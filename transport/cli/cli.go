@@ -350,6 +350,7 @@ func (c *CLI) renderResponse(text string, dur time.Duration) {
 // claude-oauth = flat subscription, ollama/ollama-cloud = local or compute-based.
 var subPricingProviders = map[string]bool{
 	"claude-oauth":  true,
+	"opencode-go":   true,
 	"ollama":        true,
 	"ollama-cloud":  true,
 }
