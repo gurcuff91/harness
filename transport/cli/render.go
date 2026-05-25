@@ -60,6 +60,7 @@ type Renderer struct {
 	costOutput     float64 // $ per 1M output tokens
 	costCacheRead  float64 // $ per 1M cache read tokens
 	costCacheWrite float64 // $ per 1M cache write tokens
+	subPricing     bool    // true = reference cost, not actual spend (sub/local)
 }
 
 // RendererConfig holds pricing and model info.
@@ -72,6 +73,9 @@ type RendererConfig struct {
 	CostOutput     float64
 	CostCacheRead  float64
 	CostCacheWrite float64
+	// SubPricing marks providers where cost is a reference metric, not actual spend.
+	// (claude-oauth = flat subscription, ollama/ollama-cloud = local/compute-based)
+	SubPricing bool
 }
 
 func NewRenderer(cfg RendererConfig) *Renderer {
@@ -84,6 +88,7 @@ func NewRenderer(cfg RendererConfig) *Renderer {
 		costOutput:     cfg.CostOutput,
 		costCacheRead:  cfg.CostCacheRead,
 		costCacheWrite: cfg.CostCacheWrite,
+		subPricing:     cfg.SubPricing,
 	}
 }
 
@@ -489,7 +494,11 @@ func (r *Renderer) buildFooter(dur time.Duration) string {
 
 	// Accumulated session cost — only show when we have real pricing data
 	if r.totalCost > 0 && r.costInput > 0 {
-		parts = append(parts, formatCost(r.totalCost))
+		costStr := formatCost(r.totalCost)
+		if r.subPricing {
+			costStr += " (sub)"
+		}
+		parts = append(parts, costStr)
 	}
 
 	// Context window usage %

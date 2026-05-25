@@ -346,16 +346,26 @@ func (c *CLI) renderResponse(text string, dur time.Duration) {
 	fmt.Println()
 }
 
+// subPricingProviders are providers where cost is a reference metric, not actual spend.
+// claude-oauth = flat subscription, ollama/ollama-cloud = local or compute-based.
+var subPricingProviders = map[string]bool{
+	"claude-oauth":  true,
+	"ollama":        true,
+	"ollama-cloud":  true,
+}
+
 func modelPricing(model string) RendererConfig {
 	cfg := RendererConfig{
 		ContextWindow: 128000, // safe default
 	}
 
-	// Find ModelMeta — try all provider prefixes against the in-memory cache
+	// Find ModelMeta — try all provider prefixes against the in-memory cache.
+	// Track which provider matched so we can set SubPricing correctly.
 	var meta *providers.ModelMeta
 	for _, prefix := range []string{"opencode-go", "ollama-cloud", "ollama", "openai", "anthropic", "claude-oauth"} {
 		if m := providers.GetModelMeta(prefix + "/" + model); m != nil {
 			meta = m
+			cfg.SubPricing = subPricingProviders[prefix]
 			break
 		}
 	}
