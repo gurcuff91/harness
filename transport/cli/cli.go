@@ -32,9 +32,11 @@ func NewCLI(a *agent.Agent, provider llm.Provider) *CLI {
 	// Use full "provider/model" as the display label — no parentheses
 	rCfg.ProviderName = ""
 	rCfg.ModelID = activeModel
-	// Show thinking level only when the active model actually supports it
+	// Show thinking level only when the active model supports it AND it's not disabled
 	if providers.ModelSupportsThinking(activeModel) {
-		rCfg.ThinkingLevel = providers.GetThinking()
+		if lvl := providers.GetThinking(); lvl != "disable" {
+			rCfg.ThinkingLevel = lvl
+		}
 	}
 
 	r := NewRenderer(rCfg)
@@ -316,7 +318,9 @@ func (c *CLI) switchModel(selector string) {
 	rCfg.ProviderName = ""
 	rCfg.ModelID = fullModel
 	if providers.ModelSupportsThinking(fullModel) {
-		rCfg.ThinkingLevel = providers.GetThinking()
+		if lvl := providers.GetThinking(); lvl != "disable" {
+			rCfg.ThinkingLevel = lvl
+		}
 	}
 	c.renderer = NewRenderer(rCfg)
 	c.agent.OnEvent(c.renderer.Handle)
