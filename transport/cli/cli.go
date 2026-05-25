@@ -116,7 +116,7 @@ func (c *CLI) printBanner() {
 	fmt.Println()
 	fmt.Println(C(Bold+Cyan, "  ╦ ╦╔═╗╦═╗╔╗╔╔═╗╔═╗╔═╗"))
 	fmt.Println(C(Bold+Cyan, "  ╠═╣╠═╣╠╦╝║║║║╣ ╚═╗╚═╗"))
-	fmt.Println(C(Bold+Cyan, "  ╩ ╩╩ ╩╩╚═╝╚╝╚═╝╚═╝╚═╝") + C(Dim, "  v0.1.0"))
+	fmt.Println(C(Bold+Cyan, "  ╩ ╩╩ ╩╩╚═╝╚╝╚═╝╚═╝╚═╝") + C(Dim, "  v0.2.0"))
 	fmt.Println()
 	fmt.Printf("  %s\n", C(Dim, "model: ")+C(BrightCyan, c.modelName))
 	fmt.Printf("  %s\n", C(Dim, "/help for commands"))

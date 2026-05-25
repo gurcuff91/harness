@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2025-05-25
+
+### Pricing & Cost Display
+- Pricing sourced from **llm-registry** for all providers — no more hardcoded values
+- `ModelMeta` now carries `InputCost`, `OutputCost`, `CacheReadCost`, `CacheWriteCost` ($ per 1M tokens)
+- `parseRegistry()` extracts all 4 price fields: `input_cost`, `output_cost`, `cache_input_cost`, `cache_output_cost`
+- `ApplyRegistryPricing()` does a second-pass pricing fill for Anthropic and Ollama after their capability APIs run
+- `enrichMeta()` applies registry pricing at all 4 fallback tiers
+- `stripDateSuffix()` matches versioned model IDs (`claude-sonnet-4-20250514` → `claude-sonnet-4`)
+- Footer hides `$` when no pricing data is available (GLM, Kimi, MiniMax, MiMo)
+- Footer shows `$0.021 (sub)` for subscription/local providers: `claude-oauth`, `opencode-go`, `ollama`, `ollama-cloud`
+
+### Architecture — Backend/Frontend Separation
+- Add `IsSubscription() bool` to `llm.Provider` interface — each provider declares its own billing model
+- Add `SetThinkingLevel(level string)` to `llm.Provider` interface — runtime level propagation
+- Add `Agent.Provider()` to expose current provider to transport layer
+- Removed hardcoded `subPricingProviders` map from CLI — frontend just reads `provider.IsSubscription()`
+- Add `ModelSupportsThinking(fullModel string)` public wrapper in providers package
+
+### Thinking Level Fixes
+- `/thinking` command now updates provider instance, renderer, and footer **immediately**
+- `disable` level fully suppresses thinking: sends `think=false` / `type=disabled` to LLM and hides `• level` from footer
+- Footer thinking label shown for **all** models that support it (not just Anthropic)
+- `NewCLI` and `/model` switch filter `disable` so renderer never shows it as a label
+
+### Documentation
+- Added `AGENTS.md` — full AI agent development guide covering architecture, interfaces, data flow, patterns, and anti-patterns
+
 ## [0.1.0] - 2025-05-25
 
 ### 🎉 Initial Release
