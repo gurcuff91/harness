@@ -29,7 +29,8 @@ func NewAnthropic(apiKey, model string) *Anthropic {
 	}
 }
 
-func (a *Anthropic) Model() string { return a.model }
+func (a *Anthropic) Model() string        { return a.model }
+func (a *Anthropic) IsSubscription() bool { return false } // pay-per-token
 
 // anthropicRequest is the Anthropic Messages API request body.
 type anthropicRequest struct {

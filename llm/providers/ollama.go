@@ -13,6 +13,7 @@ import (
 func NewOllama(model string) llm.Provider {
 	url := GetOllamaURL()
 	p := NewOpenAI("", url+"/v1", model)
+	p.subscription = true // local compute, not pay-per-token
 	return newThinkingProvider(p, "ollama", model)
 }
 

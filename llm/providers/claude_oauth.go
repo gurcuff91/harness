@@ -49,7 +49,8 @@ func NewClaudeOAuth(model string) (*ClaudeOAuth, error) {
 	}, nil
 }
 
-func (c *ClaudeOAuth) Model() string { return c.model }
+func (c *ClaudeOAuth) Model() string        { return c.model }
+func (c *ClaudeOAuth) IsSubscription() bool { return true } // flat subscription
 
 // Complete sends a non-streaming request (fallback).
 func (c *ClaudeOAuth) Complete(ctx context.Context, req *llm.Request) (*llm.Response, error) {

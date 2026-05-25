@@ -19,6 +19,10 @@ type Provider interface {
 	FormatToolResults(results []ToolResult) []json.RawMessage
 	// Model returns the current model identifier.
 	Model() string
+	// IsSubscription returns true when the provider is billed via a flat
+	// subscription or local compute — not per-token pay-as-you-go.
+	// Used by the transport layer to annotate costs as reference metrics.
+	IsSubscription() bool
 }
 
 // ImageData holds a base64-encoded image for vision requests.

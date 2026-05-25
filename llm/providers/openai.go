@@ -20,6 +20,7 @@ type OpenAI struct {
 	client        *http.Client
 	thinking      bool   // request thinking/reasoning from model
 	thinkingLevel string // universal level: low/medium/high/xhigh
+	subscription  bool   // true = flat sub or local compute, not pay-per-token
 }
 
 func NewOpenAI(apiKey, baseURL, model string) *OpenAI {
@@ -74,7 +75,8 @@ func translateThinkingLevel(model, level string) string {
 	return ""
 }
 
-func (o *OpenAI) Model() string { return o.model }
+func (o *OpenAI) Model() string        { return o.model }
+func (o *OpenAI) IsSubscription() bool { return o.subscription }
 
 type openaiRequest struct {
 	Model           string            `json:"model"`

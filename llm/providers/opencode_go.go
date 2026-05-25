@@ -13,6 +13,7 @@ const openCodeGoURL = "https://opencode.ai/zen/go/v1"
 // NewOpenCodeGo creates a provider for OpenCode Go.
 func NewOpenCodeGo(apiKey, model string) llm.Provider {
 	p := NewOpenAI(apiKey, openCodeGoURL, model)
+	p.subscription = true // account subscription, not pay-per-token
 	return newThinkingProvider(p, "opencode-go", model)
 }
 
