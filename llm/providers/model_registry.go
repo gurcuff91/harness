@@ -57,11 +57,16 @@ var defaultMeta = ModelMeta{
 func enrichMeta(m ModelMeta) ModelMeta {
 	// 1. Try remote llm-registry (in-memory, fetched once)
 	if r := lookupRemote(m.ID); r != nil {
-		if m.ContextWindow <= 0 { m.ContextWindow = r.ContextWindow }
-		if m.MaxTokens <= 0    { m.MaxTokens = r.MaxTokens }
-		if !m.Vision          { m.Vision = r.Vision }
-		if !m.Thinking        { m.Thinking = r.Thinking }
-		if m.DisplayName == "" { m.DisplayName = r.DisplayName }
+		if m.ContextWindow <= 0  { m.ContextWindow = r.ContextWindow }
+		if m.MaxTokens <= 0      { m.MaxTokens = r.MaxTokens }
+		if !m.Vision             { m.Vision = r.Vision }
+		if !m.Thinking           { m.Thinking = r.Thinking }
+		if m.DisplayName == ""   { m.DisplayName = r.DisplayName }
+		// Pricing always from registry
+		m.InputCost = r.InputCost
+		m.OutputCost = r.OutputCost
+		m.CacheReadCost = r.CacheReadCost
+		m.CacheWriteCost = r.CacheWriteCost
 		return m
 	}
 
@@ -71,6 +76,8 @@ func enrichMeta(m ModelMeta) ModelMeta {
 		if m.MaxTokens <= 0    { m.MaxTokens = r.MaxTokens }
 		if !m.Vision           { m.Vision = r.Vision }
 		if !m.Thinking         { m.Thinking = r.Thinking }
+		// Pricing always from registry (hardcoded registry has no prices)
+		ApplyRegistryPricing(&m)
 		return m
 	}
 
@@ -83,6 +90,8 @@ func enrichMeta(m ModelMeta) ModelMeta {
 	if m.ContextWindow <= 0 { m.ContextWindow = defaultMeta.ContextWindow }
 	if m.MaxTokens <= 0    { m.MaxTokens = defaultMeta.MaxTokens }
 
+	// Pricing: try registry one last time (even unknown models might partially match)
+	ApplyRegistryPricing(&m)
 	return m
 }
 
@@ -144,8 +153,12 @@ func parseRegistry(data []byte) map[string]ModelMeta {
 	var raw struct {
 		Models map[string]struct {
 			TokenCosts struct {
-				ContextWindow int `json:"context_window"`
-				MaxTokens     int `json:"max_output_tokens"`
+				ContextWindow  int     `json:"context_window"`
+				MaxTokens      int     `json:"max_output_tokens"`
+				InputCost      float64 `json:"input_cost"`
+				OutputCost     float64 `json:"output_cost"`
+				CacheReadCost  float64 `json:"cache_input_cost"`
+				CacheWriteCost float64 `json:"cache_output_cost"`
 			} `json:"token_costs"`
 			Features struct {
 				Vision   bool `json:"vision"`
@@ -159,16 +172,82 @@ func parseRegistry(data []byte) map[string]ModelMeta {
 	result := make(map[string]ModelMeta, len(raw.Models))
 	for id, m := range raw.Models {
 		mt := m.TokenCosts.MaxTokens
-		if mt <= 0 { mt = 32000 }
+		if mt <= 0 {
+			mt = 32000
+		}
 		result[id] = ModelMeta{
-			ID:            id,
-			ContextWindow: m.TokenCosts.ContextWindow,
-			MaxTokens:     mt,
-			Vision:        m.Features.Vision,
-			Thinking:      m.Features.Thinking,
+			ID:             id,
+			ContextWindow:  m.TokenCosts.ContextWindow,
+			MaxTokens:      mt,
+			Vision:         m.Features.Vision,
+			Thinking:       m.Features.Thinking,
+			InputCost:      m.TokenCosts.InputCost,
+			OutputCost:     m.TokenCosts.OutputCost,
+			CacheReadCost:  m.TokenCosts.CacheReadCost,
+			CacheWriteCost: m.TokenCosts.CacheWriteCost,
 		}
 	}
 	return result
+}
+
+// ApplyRegistryPricing fills pricing fields on a ModelMeta from the llm-registry.
+// Called after provider APIs populate caps (context, vision, thinking) so we
+// never overwrite authoritative capability data — only add missing price fields.
+func ApplyRegistryPricing(m *ModelMeta) {
+	if m == nil {
+		return
+	}
+	reg := getRemoteRegistry()
+	if reg == nil {
+		return
+	}
+	// Try exact match first, then strip date suffix (e.g. claude-sonnet-4-20250514 → claude-sonnet-4)
+	entry, ok := reg[m.ID]
+	if !ok {
+		// Strip trailing date: -YYYYMMDD or -YYYYMM
+		stripped := stripDateSuffix(m.ID)
+		if stripped != m.ID {
+			entry, ok = reg[stripped]
+		}
+	}
+	if !ok {
+		return
+	}
+	m.InputCost = entry.InputCost
+	m.OutputCost = entry.OutputCost
+	m.CacheReadCost = entry.CacheReadCost
+	m.CacheWriteCost = entry.CacheWriteCost
+}
+
+// stripDateSuffix removes trailing -YYYYMMDD or -YYYYMM from model IDs.
+func stripDateSuffix(id string) string {
+	// Match -YYYYMMDD (8 digits) or -YYYYMM (6 digits) at end
+	n := len(id)
+	if n > 9 && id[n-9] == '-' {
+		allDigits := true
+		for _, c := range id[n-8:] {
+			if c < '0' || c > '9' {
+				allDigits = false
+				break
+			}
+		}
+		if allDigits {
+			return id[:n-9]
+		}
+	}
+	if n > 7 && id[n-7] == '-' {
+		allDigits := true
+		for _, c := range id[n-6:] {
+			if c < '0' || c > '9' {
+				allDigits = false
+				break
+			}
+		}
+		if allDigits {
+			return id[:n-7]
+		}
+	}
+	return id
 }
 
 // modelSupportsThinking checks if a model has thinking capability.

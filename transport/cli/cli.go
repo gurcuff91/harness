@@ -349,39 +349,30 @@ func (c *CLI) renderResponse(text string, dur time.Duration) {
 func modelPricing(model string) RendererConfig {
 	cfg := RendererConfig{
 		ContextWindow: 128000, // safe default
-		CostInput:     3, CostOutput: 15,
-		CostCacheRead: 0.3, CostCacheWrite: 3.75,
 	}
 
-	// Try to get real context window from model cache (all providers)
-	// modelName may be bare (e.g. "deepseek-v4-pro") — try all provider prefixes
+	// Find ModelMeta — try all provider prefixes against the in-memory cache
+	var meta *providers.ModelMeta
 	for _, prefix := range []string{"opencode-go", "ollama-cloud", "ollama", "openai", "anthropic", "claude-oauth"} {
-		if meta := providers.GetModelMeta(prefix + "/" + model); meta != nil && meta.ContextWindow > 0 {
-			cfg.ContextWindow = meta.ContextWindow
+		if m := providers.GetModelMeta(prefix + "/" + model); m != nil {
+			meta = m
 			break
 		}
 	}
-	// Also try hardcoded/remote registry directly
-	if cfg.ContextWindow == 128000 {
-		if meta := providers.LookupModel(model); meta != nil && meta.ContextWindow > 0 {
-			cfg.ContextWindow = meta.ContextWindow
-		}
+	// Fallback: try registry directly (model not yet in cache)
+	if meta == nil {
+		meta = providers.LookupModel(model)
 	}
 
-	// Pricing overrides by model family
-	switch {
-	case strings.Contains(model, "opus"):
-		cfg.CostInput, cfg.CostOutput = 15, 75
-		cfg.CostCacheRead, cfg.CostCacheWrite = 1.5, 18.75
-	case strings.Contains(model, "haiku"):
-		cfg.CostInput, cfg.CostOutput = 0.8, 4
-		cfg.CostCacheRead, cfg.CostCacheWrite = 0.08, 1
-	case strings.HasPrefix(model, "gpt-"):
-		cfg.CostInput, cfg.CostOutput = 2.5, 10
-		cfg.CostCacheRead, cfg.CostCacheWrite = 0, 0
-	case strings.HasPrefix(model, "o1-"), strings.HasPrefix(model, "o3-"), strings.HasPrefix(model, "o4-"):
-		cfg.CostInput, cfg.CostOutput = 15, 60
-		cfg.CostCacheRead, cfg.CostCacheWrite = 0, 0
+	if meta != nil {
+		if meta.ContextWindow > 0 {
+			cfg.ContextWindow = meta.ContextWindow
+		}
+		// Pricing from registry — zero means unknown, footer will hide $
+		cfg.CostInput = meta.InputCost
+		cfg.CostOutput = meta.OutputCost
+		cfg.CostCacheRead = meta.CacheReadCost
+		cfg.CostCacheWrite = meta.CacheWriteCost
 	}
 	return cfg
 }

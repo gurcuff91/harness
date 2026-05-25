@@ -12,12 +12,17 @@ import (
 // ── In-memory model cache ──────────────────────────────
 
 type ModelMeta struct {
-	ID            string `json:"id"`
-	DisplayName   string `json:"display_name,omitempty"`
-	ContextWindow int    `json:"context_window"`
-	MaxTokens     int    `json:"max_tokens"`
-	Vision        bool   `json:"vision"`
-	Thinking      bool   `json:"thinking"`
+	ID            string  `json:"id"`
+	DisplayName   string  `json:"display_name,omitempty"`
+	ContextWindow int     `json:"context_window"`
+	MaxTokens     int     `json:"max_tokens"`
+	Vision        bool    `json:"vision"`
+	Thinking      bool    `json:"thinking"`
+	// Pricing ($ per 1M tokens) — sourced from llm-registry for all providers
+	InputCost      float64 `json:"input_cost,omitempty"`
+	OutputCost     float64 `json:"output_cost,omitempty"`
+	CacheReadCost  float64 `json:"cache_read_cost,omitempty"`
+	CacheWriteCost float64 `json:"cache_write_cost,omitempty"`
 }
 
 type ModelInfo struct {
@@ -238,15 +243,21 @@ func fetchAnthropicModels(tokenOrKey string) []ModelMeta {
 			continue
 		}
 		cw := m.MaxInputTokens
-		if cw <= 0 { cw = 200000 }
+		if cw <= 0 {
+			cw = 200000
+		}
 		mt := m.MaxOutputTokens
-		if mt <= 0 { mt = 64000 }
-		models = append(models, ModelMeta{  // Anthropic API is authoritative — no enrich
+		if mt <= 0 {
+			mt = 64000
+		}
+		meta := ModelMeta{ // Anthropic API is authoritative for caps
 			ID: m.ID, DisplayName: m.DisplayName,
 			ContextWindow: cw, MaxTokens: mt,
 			Vision: m.Capabilities.Vision,
 			Thinking: m.Capabilities.Thinking,
-		})
+		}
+		ApplyRegistryPricing(&meta) // pricing always from registry
+		models = append(models, meta)
 	}
 	return models
 }
@@ -340,6 +351,7 @@ func fetchOllamaModelInfo(name string) *ModelMeta {
 			meta.Thinking = true
 		}
 	}
+	ApplyRegistryPricing(meta) // pricing always from registry
 	return meta
 }
 

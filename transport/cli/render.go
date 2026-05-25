@@ -487,8 +487,8 @@ func (r *Renderer) buildFooter(dur time.Duration) string {
 		parts = append(parts, "W"+compactNum(r.lastCacheWrite))
 	}
 
-	// Accumulated session cost
-	if r.totalCost > 0 {
+	// Accumulated session cost — only show when we have real pricing data
+	if r.totalCost > 0 && r.costInput > 0 {
 		parts = append(parts, formatCost(r.totalCost))
 	}
 
