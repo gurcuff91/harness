@@ -252,6 +252,12 @@ func stripDateSuffix(id string) string {
 
 // modelSupportsThinking checks if a model has thinking capability.
 // Checks: in-memory model cache → hardcoded registry → llm-registry → false.
+// ModelSupportsThinking is the public API — accepts "provider/model" or bare model ID.
+func ModelSupportsThinking(fullModel string) bool {
+	provider, model := ParseModel(fullModel)
+	return modelSupportsThinking(provider, model)
+}
+
 func modelSupportsThinking(provider, model string) bool {
 	// Check in-memory cache first (most accurate — populated from /api/show etc.)
 	modelCacheMu.RLock()

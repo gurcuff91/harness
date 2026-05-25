@@ -32,11 +32,9 @@ func NewCLI(a *agent.Agent, provider llm.Provider) *CLI {
 	// Use full "provider/model" as the display label — no parentheses
 	rCfg.ProviderName = ""
 	rCfg.ModelID = activeModel
-	// Only show thinking level for providers that support it
-	if strings.HasPrefix(activeModel, "claude-oauth/") || strings.HasPrefix(activeModel, "anthropic/") {
+	// Show thinking level only when the active model actually supports it
+	if providers.ModelSupportsThinking(activeModel) {
 		rCfg.ThinkingLevel = providers.GetThinking()
-	} else {
-		rCfg.ThinkingLevel = ""
 	}
 
 	r := NewRenderer(rCfg)
@@ -313,7 +311,7 @@ func (c *CLI) switchModel(selector string) {
 	rCfg.SubPricing = newProvider.IsSubscription() // backend knows
 	rCfg.ProviderName = ""
 	rCfg.ModelID = fullModel
-	if target.Provider == "claude-oauth" || target.Provider == "anthropic" {
+	if providers.ModelSupportsThinking(fullModel) {
 		rCfg.ThinkingLevel = providers.GetThinking()
 	}
 	c.renderer = NewRenderer(rCfg)
