@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2025-05-25
+
+### Tools
+- `fetch` now supports binary downloads via `output_path` parameter
+- Binary-safe: writes raw bytes directly to disk (images, PDFs, ZIPs, any content)
+- `~/` home directory expansion supported in `output_path`
+- Auto-creates parent directories
+- Without `output_path`: existing text behavior unchanged (JSON, HTML, APIs)
+- Updated tool description to guide model toward `output_path` for binary content
+- Agent no longer needs `bash + curl` for any HTTP interaction
+
 ## [0.2.0] - 2025-05-25
 
 ### Pricing & Cost Display
