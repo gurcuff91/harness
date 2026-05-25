@@ -522,6 +522,17 @@ func (r *Renderer) buildFooter(dur time.Duration) string {
 	return joinParts(parts, " ")
 }
 
+// SetThinkingLevel updates the footer label at runtime (called on /thinking change).
+func (r *Renderer) SetThinkingLevel(level string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if level == "disable" {
+		r.thinkingLevel = ""
+	} else {
+		r.thinkingLevel = level
+	}
+}
+
 // calcTurnCost returns the dollar cost for a single turn.
 func (r *Renderer) calcTurnCost(input, output, cacheRead, cacheWrite int) float64 {
 	perM := 1_000_000.0

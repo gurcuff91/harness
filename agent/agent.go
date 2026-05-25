@@ -250,6 +250,11 @@ func (a *Agent) ClearHistory(userID string) {
 	delete(a.history, userID)
 }
 
+// Provider returns the current LLM provider.
+func (a *Agent) Provider() llm.Provider {
+	return a.provider
+}
+
 // SetProvider swaps the LLM provider at runtime (e.g. for model switching).
 func (a *Agent) SetProvider(p llm.Provider) {
 	a.provider = p

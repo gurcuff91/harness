@@ -21,8 +21,9 @@ type Provider interface {
 	Model() string
 	// IsSubscription returns true when the provider is billed via a flat
 	// subscription or local compute — not per-token pay-as-you-go.
-	// Used by the transport layer to annotate costs as reference metrics.
 	IsSubscription() bool
+	// SetThinkingLevel updates the thinking/reasoning effort level at runtime.
+	SetThinkingLevel(level string)
 }
 
 // ImageData holds a base64-encoded image for vision requests.

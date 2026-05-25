@@ -75,8 +75,11 @@ func translateThinkingLevel(model, level string) string {
 	return ""
 }
 
-func (o *OpenAI) Model() string        { return o.model }
-func (o *OpenAI) IsSubscription() bool { return o.subscription }
+func (o *OpenAI) Model() string              { return o.model }
+func (o *OpenAI) IsSubscription() bool       { return o.subscription }
+func (o *OpenAI) SetThinkingLevel(level string) {
+	o.thinkingLevel = level
+}
 
 type openaiRequest struct {
 	Model           string            `json:"model"`

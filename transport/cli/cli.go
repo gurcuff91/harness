@@ -215,7 +215,11 @@ func (c *CLI) handleCommand(input, userID string) bool {
 				fmt.Println(C(Dim, "  Valid: disable / low / medium / high / xhigh"))
 				fmt.Println()
 			} else {
-				providers.SetThinking(level)
+				providers.SetThinking(level)                    // persists to settings.json
+				c.agent.Provider().SetThinkingLevel(level)      // updates provider instance
+				if providers.ModelSupportsThinking(c.modelName) {
+					c.renderer.SetThinkingLevel(level)          // updates footer
+				}
 				fmt.Printf("  %s Thinking level: %s\n\n", C(Green, "✓"), C(Green, level))
 			}
 		}
