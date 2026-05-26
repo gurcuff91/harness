@@ -22,40 +22,40 @@
 
 ```
 main.go                         ← entry point, wiring
-├── agent/                      ← core ReAct loop (model-agnostic)
+├── agent/                      ← core ReAct loop + built-in tools
 │   ├── agent.go                ← Chat() loop, tool execution
-│   └── event.go                ← Event types emitted to transport
+│   ├── event.go                ← Event types emitted to transport
+│   └── tools/                  ← Built-in tools (package tools)
+│       ├── registry.go         ← Tool registry (Register, Run, Definitions)
+│       ├── bash.go             ← Shell execution
+│       ├── file.go             ← read_file, write_file
+│       ├── edit.go             ← Find/replace editing
+│       └── fetch.go            ← HTTP client (text + binary via output_path)
 ├── llm/                        ← LLM abstraction layer
-│   ├── provider.go             ← Provider interface (5 methods)
+│   ├── provider.go             ← Provider interface (7 methods)
 │   ├── types.go                ← Request, Response, StreamEvent, ToolCall, Usage
 │   ├── sse.go                  ← SSE stream parser (shared)
 │   ├── image.go                ← Base64 image loader
-│   ├── providers/              ← Provider implementations
+│   ├── providers/              ← Provider implementations + infrastructure
 │   │   ├── anthropic.go        ← Anthropic API (Messages API)
 │   │   ├── claude_oauth.go     ← Claude OAuth (subscription, token refresh)
-│   │   ├── openai.go           ← OpenAI-compatible base (also used by DeepSeek, Ollama Cloud, OpenCode Go)
+│   │   ├── openai.go           ← OpenAI-compatible base (DeepSeek, Ollama, OpenCode Go)
 │   │   ├── ollama.go           ← Ollama local (auto-detect via ping)
-│   │   ├── ollama_cloud.go     ← Ollama Cloud (API key, /api/show for caps)
-│   │   ├── opencode_go.go      ← OpenCode Go (600+ models)
-│   │   ├── catalog.go          ← In-memory model cache, RefreshModels()
+│   │   ├── ollama_cloud.go     ← Ollama Cloud (API key)
+│   │   ├── opencode_go.go      ← OpenCode Go
+│   │   ├── catalog.go          ← In-memory model cache, RefreshModels(), ModelMeta
 │   │   ├── credentials.go      ← ~/.harness/credentials.json read/write
 │   │   ├── settings.go         ← ~/.harness/settings.json read/write
 │   │   ├── status.go           ← GetProviderStatuses(), GetModelGroups()
-│   │   └── model_registry.go   ← enrichMeta(): remote registry → hardcoded → name inference
+│   │   └── model_registry.go   ← enrichMeta(), ApplyRegistryPricing(), ModelSupportsThinking()
 │   └── registry/
 │       └── resolve.go          ← Resolve("provider/model") → Provider constructor
-├── tools/                      ← Built-in tools
-│   ├── registry.go             ← Tool registry (Register, Run, Definitions)
-│   ├── bash.go                 ← Shell execution
-│   ├── file.go                 ← read_file, write_file
-│   ├── edit.go                 ← Find/replace editing
-│   └── fetch.go                ← HTTP client
 └── transport/cli/              ← Terminal UI (only consumer of agent events)
     ├── cli.go                  ← REPL loop, commands (/model, /connect, /thinking, etc.)
     ├── render.go               ← Streaming renderer, spinner, footer
     ├── colors.go               ← ANSI color helpers
     ├── rawinput.go             ← Raw terminal input (multiline, Ctrl+V)
-    └── clipboard.go           ← Clipboard image paste (macOS/Linux/Windows)
+    └── clipboard.go            ← Clipboard image paste (macOS/Linux/Windows)
 ```
 
 ## Key Interfaces
@@ -160,7 +160,7 @@ go vet ./...              # lint
 
 ### Adding a New Tool
 
-1. Create `tools/<name>.go`
+1. Create `agent/tools/<name>.go`
 2. Define the `Tool` struct with JSON schema and Execute function
 3. Register in `main.go` where other tools are registered
 4. Add tool icon in `transport/cli/render.go` `renderToolCall()`

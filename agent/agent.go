@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/gurcuff91/harness/llm"
-	"github.com/gurcuff91/harness/tools"
+	"github.com/gurcuff91/harness/agent/tools"
 )
 
 // Options configures agent behavior.

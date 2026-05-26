@@ -11,7 +11,7 @@ import (
 	"github.com/gurcuff91/harness/config"
 	"github.com/gurcuff91/harness/llm/providers"
 	"github.com/gurcuff91/harness/llm/registry"
-	"github.com/gurcuff91/harness/tools"
+	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/transport/cli"
 )
 
