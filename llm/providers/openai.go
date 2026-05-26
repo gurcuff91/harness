@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gurcuff91/harness/config"
 	"github.com/gurcuff91/harness/llm"
 )
 
@@ -173,7 +174,7 @@ func (o *OpenAI) CompleteStream(ctx context.Context, req *llm.Request, cb llm.St
 		StreamOptions: &streamOptions{IncludeUsage: true},
 	}
 	if o.thinking {
-		level := GetThinking()
+		level := config.GetThinking()
 		isDeepSeek := strings.Contains(o.model, "deepseek")
 
 		if level == "disable" {

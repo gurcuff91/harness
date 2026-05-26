@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"github.com/gurcuff91/harness/config"
 	"bytes"
 	"encoding/json"
 	"net/http"
@@ -39,7 +40,7 @@ func ParseModelKey(full string) (provider, model string) { return ParseModel(ful
 
 func RefreshModels() {
 	var wg sync.WaitGroup
-	if HasOAuth("claude-oauth") {
+	if config.HasOAuth("claude-oauth") {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -54,18 +55,18 @@ func RefreshModels() {
 			}
 		}()
 	}
-	if HasAPIKey("anthropic") {
+	if config.HasAPIKey("anthropic") {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for _, m := range fetchAnthropicModels(GetAPIKey("anthropic")) {
+			for _, m := range fetchAnthropicModels(config.GetAPIKey("anthropic")) {
 				modelCacheMu.Lock()
 				modelCache["anthropic/"+m.ID] = &m
 				modelCacheMu.Unlock()
 			}
 		}()
 	}
-	if HasAPIKey("openai") {
+	if config.HasAPIKey("openai") {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -76,15 +77,15 @@ func RefreshModels() {
 			}
 		}()
 	}
-	if HasAPIKey("opencode-go") {
+	if config.HasAPIKey("opencode-go") {
 		for _, m := range fetchOpenCodeGoModels() {
 			modelCacheMu.Lock()
 			modelCache["opencode-go/"+m.ID] = &m
 			modelCacheMu.Unlock()
 		}
 	}
-	if HasAPIKey("ollama-cloud") {
-		for _, m := range fetchOllamaCloudModels(GetAPIKey("ollama-cloud")) {
+	if config.HasAPIKey("ollama-cloud") {
+		for _, m := range fetchOllamaCloudModels(config.GetAPIKey("ollama-cloud")) {
 			modelCacheMu.Lock()
 			modelCache["ollama-cloud/"+m.ID] = &m
 			modelCacheMu.Unlock()
@@ -113,8 +114,8 @@ func RefreshProviderModels(provider string) {
 			}
 		}
 	case "anthropic":
-		if HasAPIKey("anthropic") {
-			for _, m := range fetchAnthropicModels(GetAPIKey("anthropic")) {
+		if config.HasAPIKey("anthropic") {
+			for _, m := range fetchAnthropicModels(config.GetAPIKey("anthropic")) {
 				modelCacheMu.Lock()
 				modelCache["anthropic/"+m.ID] = &m
 				modelCacheMu.Unlock()
@@ -133,15 +134,15 @@ func RefreshProviderModels(provider string) {
 			modelCacheMu.Unlock()
 		}
 	case "ollama-cloud":
-		if HasAPIKey("ollama-cloud") {
-			for _, m := range fetchOllamaCloudModels(GetAPIKey("ollama-cloud")) {
+		if config.HasAPIKey("ollama-cloud") {
+			for _, m := range fetchOllamaCloudModels(config.GetAPIKey("ollama-cloud")) {
 				modelCacheMu.Lock()
 				modelCache["ollama-cloud/"+m.ID] = &m
 				modelCacheMu.Unlock()
 			}
 		}
 	case "opencode-go":
-		if HasAPIKey("opencode-go") {
+		if config.HasAPIKey("opencode-go") {
 			for _, m := range fetchOpenCodeGoModels() {
 				modelCacheMu.Lock()
 				modelCache["opencode-go/"+m.ID] = &m

@@ -10,9 +10,9 @@ import (
 
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/llm"
+	"github.com/gurcuff91/harness/config"
 	"github.com/gurcuff91/harness/llm/providers"
-	"github.com/gurcuff91/harness/llm/registry"
-
+	
 )
 
 // CLI is a terminal REPL transport with rich UX rendering.
@@ -25,7 +25,7 @@ type CLI struct {
 
 func NewCLI(a *agent.Agent, provider llm.Provider) *CLI {
 	// activeModel is always "provider/model" format
-	activeModel := providers.GetActiveModel()
+	activeModel := config.GetActiveModel()
 
 	rCfg := modelPricing(provider.Model())
 	rCfg.SubPricing = provider.IsSubscription() // backend knows, frontend just renders
@@ -34,7 +34,7 @@ func NewCLI(a *agent.Agent, provider llm.Provider) *CLI {
 	rCfg.ModelID = activeModel
 	// Show thinking level only when the active model supports it AND it's not disabled
 	if providers.ModelSupportsThinking(activeModel) {
-		if lvl := providers.GetThinking(); lvl != "disable" {
+		if lvl := config.GetThinking(); lvl != "disable" {
 			rCfg.ThinkingLevel = lvl
 		}
 	}
@@ -142,17 +142,17 @@ func (c *CLI) handleCommand(input, userID string) bool {
 	case "/connect":
 		if len(parts) < 2 {
 			ollamaCloudSt := "disconnected"
-			if providers.HasAPIKey("ollama-cloud") { ollamaCloudSt = "connected" }
+			if config.HasAPIKey("ollama-cloud") { ollamaCloudSt = "connected" }
 			openCodeSt := "disconnected"
-			if providers.HasAPIKey("opencode-go") { openCodeSt = "connected" }
+			if config.HasAPIKey("opencode-go") { openCodeSt = "connected" }
 			claudeSt := "disconnected"
 			if tm, _ := providers.NewTokenManager(); tm != nil {
 				if _, err := tm.GetValidToken(); err == nil { claudeSt = "connected" }
 			}
 			anthropicSt := "disconnected"
-			if providers.HasAPIKey("anthropic") { anthropicSt = "connected" }
+			if config.HasAPIKey("anthropic") { anthropicSt = "connected" }
 			openaiSt := "disconnected"
-			if providers.HasAPIKey("openai") { openaiSt = "connected" }
+			if config.HasAPIKey("openai") { openaiSt = "connected" }
 			ollamaSt := "disconnected"
 			if providers.OllamaAvailable() { ollamaSt = "auto-connected" }
 
@@ -178,7 +178,7 @@ func (c *CLI) handleCommand(input, userID string) bool {
 			fmt.Println()
 			return true
 		case "anthropic", "openai", "ollama-cloud", "opencode-go":
-			if err := providers.ConnectAPIKey(parts[1]); err != nil {
+			if err := config.ConnectAPIKey(parts[1]); err != nil {
 				fmt.Printf("  %s %s\n\n", C(Red, "✗"), C(Red, err.Error()))
 			} else {
 				// Refresh model cache synchronously so /model shows them immediately
@@ -198,7 +198,7 @@ func (c *CLI) handleCommand(input, userID string) bool {
 
 	case "/thinking":
 		if len(parts) < 2 {
-			current := providers.GetThinking()
+			current := config.GetThinking()
 			levels := []string{"disable", "low", "medium", "high", "xhigh"}
 			for _, l := range levels {
 				marker := "  "
@@ -217,7 +217,7 @@ func (c *CLI) handleCommand(input, userID string) bool {
 				fmt.Println(C(Dim, "  Valid: disable / low / medium / high / xhigh"))
 				fmt.Println()
 			} else {
-				providers.SetThinking(level)                    // persists to settings.json
+				config.SetThinking(level)                    // persists to settings.json
 				c.agent.Provider().SetThinkingLevel(level)      // updates provider instance
 				if providers.ModelSupportsThinking(c.modelName) {
 					c.renderer.SetThinkingLevel(level)          // updates footer
@@ -305,7 +305,7 @@ func (c *CLI) switchModel(selector string) {
 		fmt.Println()
 		return
 	}
-	newProvider, err := registry.Resolve(target.Provider + "/" + target.Name)
+	newProvider, err := providers.Resolve(target.Provider + "/" + target.Name)
 	if err != nil {
 		fmt.Printf("  %s %s\n\n", C(Red, "✗"), C(Red, err.Error()))
 		return
@@ -318,14 +318,14 @@ func (c *CLI) switchModel(selector string) {
 	rCfg.ProviderName = ""
 	rCfg.ModelID = fullModel
 	if providers.ModelSupportsThinking(fullModel) {
-		if lvl := providers.GetThinking(); lvl != "disable" {
+		if lvl := config.GetThinking(); lvl != "disable" {
 			rCfg.ThinkingLevel = lvl
 		}
 	}
 	c.renderer = NewRenderer(rCfg)
 	c.agent.OnEvent(c.renderer.Handle)
 	fmt.Printf("  %s Using %s\n\n", C(Green, "✓"), C(Green, fullModel))
-	providers.SetActiveModel(fullModel)
+	config.SetActiveModel(fullModel)
 }
 
 

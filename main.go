@@ -8,10 +8,9 @@ import (
 	"syscall"
 
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/config"
 	"github.com/gurcuff91/harness/llm/providers"
-	"github.com/gurcuff91/harness/llm/registry"
-	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/transport/cli"
 )
 
@@ -29,16 +28,15 @@ func main() {
 	if envModel := os.Getenv("HARNESS_MODEL"); envModel != "" {
 		cfg.Model = envModel
 	} else {
-		cfg.Model = providers.GetActiveModel()
+		cfg.Model = config.GetActiveModel()
 		// If no model persisted yet, auto-detect from available providers
-		if providers.ReadSettings().Model == "" {
-			if providers.HasOAuth("claude-oauth") {
+		if config.ReadSettings().Model == "" {
+			if config.HasOAuth("claude-oauth") {
 				if n := providers.ModelCount("claude-oauth"); n > 0 {
-					// Pick first model
 					for fullName := range providers.AllModels() {
 						if p, _ := providers.ParseModelKey(fullName); p == "claude-oauth" {
 							cfg.Model = fullName
-							providers.SetActiveModel(cfg.Model)
+							config.SetActiveModel(cfg.Model)
 							break
 						}
 					}
@@ -47,27 +45,26 @@ func main() {
 				for fullName := range providers.AllModels() {
 					if p, _ := providers.ParseModelKey(fullName); p == "ollama" {
 						cfg.Model = fullName
-						providers.SetActiveModel(cfg.Model)
+						config.SetActiveModel(cfg.Model)
 						break
 					}
 				}
-			} else if providers.HasAPIKey("anthropic") {
+			} else if config.HasAPIKey("anthropic") {
 				cfg.Model = "anthropic/claude-sonnet-4-20250514"
-				providers.SetActiveModel(cfg.Model)
-			} else if providers.HasAPIKey("openai") {
+				config.SetActiveModel(cfg.Model)
+			} else if config.HasAPIKey("openai") {
 				cfg.Model = "openai/gpt-4o"
-				providers.SetActiveModel(cfg.Model)
+				config.SetActiveModel(cfg.Model)
 			}
 		}
 	}
 
 	// Resolve provider from credentials
-	provider, err := registry.Resolve(cfg.Model)
+	provider, err := providers.Resolve(cfg.Model)
 	if err != nil {
-		// Check if ANY provider is connected — if not, give helpful message
 		hasAny := providers.OllamaAvailable()
-		hasAny = hasAny || providers.HasAPIKey("anthropic")
-		hasAny = hasAny || providers.HasAPIKey("openai")
+		hasAny = hasAny || config.HasAPIKey("anthropic")
+		hasAny = hasAny || config.HasAPIKey("openai")
 		if tm, _ := providers.NewTokenManager(); tm != nil {
 			if _, tokErr := tm.GetValidToken(); tokErr == nil {
 				hasAny = true
@@ -100,7 +97,6 @@ func main() {
 	// Graceful shutdown
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-
 
 	// Launch CLI
 	t := cli.NewCLI(a, provider)

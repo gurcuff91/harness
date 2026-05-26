@@ -1,6 +1,10 @@
 package providers
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/gurcuff91/harness/config"
+)
 
 // ProviderStatus describes a provider and its current connection state.
 type ProviderStatus struct {
@@ -33,7 +37,7 @@ func GetProviderStatuses() []ProviderStatus {
 	})
 
 	// Anthropic API key
-	anthropicOK := HasAPIKey("anthropic")
+	anthropicOK := config.HasAPIKey("anthropic")
 	anthropicNote := "disconnected"
 	if anthropicOK {
 		anthropicNote = "connected"
@@ -47,7 +51,7 @@ func GetProviderStatuses() []ProviderStatus {
 	})
 
 	// OpenAI API key
-	openaiOK := HasAPIKey("openai")
+	openaiOK := config.HasAPIKey("openai")
 	openaiNote := "disconnected"
 	if openaiOK {
 		openaiNote = "connected"
@@ -61,7 +65,7 @@ func GetProviderStatuses() []ProviderStatus {
 	})
 
 	// OpenCode Go
-	openCodeOK := HasAPIKey("opencode-go")
+	openCodeOK := config.HasAPIKey("opencode-go")
 	openCodeNote := "disconnected"
 	if openCodeOK {
 		openCodeNote = "connected"
@@ -75,7 +79,7 @@ func GetProviderStatuses() []ProviderStatus {
 	})
 
 	// Ollama Cloud
-	ollamaCloudOK := HasAPIKey("ollama-cloud")
+	ollamaCloudOK := config.HasAPIKey("ollama-cloud")
 	ollamaCloudNote := "disconnected"
 	if ollamaCloudOK {
 		ollamaCloudNote = "connected"

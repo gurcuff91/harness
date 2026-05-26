@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gurcuff91/harness/config"
 	"github.com/gurcuff91/harness/llm"
 )
 
@@ -330,12 +331,12 @@ const (
 // TokenManager handles OAuth token lifecycle using credentials.json.
 type TokenManager struct {
 	mu    sync.Mutex
-	creds *ProviderCreds
+	creds *config.ProviderCreds
 }
 
 func NewTokenManager() (*TokenManager, error) {
 	tm := &TokenManager{}
-	c := GetCreds("claude-oauth")
+	c := config.GetCreds("claude-oauth")
 	if c != nil && c.AccessToken != "" {
 		tm.creds = c
 	}
@@ -356,7 +357,7 @@ func (tm *TokenManager) GetValidToken() (string, error) {
 		return "", fmt.Errorf("token expired — use /connect claude-oauth")
 	}
 	tm.creds = refreshed
-	SetCreds("claude-oauth", refreshed)
+	config.SetCreds("claude-oauth", refreshed)
 	return refreshed.AccessToken, nil
 }
 
@@ -369,7 +370,7 @@ func (tm *TokenManager) GetTokenInfo() (expiresAt int64, subType string) {
 	return tm.creds.ExpiresAt, tm.creds.SubscriptionType
 }
 
-func (tm *TokenManager) refreshToken(refreshToken string) (*ProviderCreds, error) {
+func (tm *TokenManager) refreshToken(refreshToken string) (*config.ProviderCreds, error) {
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
 		"client_id":     {oauthClientID},
@@ -403,7 +404,7 @@ func (tm *TokenManager) refreshToken(refreshToken string) (*ProviderCreds, error
 	if newRefresh == "" {
 		newRefresh = refreshToken
 	}
-	return &ProviderCreds{
+	return &config.ProviderCreds{
 		AccessToken:      result.AccessToken,
 		RefreshToken:     newRefresh,
 		ExpiresAt:        time.Now().UnixMilli() + int64(expiresIn)*1000,
@@ -411,11 +412,11 @@ func (tm *TokenManager) refreshToken(refreshToken string) (*ProviderCreds, error
 	}, nil
 }
 
-func (tm *TokenManager) SaveLogin(creds *ProviderCreds) error {
+func (tm *TokenManager) SaveLogin(creds *config.ProviderCreds) error {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	tm.creds = creds
-	SetCreds("claude-oauth", creds)
+	config.SetCreds("claude-oauth", creds)
 	return nil
 }
 
@@ -452,11 +453,11 @@ func Login() error {
 	RefreshProviderModels("claude-oauth")
 
 	// Auto-select first model if user hasn't chosen one yet
-	s := readSettings()
+	s := config.ReadSettings()
 	if s.Model == "" && ModelCount("claude-oauth") > 0 {
 		for fullName := range AllModels() {
 			if p, _ := ParseModelKey(fullName); p == "claude-oauth" {
-				SetActiveModel(fullName)
+				config.SetActiveModel(fullName)
 				fmt.Printf("  Auto-selected: %s\n", fullName)
 				break
 			}
@@ -473,7 +474,7 @@ func resetTerminal() {
 	fmt.Print("\033[0m")
 }
 
-func readClaudeFromKeychain() *ProviderCreds {
+func readClaudeFromKeychain() *config.ProviderCreds {
 	// Primary: Claude Code credentials
 	if t := readKeychainItem("Claude Code-credentials"); t != nil {
 		return t
@@ -482,7 +483,7 @@ func readClaudeFromKeychain() *ProviderCreds {
 	return readKeychainItem("claude-code")
 }
 
-func readKeychainItem(service string) *ProviderCreds {
+func readKeychainItem(service string) *config.ProviderCreds {
 	out, err := exec.Command("security", "find-generic-password",
 		"-s", service, "-w").Output()
 	if err != nil {
@@ -503,10 +504,10 @@ func readKeychainItem(service string) *ProviderCreds {
 	if at == "" || rt == "" {
 		return nil
 	}
-	return &ProviderCreds{AccessToken: at, RefreshToken: rt, ExpiresAt: int64(ea), SubscriptionType: st}
+	return &config.ProviderCreds{AccessToken: at, RefreshToken: rt, ExpiresAt: int64(ea), SubscriptionType: st}
 }
 
-func readClaudeCredentialsFile() *ProviderCreds {
+func readClaudeCredentialsFile() *config.ProviderCreds {
 	home, _ := os.UserHomeDir()
 	data, err := os.ReadFile(filepath.Join(home, ".claude", ".credentials.json"))
 	if err != nil {
@@ -524,6 +525,6 @@ func readClaudeCredentialsFile() *ProviderCreds {
 		return nil
 	}
 	t := creds.OAuthTokens[0]
-	return &ProviderCreds{AccessToken: t.AccessToken, RefreshToken: t.RefreshToken, ExpiresAt: t.ExpiresAt, SubscriptionType: t.SubType}
+	return &config.ProviderCreds{AccessToken: t.AccessToken, RefreshToken: t.RefreshToken, ExpiresAt: t.ExpiresAt, SubscriptionType: t.SubType}
 }
 

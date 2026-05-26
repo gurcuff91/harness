@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gurcuff91/harness/config"
 	"github.com/gurcuff91/harness/llm"
 )
 
@@ -393,7 +394,7 @@ func joinStrings(parts []string, sep string) string {
 //   claude-*-4-6, claude-*-4-5 → adaptive recommended (budget_tokens deprecated)
 //   older models → budget_tokens (legacy)
 func buildAnthropicThinking(model string, maxTokens int) (map[string]any, int) {
-	level := GetThinking()
+	level := config.GetThinking()
 
 	// disabled — no thinking
 	if level == "disable" {

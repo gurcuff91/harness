@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"github.com/gurcuff91/harness/config"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -288,7 +289,7 @@ func NewThinkingProviderForOpenAI(p *OpenAI, provider, model string) *OpenAI {
 func newThinkingProvider(p *OpenAI, provider, model string) *OpenAI {
 	p.thinking = modelSupportsThinking(provider, model)
 	if p.thinking {
-		p.thinkingLevel = GetThinking()
+		p.thinkingLevel = config.GetThinking()
 	}
 	return p
 }
