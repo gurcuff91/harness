@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+
 )
 
 // Provider abstracts LLM API differences.
@@ -17,17 +18,15 @@ type Provider interface {
 	FormatUserMessageWithImages(text string, images []ImageData) json.RawMessage
 	// FormatToolResults wraps tool results into the provider's message format.
 	FormatToolResults(results []ToolResult) []json.RawMessage
-	// Model returns the current model identifier.
-	Model() string
-	// IsSubscription returns true when the provider is billed via a flat
-	// subscription or local compute — not per-token pay-as-you-go.
-	IsSubscription() bool
-	// SetThinkingLevel updates the thinking/reasoning effort level at runtime.
-	SetThinkingLevel(level string)
-}
-
-// ImageData holds a base64-encoded image for vision requests.
-type ImageData struct {
-	MimeType string
-	Base64   string
+	// Name returns the provider slug (e.g. "anthropic", "openai", "ollama").
+	Name() string
+	// IsActive returns true if this provider has valid credentials and is reachable.
+	IsActive() bool
+	// Models returns the cached model list for this provider.
+	// Fast, no API call — populated by FetchModels().
+	Models() []ModelMeta
+	// FetchModels refreshes the internal model cache from the provider API.
+	// Each model is fully enriched: capabilities from the provider API
+	// and pricing from llm-registry.
+	FetchModels() []ModelMeta
 }

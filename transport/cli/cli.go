@@ -9,9 +9,10 @@ import (
 	"time"
 
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/llm"
+	llm "github.com/gurcuff91/harness/providers/llm"
 	"github.com/gurcuff91/harness/config"
-	"github.com/gurcuff91/harness/llm/providers"
+	
+	"github.com/gurcuff91/harness/providers"
 	
 )
 
@@ -27,13 +28,14 @@ func NewCLI(a *agent.Agent, provider llm.Provider) *CLI {
 	// activeModel is always "provider/model" format
 	activeModel := config.GetActiveModel()
 
-	rCfg := modelPricing(provider.Model())
-	rCfg.SubPricing = provider.IsSubscription() // backend knows, frontend just renders
+	_, modelID := llm.ParseModel(activeModel)
+	rCfg := modelPricing(modelID)
+	rCfg.SubPricing = false // TODO: read from ModelMeta.IsSubscription after llm/models refactor
 	// Use full "provider/model" as the display label — no parentheses
 	rCfg.ProviderName = ""
 	rCfg.ModelID = activeModel
 	// Show thinking level only when the active model supports it AND it's not disabled
-	if providers.ModelSupportsThinking(activeModel) {
+	if llm.ModelSupportsThinking(activeModel) {
 		if lvl := config.GetThinking(); lvl != "disable" {
 			rCfg.ThinkingLevel = lvl
 		}
@@ -183,7 +185,13 @@ func (c *CLI) handleCommand(input, userID string) bool {
 			} else {
 				// Refresh model cache synchronously so /model shows them immediately
 				providers.RefreshProviderModels(parts[1])
-				n := providers.ModelCount(parts[1])
+				var n int
+				for _, p := range providers.All {
+					if p.Name() == parts[1] {
+						n = len(p.Models())
+						break
+					}
+				}
 				if n > 0 {
 					fmt.Printf("  %s %s connected (%d models)\n\n", C(Green, "✓"), C(Green, parts[1]), n)
 				} else {
@@ -218,8 +226,8 @@ func (c *CLI) handleCommand(input, userID string) bool {
 				fmt.Println()
 			} else {
 				config.SetThinking(level)                    // persists to settings.json
-				c.agent.Provider().SetThinkingLevel(level)      // updates provider instance
-				if providers.ModelSupportsThinking(c.modelName) {
+				// TODO: provider.SetThinkingLevel removed — now via req.ThinkingLevel
+				if llm.ModelSupportsThinking(c.modelName) {
 					c.renderer.SetThinkingLevel(level)          // updates footer
 				}
 				fmt.Printf("  %s Thinking level: %s\n\n", C(Green, "✓"), C(Green, level))
@@ -292,9 +300,21 @@ func (c *CLI) listModels() {
 }
 
 func (c *CLI) switchModel(selector string) {
-	models := providers.DetectAvailable(c.modelName)
-	var target *providers.ModelInfo
-	for _, m := range models {
+	var available []llm.ModelInfo
+	for _, p := range providers.All {
+		if !p.IsActive() {
+			continue
+		}
+		for _, m := range p.Models() {
+			available = append(available, llm.ModelInfo{
+				Name:     m.ID,
+				Provider: p.Name(),
+				Active:   p.Name()+"/"+m.ID == c.modelName,
+			})
+		}
+	}
+	var target *llm.ModelInfo
+	for _, m := range available {
 		if m.Provider+"/"+m.Name == selector || m.Name == selector {
 			target = &m
 			break
@@ -305,19 +325,20 @@ func (c *CLI) switchModel(selector string) {
 		fmt.Println()
 		return
 	}
-	newProvider, err := providers.Resolve(target.Provider + "/" + target.Name)
+	newProvider, _, err := providers.Resolve(target.Provider + "/" + target.Name)
 	if err != nil {
 		fmt.Printf("  %s %s\n\n", C(Red, "✗"), C(Red, err.Error()))
 		return
 	}
 	c.agent.SetProvider(newProvider)
+	c.agent.SetModel(target.Name)
 	fullModel := target.Provider + "/" + target.Name
 	c.modelName = fullModel
 	rCfg := modelPricing(target.Name)
-	rCfg.SubPricing = newProvider.IsSubscription() // backend knows
+	rCfg.SubPricing = false // TODO: read from ModelMeta.IsSubscription after llm/models refactor
 	rCfg.ProviderName = ""
 	rCfg.ModelID = fullModel
-	if providers.ModelSupportsThinking(fullModel) {
+	if llm.ModelSupportsThinking(fullModel) {
 		if lvl := config.GetThinking(); lvl != "disable" {
 			rCfg.ThinkingLevel = lvl
 		}
@@ -359,18 +380,8 @@ func modelPricing(model string) RendererConfig {
 		ContextWindow: 128000, // safe default
 	}
 
-	// Find ModelMeta — try all provider prefixes against the in-memory cache.
-	var meta *providers.ModelMeta
-	for _, prefix := range []string{"opencode-go", "ollama-cloud", "ollama", "openai", "anthropic", "claude-oauth"} {
-		if m := providers.GetModelMeta(prefix + "/" + model); m != nil {
-			meta = m
-			break
-		}
-	}
-	// Fallback: try registry directly (model not yet in cache)
-	if meta == nil {
-		meta = providers.LookupModel(model)
-	}
+	// Find ModelMeta — search provider caches and remote/hardcoded registries.
+	meta := llm.FindMeta(model)
 
 	if meta != nil {
 		if meta.ContextWindow > 0 {

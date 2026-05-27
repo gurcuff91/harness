@@ -17,7 +17,8 @@ import (
 	"time"
 
 	"github.com/gurcuff91/harness/config"
-	"github.com/gurcuff91/harness/llm"
+	llm "github.com/gurcuff91/harness/providers/llm"
+	
 )
 
 const (
@@ -28,31 +29,37 @@ const (
 // Makes requests indistinguishable from Claude Code — uses your existing
 // subscription instead of paying API rates.
 type ClaudeOAuth struct {
-	model   string
-	client  *http.Client
-	tokens  *TokenManager
-	session string // persistent session ID per harness instance
-
-	mu sync.Mutex
+	client       *http.Client
+	tokens       *TokenManager
+	session      string // persistent session ID per harness instance
+	cachedModels []llm.ModelMeta
+	mu           sync.Mutex
 }
 
-func NewClaudeOAuth(model string) (*ClaudeOAuth, error) {
+func NewClaudeOAuth() (*ClaudeOAuth, error) {
 	tm, err := NewTokenManager()
 	if err != nil {
 		return nil, fmt.Errorf("oauth init: %w", err)
 	}
-
-	return &ClaudeOAuth{
-		model:   model,
+	c := &ClaudeOAuth{
 		client:  &http.Client{Timeout: 5 * time.Minute},
 		tokens:  tm,
 		session: generateUUID(),
-	}, nil
+	}
+	if c.IsActive() {
+		c.FetchModels()
+	}
+	return c, nil
 }
 
-func (c *ClaudeOAuth) Model() string              { return c.model }
-func (c *ClaudeOAuth) IsSubscription() bool       { return true } // flat subscription
-func (c *ClaudeOAuth) SetThinkingLevel(_ string)  {} // reads from settings on each request
+func (c *ClaudeOAuth) Name() string   { return "claude-oauth" }
+func (c *ClaudeOAuth) IsActive() bool { return config.HasOAuth("claude-oauth") }
+
+func (c *ClaudeOAuth) Models() []llm.ModelMeta {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cachedModels
+}
 
 // Complete sends a non-streaming request (fallback).
 func (c *ClaudeOAuth) Complete(ctx context.Context, req *llm.Request) (*llm.Response, error) {
@@ -71,9 +78,9 @@ func (c *ClaudeOAuth) CompleteStream(ctx context.Context, req *llm.Request, cb l
 	}
 
 	// Convert tools with MCP stealth naming
-	var aTools []anthropicTool
+	var aTools []llm.AnthropicTool
 	for _, t := range req.Tools {
-		aTools = append(aTools, anthropicTool{
+		aTools = append(aTools, llm.AnthropicTool{
 			Name:        mapToolNameToCC(t.Name),
 			Description: t.Description,
 			InputSchema: t.InputSchema,
@@ -97,10 +104,10 @@ func (c *ClaudeOAuth) CompleteStream(ctx context.Context, req *llm.Request, cb l
 	}
 
 	// Build thinking config based on model generation
-	thinkingCfg, maxTokens := buildAnthropicThinking(c.model, req.MaxTokens)
+	thinkingCfg, maxTokens := llm.BuildAnthropicThinking(req.Model, req.ThinkingLevel, req.MaxTokens)
 
 	body := map[string]any{
-		"model":      c.model,
+		"model":      req.Model,
 		"max_tokens": maxTokens,
 		"system":     systemBlocks,
 		"messages":   req.Messages,
@@ -137,42 +144,45 @@ func (c *ClaudeOAuth) CompleteStream(ctx context.Context, req *llm.Request, cb l
 	return c.parseStream(httpResp.Body, cb)
 }
 
-// parseStream processes Anthropic SSE events into a llm.Response (delegates to shared parser).
+// parseStream processes Anthropic SSE events into a llm.Response.
 func (c *ClaudeOAuth) parseStream(body io.Reader, cb llm.StreamCallback) (*llm.Response, error) {
-	return parseAnthropicStream(body, cb, unmapToolNameFromCC)
+	return llm.ParseAnthropicStream(body, cb, unmapToolNameFromCC)
 }
 
 func (c *ClaudeOAuth) FormatUserMessage(text string) json.RawMessage {
-	msg := map[string]any{
-		"role":    "user",
-		"content": text,
-	}
-	data, _ := json.Marshal(msg)
+	data, _ := json.Marshal(map[string]any{"role": "user", "content": text})
 	return data
 }
 
 func (c *ClaudeOAuth) FormatUserMessageWithImages(text string, images []llm.ImageData) json.RawMessage {
-	return formatAnthropicUserWithImages(text, images)
+	var content []map[string]any
+	for _, img := range images {
+		content = append(content, map[string]any{
+			"type": "image",
+			"source": map[string]string{
+				"type": "base64", "media_type": img.MimeType, "data": img.Base64,
+			},
+		})
+	}
+	if text != "" {
+		content = append(content, map[string]any{"type": "text", "text": text})
+	}
+	data, _ := json.Marshal(map[string]any{"role": "user", "content": content})
+	return data
 }
 
 func (c *ClaudeOAuth) FormatToolResults(results []llm.ToolResult) []json.RawMessage {
 	var content []map[string]any
 	for _, r := range results {
 		block := map[string]any{
-			"type":        "tool_result",
-			"tool_use_id": r.ID,
-			"content":     r.Output,
+			"type": "tool_result", "tool_use_id": r.ID, "content": r.Output,
 		}
 		if r.IsErr {
 			block["is_error"] = true
 		}
 		content = append(content, block)
 	}
-	msg := map[string]any{
-		"role":    "user",
-		"content": content,
-	}
-	data, _ := json.Marshal(msg)
+	data, _ := json.Marshal(map[string]any{"role": "user", "content": content})
 	return []json.RawMessage{data}
 }
 
@@ -454,9 +464,11 @@ func Login() error {
 
 	// Auto-select first model if user hasn't chosen one yet
 	s := config.ReadSettings()
-	if s.Model == "" && ModelCount("claude-oauth") > 0 {
-		for fullName := range AllModels() {
-			if p, _ := ParseModelKey(fullName); p == "claude-oauth" {
+	if s.Model == "" {
+		RefreshProviderModels("claude-oauth")
+		for _, p := range All {
+			if p.Name() == "claude-oauth" && len(p.Models()) > 0 {
+				fullName := "claude-oauth/" + p.Models()[0].ID
 				config.SetActiveModel(fullName)
 				fmt.Printf("  Auto-selected: %s\n", fullName)
 				break
@@ -528,3 +540,21 @@ func readClaudeCredentialsFile() *config.ProviderCreds {
 	return &config.ProviderCreds{AccessToken: t.AccessToken, RefreshToken: t.RefreshToken, ExpiresAt: t.ExpiresAt, SubscriptionType: t.SubType}
 }
 
+
+// FetchModels returns all models available via Claude OAuth.
+// Capabilities are authoritative from the API; pricing comes from llm-registry.
+func (c *ClaudeOAuth) FetchModels() []llm.ModelMeta {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	tm, err := NewTokenManager()
+	if err != nil || tm == nil {
+		return nil
+	}
+	tok, err := tm.GetValidToken()
+	if err != nil {
+		return nil
+	}
+	c.cachedModels = fetchAnthropicModels(tok)
+	return c.cachedModels
+}

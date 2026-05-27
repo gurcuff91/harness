@@ -1,7 +1,6 @@
-package providers
+package llm
 
 import (
-	"github.com/gurcuff91/harness/config"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -55,7 +54,7 @@ var defaultMeta = ModelMeta{
 // Priority: remote registry → hardcoded → infer by name → generic defaults.
 // Providers that return real capabilities (Anthropic, Ollama, OllamaCloud)
 // should NOT call enrichMeta — their data is already authoritative.
-func enrichMeta(m ModelMeta) ModelMeta {
+func EnrichMeta(m ModelMeta) ModelMeta {
 	// 1. Try remote llm-registry (in-memory, fetched once)
 	if r := lookupRemote(m.ID); r != nil {
 		if m.ContextWindow <= 0  { m.ContextWindow = r.ContextWindow }
@@ -83,9 +82,9 @@ func enrichMeta(m ModelMeta) ModelMeta {
 	}
 
 	// 3. Infer from model name
-	if m.ContextWindow <= 0 { m.ContextWindow = inferContextWindow(m.ID) }
+	if m.ContextWindow <= 0 { m.ContextWindow = InferContextWindow(m.ID) }
 	if m.MaxTokens <= 0    { m.MaxTokens = 32000 }
-	if !m.Vision           { m.Vision = inferVision(m.ID) }
+	if !m.Vision           { m.Vision = InferVision(m.ID) }
 
 	// 4. Generic defaults for anything still missing
 	if m.ContextWindow <= 0 { m.ContextWindow = defaultMeta.ContextWindow }
@@ -260,36 +259,65 @@ func ModelSupportsThinking(fullModel string) bool {
 }
 
 func modelSupportsThinking(provider, model string) bool {
-	// Check in-memory cache first (most accurate — populated from /api/show etc.)
-	modelCacheMu.RLock()
-	if meta, ok := modelCache[provider+"/"+model]; ok {
-		modelCacheMu.RUnlock()
-		return meta.Thinking
-	}
-	modelCacheMu.RUnlock()
-
 	// Check hardcoded registry
 	if meta, ok := hardcodedRegistry[model]; ok {
 		return meta.Thinking
 	}
-
 	// Check remote llm-registry
 	if r := lookupRemote(model); r != nil {
 		return r.Thinking
 	}
-
 	return false
 }
 
-// NewThinkingProviderForOpenAI is exported for use from registry.
-func NewThinkingProviderForOpenAI(p *OpenAI, provider, model string) *OpenAI {
-	return newThinkingProvider(p, provider, model)
+
+
+// ── Inference helpers ─────────────────────────────────────────────────────
+
+// inferVision returns true if the model name implies vision support.
+func InferVision(id string) bool {
+	visionMarkers := []string{"vl", "vision", "gemma3", "gemma4", "llava", "bakllava", "minicpm-v", "qwen2.5vl"}
+	for _, m := range visionMarkers {
+		if containsInsensitive(id, m) {
+			return true
+		}
+	}
+	return false
 }
 
-func newThinkingProvider(p *OpenAI, provider, model string) *OpenAI {
-	p.thinking = modelSupportsThinking(provider, model)
-	if p.thinking {
-		p.thinkingLevel = config.GetThinking()
+// inferContextWindow returns a reasonable context window based on model name.
+func InferContextWindow(id string) int {
+	million := []string{"deepseek-v4", "minimax-m2", "kimi-k2", "glm-5"}
+	for _, m := range million {
+		if containsInsensitive(id, m) {
+			return 1000000
+		}
 	}
-	return p
+	large := []string{"deepseek", "qwen", "kimi", "minimax", "gemini", "gpt-oss", "glm"}
+	for _, m := range large {
+		if containsInsensitive(id, m) {
+			return 128000
+		}
+	}
+	return 32000
+}
+
+func containsInsensitive(s, sub string) bool {
+	return strings.Contains(strings.ToLower(s), strings.ToLower(sub))
+}
+
+// ParseModel splits "provider/model" — local copy to avoid circular imports.
+func ParseModel(full string) (provider, model string) {
+	parts := strings.SplitN(full, "/", 2)
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	if strings.HasPrefix(full, "claude-") {
+		return "claude-oauth", full
+	}
+	if strings.HasPrefix(full, "gpt-") || strings.HasPrefix(full, "o1-") ||
+		strings.HasPrefix(full, "o3-") || strings.HasPrefix(full, "o4-") {
+		return "openai", full
+	}
+	return "claude-oauth", full
 }

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gurcuff91/harness/llm"
+	llm "github.com/gurcuff91/harness/providers/llm"
 )
 
 type fetchInput struct {

@@ -7,15 +7,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gurcuff91/harness/llm"
+	llm "github.com/gurcuff91/harness/providers/llm"
 	"github.com/gurcuff91/harness/agent/tools"
 )
 
 // Options configures agent behavior.
 type Options struct {
 	SystemPrompt string
-	MaxLoops     int // max tool-use iterations per turn
-	MaxTokens    int // max output tokens per LLM call
+	Model        string // model ID to send to the LLM
+	MaxLoops     int    // max tool-use iterations per turn
+	MaxTokens    int    // max output tokens per LLM call
 }
 
 // Agent is the core harness: it manages the ReAct loop between LLM and tools.
@@ -97,6 +98,7 @@ func (a *Agent) Chat(ctx context.Context, userID, text string, images []llm.Imag
 
 		req := &llm.Request{
 			SystemPrompt: a.opts.SystemPrompt,
+			Model:        a.opts.Model,
 			Messages:     a.history[userID],
 			Tools:        a.tools.Definitions(),
 			MaxTokens:    a.opts.MaxTokens,
@@ -258,6 +260,11 @@ func (a *Agent) Provider() llm.Provider {
 // SetProvider swaps the LLM provider at runtime (e.g. for model switching).
 func (a *Agent) SetProvider(p llm.Provider) {
 	a.provider = p
+}
+
+// SetModel updates the model ID used for LLM requests.
+func (a *Agent) SetModel(model string) {
+	a.opts.Model = model
 }
 
 // maybeCompact trims old messages if history gets too large.

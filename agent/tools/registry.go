@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/gurcuff91/harness/llm"
+	llm "github.com/gurcuff91/harness/providers/llm"
 )
 
 // Tool defines a single tool that the agent can use.

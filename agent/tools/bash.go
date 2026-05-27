@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gurcuff91/harness/llm"
+	llm "github.com/gurcuff91/harness/providers/llm"
 )
 
 const bashTimeout = 30 * time.Second

@@ -2,12 +2,20 @@ package llm
 
 import "encoding/json"
 
+// ImageData holds a base64-encoded image for vision requests.
+type ImageData struct {
+	MimeType string
+	Base64   string
+}
+
 // Request represents an LLM completion request.
 type Request struct {
-	SystemPrompt string            `json:"system_prompt"`
-	Messages     []json.RawMessage `json:"messages"`
-	Tools        []ToolDef         `json:"tools,omitempty"`
-	MaxTokens    int               `json:"max_tokens"`
+	Model         string            `json:"model"`                    // provider-specific model ID
+	SystemPrompt  string            `json:"system_prompt"`
+	Messages      []json.RawMessage `json:"messages"`
+	Tools         []ToolDef         `json:"tools,omitempty"`
+	MaxTokens     int               `json:"max_tokens"`
+	ThinkingLevel string            `json:"thinking_level,omitempty"` // disable|low|medium|high|xhigh
 }
 
 // Response represents an LLM completion response.

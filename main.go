@@ -10,7 +10,7 @@ import (
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/config"
-	"github.com/gurcuff91/harness/llm/providers"
+	"github.com/gurcuff91/harness/providers"
 	"github.com/gurcuff91/harness/transport/cli"
 )
 
@@ -31,36 +31,20 @@ func main() {
 		cfg.Model = config.GetActiveModel()
 		// If no model persisted yet, auto-detect from available providers
 		if config.ReadSettings().Model == "" {
-			if config.HasOAuth("claude-oauth") {
-				if n := providers.ModelCount("claude-oauth"); n > 0 {
-					for fullName := range providers.AllModels() {
-						if p, _ := providers.ParseModelKey(fullName); p == "claude-oauth" {
-							cfg.Model = fullName
-							config.SetActiveModel(cfg.Model)
-							break
-						}
-					}
+			providers.EnsureRegistry()
+			for _, p := range providers.All {
+				if !p.IsActive() || len(p.Models()) == 0 {
+					continue
 				}
-			} else if providers.OllamaAvailable() {
-				for fullName := range providers.AllModels() {
-					if p, _ := providers.ParseModelKey(fullName); p == "ollama" {
-						cfg.Model = fullName
-						config.SetActiveModel(cfg.Model)
-						break
-					}
-				}
-			} else if config.HasAPIKey("anthropic") {
-				cfg.Model = "anthropic/claude-sonnet-4-20250514"
+				cfg.Model = p.Name() + "/" + p.Models()[0].ID
 				config.SetActiveModel(cfg.Model)
-			} else if config.HasAPIKey("openai") {
-				cfg.Model = "openai/gpt-4o"
-				config.SetActiveModel(cfg.Model)
+				break
 			}
 		}
 	}
 
 	// Resolve provider from credentials
-	provider, err := providers.Resolve(cfg.Model)
+	provider, modelID, err := providers.Resolve(cfg.Model)
 	if err != nil {
 		hasAny := providers.OllamaAvailable()
 		hasAny = hasAny || config.HasAPIKey("anthropic")
@@ -90,6 +74,7 @@ func main() {
 	// Create agent
 	a := agent.New(provider, registry, agent.Options{
 		SystemPrompt: cfg.SystemPrompt,
+		Model:        modelID,
 		MaxLoops:     cfg.MaxLoops,
 		MaxTokens:    cfg.MaxTokens,
 	})

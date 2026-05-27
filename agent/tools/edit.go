@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gurcuff91/harness/llm"
+	llm "github.com/gurcuff91/harness/providers/llm"
 )
 
 type editInput struct {
