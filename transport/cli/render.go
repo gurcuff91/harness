@@ -99,11 +99,7 @@ func (r *Renderer) Handle(e types.Event) {
 		r.col = 0
 		r.startSpinner(e.Loop)
 
-	case types.EventThinkingEnd:
-		
-		if e.Output != "" {
-			r.renderThinking(e.Output)
-		}
+
 
 	case types.EventStreamThinkingDelta:
 		
@@ -124,7 +120,10 @@ func (r *Renderer) Handle(e types.Event) {
 	case types.EventStreamTextEnd:
 		r.finishTextStream()
 
-	case types.EventStreamToolBuilding:
+	case types.EventToolArgsDelta:
+		// Tool arguments arriving in fragments — ignored for now (spinner covers it)
+
+	case types.EventToolStart:
 		r.stopSpinnerNow()
 		r.finishAnyStream()
 		r.startSpinner(0)
@@ -137,9 +136,7 @@ func (r *Renderer) Handle(e types.Event) {
 	case types.EventToolResult:
 		r.renderToolResult(e.ToolName, e.Output, e.Duration, e.IsError)
 
-	case types.EventText:
-		
-		// Non-streamed final text — rendered by transport, not here
+
 
 	case types.EventTokens:
 		r.finishAnyStream()

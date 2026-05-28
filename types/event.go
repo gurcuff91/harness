@@ -8,28 +8,37 @@ import "time"
 type EventType int
 
 const (
-	EventThinking    EventType = iota // LLM is processing (spinner)
-	EventThinkingEnd                  // LLM finished thinking
-	EventText                         // LLM text response (non-streamed)
-	EventToolCall                     // Tool call initiated
-	EventToolResult                   // Tool execution completed
-	EventLoopStart                    // ReAct loop iteration start
-	EventLoopEnd                      // ReAct loop completed
-	EventError                        // Error occurred
-	EventTokens                       // Token usage update
-	EventTurnStart                    // Agent turn started
-	EventTurnEnd                      // Agent turn finished
+	// ── Turn lifecycle ────────────────────────────────────────────────────
+	EventTurnStart EventType = iota // user turn started
+	EventTurnEnd                    // user turn finished (final response ready)
 
-	// Streaming events
-	EventStreamTextDelta     // Streamed text fragment
-	EventStreamThinkingDelta // Streamed thinking fragment
-	EventStreamThinkingEnd   // Thinking stream finished
-	EventStreamTextEnd       // Text stream finished
-	EventStreamToolBuilding  // Tool input being generated (show spinner)
+	// ── ReAct loop ─────────────────────────────────────────────────────────
+	EventLoopStart // one ReAct iteration started
+	EventLoopEnd   // one ReAct iteration finished
 
-	// Compaction events
-	EventCompactStart // Session compaction started
-	EventCompactEnd   // Session compaction finished
+	// ── Streaming — text ───────────────────────────────────────────────────
+	EventStreamTextDelta    // streamed text fragment from LLM
+	EventStreamTextEnd      // text stream finished (footer should render)
+
+	// ── Streaming — thinking ───────────────────────────────────────────────
+	EventStreamThinkingDelta // streamed thinking/reasoning fragment
+	EventStreamThinkingEnd   // thinking stream finished
+
+	// ── Tools ──────────────────────────────────────────────────────────────
+	EventToolStart     // LLM announced a tool call (name + ID known, args not yet)
+	EventToolArgsDelta // tool arguments arriving in streaming fragments
+	EventToolCall      // tool arguments complete, tool executed
+	EventToolResult    // tool execution completed
+
+	// ── Tokens & cost ──────────────────────────────────────────────────────
+	EventTokens // token usage update (emitted on StreamUsage)
+
+	// ── Errors ─────────────────────────────────────────────────────────────
+	EventError // error occurred in the agent loop
+
+	// ── Compaction ─────────────────────────────────────────────────────────
+	EventCompactStart // session compaction started
+	EventCompactEnd   // session compaction finished
 )
 
 // TokenUsage carries token counts and derived metrics for an EventTokens event.

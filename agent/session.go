@@ -45,7 +45,7 @@ type Session struct {
 	handler Handler
 
 	mu        sync.Mutex
-	maxLoops  int
+	maxTurns  int
 	maxTokens int
 }
 
@@ -62,7 +62,7 @@ type modelPricing struct {
 func newSession(id, cwd, name string, storeInst store.SessionStoreInstance,
 	provider pllm.Provider, modelID, thinkingLvl string,
 	toolReg *tools.Registry, systemPrompt string,
-	maxLoops, maxTokens int) *Session {
+	maxTurns, maxTokens int) *Session {
 
 	s := &Session{
 		id:           id,
@@ -74,7 +74,7 @@ func newSession(id, cwd, name string, storeInst store.SessionStoreInstance,
 		thinkingLvl:  thinkingLvl,
 		tools:        toolReg,
 		systemPrompt: systemPrompt,
-		maxLoops:     maxLoops,
+		maxTurns:     maxTurns,
 		maxTokens:    maxTokens,
 	}
 	s.loadModelMeta(modelID)
@@ -112,7 +112,7 @@ func (s *Session) Prompt(ctx context.Context, text string, images []types.ImageD
 
 	s.emit(types.Event{Type: types.EventTurnStart})
 
-	for i := range s.maxLoops {
+	for i := range s.maxTurns {
 		if ctx.Err() != nil {
 			return "Cancelled.", nil
 		}
@@ -221,7 +221,7 @@ func (s *Session) Meta() SessionMeta {
 		Name:     s.name,
 		CWD:      s.cwd,
 		Model:    s.provider.Name() + "/" + s.modelID,
-		MaxLoops: s.maxLoops,
+		MaxTurns: s.maxTurns,
 	}
 }
 
@@ -263,7 +263,10 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 				s.emit(types.Event{Type: types.EventStreamTextEnd})
 				hadText = false
 			}
-			s.emit(types.Event{Type: types.EventStreamToolBuilding, ToolName: se.ToolName})
+			s.emit(types.Event{Type: types.EventToolStart, ToolName: se.ToolName})
+
+		case types.StreamToolDelta:
+			s.emit(types.Event{Type: types.EventToolArgsDelta, ToolName: se.ToolName, Delta: se.Delta})
 
 		case types.StreamToolEnd:
 			if len(se.ToolArgs) > 0 {
@@ -369,5 +372,5 @@ type SessionMeta struct {
 	Name     string
 	CWD      string
 	Model    string
-	MaxLoops int
+	MaxTurns int
 }

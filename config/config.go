@@ -9,7 +9,7 @@ import (
 type Config struct {
 	Model        string `json:"model"`
 	SystemPrompt string `json:"system_prompt"`
-	MaxLoops     int    `json:"max_loops"`
+	MaxTurns     int    `json:"max_turns"`
 	MaxTokens    int    `json:"max_tokens"`
 }
 
@@ -20,7 +20,7 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		Model:        "claude-oauth/claude-sonnet-4-20250514",
 		SystemPrompt: defaultSystemPrompt,
-		MaxLoops:     25,
+		MaxTurns:     25,
 		MaxTokens:    8192,
 	}
 

@@ -24,7 +24,7 @@ type Agent struct {
 	model          string // bare model ID
 	thinkingLevel  string
 	systemPrompt   string
-	maxLoops       int
+	maxTurns       int
 	maxTokens      int
 }
 
@@ -39,7 +39,7 @@ type AgentOptions struct {
 
 	// ── Behavior ──────────────────────────────────────────────────────────
 	SystemPrompt string // base system prompt for all sessions
-	MaxLoops     int    // max ReAct iterations per turn — default: 25
+	MaxTurns     int    // max ReAct iterations per turn — default: 25
 	MaxTokens    int    // max output tokens per LLM call — default: 8192
 
 	// ── Tools ─────────────────────────────────────────────────────────────
@@ -59,8 +59,8 @@ func New(opts AgentOptions) (*Agent, error) {
 		return nil, fmt.Errorf("agent: %w", err)
 	}
 
-	if opts.MaxLoops <= 0 {
-		opts.MaxLoops = 25
+	if opts.MaxTurns <= 0 {
+		opts.MaxTurns = 25
 	}
 	if opts.MaxTokens <= 0 {
 		opts.MaxTokens = 8192
@@ -86,7 +86,7 @@ func New(opts AgentOptions) (*Agent, error) {
 		model:          modelID,
 		thinkingLevel:  opts.ThinkingLevel,
 		systemPrompt:   opts.SystemPrompt,
-		maxLoops:       opts.MaxLoops,
+		maxTurns:       opts.MaxTurns,
 		maxTokens:      opts.MaxTokens,
 	}, nil
 }
@@ -116,7 +116,7 @@ func (a *Agent) NewSession(cwd string) (*Session, error) {
 	return newSession(id, cwd, "", storeInst,
 		a.provider, a.model, a.thinkingLevel,
 		sessionTools, systemPrompt,
-		a.maxLoops, a.maxTokens), nil
+		a.maxTurns, a.maxTokens), nil
 }
 
 // ResumeSession reopens an existing session by ID.
@@ -132,7 +132,7 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 	return newSession(sessionID, "", "", storeInst,
 		a.provider, a.model, a.thinkingLevel,
 		a.toolReg.Clone(), a.systemPrompt,
-		a.maxLoops, a.maxTokens), nil
+		a.maxTurns, a.maxTokens), nil
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────

@@ -54,7 +54,7 @@ func main() {
 	a, err := agent.New(agent.AgentOptions{
 		Model:        cfg.Model,
 		SystemPrompt: cfg.SystemPrompt,
-		MaxLoops:     cfg.MaxLoops,
+		MaxTurns:     cfg.MaxTurns,
 		MaxTokens:    cfg.MaxTokens,
 	})
 	if err != nil {
