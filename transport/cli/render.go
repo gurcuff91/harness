@@ -144,8 +144,9 @@ func (r *Renderer) Handle(e types.Event) {
 	case types.EventTokens:
 		r.finishAnyStream()
 		// Per-turn (for display)
-		// Accumulated totals — from session (source of truth)
-		r.lastInput = e.Tokens.TotalInput
+		// Input = last turn (= current context size sent to LLM)
+		// Output/Cache = accumulated totals across session
+		r.lastInput = e.Tokens.Input
 		r.lastOutput = e.Tokens.TotalOutput
 		r.lastCacheRead = e.Tokens.TotalCacheRead
 		r.lastCacheWrite = e.Tokens.TotalCacheWrite

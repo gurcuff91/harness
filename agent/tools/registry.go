@@ -18,7 +18,8 @@ type Tool struct {
 
 // Registry manages available tools.
 type Registry struct {
-	tools map[string]Tool
+	tools  map[string]Tool
+	order  []string // insertion order for deterministic output
 }
 
 func NewRegistry() *Registry {
@@ -27,23 +28,27 @@ func NewRegistry() *Registry {
 
 // Register adds a tool to the registry.
 func (r *Registry) Register(t Tool) {
+	if _, exists := r.tools[t.Def.Name]; !exists {
+		r.order = append(r.order, t.Def.Name)
+	}
 	r.tools[t.Def.Name] = t
 }
 
-// Definitions returns all tool schemas for the LLM.
+// Definitions returns tool schemas in registration order.
 func (r *Registry) Definitions() []types.ToolDef {
-	defs := make([]types.ToolDef, 0, len(r.tools))
-	for _, t := range r.tools {
-		defs = append(defs, t.Def)
+	defs := make([]types.ToolDef, 0, len(r.order))
+	for _, name := range r.order {
+		defs = append(defs, r.tools[name].Def)
 	}
 	return defs
 }
 
-// Clone returns a shallow copy of the registry.
+// Clone returns a shallow copy of the registry preserving order.
 func (r *Registry) Clone() *Registry {
 	c := NewRegistry()
-	for k, v := range r.tools {
-		c.tools[k] = v
+	for _, name := range r.order {
+		c.tools[name] = r.tools[name]
+		c.order = append(c.order, name)
 	}
 	return c
 }

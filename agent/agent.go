@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -97,12 +98,14 @@ func (a *Agent) NewSession(cwd string) (*Session, error) {
 		return nil, fmt.Errorf("load resources: %w", err)
 	}
 
-	systemPrompt := a.buildSystemPrompt(res)
-
-	// Clone base tools and always inject skill tool (loader knows if it can serve it)
+	// Clone base tools and inject skill tool only if skills were discovered
 	sessionTools := a.toolReg.Clone()
-	def, execFn := tools.Skill(a.resourceLoader.ReadSkill)
-	sessionTools.Register(tools.Tool{Def: def, Execute: execFn})
+	if len(res.Skills) > 0 {
+		def, execFn := tools.Skill(a.resourceLoader.ReadSkill)
+		sessionTools.Register(tools.Tool{Def: def, Execute: execFn})
+	}
+
+	systemPrompt := a.buildSystemPrompt(cwd, res)
 
 	id := uuid.New().String()
 	storeInst, err := a.store.Create(id, cwd)
@@ -134,18 +137,37 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 
 // ── Internal helpers ────────────────────────────────────────────────────
 
-func (a *Agent) buildSystemPrompt(res *resources.Resources) string {
-	prompt := a.systemPrompt
+func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) string {
+	var b strings.Builder
 
+	// 1. Identity — SYSTEM.md replaces completely
 	if res.SystemMD != "" {
-		prompt += "\n\n---\n\n" + res.SystemMD
+		b.WriteString(res.SystemMD)
+	} else {
+		b.WriteString(a.systemPrompt)
 	}
 
+	// 2. Tool policy — always present, survives SYSTEM.md override
+	b.WriteString("\n\nDo not use bash for file operations when dedicated file tools are available.")
+
+	// 3. Available Skills — only if skills were discovered
+	if len(res.Skills) > 0 {
+		b.WriteString("\n\n## Available Skills\n\n")
+		for _, s := range res.Skills {
+			b.WriteString(fmt.Sprintf("- %s: %s\n", s.Name, s.Description))
+		}
+	}
+
+	// 4. Working Directory — always present
+	b.WriteString(fmt.Sprintf("\n\n## Working Directory\n\n%s\n", cwd))
+
+	// 5. Project Context — only if AGENTS.md exists
 	if res.AgentsMD != "" {
-		prompt += "\n\n---\n\n" + res.AgentsMD
+		b.WriteString("\n\n## Project Context\n\n")
+		b.WriteString(res.AgentsMD)
 	}
 
-	return prompt
+	return b.String()
 }
 
 func defaultTools() *tools.Registry {

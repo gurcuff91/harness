@@ -326,29 +326,16 @@ func (s *Session) updateStats(se types.StreamEvent) {
 	// Emit enriched EventTokens to handler
 	s.emit(types.Event{
 		Type: types.EventTokens,
-		Tokens: struct {
-			Input           int
-			Output          int
-			CacheRead       int
-			CacheWrite      int
-			TotalInput      int
-			TotalOutput     int
-			TotalCacheRead  int
-			TotalCacheWrite int
-			CostUSD         float64
-			ContextUsage      float64
-			ContextWindow   int
-		}{
+		Tokens: types.TokenUsage{
 			Input:           se.InputTokens,
 			Output:          se.OutputTokens,
 			CacheRead:       se.CacheRead,
 			CacheWrite:      se.CacheWrite,
-			TotalInput:      s.stats.InputTokens,
 			TotalOutput:     s.stats.OutputTokens,
 			TotalCacheRead:  s.stats.CacheRead,
 			TotalCacheWrite: s.stats.CacheWrite,
 			CostUSD:         s.stats.CostUSD,
-			ContextUsage:      s.stats.ContextUsage,
+			ContextUsage:    s.stats.ContextUsage,
 			ContextWindow:   s.contextWindow,
 		},
 	})

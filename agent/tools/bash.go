@@ -22,7 +22,7 @@ func Bash() Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        "bash",
-			Description: "Execute a bash command and return stdout/stderr. Use for running code, installing packages, git operations, searching files (grep/find), and general system tasks. Do NOT use for reading/writing/editing files — use the dedicated file tools instead.",
+			Description: "Execute a shell command. Use for builds, git, grep/find, installs, and system tasks. Do NOT use for reading, writing, or editing files — use read_file, write_file, and edit instead.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {

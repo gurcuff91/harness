@@ -13,9 +13,7 @@ type Config struct {
 	MaxTokens    int    `json:"max_tokens"`
 }
 
-const defaultSystemPrompt = `You are a helpful AI assistant with access to tools. 
-Use them when needed to accomplish the user's request. 
-Think step by step before acting.`
+const defaultSystemPrompt = `You are an expert coding agent working directly in the user's codebase. You have access to tools for reading, writing, and editing files, running shell commands, and fetching URLs.`
 
 // Load reads config. No env vars — everything lives in ~/.harness/
 func Load() (*Config, error) {
