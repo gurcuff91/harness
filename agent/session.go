@@ -271,15 +271,13 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 				start := time.Now()
 				output, execErr := s.tools.Run(se.ToolName, se.ToolArgs)
 				dur := time.Since(start)
-				if execErr != nil {
-					output = fmt.Sprintf("TOOL ERROR: %v", execErr)
-				}
 				const maxOut = 15000
 				if len(output) > maxOut {
 					output = output[:maxOut] + "\n...(truncated)"
 				}
-				s.emit(types.Event{Type: types.EventToolResult, ToolName: se.ToolName, Output: output, Duration: dur, IsError: execErr != nil})
-				streamResults = append(streamResults, types.ToolResult{ID: se.ToolID, Output: output, IsErr: execErr != nil})
+				isErr := execErr != nil
+				s.emit(types.Event{Type: types.EventToolResult, ToolName: se.ToolName, Output: output, Duration: dur, IsError: isErr})
+				streamResults = append(streamResults, types.ToolResult{ID: se.ToolID, Output: output, IsErr: isErr})
 			}
 
 		case types.StreamUsage:

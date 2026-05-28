@@ -92,19 +92,17 @@ func New(opts AgentOptions) (*Agent, error) {
 
 // NewSession creates a fresh session for a working directory.
 func (a *Agent) NewSession(cwd string) (*Session, error) {
-	res, err := a.resourceLoader.Load(cwd)
+	res, err := a.resourceLoader.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load resources: %w", err)
 	}
 
 	systemPrompt := a.buildSystemPrompt(res)
 
-	// Clone base tools and inject read_skill if skills were discovered
+	// Clone base tools and always inject skill tool (loader knows if it can serve it)
 	sessionTools := a.toolReg.Clone()
-	if len(res.Skills) > 0 {
-		def, execFn := tools.ReadSkill(res)
-		sessionTools.Register(tools.Tool{Def: def, Execute: execFn})
-	}
+	def, execFn := tools.Skill(a.resourceLoader.ReadSkill)
+	sessionTools.Register(tools.Tool{Def: def, Execute: execFn})
 
 	id := uuid.New().String()
 	storeInst, err := a.store.Create(id, cwd)
@@ -139,16 +137,12 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 func (a *Agent) buildSystemPrompt(res *resources.Resources) string {
 	prompt := a.systemPrompt
 
-	if res.AgentsMD != "" {
-		prompt += "\n\n---\n\n" + res.AgentsMD
+	if res.SystemMD != "" {
+		prompt += "\n\n---\n\n" + res.SystemMD
 	}
 
-	if len(res.Skills) > 0 {
-		prompt += "\n\n## Available Skills\n\n"
-		for _, s := range res.Skills {
-			prompt += fmt.Sprintf("- **%s**: %s\n", s.Name, s.Description)
-		}
-		prompt += "\nUse the `read_skill` tool to load full instructions for a skill.\n"
+	if res.AgentsMD != "" {
+		prompt += "\n\n---\n\n" + res.AgentsMD
 	}
 
 	return prompt

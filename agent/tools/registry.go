@@ -1,13 +1,16 @@
 package tools
 
 import (
-	"github.com/gurcuff91/harness/types"
 	"encoding/json"
 	"fmt"
 
+	"github.com/gurcuff91/harness/types"
 )
 
 // Tool defines a single tool that the agent can use.
+// Execute returns (string, error):
+//   - string: always sent to the LLM (even on error)
+//   - error: Go-level signal — used to set IsError on the event/result
 type Tool struct {
 	Def     types.ToolDef
 	Execute func(input json.RawMessage) (string, error)
@@ -19,9 +22,7 @@ type Registry struct {
 }
 
 func NewRegistry() *Registry {
-	return &Registry{
-		tools: make(map[string]Tool),
-	}
+	return &Registry{tools: make(map[string]Tool)}
 }
 
 // Register adds a tool to the registry.
@@ -38,7 +39,7 @@ func (r *Registry) Definitions() []types.ToolDef {
 	return defs
 }
 
-// Clone returns a shallow copy of the registry (tools are not deep-copied).
+// Clone returns a shallow copy of the registry.
 func (r *Registry) Clone() *Registry {
 	c := NewRegistry()
 	for k, v := range r.tools {
@@ -48,10 +49,12 @@ func (r *Registry) Clone() *Registry {
 }
 
 // Run executes a tool by name with the given input.
+// Returns (text, error) — text always goes to the LLM, error signals failure.
 func (r *Registry) Run(name string, input json.RawMessage) (string, error) {
 	t, ok := r.tools[name]
 	if !ok {
-		return "", fmt.Errorf("unknown tool: %s", name)
+		err := fmt.Errorf("unknown tool: %s", name)
+		return err.Error(), err
 	}
 	return t.Execute(input)
 }

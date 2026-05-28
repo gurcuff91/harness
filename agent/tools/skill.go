@@ -1,34 +1,22 @@
-// Package tools holds the ReadSkill tool for session injection.
 package tools
 
 import (
-	"github.com/gurcuff91/harness/types"
 	"encoding/json"
-	"os"
+	"fmt"
 
-	"github.com/gurcuff91/harness/agent/resources"
+	"github.com/gurcuff91/harness/types"
 )
 
-// ReadSkill returns the tool definition and execute function for loading skill files.
-// The caller (Agent.NewSession) registers it into the session's tool registry.
-func ReadSkill(r *resources.Resources) (types.ToolDef, func(json.RawMessage) (string, error)) {
-	var skillList string
-	for _, s := range r.Skills {
-		skillList += "- **" + s.Name + "**: " + s.Description + "\n"
-	}
-
+// Skill returns a tool that loads the full content of a skill by name.
+// readFn is typically ResourceLoader.ReadSkill — injected by the agent at session creation.
+func Skill(readFn func(name string) (string, error)) (types.ToolDef, func(json.RawMessage) (string, error)) {
 	def := types.ToolDef{
-		Name: "read_skill",
-		Description: "Load the full instructions for a skill by name. " +
-			"Use this before executing any skill-based workflow. " +
-			"Available skills:\n" + skillList,
+		Name:        "skill",
+		Description: "Read the full instructions for a skill by name. Use this to load a skill before executing it.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
-				"name": {
-					"type": "string",
-					"description": "Name of the skill to load"
-				}
+				"name": {"type": "string", "description": "Name of the skill to load"}
 			},
 			"required": ["name"]
 		}`),
@@ -39,30 +27,14 @@ func ReadSkill(r *resources.Resources) (types.ToolDef, func(json.RawMessage) (st
 			Name string `json:"name"`
 		}
 		if err := json.Unmarshal(input, &params); err != nil {
-			return "Error: invalid input. Provide: {\"name\": \"skill-name\"}", nil
+			return fmt.Sprintf("Error parsing input: %v", err), err
 		}
-		for _, s := range r.Skills {
-			if s.Name == params.Name {
-				content, err := os.ReadFile(s.Location)
-				if err != nil {
-					return "Error reading skill file: " + err.Error(), nil
-				}
-				return string(content), nil
-			}
+		content, err := readFn(params.Name)
+		if err != nil {
+			return fmt.Sprintf("Error reading skill %q: %v", params.Name, err), err
 		}
-		return "Skill not found: " + params.Name + ". Available: " + skillNames(r.Skills), nil
+		return content, nil
 	}
 
 	return def, execute
-}
-
-func skillNames(skills []resources.SkillInfo) string {
-	var names string
-	for i, s := range skills {
-		if i > 0 {
-			names += ", "
-		}
-		names += s.Name
-	}
-	return names
 }
