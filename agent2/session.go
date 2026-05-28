@@ -1,0 +1,388 @@
+package agent2
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/gurcuff91/harness/agent2/store"
+	"github.com/gurcuff91/harness/agent2/tools"
+	"github.com/gurcuff91/harness/providers"
+	pllm "github.com/gurcuff91/harness/providers/llm"
+	"github.com/gurcuff91/harness/types"
+)
+
+// ── Session ─────────────────────────────────────────────────────────────
+
+// Session is one conversation. It owns:
+//   - store: source of truth for all messages (no in-memory history)
+//   - provider + modelID: the LLM for this session (mutable via SwitchModel)
+//   - tools: cloned registry with read_skill injected
+//   - systemPrompt: built once at creation, immutable
+//   - stats: accumulated token usage + cost (always calculated)
+//
+// All Prompt() calls are serialized via mu.
+type Session struct {
+	id           string
+	cwd          string
+	name         string
+
+	// Dependencies
+	store        store.SessionStoreInstance
+	provider     pllm.Provider
+	modelID      string
+	thinkingLvl  string
+	tools        *tools.Registry
+	systemPrompt string
+
+	// Stats — accumulated over the session lifetime
+	stats          types.SessionStats
+	lastInputTokens int    // last turn input tokens — used to compute ContextUsage
+	contextWindow   int    // from model meta, updated on SwitchModel
+	pricing         modelPricing
+
+	handler Handler
+
+	mu        sync.Mutex
+	maxLoops  int
+	maxTokens int
+}
+
+// modelPricing holds per-million-token rates for cost calculation.
+type modelPricing struct {
+	InputPrice  float64
+	OutputPrice float64
+	CacheRead   float64
+	CacheWrite  float64
+}
+
+// ── Constructor (called by Agent.NewSession) ───────────────────────────
+
+func newSession(id, cwd, name string, storeInst store.SessionStoreInstance,
+	provider pllm.Provider, modelID, thinkingLvl string,
+	toolReg *tools.Registry, systemPrompt string,
+	maxLoops, maxTokens int) *Session {
+
+	s := &Session{
+		id:           id,
+		cwd:          cwd,
+		name:         name,
+		store:        storeInst,
+		provider:     provider,
+		modelID:      modelID,
+		thinkingLvl:  thinkingLvl,
+		tools:        toolReg,
+		systemPrompt: systemPrompt,
+		maxLoops:     maxLoops,
+		maxTokens:    maxTokens,
+	}
+	s.loadModelMeta(modelID)
+	return s
+}
+
+// loadModelMeta updates contextWindow and pricing from the provider (authoritative)
+// falling back to the registry chain via provider.ModelMeta().
+func (s *Session) loadModelMeta(modelID string) {
+	meta := s.provider.ModelMeta(modelID)
+	if meta == nil {
+		s.contextWindow = 128000 // safe default
+		return
+	}
+	s.contextWindow = meta.ContextWindow
+	s.pricing = modelPricing{
+		InputPrice:  meta.InputPrice,
+		OutputPrice: meta.OutputPrice,
+		CacheRead:   meta.CacheRead,
+		CacheWrite:  meta.CacheWrite,
+	}
+}
+
+// ── Public methods ──────────────────────────────────────────────────────
+
+// Prompt runs one full turn: user message → ReAct loop → final response.
+func (s *Session) Prompt(ctx context.Context, text string, images []types.ImageData) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	userMsg := s.formatUser(text, images)
+	if err := s.store.AddMessage(userMsg); err != nil {
+		return "", fmt.Errorf("store user: %w", err)
+	}
+
+	s.emit(types.Event{Type: types.EventTurnStart})
+
+	for i := range s.maxLoops {
+		if ctx.Err() != nil {
+			return "Cancelled.", nil
+		}
+
+		history := s.store.Messages()
+
+		req := &types.Request{
+			SystemPrompt:  s.systemPrompt,
+			Model:         s.modelID,
+			Messages:      history,
+			Tools:         s.tools.Definitions(),
+			MaxTokens:     s.maxTokens,
+			ThinkingLevel: s.thinkingLvl,
+		}
+
+		s.emit(types.Event{Type: types.EventLoopStart, Loop: i})
+
+		resp, toolResults, err := s.runStream(ctx, req)
+		if err != nil {
+			s.emit(types.Event{Type: types.EventError, Output: err.Error()})
+			s.emit(types.Event{Type: types.EventLoopEnd})
+			s.emit(types.Event{Type: types.EventTurnEnd})
+			return "", err
+		}
+
+		if err := s.store.AddMessage(resp.AssistantMessage); err != nil {
+			return "", fmt.Errorf("store assistant: %w", err)
+		}
+
+		if len(resp.ToolCalls) == 0 {
+			s.emit(types.Event{Type: types.EventLoopEnd, Loop: i})
+			s.emit(types.Event{Type: types.EventTurnEnd})
+			return resp.Text, nil
+		}
+
+		for _, tr := range toolResults {
+			msg := s.formatToolResult(tr)
+			if err := s.store.AddMessage(msg); err != nil {
+				return "", fmt.Errorf("store tool result: %w", err)
+			}
+		}
+	}
+
+	s.emit(types.Event{Type: types.EventLoopEnd})
+	s.emit(types.Event{Type: types.EventTurnEnd})
+	return "Hit max tool iterations. Try breaking the task into smaller steps.", nil
+}
+
+// Subscribe registers an event handler for this session.
+func (s *Session) Subscribe(h Handler) {
+	s.handler = h
+}
+
+// SwitchModel resolves, validates, and switches to a new "provider/model".
+func (s *Session) SwitchModel(fullModel string) error {
+	// Resolve does split + provider lookup + model validation in one step
+	provider, modelID, err := providers.Resolve(fullModel)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.provider = provider
+	s.modelID = modelID
+	s.loadModelMeta(modelID)
+	s.mu.Unlock()
+	return nil
+}
+
+// SwitchThinking changes the thinking level for this session.
+func (s *Session) SwitchThinking(level string) error {
+	s.mu.Lock()
+	s.thinkingLvl = level
+	s.mu.Unlock()
+	return nil
+}
+
+// Compact truncates old messages keeping the last N.
+func (s *Session) Compact(ctx context.Context) error {
+	s.emit(types.Event{Type: types.EventCompactStart})
+	if err := s.store.Truncate(30); err != nil {
+		return err
+	}
+	s.emit(types.Event{Type: types.EventCompactEnd})
+	return nil
+}
+
+// Rename sets a friendly display name.
+func (s *Session) Rename(name string) error {
+	s.name = name
+	return nil
+}
+
+// Stats returns a snapshot of the accumulated session stats.
+func (s *Session) Stats() types.SessionStats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stats := s.stats
+	stats.ContextWindow = s.contextWindow
+	return stats
+}
+
+// Meta returns a snapshot of session metadata.
+func (s *Session) Meta() SessionMeta {
+	return SessionMeta{
+		ID:       s.id,
+		Name:     s.name,
+		CWD:      s.cwd,
+		Model:    s.provider.Name() + "/" + s.modelID,
+		MaxLoops: s.maxLoops,
+	}
+}
+
+// Close flushes and closes the store.
+func (s *Session) Close() error {
+	return s.store.Close()
+}
+
+// ── Internals ───────────────────────────────────────────────────────────
+
+// runStream is one ReAct iteration: stream LLM → execute tools during stream.
+func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Response, []types.ToolResult, error) {
+	var (
+		hadThinking   bool
+		hadText       bool
+		streamResults []types.ToolResult
+	)
+
+	resp, err := s.provider.CompleteStream(ctx, req, func(se types.StreamEvent) {
+		switch se.Type {
+		case types.StreamThinkingDelta:
+			s.emit(types.Event{Type: types.EventStreamThinkingDelta, Delta: se.Delta})
+			hadThinking = true
+
+		case types.StreamTextDelta:
+			if hadThinking && !hadText {
+				s.emit(types.Event{Type: types.EventStreamThinkingEnd})
+				hadThinking = false
+			}
+			s.emit(types.Event{Type: types.EventStreamTextDelta, Delta: se.Delta})
+			hadText = true
+
+		case types.StreamToolStart:
+			if hadThinking {
+				s.emit(types.Event{Type: types.EventStreamThinkingEnd})
+				hadThinking = false
+			}
+			if hadText {
+				s.emit(types.Event{Type: types.EventStreamTextEnd})
+				hadText = false
+			}
+			s.emit(types.Event{Type: types.EventStreamToolBuilding, ToolName: se.ToolName})
+
+		case types.StreamToolEnd:
+			if len(se.ToolArgs) > 0 {
+				s.emit(types.Event{Type: types.EventToolCall, ToolName: se.ToolName, ToolArgs: string(se.ToolArgs)})
+				start := time.Now()
+				output, execErr := s.tools.Run(se.ToolName, se.ToolArgs)
+				dur := time.Since(start)
+				if execErr != nil {
+					output = fmt.Sprintf("TOOL ERROR: %v", execErr)
+				}
+				const maxOut = 15000
+				if len(output) > maxOut {
+					output = output[:maxOut] + "\n...(truncated)"
+				}
+				s.emit(types.Event{Type: types.EventToolResult, ToolName: se.ToolName, Output: output, Duration: dur, IsError: execErr != nil})
+				streamResults = append(streamResults, types.ToolResult{ID: se.ToolID, Output: output, IsErr: execErr != nil})
+			}
+
+		case types.StreamUsage:
+			if hadThinking {
+				s.emit(types.Event{Type: types.EventStreamThinkingEnd})
+				hadThinking = false
+			}
+			s.updateStats(se)
+
+		case types.StreamDone:
+			if hadText {
+				s.emit(types.Event{Type: types.EventStreamTextEnd})
+				hadText = false
+			}
+
+		case types.StreamError:
+			s.emit(types.Event{Type: types.EventError, Output: se.Delta})
+		}
+	})
+
+	return resp, streamResults, err
+}
+
+// updateStats accumulates token counts, calculates cost and context%, then emits EventTokens.
+// Called on StreamUsage. Must be called while mu is held (we're inside Prompt's lock).
+func (s *Session) updateStats(se types.StreamEvent) {
+	// Accumulate
+	s.stats.InputTokens += se.InputTokens
+	s.stats.OutputTokens += se.OutputTokens
+	s.stats.CacheRead += se.CacheRead
+	s.stats.CacheWrite += se.CacheWrite
+
+	// Cost for this turn (per million tokens)
+	turnCost := (float64(se.InputTokens)*s.pricing.InputPrice +
+		float64(se.OutputTokens)*s.pricing.OutputPrice +
+		float64(se.CacheRead)*s.pricing.CacheRead +
+		float64(se.CacheWrite)*s.pricing.CacheWrite) / 1_000_000
+	s.stats.CostUSD += turnCost
+
+	// Context % — last input tokens / model context window
+	s.lastInputTokens = se.InputTokens
+	if s.contextWindow > 0 {
+		s.stats.ContextUsage = float64(s.lastInputTokens) / float64(s.contextWindow)
+	}
+
+	// Emit enriched EventTokens to handler
+	s.emit(types.Event{
+		Type: types.EventTokens,
+		Tokens: struct {
+			Input           int
+			Output          int
+			CacheRead       int
+			CacheWrite      int
+			TotalInput      int
+			TotalOutput     int
+			TotalCacheRead  int
+			TotalCacheWrite int
+			CostUSD         float64
+			ContextUsage      float64
+			ContextWindow   int
+		}{
+			Input:           se.InputTokens,
+			Output:          se.OutputTokens,
+			CacheRead:       se.CacheRead,
+			CacheWrite:      se.CacheWrite,
+			TotalInput:      s.stats.InputTokens,
+			TotalOutput:     s.stats.OutputTokens,
+			TotalCacheRead:  s.stats.CacheRead,
+			TotalCacheWrite: s.stats.CacheWrite,
+			CostUSD:         s.stats.CostUSD,
+			ContextUsage:      s.stats.ContextUsage,
+			ContextWindow:   s.contextWindow,
+		},
+	})
+}
+
+func (s *Session) emit(e types.Event) {
+	if s.handler != nil {
+		s.handler(e)
+	}
+}
+
+func (s *Session) formatUser(text string, images []types.ImageData) []byte {
+	if len(images) > 0 {
+		return s.provider.FormatUserMessageWithImages(text, images)
+	}
+	return s.provider.FormatUserMessage(text)
+}
+
+func (s *Session) formatToolResult(tr types.ToolResult) []byte {
+	msgs := s.provider.FormatToolResults([]types.ToolResult{tr})
+	if len(msgs) > 0 {
+		return msgs[0]
+	}
+	return nil
+}
+
+// ── SessionMeta ─────────────────────────────────────────────────────────
+
+type SessionMeta struct {
+	ID       string
+	Name     string
+	CWD      string
+	Model    string
+	MaxLoops int
+}

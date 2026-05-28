@@ -1,9 +1,9 @@
 package providers
 
 import (
+	"github.com/gurcuff91/harness/types"
 	"fmt"
 
-	llm "github.com/gurcuff91/harness/providers/llm"
 )
 
 // ProviderStatus describes a provider and its current connection state.
@@ -50,7 +50,7 @@ func GetProviderStatuses() []ProviderStatus {
 // ModelGroup is a group of models from one provider for display.
 type ModelGroup struct {
 	Label  string
-	Models []llm.ModelInfo
+	Models []types.ModelInfo
 }
 
 // GetModelGroups returns ordered groups of models for transport display.
@@ -74,11 +74,11 @@ func GetModelGroups(currentModel string) []ModelGroup {
 			if !p.IsActive() || p.Name() != name {
 				continue
 			}
-			var list []llm.ModelInfo
+			var list []types.ModelInfo
 			for _, m := range p.Models() {
 				fullName := name + "/" + m.ID
-				list = append(list, llm.ModelInfo{
-					Name:     m.ID,
+				list = append(list, types.ModelInfo{
+					ID:       m.ID,
 					Provider: name,
 					Active:   fullName == currentModel,
 				})

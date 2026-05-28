@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"github.com/gurcuff91/harness/types"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -34,7 +35,7 @@ type openAIFunction struct {
 }
 
 func DoOpenAIStream(ctx context.Context, client *http.Client, apiKey, baseURL string,
-	req *Request, extraHeaders map[string]string, cb StreamCallback) (*Response, error) {
+	req *types.Request, extraHeaders map[string]string, cb types.StreamCallback) (*types.Response, error) {
 
 	body, err := BuildOpenAIBody(req)
 	if err != nil {
@@ -70,7 +71,7 @@ func DoOpenAIStream(ctx context.Context, client *http.Client, apiKey, baseURL st
 	return ParseOpenAIStream(httpResp.Body, cb)
 }
 
-func BuildOpenAIBody(req *Request) (*openAIRequest, error) {
+func BuildOpenAIBody(req *types.Request) (*openAIRequest, error) {
 	messages := make([]json.RawMessage, 0, len(req.Messages)+1)
 	if req.SystemPrompt != "" {
 		sysMsg, _ := json.Marshal(map[string]string{"role": "system", "content": req.SystemPrompt})
@@ -133,14 +134,14 @@ func TranslateThinkingLevel(model, level string) string {
 	return ""
 }
 
-func ParseOpenAIStream(body io.Reader, cb StreamCallback) (*Response, error) {
-	emit := func(e StreamEvent) {
+func ParseOpenAIStream(body io.Reader, cb types.StreamCallback) (*types.Response, error) {
+	emit := func(e types.StreamEvent) {
 		if cb != nil {
 			cb(e)
 		}
 	}
 
-	resp := &Response{}
+	resp := &types.Response{}
 	type toolState struct {
 		id      string
 		name    string
@@ -170,14 +171,14 @@ func ParseOpenAIStream(body io.Reader, cb StreamCallback) (*Response, error) {
 
 		if r, ok := delta["reasoning_content"].(string); ok && r != "" {
 			reasoningBuf += r
-			emit(StreamEvent{Type: StreamThinkingDelta, Delta: r})
+			emit(types.StreamEvent{Type: types.StreamThinkingDelta, Delta: r})
 		} else if r, ok := delta["reasoning"].(string); ok && r != "" {
 			reasoningBuf += r
-			emit(StreamEvent{Type: StreamThinkingDelta, Delta: r})
+			emit(types.StreamEvent{Type: types.StreamThinkingDelta, Delta: r})
 		}
 		if text, ok := delta["content"].(string); ok && text != "" {
 			textBuf += text
-			emit(StreamEvent{Type: StreamTextDelta, Delta: text})
+			emit(types.StreamEvent{Type: types.StreamTextDelta, Delta: text})
 		}
 		if tcs, ok := delta["tool_calls"].([]any); ok {
 			for _, tc := range tcs {
@@ -190,13 +191,13 @@ func ParseOpenAIStream(body io.Reader, cb StreamCallback) (*Response, error) {
 					}
 					ts.id, _ = tcMap["id"].(string)
 					toolsByIdx[idx] = ts
-					emit(StreamEvent{Type: StreamToolStart, ToolID: ts.id, ToolName: ts.name})
+					emit(types.StreamEvent{Type: types.StreamToolStart, ToolID: ts.id, ToolName: ts.name})
 				}
 				ts := toolsByIdx[idx]
 				if fn, ok := tcMap["function"].(map[string]any); ok {
 					if args, ok := fn["arguments"].(string); ok {
 						ts.argsBuf += args
-						emit(StreamEvent{Type: StreamToolDelta, Delta: args})
+						emit(types.StreamEvent{Type: types.StreamToolDelta, Delta: args})
 					}
 				}
 			}
@@ -209,15 +210,15 @@ func ParseOpenAIStream(body io.Reader, cb StreamCallback) (*Response, error) {
 		if len(input) == 0 {
 			input = json.RawMessage("{}")
 		}
-		resp.ToolCalls = append(resp.ToolCalls, ToolCall{
+		resp.ToolCalls = append(resp.ToolCalls, types.ToolCall{
 			ID: ts.id, Name: ts.name, Input: input,
 		})
-		emit(StreamEvent{Type: StreamToolEnd, ToolID: ts.id, ToolName: ts.name, ToolArgs: input})
+		emit(types.StreamEvent{Type: types.StreamToolEnd, ToolID: ts.id, ToolName: ts.name, ToolArgs: input})
 	}
-	emit(StreamEvent{
-		Type: StreamUsage, InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens,
+	emit(types.StreamEvent{
+		Type: types.StreamUsage, InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens,
 	})
-	emit(StreamEvent{Type: StreamDone})
+	emit(types.StreamEvent{Type: types.StreamDone})
 
 	assistantMsg := map[string]any{"role": "assistant", "content": textBuf}
 	if len(resp.ToolCalls) > 0 {
@@ -247,7 +248,7 @@ func FormatUserMessage(text string) json.RawMessage {
 	return data
 }
 
-func FormatUserMessageWithImages(text string, images []ImageData) json.RawMessage {
+func FormatUserMessageWithImages(text string, images []types.ImageData) json.RawMessage {
 	var content []map[string]any
 	for _, img := range images {
 		content = append(content, map[string]any{
@@ -262,7 +263,7 @@ func FormatUserMessageWithImages(text string, images []ImageData) json.RawMessag
 	return data
 }
 
-func FormatToolResults(results []ToolResult) []json.RawMessage {
+func FormatToolResults(results []types.ToolResult) []json.RawMessage {
 	var msgs []json.RawMessage
 	for _, r := range results {
 		data, _ := json.Marshal(map[string]string{

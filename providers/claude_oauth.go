@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"github.com/gurcuff91/harness/types"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -32,7 +33,7 @@ type ClaudeOAuth struct {
 	client       *http.Client
 	tokens       *TokenManager
 	session      string // persistent session ID per harness instance
-	cachedModels []llm.ModelMeta
+	cache        map[string]types.ModelMeta
 	mu           sync.Mutex
 }
 
@@ -42,6 +43,7 @@ func NewClaudeOAuth() (*ClaudeOAuth, error) {
 		return nil, fmt.Errorf("oauth init: %w", err)
 	}
 	c := &ClaudeOAuth{
+		cache: make(map[string]types.ModelMeta),
 		client:  &http.Client{Timeout: 5 * time.Minute},
 		tokens:  tm,
 		session: generateUUID(),
@@ -55,20 +57,32 @@ func NewClaudeOAuth() (*ClaudeOAuth, error) {
 func (c *ClaudeOAuth) Name() string   { return "claude-oauth" }
 func (c *ClaudeOAuth) IsActive() bool { return config.HasOAuth("claude-oauth") }
 
-func (c *ClaudeOAuth) Models() []llm.ModelMeta {
+func (c *ClaudeOAuth) ModelMeta(modelID string) *types.ModelMeta {
+	if m, ok := c.cache[modelID]; ok {
+		cp := m
+		return &cp
+	}
+	return nil
+}
+
+func (c *ClaudeOAuth) Models() []types.ModelMeta {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.cachedModels
+	out := make([]types.ModelMeta, 0, len(c.cache))
+	for _, m := range c.cache {
+		out = append(out, m)
+	}
+	return out
 }
 
 // Complete sends a non-streaming request (fallback).
-func (c *ClaudeOAuth) Complete(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+func (c *ClaudeOAuth) Complete(ctx context.Context, req *types.Request) (*types.Response, error) {
 	return c.CompleteStream(ctx, req, nil)
 }
 
 // CompleteStream sends a streaming request and emits events via callback.
 // If cb is nil, it behaves like Complete (collects everything silently).
-func (c *ClaudeOAuth) CompleteStream(ctx context.Context, req *llm.Request, cb llm.StreamCallback) (*llm.Response, error) {
+func (c *ClaudeOAuth) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
 	c.mu.Lock()
 
 	// Ensure token is fresh
@@ -144,8 +158,8 @@ func (c *ClaudeOAuth) CompleteStream(ctx context.Context, req *llm.Request, cb l
 	return c.parseStream(httpResp.Body, cb)
 }
 
-// parseStream processes Anthropic SSE events into a llm.Response.
-func (c *ClaudeOAuth) parseStream(body io.Reader, cb llm.StreamCallback) (*llm.Response, error) {
+// parseStream processes Anthropic SSE events into a types.Response.
+func (c *ClaudeOAuth) parseStream(body io.Reader, cb types.StreamCallback) (*types.Response, error) {
 	return llm.ParseAnthropicStream(body, cb, unmapToolNameFromCC)
 }
 
@@ -154,7 +168,7 @@ func (c *ClaudeOAuth) FormatUserMessage(text string) json.RawMessage {
 	return data
 }
 
-func (c *ClaudeOAuth) FormatUserMessageWithImages(text string, images []llm.ImageData) json.RawMessage {
+func (c *ClaudeOAuth) FormatUserMessageWithImages(text string, images []types.ImageData) json.RawMessage {
 	var content []map[string]any
 	for _, img := range images {
 		content = append(content, map[string]any{
@@ -171,7 +185,7 @@ func (c *ClaudeOAuth) FormatUserMessageWithImages(text string, images []llm.Imag
 	return data
 }
 
-func (c *ClaudeOAuth) FormatToolResults(results []llm.ToolResult) []json.RawMessage {
+func (c *ClaudeOAuth) FormatToolResults(results []types.ToolResult) []json.RawMessage {
 	var content []map[string]any
 	for _, r := range results {
 		block := map[string]any{
@@ -543,7 +557,7 @@ func readClaudeCredentialsFile() *config.ProviderCreds {
 
 // FetchModels returns all models available via Claude OAuth.
 // Capabilities are authoritative from the API; pricing comes from llm-registry.
-func (c *ClaudeOAuth) FetchModels() []llm.ModelMeta {
+func (c *ClaudeOAuth) FetchModels() []types.ModelMeta {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -555,6 +569,10 @@ func (c *ClaudeOAuth) FetchModels() []llm.ModelMeta {
 	if err != nil {
 		return nil
 	}
-	c.cachedModels = fetchAnthropicModels(tok)
-	return c.cachedModels
+	metas := fetchAnthropicModels(tok)
+	c.cache = make(map[string]types.ModelMeta, len(metas))
+	for _, m := range metas {
+		c.cache[m.ID] = m
+	}
+	return metas
 }

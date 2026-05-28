@@ -2,13 +2,13 @@ package providers
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	llm "github.com/gurcuff91/harness/providers/llm"
 )
 
 // All is the fixed registry of provider instances.
-// Created once: each provider reads its own credentials internally.
 var All = []llm.Provider{}
 
 var initOnce sync.Once
@@ -31,19 +31,61 @@ func EnsureRegistry() {
 	initOnce.Do(initRegistry)
 }
 
-// Resolve returns the appropriate Provider and bare model ID for a "provider/model" string.
+// Resolve returns the provider and bare model ID for a "provider/model" string.
+// It:
+//  1. Splits "provider/model"
+//  2. Finds the provider and checks credentials
+//  3. Lazy-fetches models if cache is empty
+//  4. Validates the model exists in that provider
+//
+// If only "provider" is given (no model), the first available model is used.
 func Resolve(fullModel string) (llm.Provider, string, error) {
 	EnsureRegistry()
-	providerName, modelID := llm.ParseModel(fullModel)
-	for _, p := range All {
-		if p.Name() == providerName && p.IsActive() {
-			return p, modelID, nil
+
+	// 1. Split "provider/model" — inline, no external dependency
+	parts := strings.SplitN(fullModel, "/", 2)
+	providerName := parts[0]
+	modelID := ""
+	if len(parts) == 2 {
+		modelID = parts[1]
+	}
+
+	// 2. Find provider + check credentials
+	var p llm.Provider
+	for _, candidate := range All {
+		if candidate.Name() == providerName {
+			p = candidate
+			break
 		}
 	}
-	return nil, "", fmt.Errorf("provider %q not connected — use /connect", providerName)
+	if p == nil {
+		return nil, "", fmt.Errorf("provider %q not found", providerName)
+	}
+	if !p.IsActive() {
+		return nil, "", fmt.Errorf("provider %q is not active (missing credentials)", providerName)
+	}
+
+	// 3. Lazy fetch if cache is empty
+	if len(p.Models()) == 0 {
+		p.FetchModels()
+	}
+
+	// 4. Default model or validate
+	if modelID == "" {
+		models := p.Models()
+		if len(models) == 0 {
+			return nil, "", fmt.Errorf("provider %q has no available models", providerName)
+		}
+		modelID = models[0].ID
+	} else if p.ModelMeta(modelID) == nil {
+		return nil, "", fmt.Errorf("model %q not found in provider %q", modelID, providerName)
+	}
+
+	return p, modelID, nil
 }
 
 // RefreshModels fetches models from all active providers.
+// Used by the CLI on startup — not needed in SDK usage (Resolve handles lazy fetch).
 func RefreshModels() {
 	EnsureRegistry()
 	for _, p := range All {
@@ -53,7 +95,7 @@ func RefreshModels() {
 	}
 }
 
-// RefreshProviderModels refreshes models for a single provider.
+// RefreshProviderModels refreshes models for a single provider by name.
 func RefreshProviderModels(providerName string) {
 	EnsureRegistry()
 	for _, p := range All {

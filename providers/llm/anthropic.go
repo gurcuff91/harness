@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"github.com/gurcuff91/harness/types"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -16,8 +17,8 @@ type AnthropicTool struct {
 }
 
 func DoAnthropicStream(ctx context.Context, client *http.Client, apiURL, apiKey string,
-	req *Request, extraHeaders map[string]string, unmapTool func(string) string,
-	cb StreamCallback) (*Response, error) {
+	req *types.Request, extraHeaders map[string]string, unmapTool func(string) string,
+	cb types.StreamCallback) (*types.Response, error) {
 
 	var aTools []AnthropicTool
 	for _, t := range req.Tools {
@@ -67,12 +68,12 @@ func DoAnthropicStream(ctx context.Context, client *http.Client, apiURL, apiKey 
 	return ParseAnthropicStream(httpResp.Body, cb, unmapTool)
 }
 
-func ParseAnthropicStream(body io.Reader, cb StreamCallback, unmapTool func(string) string) (*Response, error) {
-	emit := func(e StreamEvent) {
+func ParseAnthropicStream(body io.Reader, cb types.StreamCallback, unmapTool func(string) string) (*types.Response, error) {
+	emit := func(e types.StreamEvent) {
 		if cb != nil { cb(e) }
 	}
 
-	resp := &Response{}
+	resp := &types.Response{}
 	var thinkingBlocks []map[string]any
 
 	type blockState struct {
@@ -88,7 +89,7 @@ func ParseAnthropicStream(body io.Reader, cb StreamCallback, unmapTool func(stri
 
 	for sse := range ParseSSE(body) {
 		if sse.Event == "error" {
-			emit(StreamEvent{Type: StreamError, Delta: sse.Data})
+			emit(types.StreamEvent{Type: types.StreamError, Delta: sse.Data})
 			return nil, fmt.Errorf("stream error: %s", sse.Data)
 		}
 		var event map[string]any
@@ -115,7 +116,7 @@ func ParseAnthropicStream(body io.Reader, cb StreamCallback, unmapTool func(stri
 			if bt == "tool_use" {
 				bs.toolID, _ = cb2["id"].(string)
 				bs.toolName = unmapTool(jsonStr(cb2, "name"))
-				emit(StreamEvent{Type: StreamToolStart, ToolID: bs.toolID, ToolName: bs.toolName})
+				emit(types.StreamEvent{Type: types.StreamToolStart, ToolID: bs.toolID, ToolName: bs.toolName})
 			}
 		case "content_block_delta":
 			idx := jsonInt(event, "index")
@@ -126,18 +127,18 @@ func ParseAnthropicStream(body io.Reader, cb StreamCallback, unmapTool func(stri
 			case "text_delta":
 				text, _ := delta["text"].(string)
 				bs.text += text
-				emit(StreamEvent{Type: StreamTextDelta, Delta: text})
+				emit(types.StreamEvent{Type: types.StreamTextDelta, Delta: text})
 			case "thinking_delta":
 				thinking, _ := delta["thinking"].(string)
 				bs.thinking += thinking
-				emit(StreamEvent{Type: StreamThinkingDelta, Delta: thinking})
+				emit(types.StreamEvent{Type: types.StreamThinkingDelta, Delta: thinking})
 			case "signature_delta":
 				sig, _ := delta["signature"].(string)
 				bs.signature += sig
 			case "input_json_delta":
 				partial, _ := delta["partial_json"].(string)
 				bs.toolJSON += partial
-				emit(StreamEvent{Type: StreamToolDelta, Delta: partial})
+				emit(types.StreamEvent{Type: types.StreamToolDelta, Delta: partial})
 			}
 		case "content_block_stop":
 			idx := jsonInt(event, "index")
@@ -158,10 +159,10 @@ func ParseAnthropicStream(body io.Reader, cb StreamCallback, unmapTool func(stri
 			case "tool_use":
 				input := json.RawMessage(bs.toolJSON)
 				if len(input) == 0 { input = json.RawMessage("{}") }
-				resp.ToolCalls = append(resp.ToolCalls, ToolCall{
+				resp.ToolCalls = append(resp.ToolCalls, types.ToolCall{
 					ID: bs.toolID, Name: bs.toolName, Input: input,
 				})
-				emit(StreamEvent{Type: StreamToolEnd, ToolID: bs.toolID, ToolName: bs.toolName, ToolArgs: input})
+				emit(types.StreamEvent{Type: types.StreamToolEnd, ToolID: bs.toolID, ToolName: bs.toolName, ToolArgs: input})
 			}
 			delete(blocks, idx)
 		case "message_delta":
@@ -171,10 +172,10 @@ func ParseAnthropicStream(body io.Reader, cb StreamCallback, unmapTool func(stri
 				resp.Usage.CacheWrite = jsonInt(u, "cache_creation_input_tokens")
 			}
 		case "message_stop":
-			emit(StreamEvent{Type: StreamUsage, InputTokens: resp.Usage.InputTokens,
+			emit(types.StreamEvent{Type: types.StreamUsage, InputTokens: resp.Usage.InputTokens,
 				OutputTokens: resp.Usage.OutputTokens, CacheRead: resp.Usage.CacheRead,
 				CacheWrite: resp.Usage.CacheWrite})
-			emit(StreamEvent{Type: StreamDone})
+			emit(types.StreamEvent{Type: types.StreamDone})
 		}
 	}
 

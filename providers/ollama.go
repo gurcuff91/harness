@@ -5,24 +5,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
-	"github.com/gurcuff91/harness/config"
 	llm "github.com/gurcuff91/harness/providers/llm"
+	"github.com/gurcuff91/harness/config"
+	"github.com/gurcuff91/harness/types"
 )
 
-// Ollama wraps OpenAI for local Ollama instances.
+// Ollama wraps OpenAI-compatible streaming for local Ollama instances.
 type Ollama struct {
-	*OpenAI
-	baseURL      string
-	cachedModels []llm.ModelMeta
+	baseURL string
+	client  *http.Client
+	cache   map[string]types.ModelMeta
+	mu      sync.RWMutex
 }
 
 func NewOllama() *Ollama {
-	url := config.GetOllamaURL()
 	o := &Ollama{
-		OpenAI:  NewOpenAIWithConfig("", url+"/v1"),
-		baseURL: url,
+		baseURL: config.GetOllamaURL(),
+		client:  &http.Client{},
+		cache:   make(map[string]types.ModelMeta),
 	}
 	if o.IsActive() {
 		o.FetchModels()
@@ -30,18 +33,54 @@ func NewOllama() *Ollama {
 	return o
 }
 
-func (o *Ollama) Name() string    { return "ollama" }
-func (o *Ollama) IsActive() bool  { return OllamaAvailable() }
+func (o *Ollama) Name() string   { return "ollama" }
+func (o *Ollama) IsActive() bool { return OllamaAvailable() }
 
-func (o *Ollama) Models() []llm.ModelMeta { return o.cachedModels }
-
-func (o *Ollama) FetchModels() []llm.ModelMeta {
-	o.cachedModels = fetchOllamaModels()
-	return o.cachedModels
+func (o *Ollama) Models() []types.ModelMeta {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	out := make([]types.ModelMeta, 0, len(o.cache))
+	for _, m := range o.cache {
+		out = append(out, m)
+	}
+	return out
 }
 
-func (o *Ollama) CompleteStream(ctx context.Context, req *llm.Request, cb llm.StreamCallback) (*llm.Response, error) {
-	return llm.DoOpenAIStream(ctx, o.OpenAI.client, o.OpenAI.apiKey, o.OpenAI.baseURL, req, nil, cb)
+func (o *Ollama) ModelMeta(modelID string) *types.ModelMeta {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	if m, ok := o.cache[modelID]; ok {
+		cp := m
+		return &cp
+	}
+	return nil
+}
+
+func (o *Ollama) FetchModels() []types.ModelMeta {
+	metas := fetchOllamaModels(o.baseURL)
+	o.mu.Lock()
+	o.cache = make(map[string]types.ModelMeta, len(metas))
+	for _, m := range metas {
+		o.cache[m.ID] = m
+	}
+	o.mu.Unlock()
+	return metas
+}
+
+func (o *Ollama) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
+	return llm.DoOpenAIStream(ctx, o.client, "", o.baseURL+"/v1", req, nil, cb)
+}
+
+func (o *Ollama) FormatUserMessage(text string) json.RawMessage {
+	return llm.FormatUserMessage(text)
+}
+
+func (o *Ollama) FormatUserMessageWithImages(text string, images []types.ImageData) json.RawMessage {
+	return llm.FormatUserMessageWithImages(text, images)
+}
+
+func (o *Ollama) FormatToolResults(results []types.ToolResult) []json.RawMessage {
+	return llm.FormatToolResults(results)
 }
 
 func OllamaAvailable() bool {
@@ -54,9 +93,8 @@ func OllamaAvailable() bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-func fetchOllamaModels() []llm.ModelMeta {
-	url := config.GetOllamaURL()
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(url + "/api/tags")
+func fetchOllamaModels(baseURL string) []types.ModelMeta {
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(baseURL + "/api/tags")
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return nil
 	}
@@ -74,9 +112,9 @@ func fetchOllamaModels() []llm.ModelMeta {
 		return nil
 	}
 
-	var metas []llm.ModelMeta
+	var metas []types.ModelMeta
 	for _, m := range result.Models {
-		meta := llm.ModelMeta{
+		meta := types.ModelMeta{
 			ID:          m.Name,
 			DisplayName: fmt.Sprintf("%s (%s)", m.Name, m.Details.ParameterSize),
 		}

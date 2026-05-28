@@ -1,13 +1,13 @@
 package tools
 
 import (
+	"github.com/gurcuff91/harness/types"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	llm "github.com/gurcuff91/harness/providers/llm"
 )
 
 type readFileInput struct {
@@ -38,7 +38,7 @@ func ReadFile() Tool {
 	}`)
 
 	return Tool{
-		Def: llm.ToolDef{
+		Def: types.ToolDef{
 			Name:        "read_file",
 			Description: "Read the contents of a file. Use offset and limit to read specific line ranges in large files. Always prefer this over bash cat/head/tail for reading file content.",
 			InputSchema: schema,
@@ -112,7 +112,7 @@ func WriteFile() Tool {
 	}`)
 
 	return Tool{
-		Def: llm.ToolDef{
+		Def: types.ToolDef{
 			Name:        "write_file",
 			Description: "Create or overwrite a file with the given content. Creates parent directories if needed. Use for new files or full rewrites. For partial changes, prefer the edit tool instead.",
 			InputSchema: schema,

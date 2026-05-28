@@ -8,17 +8,18 @@ import (
 
 	"github.com/gurcuff91/harness/config"
 	llm "github.com/gurcuff91/harness/providers/llm"
+	"github.com/gurcuff91/harness/types"
 )
 
 // Anthropic implements llm.Provider for the Anthropic Messages API.
 type Anthropic struct {
 	client       *http.Client
-	cachedModels []llm.ModelMeta
+	cache        map[string]types.ModelMeta
 	mu           sync.RWMutex
 }
 
 func NewAnthropic() *Anthropic {
-	a := &Anthropic{client: &http.Client{}}
+	a := &Anthropic{client: &http.Client{}, cache: make(map[string]types.ModelMeta)}
 	if a.IsActive() {
 		a.FetchModels()
 	}
@@ -28,20 +29,38 @@ func NewAnthropic() *Anthropic {
 func (a *Anthropic) Name() string   { return "anthropic" }
 func (a *Anthropic) IsActive() bool { return config.HasAPIKey("anthropic") }
 
-func (a *Anthropic) Models() []llm.ModelMeta {
+func (a *Anthropic) Models() []types.ModelMeta {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.cachedModels
+	out := make([]types.ModelMeta, 0, len(a.cache))
+	for _, m := range a.cache {
+		out = append(out, m)
+	}
+	return out
 }
 
-func (a *Anthropic) FetchModels() []llm.ModelMeta {
+func (a *Anthropic) ModelMeta(modelID string) *types.ModelMeta {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if m, ok := a.cache[modelID]; ok {
+		cp := m
+		return &cp
+	}
+	return nil
+}
+
+func (a *Anthropic) FetchModels() []types.ModelMeta {
+	metas := fetchAnthropicModels(config.GetAPIKey("anthropic"))
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.cachedModels = fetchAnthropicModels(config.GetAPIKey("anthropic"))
-	return a.cachedModels
+	a.cache = make(map[string]types.ModelMeta, len(metas))
+	for _, m := range metas {
+		a.cache[m.ID] = m
+	}
+	a.mu.Unlock()
+	return metas
 }
 
-func (a *Anthropic) CompleteStream(ctx context.Context, req *llm.Request, cb llm.StreamCallback) (*llm.Response, error) {
+func (a *Anthropic) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
 	return llm.DoAnthropicStream(ctx, a.client, anthropicAPI,
 		config.GetAPIKey("anthropic"), req,
 		map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14"},
@@ -53,7 +72,7 @@ func (a *Anthropic) FormatUserMessage(text string) json.RawMessage {
 	return data
 }
 
-func (a *Anthropic) FormatUserMessageWithImages(text string, images []llm.ImageData) json.RawMessage {
+func (a *Anthropic) FormatUserMessageWithImages(text string, images []types.ImageData) json.RawMessage {
 	var content []map[string]any
 	for _, img := range images {
 		content = append(content, map[string]any{
@@ -70,7 +89,7 @@ func (a *Anthropic) FormatUserMessageWithImages(text string, images []llm.ImageD
 	return data
 }
 
-func (a *Anthropic) FormatToolResults(results []llm.ToolResult) []json.RawMessage {
+func (a *Anthropic) FormatToolResults(results []types.ToolResult) []json.RawMessage {
 	var content []map[string]any
 	for _, r := range results {
 		block := map[string]any{
@@ -87,7 +106,7 @@ func (a *Anthropic) FormatToolResults(results []llm.ToolResult) []json.RawMessag
 
 const anthropicAPI = "https://api.anthropic.com/v1/messages"
 
-func fetchAnthropicModels(tokenOrKey string) []llm.ModelMeta {
+func fetchAnthropicModels(tokenOrKey string) []types.ModelMeta {
 	req, _ := http.NewRequest("GET", "https://api.anthropic.com/v1/models", nil)
 	req.Header.Set("x-api-key", tokenOrKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
@@ -129,7 +148,7 @@ func fetchAnthropicModels(tokenOrKey string) []llm.ModelMeta {
 		return nil
 	}
 
-	var metas []llm.ModelMeta
+	var metas []types.ModelMeta
 	for _, m := range result.Data {
 		if len(m.ID) == 0 || m.ID[0] != 'c' {
 			continue
@@ -142,7 +161,7 @@ func fetchAnthropicModels(tokenOrKey string) []llm.ModelMeta {
 		if mt <= 0 {
 			mt = 64000
 		}
-		meta := llm.ModelMeta{
+		meta := types.ModelMeta{
 			ID: m.ID, DisplayName: m.DisplayName,
 			ContextWindow: cw, MaxTokens: mt,
 			Vision: m.Capabilities.Vision, Thinking: m.Capabilities.Thinking,

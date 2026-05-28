@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"github.com/gurcuff91/harness/types"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -24,20 +25,20 @@ func IsImagePath(path string) bool {
 	return ok
 }
 
-// LoadImage reads an image file and returns ImageData for the LLM.
-func LoadImage(path string) (ImageData, error) {
+// LoadImage reads an image file and returns types.ImageData for the LLM.
+func LoadImage(path string) (types.ImageData, error) {
 	ext := strings.ToLower(filepath.Ext(path))
 	mime, ok := imageExtToMime[ext]
 	if !ok {
-		return ImageData{}, fmt.Errorf("unsupported image format: %s", ext)
+		return types.ImageData{}, fmt.Errorf("unsupported image format: %s", ext)
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return ImageData{}, fmt.Errorf("read image %s: %w", path, err)
+		return types.ImageData{}, fmt.Errorf("read image %s: %w", path, err)
 	}
 
-	return ImageData{
+	return types.ImageData{
 		MimeType: mime,
 		Base64:   base64.StdEncoding.EncodeToString(data),
 	}, nil

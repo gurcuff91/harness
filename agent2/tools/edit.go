@@ -1,12 +1,12 @@
 package tools
 
 import (
+	"github.com/gurcuff91/harness/types"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
-	llm "github.com/gurcuff91/harness/providers/llm"
 )
 
 type editInput struct {
@@ -37,7 +37,7 @@ func Edit() Tool {
 	}`)
 
 	return Tool{
-		Def: llm.ToolDef{
+		Def: types.ToolDef{
 			Name:        "edit",
 			Description: "Edit a file by replacing exact text. The old_text must match exactly one location in the file. Use for surgical changes to existing files without rewriting the entire content.",
 			InputSchema: schema,

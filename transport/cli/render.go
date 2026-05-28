@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"github.com/gurcuff91/harness/types"
 	"bufio"
 	"encoding/json"
 	"fmt"
@@ -9,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gurcuff91/harness/agent"
 	"github.com/charmbracelet/x/term"
 )
 
@@ -26,106 +26,93 @@ func printf(format string, args ...any) {
 
 // Renderer has a persistent turn spinner and per-event rendering.
 type Renderer struct {
-	mu        sync.Mutex
-	// Turn-level spinner (runs entire duration of agent turn)
+	mu sync.Mutex
+
+	// Turn-level spinner
 	turnSpinnerLabel string
 	stopTurnSpin     chan struct{}
 	turnSpinning     bool
 	turnStart        time.Time
 
 	// Per-block state
-	startTime      time.Time
-	spinner        int
-	stopSpin       chan struct{}
-	spinning       bool
-	streaming      bool // currently printing streamed text
-	thinkStreaming  bool // currently printing streamed thinking
-	col            int  // current column position in the active line
+	startTime     time.Time
+	spinner       int
+	stopSpin      chan struct{}
+	spinning      bool
+	streaming     bool // currently printing streamed text
+	thinkStreaming bool // currently printing streamed thinking
+	col           int  // current column position in the active line
 
-	// Token stats — accumulated per turn, shown in footer
+	// Stats from session — set on EventTokens, used in footer
+	// Per-turn (last turn only)
 	lastInput      int
 	lastOutput     int
 	lastCacheRead  int
 	lastCacheWrite int
+	// Accumulated across session (calculated by session, not renderer)
+	totalCost     float64 // USD
+	contextUsage    float64 // 0.0–1.0
+	contextWindow int     // model context window size (tokens)
 
-	// Session-level accumulators
-	totalCost      float64 // accumulated $ cost across all turns
-
-	// Provider info for footer
-	providerName   string
-	modelID        string
-	thinkingLevel  string  // e.g. "high", "medium", "low"
-	contextWindow  int     // model's context window size
-	costInput      float64 // $ per 1M input tokens
-	costOutput     float64 // $ per 1M output tokens
-	costCacheRead  float64 // $ per 1M cache read tokens
-	costCacheWrite float64 // $ per 1M cache write tokens
-	subPricing     bool    // true = reference cost, not actual spend (sub/local)
+	// Display config
+	providerName  string
+	modelID       string
+	thinkingLevel string
+	subPricing    bool // true = subscription, cost is reference not actual
 }
 
-// RendererConfig holds pricing and model info.
+// RendererConfig holds display info for the renderer.
+// Pricing and context window are NOT here — they come from session via EventTokens.
 type RendererConfig struct {
-	ProviderName   string
-	ModelID        string
-	ThinkingLevel  string // "high", "medium", "low"
-	ContextWindow  int
-	CostInput      float64 // per 1M tokens
-	CostOutput     float64
-	CostCacheRead  float64
-	CostCacheWrite float64
-	// SubPricing marks providers where cost is a reference metric, not actual spend.
-	// (claude-oauth = flat subscription, ollama/ollama-cloud = local/compute-based)
-	SubPricing bool
+	ProviderName  string
+	ModelID       string
+	ThinkingLevel string
+	SubPricing    bool
 }
 
 func NewRenderer(cfg RendererConfig) *Renderer {
 	return &Renderer{
-		providerName:   cfg.ProviderName,
-		modelID:        cfg.ModelID,
-		thinkingLevel:  cfg.ThinkingLevel,
-		contextWindow:  cfg.ContextWindow,
-		costInput:      cfg.CostInput,
-		costOutput:     cfg.CostOutput,
-		costCacheRead:  cfg.CostCacheRead,
-		costCacheWrite: cfg.CostCacheWrite,
-		subPricing:     cfg.SubPricing,
+		providerName:  cfg.ProviderName,
+		modelID:       cfg.ModelID,
+		thinkingLevel: cfg.ThinkingLevel,
+		subPricing:    cfg.SubPricing,
 	}
 }
 
 // Handle processes an agent event and renders it to the terminal.
-func (r *Renderer) Handle(e agent.Event) {
+func (r *Renderer) Handle(e types.Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	switch e.Type {
-	case agent.EventTurnStart:
+	case types.EventTurnStart:
 		r.startTime = time.Now()
 		r.turnSpinnerLabel = spinnerLabel() // one word per turn
 
-	case agent.EventTurnEnd:
+	case types.EventTurnEnd:
 		r.stopSpinnerNow()
 
-	case agent.EventLoopStart:
+	case types.EventLoopStart:
 		r.startTime = time.Now()
 		r.streaming = false
 		r.thinkStreaming = false
 		r.col = 0
 		r.startSpinner(e.Loop)
 
-	case agent.EventThinkingEnd:
+	case types.EventThinkingEnd:
 		
 		if e.Output != "" {
 			r.renderThinking(e.Output)
 		}
 
-	case agent.EventStreamThinkingDelta:
+	case types.EventStreamThinkingDelta:
 		
 		r.renderThinkingDelta(e.Delta)
 
-	case agent.EventStreamThinkingEnd:
+	case types.EventStreamThinkingEnd:
 		r.finishThinkingStream()
 
-	case agent.EventStreamTextDelta:
+	case types.EventStreamTextDelta:
 		
 		if r.thinkStreaming {
 			// Thinking was streaming — the agent should have closed it,
@@ -134,40 +121,43 @@ func (r *Renderer) Handle(e agent.Event) {
 		}
 		r.renderTextDelta(e.Delta)
 
-	case agent.EventStreamTextEnd:
+	case types.EventStreamTextEnd:
 		r.finishTextStream()
 
-	case agent.EventStreamToolBuilding:
+	case types.EventStreamToolBuilding:
 		r.stopSpinnerNow()
 		r.finishAnyStream()
 		r.startSpinner(0)
 
-	case agent.EventToolCall:
+	case types.EventToolCall:
 		
 		r.finishAnyStream()
 		r.renderToolCall(e.ToolName, e.ToolArgs)
 
-	case agent.EventToolResult:
+	case types.EventToolResult:
 		r.renderToolResult(e.ToolName, e.Output, e.Duration, e.IsError)
 
-	case agent.EventText:
+	case types.EventText:
 		
 		// Non-streamed final text — rendered by transport, not here
 
-	case agent.EventTokens:
+	case types.EventTokens:
 		r.finishAnyStream()
+		// Per-turn (for display)
 		r.lastInput = e.Tokens.Input
 		r.lastOutput = e.Tokens.Output
 		r.lastCacheRead = e.Tokens.CacheRead
 		r.lastCacheWrite = e.Tokens.CacheWrite
-		// Accumulate cost
-		r.totalCost += r.calcTurnCost(e.Tokens.Input, e.Tokens.Output, e.Tokens.CacheRead, e.Tokens.CacheWrite)
+			// Accumulated — from session (source of truth)
+		r.totalCost = e.Tokens.CostUSD
+		r.contextUsage = e.Tokens.ContextUsage
+		r.contextWindow = e.Tokens.ContextWindow
 
-	case agent.EventLoopEnd:
+	case types.EventLoopEnd:
 		r.stopSpinnerNow()
 		r.finishAnyStream()
 
-	case agent.EventError:
+	case types.EventError:
 		
 		r.finishAnyStream()
 		r.renderError(e.Output)
@@ -492,8 +482,8 @@ func (r *Renderer) buildFooter(dur time.Duration) string {
 		parts = append(parts, "W"+compactNum(r.lastCacheWrite))
 	}
 
-	// Accumulated session cost — only show when we have real pricing data
-	if r.totalCost > 0 && r.costInput > 0 {
+	// Accumulated session cost — from session (source of truth)
+	if r.totalCost > 0 {
 		costStr := formatCost(r.totalCost)
 		if r.subPricing {
 			costStr += " (sub)"
@@ -501,10 +491,13 @@ func (r *Renderer) buildFooter(dur time.Duration) string {
 		parts = append(parts, costStr)
 	}
 
-	// Context window usage %
-	if r.contextWindow > 0 && r.lastInput > 0 {
-		pct := float64(r.lastInput) / float64(r.contextWindow) * 100
-		parts = append(parts, fmt.Sprintf("%.1f%%/%s", pct, compactNum(r.contextWindow)))
+	// Context window usage % / size — from session
+	if r.contextUsage > 0 {
+		if r.contextWindow > 0 {
+			parts = append(parts, fmt.Sprintf("%.1f%%/%s", r.contextUsage*100, compactNum(r.contextWindow)))
+		} else {
+			parts = append(parts, fmt.Sprintf("%.1f%%", r.contextUsage*100))
+		}
 	}
 
 	// Model and thinking level
@@ -533,14 +526,7 @@ func (r *Renderer) SetThinkingLevel(level string) {
 	}
 }
 
-// calcTurnCost returns the dollar cost for a single turn.
-func (r *Renderer) calcTurnCost(input, output, cacheRead, cacheWrite int) float64 {
-	perM := 1_000_000.0
-	return float64(input)/perM*r.costInput +
-		float64(output)/perM*r.costOutput +
-		float64(cacheRead)/perM*r.costCacheRead +
-		float64(cacheWrite)/perM*r.costCacheWrite
-}
+
 
 // ============================================================
 // Non-streaming Renderers

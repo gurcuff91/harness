@@ -7,8 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/agent/tools"
+	"github.com/gurcuff91/harness/agent2"
 	"github.com/gurcuff91/harness/config"
 	"github.com/gurcuff91/harness/providers"
 	"github.com/gurcuff91/harness/transport/cli"
@@ -21,71 +20,55 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Refresh model cache FIRST — needed for auto-detection
-	providers.RefreshModels()
-
-	// ── Model selection (priority: env > settings > auto) ──
+	// ── Model selection (priority: env > settings > auto-detect) ──
 	if envModel := os.Getenv("HARNESS_MODEL"); envModel != "" {
 		cfg.Model = envModel
 	} else {
 		cfg.Model = config.GetActiveModel()
-		// If no model persisted yet, auto-detect from available providers
-		if config.ReadSettings().Model == "" {
+		// No model persisted yet — auto-detect first available provider/model
+		if cfg.Model == "" {
 			providers.EnsureRegistry()
 			for _, p := range providers.All {
-				if !p.IsActive() || len(p.Models()) == 0 {
+				if !p.IsActive() {
 					continue
 				}
-				cfg.Model = p.Name() + "/" + p.Models()[0].ID
-				config.SetActiveModel(cfg.Model)
-				break
+				if len(p.Models()) == 0 {
+					p.FetchModels()
+				}
+				if len(p.Models()) > 0 {
+					cfg.Model = p.Name() + "/" + p.Models()[0].ID
+					config.SetActiveModel(cfg.Model)
+					break
+				}
 			}
 		}
 	}
 
-	// Resolve provider from credentials
-	provider, modelID, err := providers.Resolve(cfg.Model)
-	if err != nil {
-		hasAny := providers.OllamaAvailable()
-		hasAny = hasAny || config.HasAPIKey("anthropic")
-		hasAny = hasAny || config.HasAPIKey("openai")
-		if tm, _ := providers.NewTokenManager(); tm != nil {
-			if _, tokErr := tm.GetValidToken(); tokErr == nil {
-				hasAny = true
-			}
-		}
-		if !hasAny {
-			fmt.Fprintf(os.Stderr, "No providers connected.\n")
-			fmt.Fprintf(os.Stderr, "Use /connect claude-oauth  or  set env vars: HARNESS_MODEL, ANTHROPIC_API_KEY, OPENAI_API_KEY, OLLAMA_URL\n")
-			os.Exit(1)
-		}
-		fmt.Fprintf(os.Stderr, "provider error: %v\n", err)
+	if cfg.Model == "" {
+		fmt.Fprintf(os.Stderr, "No providers connected.\n")
+		fmt.Fprintf(os.Stderr, "Set HARNESS_MODEL or configure credentials in ~/.harness/credentials.json\n")
 		os.Exit(1)
 	}
 
-	// Build tool registry
-	registry := tools.NewRegistry()
-	registry.Register(tools.Bash())
-	registry.Register(tools.ReadFile())
-	registry.Register(tools.WriteFile())
-	registry.Register(tools.Edit())
-	registry.Register(tools.Fetch())
-
-	// Create agent
-	a := agent.New(provider, registry, agent.Options{
+	// ── Create agent (resolves provider + validates model internally) ──
+	a, err := agent2.New(agent2.AgentOptions{
+		Model:        cfg.Model,
 		SystemPrompt: cfg.SystemPrompt,
-		Model:        modelID,
 		MaxLoops:     cfg.MaxLoops,
 		MaxTokens:    cfg.MaxTokens,
 	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent error: %v\n", err)
+		os.Exit(1)
+	}
 
-	// Graceful shutdown
+	// ── Graceful shutdown ──
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// Launch CLI
-	t := cli.NewCLI(a, provider)
-	if err := t.Run(ctx, a, provider); err != nil {
+	// ── Launch CLI ──
+	t := cli.NewCLI(a)
+	if err := t.Run(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

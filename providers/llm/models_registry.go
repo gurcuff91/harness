@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"github.com/gurcuff91/harness/types"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -11,14 +12,14 @@ import (
 // ── In-memory registry cache (no disk, fetched once per session) ───────────
 
 var (
-	remoteRegistry     map[string]ModelMeta
+	remoteRegistry     map[string]types.ModelMeta
 	remoteRegistryOnce sync.Once
 )
 
 // hardcodedRegistry covers models NOT in the public llm-registry.
 // All data sourced from official provider documentation.
 // DeepSeek V4 removed (now in llm-registry).
-var hardcodedRegistry = map[string]ModelMeta{
+var hardcodedRegistry = map[string]types.ModelMeta{
 	// GLM (Z.AI) — docs.z.ai — 202752 ctx (~200K), thinking=on, no vision
 	"glm-5":   {ID: "glm-5", ContextWindow: 202752, MaxTokens: 32000, Thinking: true},
 	"glm-5.1": {ID: "glm-5.1", ContextWindow: 202752, MaxTokens: 128000, Thinking: true},
@@ -43,7 +44,7 @@ var hardcodedRegistry = map[string]ModelMeta{
 }
 
 // defaultMeta is used when no other source has info.
-var defaultMeta = ModelMeta{
+var defaultMeta = types.ModelMeta{
 	ContextWindow: 128000,
 	MaxTokens:     32000,
 	Vision:        false,
@@ -54,7 +55,7 @@ var defaultMeta = ModelMeta{
 // Priority: remote registry → hardcoded → infer by name → generic defaults.
 // Providers that return real capabilities (Anthropic, Ollama, OllamaCloud)
 // should NOT call enrichMeta — their data is already authoritative.
-func EnrichMeta(m ModelMeta) ModelMeta {
+func EnrichMeta(m types.ModelMeta) types.ModelMeta {
 	// 1. Try remote llm-registry (in-memory, fetched once)
 	if r := lookupRemote(m.ID); r != nil {
 		if m.ContextWindow <= 0  { m.ContextWindow = r.ContextWindow }
@@ -63,10 +64,10 @@ func EnrichMeta(m ModelMeta) ModelMeta {
 		if !m.Thinking           { m.Thinking = r.Thinking }
 		if m.DisplayName == ""   { m.DisplayName = r.DisplayName }
 		// Pricing always from registry
-		m.InputCost = r.InputCost
-		m.OutputCost = r.OutputCost
-		m.CacheReadCost = r.CacheReadCost
-		m.CacheWriteCost = r.CacheWriteCost
+		m.InputPrice = r.InputPrice
+		m.OutputPrice = r.OutputPrice
+		m.CacheRead = r.CacheRead
+		m.CacheWrite = r.CacheWrite
 		return m
 	}
 
@@ -96,7 +97,7 @@ func EnrichMeta(m ModelMeta) ModelMeta {
 }
 
 // LookupModel is the public API — returns enriched metadata for a model ID.
-func LookupModel(id string) *ModelMeta {
+func LookupModel(id string) *types.ModelMeta {
 	if r := lookupRemote(id); r != nil {
 		return r
 	}
@@ -106,7 +107,7 @@ func LookupModel(id string) *ModelMeta {
 	return nil
 }
 
-func lookupRemote(id string) *ModelMeta {
+func lookupRemote(id string) *types.ModelMeta {
 	reg := getRemoteRegistry()
 	if m, ok := reg[id]; ok {
 		return &m
@@ -123,17 +124,17 @@ func lookupRemote(id string) *ModelMeta {
 }
 
 // getRemoteRegistry fetches the llm-registry once per session (no disk cache).
-func getRemoteRegistry() map[string]ModelMeta {
+func getRemoteRegistry() map[string]types.ModelMeta {
 	remoteRegistryOnce.Do(func() {
 		remoteRegistry = fetchRemoteRegistry()
 		if remoteRegistry == nil {
-			remoteRegistry = make(map[string]ModelMeta)
+			remoteRegistry = make(map[string]types.ModelMeta)
 		}
 	})
 	return remoteRegistry
 }
 
-func fetchRemoteRegistry() map[string]ModelMeta {
+func fetchRemoteRegistry() map[string]types.ModelMeta {
 	const url = "https://raw.githubusercontent.com/yamanahlawat/llm-registry/main/src/llm_registry/data/models.json"
 	req, _ := http.NewRequest("GET", url, nil)
 	resp, err := http.DefaultClient.Do(req)
@@ -149,7 +150,7 @@ func fetchRemoteRegistry() map[string]ModelMeta {
 	return parseRegistry(data)
 }
 
-func parseRegistry(data []byte) map[string]ModelMeta {
+func parseRegistry(data []byte) map[string]types.ModelMeta {
 	var raw struct {
 		Models map[string]struct {
 			TokenCosts struct {
@@ -169,31 +170,31 @@ func parseRegistry(data []byte) map[string]ModelMeta {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil
 	}
-	result := make(map[string]ModelMeta, len(raw.Models))
+	result := make(map[string]types.ModelMeta, len(raw.Models))
 	for id, m := range raw.Models {
 		mt := m.TokenCosts.MaxTokens
 		if mt <= 0 {
 			mt = 32000
 		}
-		result[id] = ModelMeta{
-			ID:             id,
-			ContextWindow:  m.TokenCosts.ContextWindow,
-			MaxTokens:      mt,
-			Vision:         m.Features.Vision,
-			Thinking:       m.Features.Thinking,
-			InputCost:      m.TokenCosts.InputCost,
-			OutputCost:     m.TokenCosts.OutputCost,
-			CacheReadCost:  m.TokenCosts.CacheReadCost,
-			CacheWriteCost: m.TokenCosts.CacheWriteCost,
+		result[id] = types.ModelMeta{
+			ID:            id,
+			ContextWindow: m.TokenCosts.ContextWindow,
+			MaxTokens:     mt,
+			Vision:        m.Features.Vision,
+			Thinking:      m.Features.Thinking,
+			InputPrice:    m.TokenCosts.InputCost,
+			OutputPrice:   m.TokenCosts.OutputCost,
+			CacheRead:     m.TokenCosts.CacheReadCost,
+			CacheWrite:    m.TokenCosts.CacheWriteCost,
 		}
 	}
 	return result
 }
 
-// ApplyRegistryPricing fills pricing fields on a ModelMeta from the llm-registry.
+// ApplyRegistryPricing fills pricing fields on a types.ModelMeta from the llm-registry.
 // Called after provider APIs populate caps (context, vision, thinking) so we
 // never overwrite authoritative capability data — only add missing price fields.
-func ApplyRegistryPricing(m *ModelMeta) {
+func ApplyRegistryPricing(m *types.ModelMeta) {
 	if m == nil {
 		return
 	}
@@ -213,10 +214,10 @@ func ApplyRegistryPricing(m *ModelMeta) {
 	if !ok {
 		return
 	}
-	m.InputCost = entry.InputCost
-	m.OutputCost = entry.OutputCost
-	m.CacheReadCost = entry.CacheReadCost
-	m.CacheWriteCost = entry.CacheWriteCost
+	m.InputPrice = entry.InputPrice
+	m.OutputPrice = entry.OutputPrice
+	m.CacheRead = entry.CacheRead
+	m.CacheWrite = entry.CacheWrite
 }
 
 // stripDateSuffix removes trailing -YYYYMMDD or -YYYYMM from model IDs.
@@ -254,7 +255,7 @@ func stripDateSuffix(id string) string {
 // Checks: in-memory model cache → hardcoded registry → llm-registry → false.
 // ModelSupportsThinking is the public API — accepts "provider/model" or bare model ID.
 func ModelSupportsThinking(fullModel string) bool {
-	provider, model := ParseModel(fullModel)
+	provider, model := parseModel(fullModel)
 	return modelSupportsThinking(provider, model)
 }
 
@@ -307,7 +308,7 @@ func containsInsensitive(s, sub string) bool {
 }
 
 // ParseModel splits "provider/model" — local copy to avoid circular imports.
-func ParseModel(full string) (provider, model string) {
+func parseModel(full string) (provider, model string) {
 	parts := strings.SplitN(full, "/", 2)
 	if len(parts) == 2 {
 		return parts[0], parts[1]

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"github.com/gurcuff91/harness/types"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	llm "github.com/gurcuff91/harness/providers/llm"
 )
 
 type fetchInput struct {
@@ -51,7 +51,7 @@ func Fetch() Tool {
 	}`)
 
 	return Tool{
-		Def: llm.ToolDef{
+		Def: types.ToolDef{
 			Name:        "fetch",
 			Description: "Fetch a URL over HTTP. Provide output_path to save binary content (images, PDFs, ZIPs, etc.) directly to disk — binary-safe, no corruption. Without output_path, returns response body as text (best for JSON, HTML, APIs). Supports GET, POST, PUT, DELETE with optional headers and body.",
 			InputSchema: schema,

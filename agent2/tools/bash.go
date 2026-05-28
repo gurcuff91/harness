@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"github.com/gurcuff91/harness/types"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	llm "github.com/gurcuff91/harness/providers/llm"
 )
 
 const bashTimeout = 30 * time.Second
@@ -36,7 +36,7 @@ func Bash() Tool {
 	}`)
 
 	return Tool{
-		Def: llm.ToolDef{
+		Def: types.ToolDef{
 			Name:        "bash",
 			Description: "Execute a bash command and return stdout/stderr. Use for running code, installing packages, git operations, searching files (grep/find), and general system tasks. Do NOT use for reading/writing/editing files — use the dedicated file tools instead.",
 			InputSchema: schema,

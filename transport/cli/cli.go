@@ -8,53 +8,41 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gurcuff91/harness/agent"
-	llm "github.com/gurcuff91/harness/providers/llm"
+	"github.com/gurcuff91/harness/agent2"
 	"github.com/gurcuff91/harness/config"
-	
 	"github.com/gurcuff91/harness/providers"
-	
+	llm "github.com/gurcuff91/harness/providers/llm"
+	"github.com/gurcuff91/harness/types"
 )
 
-// CLI is a terminal REPL transport with rich UX rendering.
+// CLI is a terminal REPL transport.
 type CLI struct {
-	agent      *agent.Agent
-	renderer   *Renderer
-	modelName  string
-	
+	agent     *agent2.Agent
+	session   *agent2.Session
+	renderer  *Renderer
+	modelName string // always "provider/model"
 }
 
-func NewCLI(a *agent.Agent, provider llm.Provider) *CLI {
-	// activeModel is always "provider/model" format
-	activeModel := config.GetActiveModel()
-
-	_, modelID := llm.ParseModel(activeModel)
-	rCfg := modelPricing(modelID)
-	rCfg.SubPricing = false // TODO: read from ModelMeta.IsSubscription after llm/models refactor
-	// Use full "provider/model" as the display label — no parentheses
-	rCfg.ProviderName = ""
-	rCfg.ModelID = activeModel
-	// Show thinking level only when the active model supports it AND it's not disabled
-	if llm.ModelSupportsThinking(activeModel) {
-		if lvl := config.GetThinking(); lvl != "disable" {
-			rCfg.ThinkingLevel = lvl
-		}
-	}
-
-	r := NewRenderer(rCfg)
-	a.OnEvent(r.Handle)
-
-	return &CLI{
-		agent:      a,
-		renderer:   r,
-		modelName:  activeModel,
-	}
+func NewCLI(a *agent2.Agent) *CLI {
+	return &CLI{agent: a}
 }
 
-func (c *CLI) Run(ctx context.Context, a *agent.Agent, provider llm.Provider) error {
+func (c *CLI) Run(ctx context.Context) error {
+	// Create session for the current working directory
+	cwd, _ := os.Getwd()
+	session, err := c.agent.NewSession(cwd)
+	if err != nil {
+		return fmt.Errorf("create session: %w", err)
+	}
+	defer session.Close()
+	c.session = session
+	c.modelName = session.Meta().Model
+
+	// Build renderer from model meta
+	c.rebuildRenderer()
+	session.Subscribe(c.renderer.Handle)
+
 	c.printBanner()
-
-	userID := "cli-user"
 
 	ri := newRawInput(func() string {
 		path := checkClipboardImage()
@@ -87,10 +75,9 @@ func (c *CLI) Run(ctx context.Context, a *agent.Agent, provider llm.Provider) er
 
 		// Handle slash commands
 		if strings.HasPrefix(input, "/") {
-			if c.handleCommand(input, userID) {
+			if c.handleCommand(ctx, input) {
 				continue
 			}
-			// Unknown command — don't send to agent
 			fmt.Printf("  %s Unknown command: %s\n\n", C(Red, "✗"), C(Dim, input))
 			continue
 		}
@@ -100,17 +87,11 @@ func (c *CLI) Run(ctx context.Context, a *agent.Agent, provider llm.Provider) er
 			fmt.Printf("  %s %s\n", C(Dim, "🖼"), C(Dim, fmt.Sprintf("%d image(s) attached", len(images))))
 		}
 
-		start := time.Now()
 		fmt.Println()
-
-		_, err := c.agent.Chat(ctx, userID, text, images)
-		_ = time.Since(start)
-
+		_, err := c.session.Prompt(ctx, text, images)
 		if err != nil {
 			fmt.Printf("  %s %s\n\n", C(Red, "✗"), C(Red, err.Error()))
-			continue
 		}
-		// Streaming: renderer handled it
 	}
 }
 
@@ -125,7 +106,22 @@ func (c *CLI) printBanner() {
 	fmt.Println()
 }
 
-func (c *CLI) handleCommand(input, userID string) bool {
+// rebuildRenderer creates a new Renderer for the current model.
+func (c *CLI) rebuildRenderer() {
+	rCfg := RendererConfig{
+		ModelID: c.modelName,
+	}
+	if llm.ModelSupportsThinking(c.modelName) {
+		if lvl := config.GetThinking(); lvl != "disable" {
+			rCfg.ThinkingLevel = lvl
+		}
+	}
+	c.renderer = NewRenderer(rCfg)
+}
+
+// ── Commands ─────────────────────────────────────────────────────────────
+
+func (c *CLI) handleCommand(ctx context.Context, input string) bool {
 	parts := strings.Fields(strings.ToLower(input))
 	if len(parts) == 0 {
 		return false
@@ -133,7 +129,16 @@ func (c *CLI) handleCommand(input, userID string) bool {
 
 	switch parts[0] {
 	case "/clear":
-		c.agent.ClearHistory(userID)
+		// Close current session and start a fresh one
+		c.session.Close()
+		cwd, _ := os.Getwd()
+		session, err := c.agent.NewSession(cwd)
+		if err != nil {
+			fmt.Printf("  %s %s\n\n", C(Red, "✗"), C(Red, err.Error()))
+			return true
+		}
+		c.session = session
+		session.Subscribe(c.renderer.Handle)
 		fmt.Printf("  %s %s\n\n", C(Green, "✓"), C(Dim, "History cleared"))
 		return true
 
@@ -142,97 +147,11 @@ func (c *CLI) handleCommand(input, userID string) bool {
 		os.Exit(0)
 
 	case "/connect":
-		if len(parts) < 2 {
-			ollamaCloudSt := "disconnected"
-			if config.HasAPIKey("ollama-cloud") { ollamaCloudSt = "connected" }
-			openCodeSt := "disconnected"
-			if config.HasAPIKey("opencode-go") { openCodeSt = "connected" }
-			claudeSt := "disconnected"
-			if tm, _ := providers.NewTokenManager(); tm != nil {
-				if _, err := tm.GetValidToken(); err == nil { claudeSt = "connected" }
-			}
-			anthropicSt := "disconnected"
-			if config.HasAPIKey("anthropic") { anthropicSt = "connected" }
-			openaiSt := "disconnected"
-			if config.HasAPIKey("openai") { openaiSt = "connected" }
-			ollamaSt := "disconnected"
-			if providers.OllamaAvailable() { ollamaSt = "auto-connected" }
-
-			fmt.Printf("  claude-oauth   (%s)\n", C(statusColor(claudeSt), claudeSt))
-			fmt.Printf("  anthropic      (%s)\n", C(statusColor(anthropicSt), anthropicSt))
-			fmt.Printf("  openai         (%s)\n", C(statusColor(openaiSt), openaiSt))
-			fmt.Printf("  opencode-go    (%s)\n", C(statusColor(openCodeSt), openCodeSt))
-			fmt.Printf("  ollama-cloud   (%s)\n", C(statusColor(ollamaCloudSt), ollamaCloudSt))
-			fmt.Printf("  ollama         (%s)\n", C(statusColor(ollamaSt), ollamaSt))
-			fmt.Println(C(Dim, "\n  Usage: /connect <provider>"))
-			fmt.Println()
-			return true
-		}
-		switch parts[1] {
-		case "claude-oauth":
-			fmt.Println(C(Dim, "\n  Connecting to Claude OAuth..."))
-			fmt.Println()
-			if err := providers.Login(); err != nil {
-				fmt.Printf("  %s %s\n", C(Red, "✗"), C(Red, err.Error()))
-			} else {
-				fmt.Printf("\n  %s Connected! Restart to apply.\n", C(Green, "✓"))
-			}
-			fmt.Println()
-			return true
-		case "anthropic", "openai", "ollama-cloud", "opencode-go":
-			if err := config.ConnectAPIKey(parts[1]); err != nil {
-				fmt.Printf("  %s %s\n\n", C(Red, "✗"), C(Red, err.Error()))
-			} else {
-				// Refresh model cache synchronously so /model shows them immediately
-				providers.RefreshProviderModels(parts[1])
-				var n int
-				for _, p := range providers.All {
-					if p.Name() == parts[1] {
-						n = len(p.Models())
-						break
-					}
-				}
-				if n > 0 {
-					fmt.Printf("  %s %s connected (%d models)\n\n", C(Green, "✓"), C(Green, parts[1]), n)
-				} else {
-					fmt.Printf("  %s %s connected\n\n", C(Green, "✓"), C(Green, parts[1]))
-				}
-			}
-			return true
-		default:
-			fmt.Printf("  %s Unknown provider: %s\n\n", C(Red, "✗"), C(Dim, parts[1]))
-			return true
-		}
+		c.handleConnect(parts)
+		return true
 
 	case "/thinking":
-		if len(parts) < 2 {
-			current := config.GetThinking()
-			levels := []string{"disable", "low", "medium", "high", "xhigh"}
-			for _, l := range levels {
-				marker := "  "
-				if l == current {
-					marker = C(Green, "● ")
-				}
-				fmt.Printf("  %s%s\n", marker, C(Dim, l))
-			}
-			fmt.Println(C(Dim, "\n  Usage: /thinking <level>"))
-			fmt.Println()
-		} else {
-			level := strings.ToLower(parts[1])
-			valid := map[string]bool{"disable": true, "low": true, "medium": true, "high": true, "xhigh": true}
-			if !valid[level] {
-				fmt.Printf("  %s Invalid level: %s\n\n", C(Red, "✗"), level)
-				fmt.Println(C(Dim, "  Valid: disable / low / medium / high / xhigh"))
-				fmt.Println()
-			} else {
-				config.SetThinking(level)                    // persists to settings.json
-				// TODO: provider.SetThinkingLevel removed — now via req.ThinkingLevel
-				if llm.ModelSupportsThinking(c.modelName) {
-					c.renderer.SetThinkingLevel(level)          // updates footer
-				}
-				fmt.Printf("  %s Thinking level: %s\n\n", C(Green, "✓"), C(Green, level))
-			}
-		}
+		c.handleThinking(parts)
 		return true
 
 	case "/model":
@@ -244,39 +163,100 @@ func (c *CLI) handleCommand(input, userID string) bool {
 		return true
 
 	case "/help":
-		fmt.Println()
-		fmt.Println(C(Bold, "  Providers"))
-		fmt.Println(C(Dim, "    /connect              — List providers and status"))
-		fmt.Println(C(Dim, "    /connect <provider>   — Connect a provider"))
-		fmt.Println(C(Dim, "      providers: claude-oauth, anthropic, openai, opencode-go, ollama-cloud"))
-		fmt.Println(C(Dim, "      ollama is auto-detected (no connect needed)"))
-		fmt.Println()
-		fmt.Println(C(Bold, "  Models"))
-		fmt.Println(C(Dim, "    /model               — List available models"))
-		fmt.Println(C(Dim, "    /model <prov/model>  — Switch active model"))
-		fmt.Println()
-		fmt.Println(C(Bold, "  Session"))
-		fmt.Println(C(Dim, "    /thinking [level]     — Show or set thinking level"))
-		fmt.Println(C(Dim, "      levels: disable / low / medium / high / xhigh"))
-		fmt.Println(C(Dim, "    /clear               — Reset conversation history"))
-		fmt.Println(C(Dim, "    /exit                — Quit"))
-		fmt.Println()
-		fmt.Println(C(Bold, "  Images"))
-		fmt.Println(C(Dim, "    Paste a file path:    describe /path/to/image.png"))
-		fmt.Println(C(Dim, "    Clipboard:           Cmd+V pastes image path"))
-		fmt.Println()
-		fmt.Println(C(Bold, "  Env vars"))
-		fmt.Println(C(Dim, "    ANTHROPIC_API_KEY     — Anthropic API key"))
-		fmt.Println(C(Dim, "    OPENAI_API_KEY        — OpenAI API key"))
-		fmt.Println(C(Dim, "    OPENCODE_GO_API_KEY   — OpenCode Go API key"))
-		fmt.Println(C(Dim, "    OLLAMA_API_KEY        — Ollama Cloud API key"))
-		fmt.Println(C(Dim, "    OLLAMA_URL            — Ollama server URL (default: localhost:11434)"))
-		fmt.Println(C(Dim, "    HARNESS_MODEL         — Override default model (provider/model)"))
-		fmt.Println(C(Dim, "    HARNESS_THINKING        — Thinking level (disable/low/medium/high/xhigh)"))
-		fmt.Println()
+		c.printHelp()
 		return true
 	}
 	return false
+}
+
+func (c *CLI) handleConnect(parts []string) {
+	if len(parts) < 2 {
+		// Show provider status
+		statuses := []struct{ name, status string }{
+			{"claude-oauth", func() string {
+				if tm, _ := providers.NewTokenManager(); tm != nil {
+					if _, err := tm.GetValidToken(); err == nil {
+						return "connected"
+					}
+				}
+				return "disconnected"
+			}()},
+			{"anthropic", connStatus(config.HasAPIKey("anthropic"))},
+			{"openai", connStatus(config.HasAPIKey("openai"))},
+			{"opencode-go", connStatus(config.HasAPIKey("opencode-go"))},
+			{"ollama-cloud", connStatus(config.HasAPIKey("ollama-cloud"))},
+			{"ollama", func() string {
+				if providers.OllamaAvailable() {
+					return "auto-connected"
+				}
+				return "disconnected"
+			}()},
+		}
+		for _, s := range statuses {
+			fmt.Printf("  %-18s (%s)\n", s.name, C(statusColor(s.status), s.status))
+		}
+		fmt.Println(C(Dim, "\n  Usage: /connect <provider>"))
+		fmt.Println()
+		return
+	}
+
+	switch parts[1] {
+	case "claude-oauth":
+		fmt.Println(C(Dim, "\n  Connecting to Claude OAuth..."))
+		fmt.Println()
+		if err := providers.Login(); err != nil {
+			fmt.Printf("  %s %s\n", C(Red, "✗"), C(Red, err.Error()))
+		} else {
+			fmt.Printf("\n  %s Connected! Restart to apply.\n", C(Green, "✓"))
+		}
+		fmt.Println()
+	case "anthropic", "openai", "ollama-cloud", "opencode-go":
+		if err := config.ConnectAPIKey(parts[1]); err != nil {
+			fmt.Printf("  %s %s\n\n", C(Red, "✗"), C(Red, err.Error()))
+		} else {
+			providers.RefreshProviderModels(parts[1])
+			var n int
+			for _, p := range providers.All {
+				if p.Name() == parts[1] {
+					n = len(p.Models())
+					break
+				}
+			}
+			fmt.Printf("  %s %s connected (%d models)\n\n", C(Green, "✓"), C(Green, parts[1]), n)
+		}
+	default:
+		fmt.Printf("  %s Unknown provider: %s\n\n", C(Red, "✗"), C(Dim, parts[1]))
+	}
+}
+
+func (c *CLI) handleThinking(parts []string) {
+	if len(parts) < 2 {
+		current := config.GetThinking()
+		for _, l := range []string{"disable", "low", "medium", "high", "xhigh"} {
+			marker := "  "
+			if l == current {
+				marker = C(Green, "● ")
+			}
+			fmt.Printf("  %s%s\n", marker, C(Dim, l))
+		}
+		fmt.Println(C(Dim, "\n  Usage: /thinking <level>"))
+		fmt.Println()
+		return
+	}
+	level := strings.ToLower(parts[1])
+	valid := map[string]bool{"disable": true, "low": true, "medium": true, "high": true, "xhigh": true}
+	if !valid[level] {
+		fmt.Printf("  %s Invalid level: %s\n\n", C(Red, "✗"), level)
+		fmt.Println(C(Dim, "  Valid: disable / low / medium / high / xhigh"))
+		fmt.Println()
+		return
+	}
+	config.SetThinking(level)
+	c.session.SwitchThinking(level)
+	if llm.ModelSupportsThinking(c.modelName) {
+		c.renderer.SetThinkingLevel(level)
+	}
+	fmt.Printf("  %s Thinking level: %s\n\n", C(Green, "✓"), C(Green, level))
 }
 
 func (c *CLI) listModels() {
@@ -292,7 +272,7 @@ func (c *CLI) listModels() {
 			if m.Active {
 				marker = C(Green, "● ")
 			}
-			fmt.Printf("  %s%s/%s\n", marker, C(Dim, m.Provider), C(Dim, m.Name))
+			fmt.Printf("  %s%s/%s\n", marker, C(Dim, m.Provider), C(Dim, m.ID))
 		}
 	}
 	fmt.Println(C(Dim, "\n  Usage: /model <provider/model>"))
@@ -300,55 +280,65 @@ func (c *CLI) listModels() {
 }
 
 func (c *CLI) switchModel(selector string) {
-	var available []llm.ModelInfo
-	for _, p := range providers.All {
-		if !p.IsActive() {
-			continue
-		}
-		for _, m := range p.Models() {
-			available = append(available, llm.ModelInfo{
-				Name:     m.ID,
-				Provider: p.Name(),
-				Active:   p.Name()+"/"+m.ID == c.modelName,
-			})
-		}
-	}
-	var target *llm.ModelInfo
-	for _, m := range available {
-		if m.Provider+"/"+m.Name == selector || m.Name == selector {
-			target = &m
-			break
+	// Normalize: if no "/" try to find provider prefix
+	if !strings.Contains(selector, "/") {
+		for _, p := range providers.All {
+			if !p.IsActive() {
+				continue
+			}
+			for _, m := range p.Models() {
+				if m.ID == selector {
+					selector = p.Name() + "/" + selector
+					break
+				}
+			}
 		}
 	}
-	if target == nil {
-		fmt.Printf("  %s Not found: %s\n", C(Red, "✗"), C(Dim, selector))
-		fmt.Println()
-		return
-	}
-	newProvider, _, err := providers.Resolve(target.Provider + "/" + target.Name)
-	if err != nil {
+
+	if err := c.session.SwitchModel(selector); err != nil {
 		fmt.Printf("  %s %s\n\n", C(Red, "✗"), C(Red, err.Error()))
 		return
 	}
-	c.agent.SetProvider(newProvider)
-	c.agent.SetModel(target.Name)
-	fullModel := target.Provider + "/" + target.Name
-	c.modelName = fullModel
-	rCfg := modelPricing(target.Name)
-	rCfg.SubPricing = false // TODO: read from ModelMeta.IsSubscription after llm/models refactor
-	rCfg.ProviderName = ""
-	rCfg.ModelID = fullModel
-	if llm.ModelSupportsThinking(fullModel) {
-		if lvl := config.GetThinking(); lvl != "disable" {
-			rCfg.ThinkingLevel = lvl
-		}
-	}
-	c.renderer = NewRenderer(rCfg)
-	c.agent.OnEvent(c.renderer.Handle)
-	fmt.Printf("  %s Using %s\n\n", C(Green, "✓"), C(Green, fullModel))
-	config.SetActiveModel(fullModel)
+
+	c.modelName = c.session.Meta().Model
+	c.rebuildRenderer()
+	c.session.Subscribe(c.renderer.Handle)
+	config.SetActiveModel(c.modelName)
+	fmt.Printf("  %s Using %s\n\n", C(Green, "✓"), C(Green, c.modelName))
 }
 
+func (c *CLI) printHelp() {
+	fmt.Println()
+	fmt.Println(C(Bold, "  Providers"))
+	fmt.Println(C(Dim, "    /connect              — List providers and status"))
+	fmt.Println(C(Dim, "    /connect <provider>   — Connect a provider"))
+	fmt.Println(C(Dim, "      providers: claude-oauth, anthropic, openai, opencode-go, ollama-cloud"))
+	fmt.Println(C(Dim, "      ollama is auto-detected (no connect needed)"))
+	fmt.Println()
+	fmt.Println(C(Bold, "  Models"))
+	fmt.Println(C(Dim, "    /model               — List available models"))
+	fmt.Println(C(Dim, "    /model <prov/model>  — Switch active model"))
+	fmt.Println()
+	fmt.Println(C(Bold, "  Session"))
+	fmt.Println(C(Dim, "    /thinking [level]    — Show or set thinking level"))
+	fmt.Println(C(Dim, "      levels: disable / low / medium / high / xhigh"))
+	fmt.Println(C(Dim, "    /clear               — Reset conversation history"))
+	fmt.Println(C(Dim, "    /exit                — Quit"))
+	fmt.Println()
+	fmt.Println(C(Bold, "  Images"))
+	fmt.Println(C(Dim, "    Paste a file path:   describe /path/to/image.png"))
+	fmt.Println(C(Dim, "    Clipboard:           Cmd+V pastes image path"))
+	fmt.Println()
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+
+func connStatus(active bool) string {
+	if active {
+		return "connected"
+	}
+	return "disconnected"
+}
 
 func statusColor(s string) string {
 	switch s {
@@ -359,6 +349,39 @@ func statusColor(s string) string {
 	}
 }
 
+
+
+var imagePathRe = regexp.MustCompile(`(?:^|\s)((?:/|\./|~/)[^\s]+\.(?:png|jpg|jpeg|gif|webp))`)
+
+func extractImages(input string) (string, []types.ImageData) {
+	matches := imagePathRe.FindAllStringSubmatch(input, -1)
+	if len(matches) == 0 {
+		return input, nil
+	}
+	var images []types.ImageData
+	text := input
+	for _, m := range matches {
+		path := strings.TrimSpace(m[1])
+		if strings.HasPrefix(path, "~/") {
+			home, _ := os.UserHomeDir()
+			path = home + path[1:]
+		}
+		img, err := llm.LoadImage(path)
+		if err != nil {
+			fmt.Printf("  %s %s\n", C(Red, "⚠"), C(Red, fmt.Sprintf("image: %v", err)))
+			continue
+		}
+		images = append(images, img)
+		text = strings.Replace(text, m[1], "", 1)
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		text = "What's in this image?"
+	}
+	return text, images
+}
+
+// renderResponse kept for reference — streaming renderer handles output now.
 func (c *CLI) renderResponse(text string, dur time.Duration) {
 	if text == "" {
 		return
@@ -373,59 +396,4 @@ func (c *CLI) renderResponse(text string, dur time.Duration) {
 		C(Gray, fmt.Sprintf("%.1fs", dur.Seconds())),
 	)
 	fmt.Println()
-}
-
-func modelPricing(model string) RendererConfig {
-	cfg := RendererConfig{
-		ContextWindow: 128000, // safe default
-	}
-
-	// Find ModelMeta — search provider caches and remote/hardcoded registries.
-	meta := llm.FindMeta(model)
-
-	if meta != nil {
-		if meta.ContextWindow > 0 {
-			cfg.ContextWindow = meta.ContextWindow
-		}
-		// Pricing from registry — zero means unknown, footer will hide $
-		cfg.CostInput = meta.InputCost
-		cfg.CostOutput = meta.OutputCost
-		cfg.CostCacheRead = meta.CacheReadCost
-		cfg.CostCacheWrite = meta.CacheWriteCost
-	}
-	return cfg
-}
-
-var imagePathRe = regexp.MustCompile(`(?:^|\s)((?:/|\./|~/)[^\s]+\.(?:png|jpg|jpeg|gif|webp))`)
-
-func extractImages(input string) (string, []llm.ImageData) {
-	matches := imagePathRe.FindAllStringSubmatch(input, -1)
-	if len(matches) == 0 {
-		return input, nil
-	}
-
-	var images []llm.ImageData
-	text := input
-
-	for _, m := range matches {
-		path := strings.TrimSpace(m[1])
-		if strings.HasPrefix(path, "~/") {
-			home, _ := os.UserHomeDir()
-			path = home + path[1:]
-		}
-
-		img, err := llm.LoadImage(path)
-		if err != nil {
-			fmt.Printf("  %s %s\n", C(Red, "⚠"), C(Red, fmt.Sprintf("image: %v", err)))
-			continue
-		}
-		images = append(images, img)
-		text = strings.Replace(text, m[1], "", 1)
-	}
-
-	text = strings.TrimSpace(text)
-	if text == "" {
-		text = "What's in this image?"
-	}
-	return text, images
 }

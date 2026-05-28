@@ -1,15 +1,15 @@
 package tools
 
 import (
+	"github.com/gurcuff91/harness/types"
 	"encoding/json"
 	"fmt"
 
-	llm "github.com/gurcuff91/harness/providers/llm"
 )
 
 // Tool defines a single tool that the agent can use.
 type Tool struct {
-	Def     llm.ToolDef
+	Def     types.ToolDef
 	Execute func(input json.RawMessage) (string, error)
 }
 
@@ -30,12 +30,21 @@ func (r *Registry) Register(t Tool) {
 }
 
 // Definitions returns all tool schemas for the LLM.
-func (r *Registry) Definitions() []llm.ToolDef {
-	defs := make([]llm.ToolDef, 0, len(r.tools))
+func (r *Registry) Definitions() []types.ToolDef {
+	defs := make([]types.ToolDef, 0, len(r.tools))
 	for _, t := range r.tools {
 		defs = append(defs, t.Def)
 	}
 	return defs
+}
+
+// Clone returns a shallow copy of the registry (tools are not deep-copied).
+func (r *Registry) Clone() *Registry {
+	c := NewRegistry()
+	for k, v := range r.tools {
+		c.tools[k] = v
+	}
+	return c
 }
 
 // Run executes a tool by name with the given input.
