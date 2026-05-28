@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/gurcuff91/harness/agent2"
+	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/config"
 	"github.com/gurcuff91/harness/providers"
 	"github.com/gurcuff91/harness/transport/cli"
@@ -51,7 +51,7 @@ func main() {
 	}
 
 	// ── Create agent (resolves provider + validates model internally) ──
-	a, err := agent2.New(agent2.AgentOptions{
+	a, err := agent.New(agent.AgentOptions{
 		Model:        cfg.Model,
 		SystemPrompt: cfg.SystemPrompt,
 		MaxLoops:     cfg.MaxLoops,

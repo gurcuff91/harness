@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/gurcuff91/harness/agent2/resources"
+	"github.com/gurcuff91/harness/agent/resources"
 )
 
 // ReadSkill returns the tool definition and execute function for loading skill files.

@@ -1,4 +1,4 @@
-package agent2
+package agent
 
 import (
 	"context"
@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gurcuff91/harness/agent2/store"
-	"github.com/gurcuff91/harness/agent2/tools"
+	"github.com/gurcuff91/harness/agent/store"
+	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/providers"
 	pllm "github.com/gurcuff91/harness/providers/llm"
 	"github.com/gurcuff91/harness/types"

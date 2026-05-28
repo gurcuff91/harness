@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gurcuff91/harness/agent2"
+	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/config"
 	"github.com/gurcuff91/harness/providers"
 	llm "github.com/gurcuff91/harness/providers/llm"
@@ -17,13 +17,13 @@ import (
 
 // CLI is a terminal REPL transport.
 type CLI struct {
-	agent     *agent2.Agent
-	session   *agent2.Session
+	agent     *agent.Agent
+	session   *agent.Session
 	renderer  *Renderer
 	modelName string // always "provider/model"
 }
 
-func NewCLI(a *agent2.Agent) *CLI {
+func NewCLI(a *agent.Agent) *CLI {
 	return &CLI{agent: a}
 }
 

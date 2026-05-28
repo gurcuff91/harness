@@ -144,11 +144,11 @@ func (r *Renderer) Handle(e types.Event) {
 	case types.EventTokens:
 		r.finishAnyStream()
 		// Per-turn (for display)
-		r.lastInput = e.Tokens.Input
-		r.lastOutput = e.Tokens.Output
-		r.lastCacheRead = e.Tokens.CacheRead
-		r.lastCacheWrite = e.Tokens.CacheWrite
-			// Accumulated — from session (source of truth)
+		// Accumulated totals — from session (source of truth)
+		r.lastInput = e.Tokens.TotalInput
+		r.lastOutput = e.Tokens.TotalOutput
+		r.lastCacheRead = e.Tokens.TotalCacheRead
+		r.lastCacheWrite = e.Tokens.TotalCacheWrite
 		r.totalCost = e.Tokens.CostUSD
 		r.contextUsage = e.Tokens.ContextUsage
 		r.contextWindow = e.Tokens.ContextWindow

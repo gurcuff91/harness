@@ -1,13 +1,13 @@
-package agent2
+package agent
 
 import (
 	"fmt"
 
 	"github.com/google/uuid"
 
-	"github.com/gurcuff91/harness/agent2/resources"
-	"github.com/gurcuff91/harness/agent2/store"
-	"github.com/gurcuff91/harness/agent2/tools"
+	"github.com/gurcuff91/harness/agent/resources"
+	"github.com/gurcuff91/harness/agent/store"
+	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/providers"
 	pllm "github.com/gurcuff91/harness/providers/llm"
 )

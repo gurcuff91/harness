@@ -1,4 +1,4 @@
-package agent2
+package agent
 
 // ── SessionManager ──────────────────────────────────────────────────────
 
