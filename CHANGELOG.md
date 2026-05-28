@@ -2,6 +2,82 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2025-05-28
+
+### Architecture — Major Redesign
+
+#### `types/` — Shared Core Types (new top-level package)
+- New `types/` package: zero dependencies (stdlib only), foundation of the dependency graph
+- Moved all shared data types here: `ToolDef`, `ToolCall`, `ToolResult`, `Request`, `Response`, `Usage`, `ImageData`, `StreamEvent`, `StreamCallback`, `ModelMeta`, `ModelInfo`, `Event`, `Handler`, `SessionStats`
+- Eliminates cross-package coupling — all modules depend on `types/`, not on each other
+
+#### `providers/` — Redesigned Provider System
+- Provider model cache is now `map[string]ModelMeta` — O(1) lookup by model ID
+- New `Provider.ModelMeta(modelID)` interface method — direct cache lookup, no registry bypass
+- `FetchModels()` now does all enrichment work (API + registry + pricing) and fills the map
+- `providers.Resolve(fullModel)` is the single entry point: splits `provider/model`, finds provider, lazy-fetches models, validates model exists — replaces `Get()` + `ParseModel()` which are now internal
+- `llm.ParseModel` unexported — internal to `providers/llm/`
+- Removed `ModelMetaFor()` helper — no longer needed with map-based cache
+
+#### `agent/` — Session-based Architecture (replaces old monolithic Agent)
+- **`Agent`** is now a pure factory — holds global config, spawns `Session` objects via `NewSession(cwd)` and `ResumeSession(id)`
+- **`Session`** is the core of a conversation: owns store, provider, model, tools, system prompt
+- Store is the **single source of truth** for messages — no in-memory history duplication
+- Every `Prompt()` call reads history from store at each ReAct iteration
+- `Session.SwitchModel(fullModel)` — resolves + validates model via `providers.Resolve()`
+- `Session.SwitchThinking(level)` — updates thinking level mid-conversation
+- `Session.Compact(ctx)` — truncates old messages, emits `EventCompactStart/End`
+- `Session.Stats()` — returns `SessionStats` snapshot: tokens, cost, context usage, context window
+- `Session.Subscribe(Handler)` — single event subscriber per session
+- **`agent/store/`** — `SessionStore` + `SessionStoreInstance` interfaces + `InMemoryStore`
+- **`agent/resources/`** — `ResourceLoader` interface + `NilLoader` (FileLoader coming soon)
+- **`agent/tools/`** — full tool registry with `Clone()`, `ReadSkill` injectable per session
+
+#### Session Stats — Single Source of Truth
+- `Session` accumulates: `InputTokens`, `OutputTokens`, `CacheRead`, `CacheWrite`, `CostUSD`, `ContextUsage`, `ContextWindow`
+- `CostUSD` always calculated from model pricing (no subscription special-casing)
+- `ContextUsage` = last turn input tokens / model context window
+- `ContextWindow` sourced from `provider.ModelMeta()` — authoritative, updated on `SwitchModel()`
+- All stats emitted via `EventTokens` — renderer reads, never recalculates
+
+#### CLI Transport — Simplified
+- `NewCLI(agent)` — takes only `*Agent`, no provider param
+- `Run(ctx)` — no agent/provider params
+- `Session` created per CLI run via `agent.NewSession(cwd)`
+- `/clear` now closes session and creates a fresh one
+- `/model` uses `session.SwitchModel()` — validates model before switching
+- `/thinking` uses `session.SwitchThinking()` — propagates to next LLM call
+- Renderer no longer calculates cost or context% — reads from `EventTokens` (session is authority)
+- Footer now shows `1.9%/1.0M` (context usage + window size) — both from session
+- Footer tokens are accumulated session totals, not per-turn
+
+#### `AgentOptions` — Clean SDK Interface
+- `Model string` — `"provider/model"` format, provider resolved internally via `providers.Resolve()`
+- `ExtraTools []tools.Tool` — inject custom tools without replacing defaults
+- `Store`, `ResourceLoader` — optional infrastructure overrides
+- Removed `Provider` field — provider resolved from `Model` string
+- `New()` returns `(*Agent, error)` — fails fast if provider inactive or model not found
+
+### SDK Usage (new)
+```go
+a, err := agent.New(agent.AgentOptions{
+    Model:        "opencode-go/deepseek-v4-pro",
+    SystemPrompt: "You are helpful.",
+})
+session, _ := a.NewSession(".")
+session.Subscribe(func(e types.Event) { ... })
+session.Prompt(ctx, "hello", nil)
+stats := session.Stats() // CostUSD, ContextUsage, ContextWindow, tokens
+```
+
+### Bug Fixes
+- `opencode-go` models now visible in `/model` — `FetchModels()` was missing Authorization header
+- `req.Model` was empty (model not set in Request) — fixed by passing modelID through agent options
+- Footer output tokens were per-turn instead of accumulated — now uses `TotalOutput` from session
+- `ContextUsage` in footer was missing context window size — now shows `1.9%/1.0M`
+
+---
+
 ## [0.3.0] - 2025-05-25
 
 ### Tools
