@@ -155,8 +155,10 @@ func (r *Renderer) Handle(e types.Event) {
 		r.stopSpinnerNow()
 		r.finishAnyStream()
 
+	case types.EventMaxTurnsReached:
+		// LLM summary already streamed — no extra UI needed
+
 	case types.EventError:
-		
 		r.finishAnyStream()
 		r.renderError(e.Output)
 	}

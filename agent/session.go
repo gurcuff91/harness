@@ -112,7 +112,8 @@ func (s *Session) Prompt(ctx context.Context, text string, images []types.ImageD
 
 	s.emit(types.Event{Type: types.EventTurnStart})
 
-	for i := range s.maxTurns {
+	// Reserve one turn for the summary call if max turns is reached mid-task.
+	for i := range s.maxTurns - 1 {
 		if ctx.Err() != nil {
 			return "Cancelled.", nil
 		}
@@ -156,9 +157,13 @@ func (s *Session) Prompt(ctx context.Context, text string, images []types.ImageD
 		}
 	}
 
+	// Max turns reached while still executing tools.
+	// Ask the LLM to summarize progress and let the user decide what to do next.
 	s.emit(types.Event{Type: types.EventLoopEnd})
+	summary, _ := s.requestSummary(ctx)
+	s.emit(types.Event{Type: types.EventMaxTurnsReached})
 	s.emit(types.Event{Type: types.EventTurnEnd})
-	return "Hit max tool iterations. Try breaking the task into smaller steps.", nil
+	return summary, nil
 }
 
 // Subscribe registers an event handler for this session.
@@ -342,6 +347,41 @@ func (s *Session) updateStats(se types.StreamEvent) {
 			ContextWindow:   s.contextWindow,
 		},
 	})
+}
+
+// requestSummary makes a final LLM call without tools, asking the model to
+// summarize what it has done and what still needs to be done.
+// The response is streamed normally so the transport receives it via EventStreamTextDelta.
+func (s *Session) requestSummary(ctx context.Context) (string, error) {
+	const summaryPrompt = "You've reached the maximum number of tool calls allowed for this turn. " +
+		"Please summarize: (1) what you have completed so far, (2) what still needs to be done, " +
+		"and (3) ask the user if they want you to continue or if they'd like to change direction."
+
+	// Inject summary request into history
+	summaryMsg := s.provider.FormatUserMessage(summaryPrompt)
+	if err := s.store.AddMessage(summaryMsg); err != nil {
+		return "", err
+	}
+
+	// LLM call with no tools — pure text response
+	req := &types.Request{
+		SystemPrompt: s.systemPrompt,
+		Model:        s.modelID,
+		Messages:     s.store.Messages(),
+		Tools:        nil, // no tools — force text response
+		MaxTokens:    s.maxTokens,
+	}
+
+	resp, _, err := s.runStream(ctx, req)
+	if err != nil {
+		return "", err
+	}
+
+	if err := s.store.AddMessage(resp.AssistantMessage); err != nil {
+		return "", err
+	}
+
+	return resp.Text, nil
 }
 
 func (s *Session) emit(e types.Event) {

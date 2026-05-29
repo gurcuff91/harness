@@ -36,6 +36,9 @@ const (
 	// ── Errors ─────────────────────────────────────────────────────────────
 	EventError // error occurred in the agent loop
 
+	// ── Limits ─────────────────────────────────────────────────────────────
+	EventMaxTurnsReached // agent reached max turns limit (LLM summarized progress)
+
 	// ── Compaction ─────────────────────────────────────────────────────────
 	EventCompactStart // session compaction started
 	EventCompactEnd   // session compaction finished
