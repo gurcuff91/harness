@@ -2,6 +2,109 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2025-05-28
+
+### Agent — Session & Loop Improvements
+
+#### Max Turns — Smart Limit with LLM Summary
+- Renamed `MaxLoops` → `MaxTurns` everywhere (agent, config, session, CLI)
+- `MaxTurns = 25` now means exactly 25 LLM calls total (24 ReAct + 1 summary reserved)
+- When the turn limit is reached mid-task, a final summary call is made **without tools**
+- The LLM summarizes: (1) what was completed, (2) what still needs to be done, (3) asks user to continue or change direction
+- No error returned — `ErrMaxTurnsReached` eliminated — max turns is not an error, it's a normal flow state
+- `EventMaxTurnsReached` emitted for SDK users who need to detect it programmatically
+- CLI shows no warning — the LLM summary is sufficient UX
+
+#### System Prompt — Context Engineering
+- Removed redundant `## Tools` section — tool descriptions already arrive via API schema
+- Added always-present tool policy line: *"Do not use bash for file operations when dedicated file tools are available"*
+- Policy survives `SYSTEM.md` override (separate block, not part of identity)
+- `buildSystemPrompt(cwd, res)` now receives working directory and injects it as `## Working Directory`
+- Skills listed in system prompt with name + description (not just name)
+- `skill` tool only registered and listed when skills are actually discovered
+- Tool descriptions are the single source of guidance — no duplication
+
+#### Tool Registry — Ordered Output
+- Registry now preserves insertion order via `order []string` slice
+- `Definitions()` returns tools in registration order — deterministic for system prompt and LLM
+- `Clone()` preserves insertion order
+
+#### Tool Execute Signature
+- `Execute func(json.RawMessage) (string, error)` — restored clean `(string, error)` contract
+- `string` always goes to LLM (even on error — descriptive error text)
+- `error` is the Go-level signal for `IsError` on events/results — no string prefix conventions
+- `Registry.Run()` returns `(string, error)` — clean, no `[ERROR]` prefix detection
+
+#### Resource Loader — Redesigned Interface
+- `Load()` takes no parameters — config set at construction time in each implementation
+- `ReadSkill(name string) (string, error)` added to interface — loader knows how to read its own skills
+- `SystemPrompt` field renamed to `SystemMD` — clearer intent
+- `NilLoader.ReadSkill()` returns descriptive error
+- `FileResourceLoader` placeholder ready for implementation
+
+#### Tool `skill` — Simplified
+- Renamed from `ReadSkill` → `Skill`
+- Takes only `readFn func(name string) (string, error)` — no knowledge of skill list
+- Description is concise: *"Read the full instructions for a skill by name"*
+- No skill listing in description — that's the system prompt's job
+- Agent passes `resourceLoader.ReadSkill` directly as the read function
+
+### Event System — Cleanup & New Events
+
+#### Removed phantom events (never emitted)
+- `EventThinking` — removed
+- `EventThinkingEnd` — removed  
+- `EventText` — removed
+
+#### Renamed
+- `EventStreamToolBuilding` → `EventToolStart` — LLM announced a tool call (name + ID known)
+
+#### New events
+- `EventToolArgsDelta` — tool arguments arriving in streaming fragments (Option B implemented)
+- `EventMaxTurnsReached` — emitted after LLM summary when turn limit hit
+
+#### Reorganized with clear sections
+```
+── Turn lifecycle ──    EventTurnStart, EventTurnEnd
+── ReAct loop ──        EventLoopStart, EventLoopEnd
+── Streaming text ──    EventStreamTextDelta, EventStreamTextEnd
+── Streaming thinking ─ EventStreamThinkingDelta, EventStreamThinkingEnd
+── Tools ──             EventToolStart, EventToolArgsDelta, EventToolCall, EventToolResult
+── Tokens & cost ──     EventTokens
+── Errors ──            EventError
+── Limits ──            EventMaxTurnsReached
+── Compaction ──        EventCompactStart, EventCompactEnd
+```
+
+### Token Usage — Fixes & Cleanup
+
+#### `TokenUsage` type (named, replaces anonymous struct)
+- `Input` — last turn input tokens (= current context size sent to LLM)
+- `Output` — last turn output tokens
+- `CacheRead/Write` — last turn cache tokens
+- `TotalOutput` — accumulated output across session
+- `TotalCacheRead/Write` — accumulated cache across session
+- `CostUSD` — accumulated cost (session authority)
+- `ContextUsage` — last input / context window (0.0–1.0)
+- `ContextWindow` — model context window size
+- `TotalInput` removed from `TokenUsage` — moved to `SessionStats` only (billing reference)
+
+#### Footer fixes
+- `↑` now shows `Input` (last turn = current context size) — not accumulated
+- `↓` shows `TotalOutput` (accumulated session total)
+- `%/size` shows `ContextUsage × 100` + `ContextWindow` — e.g. `13.0%/1.0M`
+- Renderer reads all stats from session via `EventTokens` — never recalculates
+- `ContextWindow` sourced from session (via `provider.ModelMeta()`) — not from CLI config
+
+#### `SessionStats` — billing reference
+- `InputTokens` kept with clear doc comment: accumulates across turns (for billing reference only)
+- `ContextWindow` added to `Stats()` snapshot
+
+### Config
+- `max_loops` → `max_turns` in `harness.json` / `config.go`
+
+---
+
 ## [0.4.0] - 2025-05-28
 
 ### Architecture — Major Redesign
