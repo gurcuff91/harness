@@ -19,6 +19,7 @@ import (
 type Agent struct {
 	provider       pllm.Provider
 	toolReg        *tools.Registry
+	allowedTools   []string // empty = all tools allowed
 	store          store.SessionStore
 	resourceLoader resources.ResourceLoader
 	model          string // bare model ID
@@ -43,7 +44,8 @@ type AgentOptions struct {
 	MaxTokens    int    // max output tokens per LLM call — default: model's MaxTokens from ModelMeta
 
 	// ── Tools ─────────────────────────────────────────────────────────────
-	ExtraTools []tools.Tool // additional tools (default tools always included)
+	ExtraTools   []tools.Tool // additional tools (default tools always included)
+	AllowedTools []string     // tool names the agent may use — empty = all allowed
 
 	// ── Infrastructure (optional) ─────────────────────────────────────────
 	Store          store.SessionStore       // default: InMemoryStore
@@ -86,6 +88,7 @@ func New(opts AgentOptions) (*Agent, error) {
 	return &Agent{
 		provider:       provider,
 		toolReg:        reg,
+		allowedTools:   opts.AllowedTools,
 		store:          opts.Store,
 		resourceLoader: opts.ResourceLoader,
 		model:          modelID,
@@ -108,12 +111,7 @@ func (a *Agent) NewSession(cwd string) (*Session, error) {
 		return nil, fmt.Errorf("load resources: %w", err)
 	}
 
-	// Clone base tools and inject skill tool only if skills were discovered
-	sessionTools := a.toolReg.Clone()
-	if len(res.Skills) > 0 {
-		def, execFn := tools.Skill(loader.ReadSkill)
-		sessionTools.Register(tools.Tool{Def: def, Execute: execFn})
-	}
+	sessionTools := a.buildSessionTools(res, loader)
 
 	systemPrompt := a.buildSystemPrompt(cwd, res)
 
@@ -147,6 +145,40 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 
 // ── Internal helpers ────────────────────────────────────────────────────
 
+// buildSessionTools constructs the tool registry for a session.
+// Applies AllowedTools filter to all tools (built-in, extra, and skill).
+func (a *Agent) buildSessionTools(res *resources.Resources, loader resources.ResourceLoader) *tools.Registry {
+	reg := tools.NewRegistry()
+
+	// Add tools from the base registry — filtered by AllowedTools
+	for _, def := range a.toolReg.Definitions() {
+		if a.isToolAllowed(def.Name) {
+			reg.Register(a.toolReg.Get(def.Name))
+		}
+	}
+
+	// Inject skill tool only if skills discovered AND skill is allowed
+	if len(res.Skills) > 0 && a.isToolAllowed("skill") {
+		def, execFn := tools.Skill(loader.ReadSkill)
+		reg.Register(tools.Tool{Def: def, Execute: execFn})
+	}
+
+	return reg
+}
+
+// isToolAllowed returns true if the tool is in AllowedTools, or if AllowedTools is empty.
+func (a *Agent) isToolAllowed(name string) bool {
+	if len(a.allowedTools) == 0 {
+		return true
+	}
+	for _, n := range a.allowedTools {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) string {
 	var b strings.Builder
 
@@ -157,10 +189,7 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) string {
 		b.WriteString(a.systemPrompt)
 	}
 
-	// 2. Tool policy — always present, survives SYSTEM.md override
-	b.WriteString("\n\nDo not use bash for file operations when dedicated file tools are available.")
-
-	// 3. Available Skills — only if skills were discovered
+	// 2. Available Skills — only if skills were discovered
 	if len(res.Skills) > 0 {
 		b.WriteString("\n\n## Available Skills\n\n")
 		for _, s := range res.Skills {

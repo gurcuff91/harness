@@ -53,6 +53,11 @@ func (r *Registry) Clone() *Registry {
 	return c
 }
 
+// Get returns a tool by name. Returns zero value if not found.
+func (r *Registry) Get(name string) Tool {
+	return r.tools[name]
+}
+
 // Run executes a tool by name with the given input.
 // Returns (text, error) — text always goes to the LLM, error signals failure.
 func (r *Registry) Run(name string, input json.RawMessage) (string, error) {
