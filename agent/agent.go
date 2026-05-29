@@ -40,14 +40,15 @@ type AgentOptions struct {
 	// ── Behavior ──────────────────────────────────────────────────────────
 	SystemPrompt string // base system prompt for all sessions
 	MaxTurns     int    // max ReAct iterations per turn — default: 25
-	MaxTokens    int    // max output tokens per LLM call — default: 8192
+	MaxTokens    int    // max output tokens per LLM call — default: model's MaxTokens from ModelMeta
 
 	// ── Tools ─────────────────────────────────────────────────────────────
 	ExtraTools []tools.Tool // additional tools (default tools always included)
 
 	// ── Infrastructure (optional) ─────────────────────────────────────────
 	Store          store.SessionStore       // default: InMemoryStore
-	ResourceLoader resources.ResourceLoader // default: NilLoader (FileLoader coming soon)
+	ResourceLoader resources.ResourceLoader // default: FileResourceLoader(cwd) per session
+	//                                       // pass NilLoader{} to disable resource discovery
 }
 
 // New creates a new Agent.
@@ -63,14 +64,18 @@ func New(opts AgentOptions) (*Agent, error) {
 		opts.MaxTurns = 25
 	}
 	if opts.MaxTokens <= 0 {
-		opts.MaxTokens = 8192
+		// Use the model's actual max output tokens — no artificial cap
+		if meta := provider.ModelMeta(modelID); meta != nil && meta.MaxTokens > 0 {
+			opts.MaxTokens = meta.MaxTokens
+		} else {
+			opts.MaxTokens = 32000 // safe fallback
+		}
 	}
 	if opts.Store == nil {
 		opts.Store = store.NewInMemoryStore()
 	}
-	if opts.ResourceLoader == nil {
-		opts.ResourceLoader = resources.NilLoader{}
-	}
+	// ResourceLoader nil = FileResourceLoader created per session with session's cwd
+	// Pass resources.NilLoader{} explicitly to disable resource discovery
 
 	// Build base tool registry: defaults + extras
 	reg := defaultTools()
@@ -93,7 +98,12 @@ func New(opts AgentOptions) (*Agent, error) {
 
 // NewSession creates a fresh session for a working directory.
 func (a *Agent) NewSession(cwd string) (*Session, error) {
-	res, err := a.resourceLoader.Load()
+	// Use FileResourceLoader with this session's cwd by default
+	loader := a.resourceLoader
+	if loader == nil {
+		loader = resources.NewFileResourceLoader(cwd)
+	}
+	res, err := loader.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load resources: %w", err)
 	}
@@ -101,7 +111,7 @@ func (a *Agent) NewSession(cwd string) (*Session, error) {
 	// Clone base tools and inject skill tool only if skills were discovered
 	sessionTools := a.toolReg.Clone()
 	if len(res.Skills) > 0 {
-		def, execFn := tools.Skill(a.resourceLoader.ReadSkill)
+		def, execFn := tools.Skill(loader.ReadSkill)
 		sessionTools.Register(tools.Tool{Def: def, Execute: execFn})
 	}
 

@@ -56,6 +56,7 @@ func main() {
 		SystemPrompt: cfg.SystemPrompt,
 		MaxTurns:     cfg.MaxTurns,
 		MaxTokens:    cfg.MaxTokens,
+		// ResourceLoader: nil → FileResourceLoader(cwd) created per session automatically
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent error: %v\n", err)
