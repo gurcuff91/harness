@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -20,7 +21,7 @@ type Agent struct {
 	provider       pllm.Provider
 	toolReg        *tools.Registry
 	allowedTools   []string // empty = all tools allowed
-	store          store.SessionStore
+	store          store.SessionStoreManager
 	resourceLoader resources.ResourceLoader
 	model          string // bare model ID
 	thinkingLevel  string
@@ -48,7 +49,7 @@ type AgentOptions struct {
 	AllowedTools []string     // tool names the agent may use — empty = all allowed
 
 	// ── Infrastructure (optional) ─────────────────────────────────────────
-	Store          store.SessionStore       // default: InMemoryStore
+	Store          store.SessionStoreManager       // default: InMemoryStore
 	ResourceLoader resources.ResourceLoader // default: FileResourceLoader(cwd) per session
 	//                                       // pass NilLoader{} to disable resource discovery
 }
@@ -74,7 +75,7 @@ func New(opts AgentOptions) (*Agent, error) {
 		}
 	}
 	if opts.Store == nil {
-		opts.Store = store.NewInMemoryStore()
+		opts.Store = store.NewInMemorySessionStoreManager()
 	}
 	// ResourceLoader nil = FileResourceLoader created per session with session's cwd
 	// Pass resources.NilLoader{} explicitly to disable resource discovery
@@ -115,19 +116,48 @@ func (a *Agent) NewSession(cwd string) (*Session, error) {
 
 	systemPrompt := a.buildSystemPrompt(cwd, res)
 
-	id := uuid.New().String()
-	storeInst, err := a.store.Create(id, cwd)
+	now := time.Now()
+	meta := store.SessionMeta{
+		ID:           uuid.New().String(),
+		CWD:          cwd,
+		Model:        a.provider.Name() + "/" + a.model,
+		Thinking:     a.thinkingLevel,
+		CreatedAt:    now,
+		LastActiveAt: now,
+	}
+	storeInst, err := a.store.Create(meta)
 	if err != nil {
 		return nil, fmt.Errorf("create store: %w", err)
 	}
 
-	return newSession(id, cwd, "", storeInst,
+	return newSession(storeInst,
 		a.provider, a.model, a.thinkingLevel,
 		sessionTools, systemPrompt,
 		a.maxTurns, a.maxTokens), nil
 }
 
-// ResumeSession reopens an existing session by ID.
+// ListSessions returns all sessions for a given working directory.
+func (a *Agent) ListSessions(cwd string) ([]store.SessionMeta, error) {
+	return a.store.List(cwd)
+}
+
+// ListAllSessions returns all sessions across all directories.
+func (a *Agent) ListAllSessions() ([]store.SessionMeta, error) {
+	return a.store.ListAll()
+}
+
+// DeleteSession removes a session permanently.
+func (a *Agent) DeleteSession(sessionID string) error {
+	return a.store.Delete(sessionID)
+}
+
+// RenameSession sets a friendly name for a session.
+func (a *Agent) RenameSession(sessionID, name string) error {
+	return a.store.Rename(sessionID, name)
+}
+
+// ResumeSession reopens an existing session, fully restoring its state:
+// cwd, model, thinking level, and accumulated stats.
 func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 	storeInst, err := a.store.Open(sessionID)
 	if err != nil {
@@ -137,9 +167,37 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 		return nil, fmt.Errorf("session %s not found", sessionID)
 	}
 
-	return newSession(sessionID, "", "", storeInst,
-		a.provider, a.model, a.thinkingLevel,
-		a.toolReg.Clone(), a.systemPrompt,
+	meta := storeInst.Meta()
+
+	// Restore provider+model from the session's last known model
+	// Fall back to agent default if provider is no longer available
+	provider := a.provider
+	modelID := a.model
+	if meta.Model != "" {
+		if p, id, err := providers.Resolve(meta.Model); err == nil {
+			provider = p
+			modelID = id
+		}
+	}
+
+	thinkingLvl := a.thinkingLevel
+	if meta.Thinking != "" {
+		thinkingLvl = meta.Thinking
+	}
+
+	// Rebuild resources and tools for the session's cwd
+	cwd := meta.CWD
+	loader := a.resourceLoader
+	if loader == nil {
+		loader = resources.NewFileResourceLoader(cwd)
+	}
+	res, _ := loader.Load()
+	sessionTools := a.buildSessionTools(res, loader)
+	systemPrompt := a.buildSystemPrompt(cwd, res)
+
+	return newSession(storeInst,
+		provider, modelID, thinkingLvl,
+		sessionTools, systemPrompt,
 		a.maxTurns, a.maxTokens), nil
 }
 

@@ -2,70 +2,126 @@ package store
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
 )
 
-// ── InMemoryStore ───────────────────────────────────────────────────────
+// ── InMemorySessionStoreManager ─────────────────────────────────────────────────
 
-// InMemoryStore is a test/development SessionStore that keeps everything in memory.
-type InMemoryStore struct {
-	mu       sync.Mutex
-	sessions map[string]*InMemoryInstance
+// InMemorySessionStoreManager keeps everything in memory — for tests and SDK no-persist mode.
+type InMemorySessionStoreManager struct {
+	mu        sync.Mutex
+	instances map[string]*InMemorySessionStore
 }
 
-func NewInMemoryStore() *InMemoryStore {
-	return &InMemoryStore{sessions: make(map[string]*InMemoryInstance)}
+func NewInMemorySessionStoreManager() *InMemorySessionStoreManager {
+	return &InMemorySessionStoreManager{instances: make(map[string]*InMemorySessionStore)}
 }
 
-func (s *InMemoryStore) Create(sessionID, cwd string) (SessionStoreInstance, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	inst := &InMemoryInstance{}
-	s.sessions[sessionID] = inst
+func (m *InMemorySessionStoreManager) Create(meta SessionMeta) (SessionStore, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inst := &InMemorySessionStore{meta: meta}
+	m.instances[meta.ID] = inst
 	return inst, nil
 }
 
-func (s *InMemoryStore) Open(sessionID string) (SessionStoreInstance, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	inst, ok := s.sessions[sessionID]
+func (m *InMemorySessionStoreManager) Open(sessionID string) (SessionStore, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inst, ok := m.instances[sessionID]
 	if !ok {
 		return nil, nil
 	}
 	return inst, nil
 }
 
-// ── InMemoryInstance ────────────────────────────────────────────────────
+func (m *InMemorySessionStoreManager) List(cwd string) ([]SessionMeta, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var result []SessionMeta
+	for _, inst := range m.instances {
+		if inst.meta.CWD == cwd {
+			result = append(result, inst.meta)
+		}
+	}
+	return result, nil
+}
 
-type InMemoryInstance struct {
+func (m *InMemorySessionStoreManager) ListAll() ([]SessionMeta, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]SessionMeta, 0, len(m.instances))
+	for _, inst := range m.instances {
+		result = append(result, inst.meta)
+	}
+	return result, nil
+}
+
+func (m *InMemorySessionStoreManager) Delete(sessionID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.instances, sessionID)
+	return nil
+}
+
+func (m *InMemorySessionStoreManager) Rename(sessionID, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inst, ok := m.instances[sessionID]
+	if !ok {
+		return fmt.Errorf("session %s not found", sessionID)
+	}
+	inst.mu.Lock()
+	inst.meta.Name = name
+	inst.mu.Unlock()
+	return nil
+}
+
+// ── InMemorySessionStore ─────────────────────────────────────────────────
+
+type InMemorySessionStore struct {
 	mu       sync.Mutex
+	meta     SessionMeta
 	messages []json.RawMessage
 }
 
-func (i *InMemoryInstance) Messages() []json.RawMessage {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	out := make([]json.RawMessage, len(i.messages))
-	copy(out, i.messages)
+func (s *InMemorySessionStore) Meta() SessionMeta {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.meta
+}
+
+func (s *InMemorySessionStore) UpdateMeta(meta SessionMeta) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.meta = meta
+	return nil
+}
+
+func (s *InMemorySessionStore) Messages() []json.RawMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]json.RawMessage, len(s.messages))
+	copy(out, s.messages)
 	return out
 }
 
-func (i *InMemoryInstance) AddMessage(msg json.RawMessage) error {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	i.messages = append(i.messages, msg)
+func (s *InMemorySessionStore) AddMessage(msg json.RawMessage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.messages = append(s.messages, msg)
 	return nil
 }
 
-func (i *InMemoryInstance) Truncate(keepLast int) error {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	if keepLast >= len(i.messages) {
+func (s *InMemorySessionStore) Truncate(keepLast int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if keepLast >= len(s.messages) {
 		return nil
 	}
-	cut := len(i.messages) - keepLast
-	i.messages = i.messages[cut:]
+	s.messages = s.messages[len(s.messages)-keepLast:]
 	return nil
 }
 
-func (i *InMemoryInstance) Close() error { return nil }
+func (s *InMemorySessionStore) Close() error { return nil }

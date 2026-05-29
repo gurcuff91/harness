@@ -29,7 +29,7 @@ type Session struct {
 	name         string
 
 	// Dependencies
-	store        store.SessionStoreInstance
+	store        store.SessionStore
 	provider     pllm.Provider
 	modelID      string
 	thinkingLvl  string
@@ -59,15 +59,16 @@ type modelPricing struct {
 
 // ── Constructor (called by Agent.NewSession) ───────────────────────────
 
-func newSession(id, cwd, name string, storeInst store.SessionStoreInstance,
+func newSession(storeInst store.SessionStore,
 	provider pllm.Provider, modelID, thinkingLvl string,
 	toolReg *tools.Registry, systemPrompt string,
 	maxTurns, maxTokens int) *Session {
 
+	meta := storeInst.Meta()
 	s := &Session{
-		id:           id,
-		cwd:          cwd,
-		name:         name,
+		id:           meta.ID,
+		cwd:          meta.CWD,
+		name:         meta.Name,
 		store:        storeInst,
 		provider:     provider,
 		modelID:      modelID,
@@ -76,6 +77,7 @@ func newSession(id, cwd, name string, storeInst store.SessionStoreInstance,
 		systemPrompt: systemPrompt,
 		maxTurns:     maxTurns,
 		maxTokens:    maxTokens,
+		stats:        meta.Stats, // restore accumulated stats
 	}
 	s.loadModelMeta(modelID)
 	return s
@@ -173,7 +175,6 @@ func (s *Session) Subscribe(h Handler) {
 
 // SwitchModel resolves, validates, and switches to a new "provider/model".
 func (s *Session) SwitchModel(fullModel string) error {
-	// Resolve does split + provider lookup + model validation in one step
 	provider, modelID, err := providers.Resolve(fullModel)
 	if err != nil {
 		return err
@@ -182,6 +183,9 @@ func (s *Session) SwitchModel(fullModel string) error {
 	s.provider = provider
 	s.modelID = modelID
 	s.loadModelMeta(modelID)
+	meta := s.store.Meta()
+	meta.Model = fullModel
+	s.store.UpdateMeta(meta)
 	s.mu.Unlock()
 	return nil
 }
@@ -190,6 +194,9 @@ func (s *Session) SwitchModel(fullModel string) error {
 func (s *Session) SwitchThinking(level string) error {
 	s.mu.Lock()
 	s.thinkingLvl = level
+	meta := s.store.Meta()
+	meta.Thinking = level
+	s.store.UpdateMeta(meta)
 	s.mu.Unlock()
 	return nil
 }
@@ -207,7 +214,9 @@ func (s *Session) Compact(ctx context.Context) error {
 // Rename sets a friendly display name.
 func (s *Session) Rename(name string) error {
 	s.name = name
-	return nil
+	meta := s.store.Meta()
+	meta.Name = name
+	return s.store.UpdateMeta(meta)
 }
 
 // Stats returns a snapshot of the accumulated session stats.
@@ -220,14 +229,10 @@ func (s *Session) Stats() types.SessionStats {
 }
 
 // Meta returns a snapshot of session metadata.
-func (s *Session) Meta() SessionMeta {
-	return SessionMeta{
-		ID:       s.id,
-		Name:     s.name,
-		CWD:      s.cwd,
-		Model:    s.provider.Name() + "/" + s.modelID,
-		MaxTurns: s.maxTurns,
-	}
+// Meta returns the full session metadata from the store.
+// Includes: id, cwd, name, model, thinking, stats, timestamps.
+func (s *Session) Meta() store.SessionMeta {
+	return s.store.Meta()
 }
 
 // Close flushes and closes the store.
@@ -331,6 +336,12 @@ func (s *Session) updateStats(se types.StreamEvent) {
 		s.stats.ContextUsage = float64(s.lastInputTokens) / float64(s.contextWindow)
 	}
 
+	// Persist stats to store
+	meta := s.store.Meta()
+	meta.Stats = s.stats
+	meta.LastActiveAt = time.Now()
+	s.store.UpdateMeta(meta)
+
 	// Emit enriched EventTokens to handler
 	s.emit(types.Event{
 		Type: types.EventTokens,
@@ -405,12 +416,4 @@ func (s *Session) formatToolResult(tr types.ToolResult) []byte {
 	return nil
 }
 
-// ── SessionMeta ─────────────────────────────────────────────────────────
 
-type SessionMeta struct {
-	ID       string
-	Name     string
-	CWD      string
-	Model    string
-	MaxTurns int
-}
