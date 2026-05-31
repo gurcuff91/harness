@@ -3,7 +3,9 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -21,9 +23,18 @@ type OpenCodeGo struct {
 	mu     sync.RWMutex
 }
 
+const (
+	openCodeGoAPIKeyCred = "opencode-go.api_key"
+	openCodeGoAPIKeyEnv  = "OPENCODE_GO_API_KEY"
+)
+
 func NewOpenCodeGo() *OpenCodeGo {
+	apiKey := os.Getenv(openCodeGoAPIKeyEnv)
+	if apiKey == "" {
+		apiKey, _ = config.LoadCred(openCodeGoAPIKeyCred)
+	}
 	o := &OpenCodeGo{
-		apiKey: config.GetAPIKey("opencode-go"),
+		apiKey: apiKey,
 		client: &http.Client{},
 		cache:  make(map[string]types.ModelMeta),
 	}
@@ -35,6 +46,32 @@ func NewOpenCodeGo() *OpenCodeGo {
 
 func (o *OpenCodeGo) Name() string   { return "opencode-go" }
 func (o *OpenCodeGo) IsActive() bool { return o.apiKey != "" }
+
+func (o *OpenCodeGo) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
+
+func (o *OpenCodeGo) SetCredentials(creds types.Credentials) error {
+	if creds.Type != types.CredTypeAPIKey {
+		return fmt.Errorf("opencode-go expects api_key credentials, got %s", creds.Type)
+	}
+	if creds.APIKey == "" {
+		return fmt.Errorf("api_key cannot be empty")
+	}
+	o.mu.Lock()
+	o.apiKey = creds.APIKey
+	o.cache = make(map[string]types.ModelMeta)
+	o.mu.Unlock()
+	config.StoreCred(openCodeGoAPIKeyCred, creds.APIKey)
+	o.FetchModels()
+	return nil
+}
+
+func (o *OpenCodeGo) ClearCredentials() error {
+	o.mu.Lock()
+	o.apiKey = ""
+	o.cache = make(map[string]types.ModelMeta)
+	o.mu.Unlock()
+	return config.DeleteCred(openCodeGoAPIKeyCred)
+}
 
 func (o *OpenCodeGo) Models() []types.ModelMeta {
 	o.mu.RLock()

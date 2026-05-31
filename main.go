@@ -44,30 +44,27 @@ func main() {
 		}
 	}
 
-	if cfg.Model == "" {
-		fmt.Fprintf(os.Stderr, "No providers connected.\n")
-		fmt.Fprintf(os.Stderr, "Set HARNESS_MODEL or configure credentials in ~/.harness/credentials.json\n")
-		os.Exit(1)
-	}
-
-	// ── Create agent (resolves provider + validates model internally) ──
-	a, err := agent.New(agent.AgentOptions{
-		Model:        cfg.Model,
-		SystemPrompt: cfg.SystemPrompt,
-		MaxTurns:     cfg.MaxTurns,
-		MaxTokens:    cfg.MaxTokens,
-		// ResourceLoader: nil → FileResourceLoader(cwd) created per session automatically
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent error: %v\n", err)
-		os.Exit(1)
-	}
-
 	// ── Graceful shutdown ──
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// ── Launch CLI ──
+	// ── Try to create agent — may fail if no provider connected ──
+	var a *agent.Agent
+	if cfg.Model != "" {
+		var err error
+		a, err = agent.New(agent.AgentOptions{
+			Model:        cfg.Model,
+			SystemPrompt: cfg.SystemPrompt,
+			MaxTurns:     cfg.MaxTurns,
+			MaxTokens:    cfg.MaxTokens,
+		})
+		if err != nil {
+			// Provider not available — launch CLI in no-provider mode
+			a = nil
+		}
+	}
+
+	// ── Launch CLI (a may be nil — CLI handles it gracefully) ──
 	t := cli.NewCLI(a)
 	if err := t.Run(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

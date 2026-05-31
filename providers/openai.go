@@ -2,7 +2,9 @@ package providers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"os"
 	"sync"
 
 	"github.com/gurcuff91/harness/config"
@@ -19,9 +21,18 @@ type OpenAI struct {
 	mu      sync.RWMutex
 }
 
+const (
+	openAIAPIKeyCred = "openai.api_key"
+	openAIAPIKeyEnv  = "OPENAI_API_KEY"
+)
+
 func NewOpenAI() *OpenAI {
+	apiKey := os.Getenv(openAIAPIKeyEnv)
+	if apiKey == "" {
+		apiKey, _ = config.LoadCred(openAIAPIKeyCred)
+	}
 	o := &OpenAI{
-		apiKey:  config.GetAPIKey("openai"),
+		apiKey:  apiKey,
 		baseURL: "https://api.openai.com/v1",
 		client:  &http.Client{},
 		cache:   make(map[string]types.ModelMeta),
@@ -30,6 +41,32 @@ func NewOpenAI() *OpenAI {
 		o.FetchModels()
 	}
 	return o
+}
+
+func (o *OpenAI) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
+
+func (o *OpenAI) SetCredentials(creds types.Credentials) error {
+	if creds.Type != types.CredTypeAPIKey {
+		return fmt.Errorf("openai expects api_key credentials, got %s", creds.Type)
+	}
+	if creds.APIKey == "" {
+		return fmt.Errorf("api_key cannot be empty")
+	}
+	o.mu.Lock()
+	o.apiKey = creds.APIKey
+	o.cache = make(map[string]types.ModelMeta)
+	o.mu.Unlock()
+	config.StoreCred(openAIAPIKeyCred, creds.APIKey)
+	o.FetchModels()
+	return nil
+}
+
+func (o *OpenAI) ClearCredentials() error {
+	o.mu.Lock()
+	o.apiKey = ""
+	o.cache = make(map[string]types.ModelMeta)
+	o.mu.Unlock()
+	return config.DeleteCred(openAIAPIKeyCred)
 }
 
 func NewOpenAIWithConfig(apiKey, baseURL string) *OpenAI {

@@ -36,6 +36,14 @@ func NewOllama() *Ollama {
 func (o *Ollama) Name() string   { return "ollama" }
 func (o *Ollama) IsActive() bool { return OllamaAvailable() }
 
+func (o *Ollama) CredentialType() types.CredentialType { return types.CredTypeNone }
+
+func (o *Ollama) SetCredentials(creds types.Credentials) error {
+	return fmt.Errorf("ollama is auto-detected — no credentials needed")
+}
+
+func (o *Ollama) ClearCredentials() error { return nil }
+
 func (o *Ollama) Models() []types.ModelMeta {
 	o.mu.RLock()
 	defer o.mu.RUnlock()

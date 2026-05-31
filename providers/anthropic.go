@@ -3,7 +3,9 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
 	"sync"
 
 	"github.com/gurcuff91/harness/config"
@@ -13,13 +15,23 @@ import (
 
 // Anthropic implements llm.Provider for the Anthropic Messages API.
 type Anthropic struct {
-	client       *http.Client
-	cache        map[string]types.ModelMeta
-	mu           sync.RWMutex
+	client *http.Client
+	apiKey string
+	cache  map[string]types.ModelMeta
+	mu     sync.RWMutex
 }
 
+const (
+	anthropicAPIKeyCred = "anthropic.api_key"
+	anthropicAPIKeyEnv  = "ANTHROPIC_API_KEY"
+)
+
 func NewAnthropic() *Anthropic {
-	a := &Anthropic{client: &http.Client{}, cache: make(map[string]types.ModelMeta)}
+	apiKey := os.Getenv(anthropicAPIKeyEnv)
+	if apiKey == "" {
+		apiKey, _ = config.LoadCred(anthropicAPIKeyCred)
+	}
+	a := &Anthropic{client: &http.Client{}, cache: make(map[string]types.ModelMeta), apiKey: apiKey}
 	if a.IsActive() {
 		a.FetchModels()
 	}
@@ -27,7 +39,33 @@ func NewAnthropic() *Anthropic {
 }
 
 func (a *Anthropic) Name() string   { return "anthropic" }
-func (a *Anthropic) IsActive() bool { return config.HasAPIKey("anthropic") }
+func (a *Anthropic) IsActive() bool { return a.apiKey != "" }
+
+func (a *Anthropic) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
+
+func (a *Anthropic) SetCredentials(creds types.Credentials) error {
+	if creds.Type != types.CredTypeAPIKey {
+		return fmt.Errorf("anthropic expects api_key credentials, got %s", creds.Type)
+	}
+	if creds.APIKey == "" {
+		return fmt.Errorf("api_key cannot be empty")
+	}
+	a.apiKey = creds.APIKey
+	a.mu.Lock()
+	a.cache = make(map[string]types.ModelMeta)
+	a.mu.Unlock()
+	config.StoreCred(anthropicAPIKeyCred, creds.APIKey)
+	a.FetchModels()
+	return nil
+}
+
+func (a *Anthropic) ClearCredentials() error {
+	a.apiKey = ""
+	a.mu.Lock()
+	a.cache = make(map[string]types.ModelMeta)
+	a.mu.Unlock()
+	return config.DeleteCred(anthropicAPIKeyCred)
+}
 
 func (a *Anthropic) Models() []types.ModelMeta {
 	a.mu.RLock()
@@ -50,7 +88,7 @@ func (a *Anthropic) ModelMeta(modelID string) *types.ModelMeta {
 }
 
 func (a *Anthropic) FetchModels() []types.ModelMeta {
-	metas := fetchAnthropicModels(config.GetAPIKey("anthropic"))
+	metas := fetchAnthropicModels(a.apiKey)
 	a.mu.Lock()
 	a.cache = make(map[string]types.ModelMeta, len(metas))
 	for _, m := range metas {
@@ -62,7 +100,7 @@ func (a *Anthropic) FetchModels() []types.ModelMeta {
 
 func (a *Anthropic) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
 	return llm.DoAnthropicStream(ctx, a.client, anthropicAPI,
-		config.GetAPIKey("anthropic"), req,
+		a.apiKey, req,
 		map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14"},
 		nil, cb)
 }

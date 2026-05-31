@@ -28,19 +28,19 @@ func NewCLI(a *agent.Agent) *CLI {
 }
 
 func (c *CLI) Run(ctx context.Context) error {
-	// Create session for the current working directory
-	cwd, _ := os.Getwd()
-	session, err := c.agent.NewSession(cwd)
-	if err != nil {
-		return fmt.Errorf("create session: %w", err)
+	if c.agent != nil {
+		// Create session for the current working directory
+		cwd, _ := os.Getwd()
+		session, err := c.agent.NewSession(cwd)
+		if err != nil {
+			return fmt.Errorf("create session: %w", err)
+		}
+		defer session.Close()
+		c.session = session
+		c.modelName = session.Meta().Model
+		c.rebuildRenderer()
+		session.Subscribe(c.renderer.Handle)
 	}
-	defer session.Close()
-	c.session = session
-	c.modelName = session.Meta().Model
-
-	// Build renderer from model meta
-	c.rebuildRenderer()
-	session.Subscribe(c.renderer.Handle)
 
 	c.printBanner()
 
@@ -87,6 +87,10 @@ func (c *CLI) Run(ctx context.Context) error {
 			fmt.Printf("  %s %s\n", C(Dim, "🖼"), C(Dim, fmt.Sprintf("%d image(s) attached", len(images))))
 		}
 
+		if c.session == nil {
+			fmt.Printf("  %s No provider connected — use %s\n\n", C(Yellow, "⚠"), C(BrightCyan, "/connect"))
+			continue
+		}
 		fmt.Println()
 		_, err := c.session.Prompt(ctx, text, images)
 		if err != nil {
@@ -101,7 +105,12 @@ func (c *CLI) printBanner() {
 	fmt.Println(C(Bold+Cyan, "  ╠═╣╠═╣╠╦╝║║║║╣ ╚═╗╚═╗"))
 	fmt.Println(C(Bold+Cyan, "  ╩ ╩╩ ╩╩╚═╝╚╝╚═╝╚═╝╚═╝") + C(Dim, "  v0.5.0"))
 	fmt.Println()
-	fmt.Printf("  %s\n", C(Dim, "model: ")+C(BrightCyan, c.modelName))
+	if c.agent == nil {
+		fmt.Printf("  %s\n", C(Yellow, "⚠  No provider connected"))
+		fmt.Printf("  %s\n", C(Dim, "Use /connect to set up a provider"))
+	} else {
+		fmt.Printf("  %s\n", C(Dim, "model: ")+C(BrightCyan, c.modelName))
+	}
 	fmt.Printf("  %s\n", C(Dim, "/help for commands"))
 	fmt.Println()
 }
@@ -171,61 +180,65 @@ func (c *CLI) handleCommand(ctx context.Context, input string) bool {
 
 func (c *CLI) handleConnect(parts []string) {
 	if len(parts) < 2 {
-		// Show provider status
-		statuses := []struct{ name, status string }{
-			{"claude-oauth", func() string {
-				if tm, _ := providers.NewTokenManager(); tm != nil {
-					if _, err := tm.GetValidToken(); err == nil {
-						return "connected"
-					}
-				}
-				return "disconnected"
-			}()},
-			{"anthropic", connStatus(config.HasAPIKey("anthropic"))},
-			{"openai", connStatus(config.HasAPIKey("openai"))},
-			{"opencode-go", connStatus(config.HasAPIKey("opencode-go"))},
-			{"ollama-cloud", connStatus(config.HasAPIKey("ollama-cloud"))},
-			{"ollama", func() string {
-				if providers.OllamaAvailable() {
-					return "auto-connected"
-				}
-				return "disconnected"
-			}()},
-		}
-		for _, s := range statuses {
-			fmt.Printf("  %-18s (%s)\n", s.name, C(statusColor(s.status), s.status))
+		// Show status for all known providers
+		for _, p := range providers.All {
+			status := "disconnected"
+			if p.IsActive() {
+				status = "connected"
+			} else if p.CredentialType() == types.CredTypeNone {
+				status = "auto-connected"
+			}
+			fmt.Printf("  %-18s (%s)\n", p.Name(), C(statusColor(status), status))
 		}
 		fmt.Println(C(Dim, "\n  Usage: /connect <provider>"))
 		fmt.Println()
 		return
 	}
 
-	switch parts[1] {
-	case "claude-oauth":
-		fmt.Println(C(Dim, "\n  Connecting to Claude OAuth..."))
-		fmt.Println()
-		if err := providers.Login(); err != nil {
-			fmt.Printf("  %s %s\n", C(Red, "✗"), C(Red, err.Error()))
-		} else {
-			fmt.Printf("\n  %s Connected! Restart to apply.\n", C(Green, "✓"))
+	name := parts[1]
+	var target llm.Provider
+	for _, p := range providers.All {
+		if p.Name() == name {
+			target = p
+			break
 		}
+	}
+	if target == nil {
+		fmt.Printf("  %s Unknown provider: %s\n\n", C(Red, "✗"), C(Dim, name))
+		return
+	}
+
+	switch target.CredentialType() {
+	case types.CredTypeNone:
+		fmt.Printf("  %s %s is auto-detected, no credentials needed\n\n", C(Green, "✓"), name)
+
+	case types.CredTypeOAuth:
+		fmt.Println(C(Dim, "\n  Connecting via OAuth..."))
 		fmt.Println()
-	case "anthropic", "openai", "ollama-cloud", "opencode-go":
-		if err := config.ConnectAPIKey(parts[1]); err != nil {
+		token := providers.RunOAuthFlow()
+		if token == nil {
+			fmt.Printf("  %s OAuth flow failed\n\n", C(Red, "✗"))
+			return
+		}
+		if err := target.SetCredentials(*token); err != nil {
 			fmt.Printf("  %s %s\n\n", C(Red, "✗"), C(Red, err.Error()))
-		} else {
-			providers.RefreshProviderModels(parts[1])
-			var n int
-			for _, p := range providers.All {
-				if p.Name() == parts[1] {
-					n = len(p.Models())
-					break
-				}
-			}
-			fmt.Printf("  %s %s connected (%d models)\n\n", C(Green, "✓"), C(Green, parts[1]), n)
+			return
 		}
-	default:
-		fmt.Printf("  %s Unknown provider: %s\n\n", C(Red, "✗"), C(Dim, parts[1]))
+		fmt.Printf("  %s Connected!\n\n", C(Green, "✓"))
+		c.tryInitAgent(name)
+
+	case types.CredTypeAPIKey:
+		key := c.readMasked(fmt.Sprintf("Enter %s API key", name))
+		if key == "" {
+			fmt.Printf("  %s Cancelled\n\n", C(Red, "✗"))
+			return
+		}
+		if err := target.SetCredentials(types.APIKeyCredentials(key)); err != nil {
+			fmt.Printf("  %s %s\n\n", C(Red, "✗"), C(Red, err.Error()))
+			return
+		}
+		fmt.Printf("  %s %s connected (%d models)\n\n", C(Green, "✓"), C(Green, name), len(target.Models()))
+		c.tryInitAgent(name)
 	}
 }
 
@@ -332,6 +345,69 @@ func (c *CLI) printHelp() {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
+
+// tryInitAgent creates the agent+session after a successful /connect.
+func (c *CLI) tryInitAgent(providerName string) {
+	// Find first available model for this provider
+	var model string
+	for _, p := range providers.All {
+		if p.Name() == providerName && p.IsActive() && len(p.Models()) > 0 {
+			model = p.Name() + "/" + p.Models()[0].ID
+			break
+		}
+	}
+	if model == "" {
+		return
+	}
+	a, err := agent.New(agent.AgentOptions{
+		Model: model,
+	})
+	if err != nil {
+		return
+	}
+	c.agent = a
+	cwd, _ := os.Getwd()
+	session, err := a.NewSession(cwd)
+	if err != nil {
+		return
+	}
+	if c.session != nil {
+		c.session.Close()
+	}
+	c.session = session
+	c.modelName = model
+	c.rebuildRenderer()
+	session.Subscribe(c.renderer.Handle)
+	config.SetActiveModel(model)
+	fmt.Printf("  %s Active model: %s\n\n", C(Green, "✓"), C(BrightCyan, model))
+}
+
+func (c *CLI) readMasked(prompt string) string {
+	fmt.Printf("\n  %s: ", prompt)
+	var key []byte
+	buf := make([]byte, 1)
+	for {
+		os.Stdin.Read(buf)
+		if buf[0] == 13 || buf[0] == 10 {
+			break
+		}
+		if buf[0] == 3 {
+			fmt.Println()
+			return ""
+		}
+		if buf[0] == 127 || buf[0] == 8 {
+			if len(key) > 0 {
+				key = key[:len(key)-1]
+				fmt.Print("\b \b")
+			}
+			continue
+		}
+		key = append(key, buf[0])
+		fmt.Print("*")
+	}
+	fmt.Println()
+	return string(key)
+}
 
 func connStatus(active bool) string {
 	if active {

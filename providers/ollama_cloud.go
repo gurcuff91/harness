@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -23,9 +25,18 @@ type OllamaCloud struct {
 	mu     sync.RWMutex
 }
 
+const (
+	ollamaCloudAPIKeyCred = "ollama-cloud.api_key"
+	ollamaCloudAPIKeyEnv  = "OLLAMA_API_KEY"
+)
+
 func NewOllamaCloud() *OllamaCloud {
+	apiKey := os.Getenv(ollamaCloudAPIKeyEnv)
+	if apiKey == "" {
+		apiKey, _ = config.LoadCred(ollamaCloudAPIKeyCred)
+	}
 	o := &OllamaCloud{
-		apiKey: config.GetAPIKey("ollama-cloud"),
+		apiKey: apiKey,
 		client: &http.Client{},
 		cache:  make(map[string]types.ModelMeta),
 	}
@@ -37,6 +48,32 @@ func NewOllamaCloud() *OllamaCloud {
 
 func (o *OllamaCloud) Name() string   { return "ollama-cloud" }
 func (o *OllamaCloud) IsActive() bool { return o.apiKey != "" }
+
+func (o *OllamaCloud) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
+
+func (o *OllamaCloud) SetCredentials(creds types.Credentials) error {
+	if creds.Type != types.CredTypeAPIKey {
+		return fmt.Errorf("ollama-cloud expects api_key credentials, got %s", creds.Type)
+	}
+	if creds.APIKey == "" {
+		return fmt.Errorf("api_key cannot be empty")
+	}
+	o.mu.Lock()
+	o.apiKey = creds.APIKey
+	o.cache = make(map[string]types.ModelMeta)
+	o.mu.Unlock()
+	config.StoreCred(ollamaCloudAPIKeyCred, creds.APIKey)
+	o.FetchModels()
+	return nil
+}
+
+func (o *OllamaCloud) ClearCredentials() error {
+	o.mu.Lock()
+	o.apiKey = ""
+	o.cache = make(map[string]types.ModelMeta)
+	o.mu.Unlock()
+	return config.DeleteCred(ollamaCloudAPIKeyCred)
+}
 
 func (o *OllamaCloud) Models() []types.ModelMeta {
 	o.mu.RLock()

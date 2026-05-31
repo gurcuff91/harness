@@ -2,20 +2,14 @@ package config
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 )
 
-type ProviderCreds struct {
-	APIKey           string `json:"api_key,omitempty"`
-	AccessToken      string `json:"access_token,omitempty"`
-	RefreshToken     string `json:"refresh_token,omitempty"`
-	ExpiresAt        int64  `json:"expires_at,omitempty"`
-	SubscriptionType string `json:"subscription_type,omitempty"`
-}
+// credentials.go — neutral key-value store for provider credentials.
+// No knowledge of specific providers, env vars, or credential types.
 
-type CredsFile map[string]*ProviderCreds
+type credsFile map[string]string
 
 func credsPath() string {
 	home, _ := os.UserHomeDir()
@@ -24,100 +18,55 @@ func credsPath() string {
 	return filepath.Join(dir, "credentials.json")
 }
 
-func LoadCreds() CredsFile {
+func loadCredsFile() credsFile {
 	data, err := os.ReadFile(credsPath())
 	if err != nil {
-		return make(CredsFile)
+		return make(credsFile)
 	}
-	var f CredsFile
+	var f credsFile
 	if err := json.Unmarshal(data, &f); err != nil {
-		return make(CredsFile)
+		return make(credsFile)
 	}
 	return f
 }
 
-func SaveCreds(f CredsFile) {
+func saveCredsFile(f credsFile) {
 	data, _ := json.MarshalIndent(f, "", "  ")
 	os.WriteFile(credsPath(), data, 0600)
 }
 
-func GetCreds(provider string) *ProviderCreds {
-	f := LoadCreds()
-	return f[provider]
+// StoreCred persists a credential value by key.
+func StoreCred(key, value string) error {
+	f := loadCredsFile()
+	f[key] = value
+	saveCredsFile(f)
+	return nil
 }
 
-func SetCreds(provider string, creds *ProviderCreds) {
-	f := LoadCreds()
-	f[provider] = creds
-	SaveCreds(f)
+// LoadCred retrieves a credential value by key.
+// Returns ("", false) if the key does not exist.
+func LoadCred(key string) (string, bool) {
+	f := loadCredsFile()
+	v, ok := f[key]
+	return v, ok
 }
 
-func HasAPIKey(provider string) bool {
-	if envKey := apiKeyFromEnv(provider); envKey != "" {
-		return true
-	}
-	c := GetCreds(provider)
-	return c != nil && c.APIKey != ""
+// DeleteCred removes a credential by key.
+func DeleteCred(key string) error {
+	f := loadCredsFile()
+	delete(f, key)
+	saveCredsFile(f)
+	return nil
 }
 
-func GetAPIKey(provider string) string {
-	if envKey := apiKeyFromEnv(provider); envKey != "" {
-		return envKey
-	}
-	c := GetCreds(provider)
-	if c != nil {
-		return c.APIKey
-	}
-	return ""
-}
-
-func apiKeyFromEnv(provider string) string {
-	switch provider {
-	case "anthropic":
-		return os.Getenv("ANTHROPIC_API_KEY")
-	case "openai":
-		return os.Getenv("OPENAI_API_KEY")
-	case "ollama-cloud":
-		return os.Getenv("OLLAMA_API_KEY")
-	case "opencode-go":
-		return os.Getenv("OPENCODE_GO_API_KEY")
-	}
-	return ""
-}
-
-func HasOAuth(provider string) bool {
-	c := GetCreds(provider)
-	return c != nil && c.AccessToken != ""
-}
-
-func ConnectAPIKey(provider string) error {
-	fmt.Printf("\n  Enter %s API key: ", provider)
-	var key []byte
-	buf := make([]byte, 1)
-	for {
-		os.Stdin.Read(buf)
-		if buf[0] == 13 || buf[0] == 10 {
-			break
+// DeletePrefix removes all credentials whose keys start with prefix.
+func DeletePrefix(prefix string) error {
+	f := loadCredsFile()
+	for k := range f {
+		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
+			delete(f, k)
 		}
-		if buf[0] == 3 {
-			fmt.Println()
-			return fmt.Errorf("cancelled")
-		}
-		if buf[0] == 127 || buf[0] == 8 {
-			if len(key) > 0 {
-				key = key[:len(key)-1]
-				fmt.Print("\b \b")
-			}
-			continue
-		}
-		key = append(key, buf[0])
-		fmt.Print("*")
 	}
-	fmt.Println()
-	apiKey := string(key)
-	if apiKey == "" {
-		return fmt.Errorf("no key provided")
-	}
-	SetCreds(provider, &ProviderCreds{APIKey: apiKey})
+	saveCredsFile(f)
 	return nil
 }

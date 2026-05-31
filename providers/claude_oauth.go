@@ -55,7 +55,32 @@ func NewClaudeOAuth() (*ClaudeOAuth, error) {
 }
 
 func (c *ClaudeOAuth) Name() string   { return "claude-oauth" }
-func (c *ClaudeOAuth) IsActive() bool { return config.HasOAuth("claude-oauth") }
+func (c *ClaudeOAuth) IsActive() bool {
+	return c.tokens != nil && c.tokens.creds != nil && c.tokens.creds.AccessToken != ""
+}
+
+func (c *ClaudeOAuth) CredentialType() types.CredentialType { return types.CredTypeOAuth }
+
+func (c *ClaudeOAuth) SetCredentials(creds types.Credentials) error {
+	if creds.Type != types.CredTypeOAuth {
+		return fmt.Errorf("claude-oauth expects oauth credentials, got %s", creds.Type)
+	}
+	if creds.AccessToken == "" {
+		return fmt.Errorf("access_token cannot be empty")
+	}
+	c.tokens.creds = &creds
+	c.tokens.SaveLogin(&creds)
+	c.FetchModels()
+	return nil
+}
+
+func (c *ClaudeOAuth) ClearCredentials() error {
+	c.tokens.creds = nil
+	c.mu.Lock()
+	c.cache = make(map[string]types.ModelMeta)
+	c.mu.Unlock()
+	return config.DeletePrefix("claude-oauth.")
+}
 
 func (c *ClaudeOAuth) ModelMeta(modelID string) *types.ModelMeta {
 	if m, ok := c.cache[modelID]; ok {
@@ -347,13 +372,23 @@ const (
 // TokenManager handles OAuth token lifecycle using credentials.json.
 type TokenManager struct {
 	mu    sync.Mutex
-	creds *config.ProviderCreds
+	creds *types.Credentials
 }
 
 func NewTokenManager() (*TokenManager, error) {
 	tm := &TokenManager{}
-	c := config.GetCreds("claude-oauth")
-	if c != nil && c.AccessToken != "" {
+	at, _ := config.LoadCred("claude-oauth.access_token")
+	rt, _ := config.LoadCred("claude-oauth.refresh_token")
+	var ea int64
+	if eas, ok := config.LoadCred("claude-oauth.expires_at"); ok {
+		fmt.Sscanf(eas, "%d", &ea)
+	}
+	st, _ := config.LoadCred("claude-oauth.subscription_type")
+	var c *types.Credentials
+	if at != "" {
+		c = &types.Credentials{Type: types.CredTypeOAuth, AccessToken: at, RefreshToken: rt, ExpiresAt: ea, SubscriptionType: st}
+	}
+	if c != nil {
 		tm.creds = c
 	}
 	return tm, nil
@@ -373,7 +408,7 @@ func (tm *TokenManager) GetValidToken() (string, error) {
 		return "", fmt.Errorf("token expired — use /connect claude-oauth")
 	}
 	tm.creds = refreshed
-	config.SetCreds("claude-oauth", refreshed)
+	tm.SaveLogin(refreshed)
 	return refreshed.AccessToken, nil
 }
 
@@ -386,7 +421,7 @@ func (tm *TokenManager) GetTokenInfo() (expiresAt int64, subType string) {
 	return tm.creds.ExpiresAt, tm.creds.SubscriptionType
 }
 
-func (tm *TokenManager) refreshToken(refreshToken string) (*config.ProviderCreds, error) {
+func (tm *TokenManager) refreshToken(refreshToken string) (*types.Credentials, error) {
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
 		"client_id":     {oauthClientID},
@@ -420,7 +455,7 @@ func (tm *TokenManager) refreshToken(refreshToken string) (*config.ProviderCreds
 	if newRefresh == "" {
 		newRefresh = refreshToken
 	}
-	return &config.ProviderCreds{
+	return &types.Credentials{
 		AccessToken:      result.AccessToken,
 		RefreshToken:     newRefresh,
 		ExpiresAt:        time.Now().UnixMilli() + int64(expiresIn)*1000,
@@ -428,18 +463,34 @@ func (tm *TokenManager) refreshToken(refreshToken string) (*config.ProviderCreds
 	}, nil
 }
 
-func (tm *TokenManager) SaveLogin(creds *config.ProviderCreds) error {
+func (tm *TokenManager) SaveLogin(creds *types.Credentials) error {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	tm.creds = creds
-	config.SetCreds("claude-oauth", creds)
+	config.StoreCred("claude-oauth.access_token", creds.AccessToken)
+	config.StoreCred("claude-oauth.refresh_token", creds.RefreshToken)
+	config.StoreCred("claude-oauth.expires_at", fmt.Sprintf("%d", creds.ExpiresAt))
+	config.StoreCred("claude-oauth.subscription_type", creds.SubscriptionType)
 	return nil
 }
 
 // ── OAuth Login ──────────────────────────────────────────
 
+// RunOAuthFlow executes the OAuth flow and returns the resulting credentials.
+// Called by the CLI transport — not interactive inside the provider itself.
+func RunOAuthFlow() *types.Credentials {
+	if err := Login(); err != nil {
+		return nil
+	}
+	tm, _ := NewTokenManager()
+	if tm == nil || tm.creds == nil {
+		return nil
+	}
+	return tm.creds
+}
+
 // Login authenticates via Claude Code's official login flow,
-// then imports the resulting tokens into ~/.harness/oauth.json
+// then imports the resulting tokens into ~/.harness/credentials.json
 func Login() error {
 	fmt.Println("\n  🔑 Starting authentication via Claude Code...")
 
@@ -492,7 +543,7 @@ func resetTerminal() {
 	fmt.Print("\033[0m")
 }
 
-func readClaudeFromKeychain() *config.ProviderCreds {
+func readClaudeFromKeychain() *types.Credentials {
 	// Primary: Claude Code credentials
 	if t := readKeychainItem("Claude Code-credentials"); t != nil {
 		return t
@@ -501,7 +552,7 @@ func readClaudeFromKeychain() *config.ProviderCreds {
 	return readKeychainItem("claude-code")
 }
 
-func readKeychainItem(service string) *config.ProviderCreds {
+func readKeychainItem(service string) *types.Credentials {
 	out, err := exec.Command("security", "find-generic-password",
 		"-s", service, "-w").Output()
 	if err != nil {
@@ -522,10 +573,10 @@ func readKeychainItem(service string) *config.ProviderCreds {
 	if at == "" || rt == "" {
 		return nil
 	}
-	return &config.ProviderCreds{AccessToken: at, RefreshToken: rt, ExpiresAt: int64(ea), SubscriptionType: st}
+	return &types.Credentials{Type: types.CredTypeOAuth, AccessToken: at, RefreshToken: rt, ExpiresAt: int64(ea), SubscriptionType: st}
 }
 
-func readClaudeCredentialsFile() *config.ProviderCreds {
+func readClaudeCredentialsFile() *types.Credentials {
 	home, _ := os.UserHomeDir()
 	data, err := os.ReadFile(filepath.Join(home, ".claude", ".credentials.json"))
 	if err != nil {
@@ -543,7 +594,7 @@ func readClaudeCredentialsFile() *config.ProviderCreds {
 		return nil
 	}
 	t := creds.OAuthTokens[0]
-	return &config.ProviderCreds{AccessToken: t.AccessToken, RefreshToken: t.RefreshToken, ExpiresAt: t.ExpiresAt, SubscriptionType: t.SubType}
+	return &types.Credentials{Type: types.CredTypeOAuth, AccessToken: t.AccessToken, RefreshToken: t.RefreshToken, ExpiresAt: t.ExpiresAt, SubscriptionType: t.SubType}
 }
 
 

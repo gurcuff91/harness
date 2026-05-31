@@ -29,4 +29,15 @@ type Provider interface {
 	// Checks the provider's cache first; falls back to the registry and name inference.
 	// Returns nil if nothing is known about the model.
 	ModelMeta(modelID string) *types.ModelMeta
+
+	// CredentialType returns what kind of credentials this provider expects.
+	// Used by transports to decide what UI flow to present.
+	CredentialType() types.CredentialType
+
+	// SetCredentials validates, persists, and applies credentials.
+	// Returns error if the credential type doesn't match what the provider expects.
+	SetCredentials(creds types.Credentials) error
+
+	// ClearCredentials removes all stored credentials and deactivates the provider.
+	ClearCredentials() error
 }
