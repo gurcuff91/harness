@@ -85,6 +85,7 @@ type InMemorySessionStore struct {
 	mu       sync.Mutex
 	meta     SessionMeta
 	messages []types.Message
+	// compactOffset lives in meta.CompactOffset — no separate field needed
 }
 
 func (s *InMemorySessionStore) Meta() SessionMeta {
@@ -100,11 +101,14 @@ func (s *InMemorySessionStore) UpdateMeta(meta SessionMeta) error {
 	return nil
 }
 
+// Messages returns only messages since the last compaction checkpoint.
 func (s *InMemorySessionStore) Messages() []types.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]types.Message, len(s.messages))
-	copy(out, s.messages)
+	offset := s.meta.CompactOffset
+	slice := s.messages[offset:]
+	out := make([]types.Message, len(slice))
+	copy(out, slice)
 	return out
 }
 
@@ -115,13 +119,19 @@ func (s *InMemorySessionStore) AddMessage(msg types.Message) error {
 	return nil
 }
 
-func (s *InMemorySessionStore) Truncate(keepLast int) error {
+// AddCheckpoint appends the summary as a user message, moves the compact offset
+// to that position, and increments the compact count.
+// Full history is preserved (append-only — nothing is deleted).
+func (s *InMemorySessionStore) AddCheckpoint(summary string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if keepLast >= len(s.messages) {
-		return nil
-	}
-	s.messages = s.messages[len(s.messages)-keepLast:]
+	summaryMsg := types.NewUserTextMessage(
+		"Previous conversation summary:\n\n" + summary,
+	)
+	s.messages = append(s.messages, summaryMsg)
+	// CompactOffset points to the summary — it becomes the first message LLM sees
+	s.meta.CompactOffset = len(s.messages) - 1
+	s.meta.CompactCount++
 	return nil
 }
 

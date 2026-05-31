@@ -161,12 +161,18 @@ func (s *Session) Prompt(ctx context.Context, text string, images []types.ImageD
 				return "", fmt.Errorf("store tool results: %w", err)
 			}
 		}
+
+		// Auto-compact at 98% context usage before next iteration
+		// Compact emits EventError itself if it fails — no duplication here
+		if s.stats.ContextUsage >= 0.98 {
+			s.Compact(ctx) //nolint:errcheck — error already emitted as EventError
+		}
 	}
 
 	// Max turns reached while still executing tools.
 	// Ask the LLM to summarize progress and let the user decide what to do next.
 	s.emit(types.Event{Type: types.EventLoopEnd})
-	summary, _ := s.requestSummary(ctx)
+	summary, _ := s.requestProgressUpdate(ctx)
 	s.emit(types.Event{Type: types.EventMaxTurnsReached})
 	s.emit(types.Event{Type: types.EventTurnEnd})
 	return summary, nil
@@ -178,11 +184,26 @@ func (s *Session) Subscribe(h Handler) {
 }
 
 // SwitchModel resolves, validates, and switches to a new "provider/model".
-func (s *Session) SwitchModel(fullModel string) error {
+// If the new model has a smaller context window than the current usage,
+// Compact() is called automatically before switching.
+func (s *Session) SwitchModel(ctx context.Context, fullModel string) error {
 	provider, modelID, err := providers.Resolve(fullModel)
 	if err != nil {
 		return err
 	}
+
+	// If the new model has a smaller context window than current usage,
+	// compact is mandatory — switch fails if compact fails.
+	if meta := provider.ModelMeta(modelID); meta != nil && meta.ContextWindow > 0 {
+		if s.lastInputTokens > meta.ContextWindow {
+			if compactErr := s.Compact(ctx); compactErr != nil {
+				// Compact already emitted EventError — just return
+				return fmt.Errorf("cannot switch to %s: history (%d tokens) exceeds context window (%d): %w",
+					fullModel, s.lastInputTokens, meta.ContextWindow, compactErr)
+			}
+		}
+	}
+
 	s.mu.Lock()
 	s.provider = provider
 	s.modelID = modelID
@@ -205,14 +226,79 @@ func (s *Session) SwitchThinking(level string) error {
 	return nil
 }
 
-// Compact truncates old messages keeping the last N.
+const compactSystemPrompt = `Your task is to produce a concise but complete summary of the conversation so far.
+This summary will REPLACE the full conversation history — it must contain everything
+needed to continue the work without losing context.
+
+Include:
+1. What was asked / the goal
+2. What has been done (decisions made, files changed, commands run, key findings)
+3. Current state — what is working, what is pending
+4. Any critical context (errors encountered, constraints, important details)
+
+Be specific and factual. Use bullet points. Do NOT ask questions or add commentary.
+Respond with ONLY the summary text.`
+
+// Compact summarizes the conversation via LLM and stores a checkpoint.
+//
+// Events emitted:
+//   - EventCompactStart always
+//   - EventCompactEnd{Output: summary} on success
+//   - EventError{Output: msg} on failure (no EventCompactEnd)
+//
+// The store is never modified if summary generation fails.
 func (s *Session) Compact(ctx context.Context) error {
 	s.emit(types.Event{Type: types.EventCompactStart})
-	if err := s.store.Truncate(30); err != nil {
-		return err
+
+	// Generate compaction summary — store is untouched until this succeeds
+	summary, err := s.generateCompactionSummary(ctx)
+	if err != nil {
+		s.emit(types.Event{Type: types.EventError, Output: fmt.Sprintf("compact failed: %v", err)})
+		return fmt.Errorf("compact: %w", err)
 	}
-	s.emit(types.Event{Type: types.EventCompactEnd})
+
+	// Commit checkpoint — append-only, no data lost
+	if err := s.store.AddCheckpoint(summary); err != nil {
+		s.emit(types.Event{Type: types.EventError, Output: fmt.Sprintf("compact checkpoint failed: %v", err)})
+		return fmt.Errorf("compact: checkpoint: %w", err)
+	}
+
+	// Reset context usage stats
+	s.stats.InputTokens = 0
+	s.stats.ContextUsage = 0
+	meta := s.store.Meta()
+	meta.Stats = s.stats
+	s.store.UpdateMeta(meta)
+
+	s.emit(types.Event{Type: types.EventCompactEnd, Output: summary})
 	return nil
+}
+
+// generateCompactionSummary makes a focused LLM call to summarize the full conversation
+// for use as a compaction checkpoint. Uses no tools and a dedicated system prompt.
+// The result is stored internally — NOT streamed to the transport.
+func (s *Session) generateCompactionSummary(ctx context.Context) (string, error) {
+	req := &types.Request{
+		SystemPrompt: compactSystemPrompt,
+		Model:        s.modelID,
+		Messages:     s.store.Messages(),
+		Tools:        nil, // no tools — pure text
+		MaxTokens:    4096,
+	}
+
+	var summaryText string
+	_, err := s.provider.CompleteStream(ctx, req, func(se types.StreamEvent) {
+		if se.Type == types.StreamTextDelta {
+			summaryText += se.Delta
+		}
+	})
+	if err != nil {
+		return "", err
+	}
+	if summaryText == "" {
+		return "", fmt.Errorf("empty summary")
+	}
+	return summaryText, nil
 }
 
 // Rename sets a friendly display name.
@@ -364,10 +450,10 @@ func (s *Session) updateStats(se types.StreamEvent) {
 	})
 }
 
-// requestSummary makes a final LLM call without tools, asking the model to
-// summarize what it has done and what still needs to be done.
-// The response is streamed normally so the transport receives it via EventStreamTextDelta.
-func (s *Session) requestSummary(ctx context.Context) (string, error) {
+// requestProgressUpdate makes a final LLM call when max turns is reached.
+// Asks the model to summarize progress and check with the user on next steps.
+// The response IS streamed to the transport via EventStreamTextDelta.
+func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 	const summaryPrompt = "You've reached the maximum number of tool calls allowed for this turn. " +
 		"Please summarize: (1) what you have completed so far, (2) what still needs to be done, " +
 		"and (3) ask the user if they want you to continue or if they'd like to change direction."

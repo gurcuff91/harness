@@ -170,7 +170,7 @@ func (c *CLI) handleCommand(ctx context.Context, input string) bool {
 		if len(parts) < 2 {
 			c.listModels()
 		} else {
-			c.switchModel(parts[1])
+			c.switchModel(ctx, parts[1])
 		}
 		return true
 
@@ -335,7 +335,7 @@ func (c *CLI) listModels() {
 	fmt.Println()
 }
 
-func (c *CLI) switchModel(selector string) {
+func (c *CLI) switchModel(ctx context.Context, selector string) {
 	// Normalize: if no "/" try to find provider prefix
 	if !strings.Contains(selector, "/") {
 		for _, p := range providers.All {
@@ -351,7 +351,7 @@ func (c *CLI) switchModel(selector string) {
 		}
 	}
 
-	if err := c.session.SwitchModel(selector); err != nil {
+	if err := c.session.SwitchModel(ctx, selector); err != nil {
 		fmt.Printf("  %s %s\n\n", C(Red, "✗"), C(Red, err.Error()))
 		return
 	}

@@ -23,6 +23,10 @@ type SessionMeta struct {
 	Model    string `json:"model"`             // "provider/model"
 	Thinking string `json:"thinking,omitempty"` // thinking level
 
+	// Compaction
+	CompactOffset int `json:"compact_offset,omitempty"` // message index of last checkpoint
+	CompactCount  int `json:"compact_count,omitempty"`  // number of times compacted
+
 	// Accumulated stats — persisted after each turn
 	Stats types.SessionStats `json:"stats"`
 
@@ -42,14 +46,18 @@ type SessionStore interface {
 	// UpdateMeta persists metadata changes (model, stats, name, etc.).
 	UpdateMeta(meta SessionMeta) error
 
-	// Messages returns all messages for LLM history reconstruction.
+	// Messages returns messages since the last compaction checkpoint.
+	// Full history (including pre-checkpoint messages) is preserved in the store.
 	Messages() []types.Message
 
 	// AddMessage appends a message to the log. Thread-safe.
 	AddMessage(msg types.Message) error
 
-	// Truncate keeps only the last N messages.
-	Truncate(keepLast int) error
+	// AddCheckpoint appends a compaction checkpoint.
+	// summary is the LLM-generated conversation summary.
+	// After this call, Messages() returns only messages from this checkpoint onward.
+	// The store is append-only — pre-checkpoint messages are preserved, not deleted.
+	AddCheckpoint(summary string) error
 
 	// Close flushes and closes the store.
 	Close() error
