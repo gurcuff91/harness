@@ -11,7 +11,7 @@ import (
 // readFn is typically ResourceLoader.ReadSkill — injected by the agent at session creation.
 func Skill(readFn func(name string) (string, error)) (types.ToolDef, func(json.RawMessage) (string, error)) {
 	def := types.ToolDef{
-		Name:        "skill",
+		Name:        "Skill",
 		Description: "Read the full instructions for a skill by name. Use this to load a skill before executing it.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",

@@ -19,7 +19,7 @@ type readFileInput struct {
 func ReadFile() Tool {
 	return Tool{
 		Def: types.ToolDef{
-			Name:        "read_file",
+			Name:        "Read",
 			Description: "Read the contents of a file. Use offset and limit to read specific line ranges in large files. Always prefer this over bash cat/head/tail for reading file content.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
@@ -72,7 +72,7 @@ type writeFileInput struct {
 func WriteFile() Tool {
 	return Tool{
 		Def: types.ToolDef{
-			Name:        "write_file",
+			Name:        "Write",
 			Description: "Create or overwrite a file with the given content. Creates parent directories if needed. Use for new files or full rewrites. For partial changes, prefer the edit tool instead.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",

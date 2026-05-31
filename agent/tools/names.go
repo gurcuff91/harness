@@ -2,11 +2,12 @@ package tools
 
 // Built-in tool names — use these constants in AgentOptions.AllowedTools
 // to avoid typos and enable IDE autocompletion.
+// Names match Claude Code canonical names where possible.
 const (
-	ToolBash      = "bash"
-	ToolReadFile  = "read_file"
-	ToolWriteFile = "write_file"
-	ToolEdit      = "edit"
-	ToolFetch     = "fetch"
-	ToolSkill     = "skill"
+	ToolBash  = "Bash"
+	ToolRead  = "Read"
+	ToolWrite = "Write"
+	ToolEdit  = "Edit"
+	ToolFetch = "Fetch"
+	ToolSkill = "Skill"
 )

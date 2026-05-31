@@ -382,13 +382,18 @@ func addLastUserCacheControl(msgs []json.RawMessage) []json.RawMessage {
 
 // ── Claude Code stealth identity ─────────────────────────────────────────
 
-// CC-native tools keep canonical casing; everything else gets MCP prefix.
+// CC-native tools — maps harness tool names to Claude Code canonical names.
+// Our built-in tools that have a CC equivalent map directly (no MCP prefix).
+// Any future tool not in this set gets mcp__extensions__ prefix automatically.
 var ccToolNames = map[string]string{
-	"read": "Read", "write": "Write", "edit": "Edit", "bash": "Bash",
+	// Harness built-ins → CC canonical
+	"bash": "Bash", "read": "Read", "write": "Write",
+	"edit": "Edit", "fetch": "WebFetch", "skill": "Skill",
+	// CC originals (pass-through)
 	"grep": "Grep", "glob": "Glob", "askuserquestion": "AskUserQuestion",
 	"enterplanmode": "EnterPlanMode", "exitplanmode": "ExitPlanMode",
 	"killshell": "KillShell", "notebookedit": "NotebookEdit",
-	"skill": "Skill", "task": "Task", "taskoutput": "TaskOutput",
+	"task": "Task", "taskoutput": "TaskOutput",
 	"todowrite": "TodoWrite", "webfetch": "WebFetch", "websearch": "WebSearch",
 }
 
@@ -399,14 +404,20 @@ func mapToolNameToCC(name string) string {
 	return mcpPrefix + name
 }
 
+// harnessToolNames maps CC canonical names → actual harness tool names (inbound).
+// Explicit map needed because ccToolNames uses lowercase keys but harness names
+// are capitalized (e.g. "fetch"→"WebFetch" outbound, "WebFetch"→"Fetch" inbound).
+var harnessToolNames = map[string]string{
+	"Bash": "Bash", "Read": "Read", "Write": "Write",
+	"Edit": "Edit", "WebFetch": "Fetch", "Skill": "Skill",
+}
+
 func unmapToolNameFromCC(name string) string {
 	if strings.HasPrefix(name, mcpPrefix) {
 		return strings.TrimPrefix(name, mcpPrefix)
 	}
-	for original, cc := range ccToolNames {
-		if name == cc {
-			return original
-		}
+	if harness, ok := harnessToolNames[name]; ok {
+		return harness
 	}
 	return name
 }

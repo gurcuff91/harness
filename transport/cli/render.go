@@ -608,13 +608,13 @@ func (r *Renderer) renderError(msg string) {
 
 func toolIcon(name string) string {
 	switch strings.ToLower(name) {
-	case "bash":
+	case "Bash", "bash":
 		return "⚡"
-	case "read_file", "read":
+	case "Read", "read_file", "read":
 		return "📄"
-	case "write_file", "write":
+	case "Write", "write_file", "write":
 		return "✏️"
-	case "edit":
+	case "Edit", "edit":
 		return "🔧"
 	case "web_search", "websearch":
 		return "🔍"
@@ -632,15 +632,15 @@ func formatToolArgs(toolName string, rawArgs string) string {
 	}
 
 	switch strings.ToLower(toolName) {
-	case "bash":
+	case "Bash", "bash":
 		if cmd, ok := args["command"].(string); ok {
 			return OneLiner(cmd, 80)
 		}
-	case "read_file", "read":
+	case "Read", "read_file", "read":
 		if path, ok := args["path"].(string); ok {
 			return path
 		}
-	case "write_file", "write":
+	case "Write", "write_file", "write":
 		if path, ok := args["path"].(string); ok {
 			size := ""
 			if content, ok := args["content"].(string); ok {
@@ -648,7 +648,7 @@ func formatToolArgs(toolName string, rawArgs string) string {
 			}
 			return path + size
 		}
-	case "edit":
+	case "Edit", "edit":
 		if path, ok := args["path"].(string); ok {
 			return path
 		}

@@ -18,7 +18,7 @@ type editInput struct {
 func Edit() Tool {
 	return Tool{
 		Def: types.ToolDef{
-			Name:        "edit",
+			Name:        "Edit",
 			Description: "Edit a file by replacing exact text. The old_text must match exactly one location in the file. Use for surgical changes to existing files without rewriting the entire content.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",

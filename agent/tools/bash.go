@@ -21,7 +21,7 @@ type bashInput struct {
 func Bash() Tool {
 	return Tool{
 		Def: types.ToolDef{
-			Name:        "bash",
+			Name:        "Bash",
 			Description: "Execute a shell command. Use for builds, git, grep/find, installs, and system tasks. Do NOT use for reading, writing, or editing files — use read_file, write_file, and edit instead.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",

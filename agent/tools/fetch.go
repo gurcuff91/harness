@@ -24,7 +24,7 @@ type fetchInput struct {
 func Fetch() Tool {
 	return Tool{
 		Def: types.ToolDef{
-			Name:        "fetch",
+			Name:        "Fetch",
 			Description: "Fetch a URL over HTTP. Provide output_path to save binary content (images, PDFs, ZIPs, etc.) directly to disk — binary-safe. Without output_path, returns response body as text (best for JSON, HTML, APIs). Supports GET, POST, PUT, DELETE with optional headers and body.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
