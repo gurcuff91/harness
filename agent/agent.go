@@ -49,10 +49,16 @@ type AgentOptions struct {
 	//                                         // pass NilLoader{} to disable discovery
 }
 
+// defaultSystemPrompt is used when AgentOptions.SystemPrompt is empty.
+const defaultSystemPrompt = `You are an expert coding agent working directly in the user's codebase. You have access to tools for reading, writing, and editing files, running shell commands, and fetching URLs.`
+
 // New creates a new Agent. Never fails — provider is resolved per session.
 func New(opts AgentOptions) *Agent {
 	if opts.MaxTurns <= 0 {
 		opts.MaxTurns = 25
+	}
+	if opts.SystemPrompt == "" {
+		opts.SystemPrompt = defaultSystemPrompt
 	}
 	if opts.Store == nil {
 		opts.Store = store.NewInMemorySessionStoreManager()

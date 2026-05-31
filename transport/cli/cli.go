@@ -23,8 +23,8 @@ type CLI struct {
 	modelName string // always "provider/model"
 }
 
-func NewCLI(a *agent.Agent) *CLI {
-	return &CLI{agent: a}
+func NewCLI(a *agent.Agent, defaultModel string) *CLI {
+	return &CLI{agent: a, modelName: defaultModel}
 }
 
 func (c *CLI) Run(ctx context.Context) error {

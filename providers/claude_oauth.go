@@ -198,20 +198,24 @@ func (c *ClaudeOAuth) CompleteStream(ctx context.Context, req *types.Request, cb
 	// System blocks — stable for prompt caching
 	systemBlocks := buildSystemBlocks(req.SystemPrompt)
 
-	// Thinking config
-	thinkingCfg, maxTokens := llm.BuildAnthropicThinking(req.Model, req.ThinkingLevel, req.MaxTokens)
+	// Thinking config — output_config must be top-level, not inside thinking
+	thinkingFull, _ := llm.BuildAnthropicThinkingFull(req.Model, req.ThinkingLevel, req.MaxTokens)
 
 	// Messages — drop non-redacted thinking, add cache_control on last user msg
 	wireMsgs := buildWireMessages(req.Messages)
 
 	body := map[string]any{
 		"model":      req.Model,
-		"max_tokens": maxTokens,
+		"max_tokens": thinkingFull.MaxTokens,
 		"system":     systemBlocks,
 		"messages":   wireMsgs,
 		"tools":      aTools,
 		"stream":     true,
-		"thinking":   thinkingCfg,
+		"thinking":   thinkingFull.Thinking,
+	}
+	// output_config is top-level (adaptive models only)
+	if thinkingFull.OutputConfig != nil {
+		body["output_config"] = thinkingFull.OutputConfig
 	}
 
 	data, err := json.Marshal(body)

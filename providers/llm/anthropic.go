@@ -239,22 +239,54 @@ func TranslateMessageToAnthropic(msg types.Message) []json.RawMessage {
 	return nil
 }
 
+// ThinkingConfig holds the thinking block config and optional top-level output_config.
+// output_config must be set at the request body level, not inside thinking.
+type ThinkingConfig struct {
+	Thinking     map[string]any // goes in body["thinking"]
+	OutputConfig map[string]any // goes in body["output_config"] (adaptive only)
+	MaxTokens    int
+}
+
 func BuildAnthropicThinking(model, level string, maxTokens int) (map[string]any, int) {
+	cfg, _ := BuildAnthropicThinkingFull(model, level, maxTokens)
+	return cfg.Thinking, cfg.MaxTokens
+}
+
+// BuildAnthropicThinkingFull returns full thinking config including output_config.
+func BuildAnthropicThinkingFull(model, level string, maxTokens int) (ThinkingConfig, error) {
 	if level == "" || level == "disable" {
-		return map[string]any{"type": "disabled"}, maxTokens
+		return ThinkingConfig{
+			Thinking:  map[string]any{"type": "disabled"},
+			MaxTokens: maxTokens,
+		}, nil
 	}
-	useAdaptive := isAdaptive(model)
-	if useAdaptive {
-		cfg := map[string]any{"type": "adaptive"}
-		if level != "" { cfg["output_config"] = map[string]any{"effort": level} }
-		if maxTokens < 16000 { maxTokens = 16000 }
-		return cfg, maxTokens
+	if isAdaptive(model) {
+		cfg := ThinkingConfig{
+			Thinking:  map[string]any{"type": "adaptive"},
+			MaxTokens: maxTokens,
+		}
+		if maxTokens < 16000 {
+			cfg.MaxTokens = 16000
+		}
+		// output_config is TOP-LEVEL in the request body, not inside thinking
+		if level != "" {
+			cfg.OutputConfig = map[string]any{"effort": level}
+		}
+		return cfg, nil
 	}
-	budget := map[string]int{"low": 2048, "medium": 5000, "xhigh": 32000}
+	// Legacy budget_tokens for non-adaptive models
+	budget := map[string]int{"low": 2048, "medium": 5000, "high": 10240, "xhigh": 32000}
 	b, ok := budget[level]
-	if !ok { b = 10240 }
-	if maxTokens <= b { maxTokens = b + 8192 }
-	return map[string]any{"type": "enabled", "budget_tokens": b}, maxTokens
+	if !ok {
+		b = 10240
+	}
+	if maxTokens <= b {
+		maxTokens = b + 8192
+	}
+	return ThinkingConfig{
+		Thinking:  map[string]any{"type": "enabled", "budget_tokens": b},
+		MaxTokens: maxTokens,
+	}, nil
 }
 
 func IsAdaptiveThinking(model string) bool { return isAdaptive(model) }
