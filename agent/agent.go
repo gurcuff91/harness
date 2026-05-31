@@ -11,98 +11,91 @@ import (
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/providers"
-	pllm "github.com/gurcuff91/harness/providers/llm"
 )
 
-// ── Agent ───────────────────────────────────────────────────────────────
+// ── Agent ────────────────────────────────────────────────────────────────
 
-// Agent is the entry point and factory. It holds global config and spawns Sessions.
+// Agent is a pure factory — it holds global config and spawns Sessions.
+// It has zero knowledge of providers, credentials, or which providers are active.
+// The caller is responsible for ensuring the provider is active before NewSession().
 type Agent struct {
-	provider       pllm.Provider
 	toolReg        *tools.Registry
-	allowedTools   []string // empty = all tools allowed
+	allowedTools   []string
 	store          store.SessionStoreManager
-	resourceLoader resources.ResourceLoader
-	model          string // bare model ID
+	resourceLoader resources.ResourceLoader // nil = FileResourceLoader(cwd) per session
 	thinkingLevel  string
 	systemPrompt   string
 	maxTurns       int
-	maxTokens      int
+	maxTokens      int // 0 = resolved from ModelMeta in NewSession
 }
 
 // AgentOptions configures a new Agent.
 type AgentOptions struct {
-	// ── Required ──────────────────────────────────────────────────────────
-	Model string // "provider/model" e.g. "opencode-go/deepseek-v4-pro"
-	//            // provider is resolved internally via providers.Get()
+	// ── Thinking ─────────────────────────────────────────────────────────
+	ThinkingLevel string // "disable"|"low"|"medium"|"high"|"xhigh"
 
-	// ── Thinking ──────────────────────────────────────────────────────────
-	ThinkingLevel string // "disable"|"low"|"medium"|"high"|"xhigh" — default: ""
-
-	// ── Behavior ──────────────────────────────────────────────────────────
+	// ── Behavior ─────────────────────────────────────────────────────────
 	SystemPrompt string // base system prompt for all sessions
 	MaxTurns     int    // max ReAct iterations per turn — default: 25
-	MaxTokens    int    // max output tokens per LLM call — default: model's MaxTokens from ModelMeta
+	MaxTokens    int    // max output tokens — default: model's MaxTokens from ModelMeta
 
-	// ── Tools ─────────────────────────────────────────────────────────────
-	ExtraTools   []tools.Tool // additional tools (default tools always included)
-	AllowedTools []string     // tool names the agent may use — empty = all allowed
+	// ── Tools ────────────────────────────────────────────────────────────
+	ExtraTools   []tools.Tool // additional tools (defaults always included)
+	AllowedTools []string     // tool names allowed — empty = all
 
-	// ── Infrastructure (optional) ─────────────────────────────────────────
-	Store          store.SessionStoreManager       // default: InMemoryStore
-	ResourceLoader resources.ResourceLoader // default: FileResourceLoader(cwd) per session
-	//                                       // pass NilLoader{} to disable resource discovery
+	// ── Infrastructure (optional) ────────────────────────────────────────
+	Store          store.SessionStoreManager  // default: InMemorySessionStoreManager
+	ResourceLoader resources.ResourceLoader   // default: FileResourceLoader(cwd) per session
+	//                                         // pass NilLoader{} to disable discovery
 }
 
-// New creates a new Agent.
-// Returns error if the provider cannot be resolved or has no credentials.
-func New(opts AgentOptions) (*Agent, error) {
-	// Resolve provider + validate model in one step
-	provider, modelID, err := providers.Resolve(opts.Model)
-	if err != nil {
-		return nil, fmt.Errorf("agent: %w", err)
-	}
-
+// New creates a new Agent. Never fails — provider is resolved per session.
+func New(opts AgentOptions) *Agent {
 	if opts.MaxTurns <= 0 {
 		opts.MaxTurns = 25
-	}
-	if opts.MaxTokens <= 0 {
-		// Use the model's actual max output tokens — no artificial cap
-		if meta := provider.ModelMeta(modelID); meta != nil && meta.MaxTokens > 0 {
-			opts.MaxTokens = meta.MaxTokens
-		} else {
-			opts.MaxTokens = 32000 // safe fallback
-		}
 	}
 	if opts.Store == nil {
 		opts.Store = store.NewInMemorySessionStoreManager()
 	}
-	// ResourceLoader nil = FileResourceLoader created per session with session's cwd
-	// Pass resources.NilLoader{} explicitly to disable resource discovery
 
-	// Build base tool registry: defaults + extras
 	reg := defaultTools()
 	for _, t := range opts.ExtraTools {
 		reg.Register(t)
 	}
 
 	return &Agent{
-		provider:       provider,
 		toolReg:        reg,
 		allowedTools:   opts.AllowedTools,
 		store:          opts.Store,
 		resourceLoader: opts.ResourceLoader,
-		model:          modelID,
 		thinkingLevel:  opts.ThinkingLevel,
 		systemPrompt:   opts.SystemPrompt,
 		maxTurns:       opts.MaxTurns,
 		maxTokens:      opts.MaxTokens,
-	}, nil
+	}
 }
 
-// NewSession creates a fresh session for a working directory.
-func (a *Agent) NewSession(cwd string) (*Session, error) {
-	// Use FileResourceLoader with this session's cwd by default
+// NewSession creates a fresh session for the given working directory and model.
+// model is required in "provider/model" format (e.g. "anthropic/claude-sonnet-4").
+// Returns error if the provider is not active or the model doesn't exist.
+func (a *Agent) NewSession(cwd, model string) (*Session, error) {
+	// Resolve provider — validates active + model exists
+	provider, modelID, err := providers.Resolve(model)
+	if err != nil {
+		return nil, fmt.Errorf("new session: %w", err)
+	}
+
+	// MaxTokens from model if not set
+	maxTokens := a.maxTokens
+	if maxTokens == 0 {
+		if meta := provider.ModelMeta(modelID); meta != nil && meta.MaxTokens > 0 {
+			maxTokens = meta.MaxTokens
+		} else {
+			maxTokens = 32000
+		}
+	}
+
+	// Resources
 	loader := a.resourceLoader
 	if loader == nil {
 		loader = resources.NewFileResourceLoader(cwd)
@@ -113,14 +106,13 @@ func (a *Agent) NewSession(cwd string) (*Session, error) {
 	}
 
 	sessionTools := a.buildSessionTools(res, loader)
-
 	systemPrompt := a.buildSystemPrompt(cwd, res)
 
 	now := time.Now()
 	meta := store.SessionMeta{
 		ID:           uuid.New().String(),
 		CWD:          cwd,
-		Model:        a.provider.Name() + "/" + a.model,
+		Model:        model,
 		Thinking:     a.thinkingLevel,
 		CreatedAt:    now,
 		LastActiveAt: now,
@@ -131,33 +123,12 @@ func (a *Agent) NewSession(cwd string) (*Session, error) {
 	}
 
 	return newSession(storeInst,
-		a.provider, a.model, a.thinkingLevel,
+		provider, modelID, a.thinkingLevel,
 		sessionTools, systemPrompt,
-		a.maxTurns, a.maxTokens), nil
+		a.maxTurns, maxTokens), nil
 }
 
-// ListSessions returns all sessions for a given working directory.
-func (a *Agent) ListSessions(cwd string) ([]store.SessionMeta, error) {
-	return a.store.List(cwd)
-}
-
-// ListAllSessions returns all sessions across all directories.
-func (a *Agent) ListAllSessions() ([]store.SessionMeta, error) {
-	return a.store.ListAll()
-}
-
-// DeleteSession removes a session permanently.
-func (a *Agent) DeleteSession(sessionID string) error {
-	return a.store.Delete(sessionID)
-}
-
-// RenameSession sets a friendly name for a session.
-func (a *Agent) RenameSession(sessionID, name string) error {
-	return a.store.Rename(sessionID, name)
-}
-
-// ResumeSession reopens an existing session, fully restoring its state:
-// cwd, model, thinking level, and accumulated stats.
+// ResumeSession reopens an existing session, fully restoring its state.
 func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 	storeInst, err := a.store.Open(sessionID)
 	if err != nil {
@@ -169,15 +140,10 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 
 	meta := storeInst.Meta()
 
-	// Restore provider+model from the session's last known model
-	// Fall back to agent default if provider is no longer available
-	provider := a.provider
-	modelID := a.model
-	if meta.Model != "" {
-		if p, id, err := providers.Resolve(meta.Model); err == nil {
-			provider = p
-			modelID = id
-		}
+	// Restore provider+model — error if provider no longer available
+	provider, modelID, err := providers.Resolve(meta.Model)
+	if err != nil {
+		return nil, fmt.Errorf("resume session: provider %q no longer available: %w", meta.Model, err)
 	}
 
 	thinkingLvl := a.thinkingLevel
@@ -185,46 +151,63 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 		thinkingLvl = meta.Thinking
 	}
 
-	// Rebuild resources and tools for the session's cwd
+	maxTokens := a.maxTokens
+	if maxTokens == 0 {
+		if m := provider.ModelMeta(modelID); m != nil && m.MaxTokens > 0 {
+			maxTokens = m.MaxTokens
+		} else {
+			maxTokens = 32000
+		}
+	}
+
 	cwd := meta.CWD
 	loader := a.resourceLoader
 	if loader == nil {
 		loader = resources.NewFileResourceLoader(cwd)
 	}
 	res, _ := loader.Load()
-	sessionTools := a.buildSessionTools(res, loader)
-	systemPrompt := a.buildSystemPrompt(cwd, res)
 
 	return newSession(storeInst,
 		provider, modelID, thinkingLvl,
-		sessionTools, systemPrompt,
-		a.maxTurns, a.maxTokens), nil
+		a.buildSessionTools(res, loader),
+		a.buildSystemPrompt(cwd, res),
+		a.maxTurns, maxTokens), nil
 }
 
-// ── Internal helpers ────────────────────────────────────────────────────
+// ── Session management ───────────────────────────────────────────────────
 
-// buildSessionTools constructs the tool registry for a session.
-// Applies AllowedTools filter to all tools (built-in, extra, and skill).
+func (a *Agent) ListSessions(cwd string) ([]store.SessionMeta, error) {
+	return a.store.List(cwd)
+}
+
+func (a *Agent) ListAllSessions() ([]store.SessionMeta, error) {
+	return a.store.ListAll()
+}
+
+func (a *Agent) DeleteSession(sessionID string) error {
+	return a.store.Delete(sessionID)
+}
+
+func (a *Agent) RenameSession(sessionID, name string) error {
+	return a.store.Rename(sessionID, name)
+}
+
+// ── Internal helpers ─────────────────────────────────────────────────────
+
 func (a *Agent) buildSessionTools(res *resources.Resources, loader resources.ResourceLoader) *tools.Registry {
 	reg := tools.NewRegistry()
-
-	// Add tools from the base registry — filtered by AllowedTools
 	for _, def := range a.toolReg.Definitions() {
 		if a.isToolAllowed(def.Name) {
 			reg.Register(a.toolReg.Get(def.Name))
 		}
 	}
-
-	// Inject skill tool only if skills discovered AND skill is allowed
-	if len(res.Skills) > 0 && a.isToolAllowed("skill") {
+	if len(res.Skills) > 0 && a.isToolAllowed(tools.ToolSkill) {
 		def, execFn := tools.Skill(loader.ReadSkill)
 		reg.Register(tools.Tool{Def: def, Execute: execFn})
 	}
-
 	return reg
 }
 
-// isToolAllowed returns true if the tool is in AllowedTools, or if AllowedTools is empty.
 func (a *Agent) isToolAllowed(name string) bool {
 	if len(a.allowedTools) == 0 {
 		return true
@@ -240,14 +223,12 @@ func (a *Agent) isToolAllowed(name string) bool {
 func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) string {
 	var b strings.Builder
 
-	// 1. Identity — SYSTEM.md replaces completely
 	if res.SystemMD != "" {
 		b.WriteString(res.SystemMD)
 	} else {
 		b.WriteString(a.systemPrompt)
 	}
 
-	// 2. Available Skills — only if skills were discovered
 	if len(res.Skills) > 0 {
 		b.WriteString("\n\n## Available Skills\n\n")
 		for _, s := range res.Skills {
@@ -255,10 +236,8 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) string {
 		}
 	}
 
-	// 4. Working Directory — always present
 	b.WriteString(fmt.Sprintf("\n\n## Working Directory\n\n%s\n", cwd))
 
-	// 5. Project Context — only if AGENTS.md exists
 	if res.AgentsMD != "" {
 		b.WriteString("\n\n## Project Context\n\n")
 		b.WriteString(res.AgentsMD)
@@ -276,5 +255,3 @@ func defaultTools() *tools.Registry {
 	r.Register(tools.Fetch())
 	return r
 }
-
-

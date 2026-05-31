@@ -28,18 +28,17 @@ func NewCLI(a *agent.Agent) *CLI {
 }
 
 func (c *CLI) Run(ctx context.Context) error {
-	if c.agent != nil {
-		// Create session for the current working directory
+	// Try to create session with the saved active model
+	if model := config.GetActiveModel(); model != "" {
 		cwd, _ := os.Getwd()
-		session, err := c.agent.NewSession(cwd)
-		if err != nil {
-			return fmt.Errorf("create session: %w", err)
+		if session, err := c.agent.NewSession(cwd, model); err == nil {
+			defer session.Close()
+			c.session = session
+			c.modelName = session.Meta().Model
+			c.rebuildRenderer()
+			session.Subscribe(c.renderer.Handle)
 		}
-		defer session.Close()
-		c.session = session
-		c.modelName = session.Meta().Model
-		c.rebuildRenderer()
-		session.Subscribe(c.renderer.Handle)
+		// err != nil → no provider active, session stays nil → banner shows hint
 	}
 
 	c.printBanner()
@@ -141,7 +140,7 @@ func (c *CLI) handleCommand(ctx context.Context, input string) bool {
 		// Close current session and start a fresh one
 		c.session.Close()
 		cwd, _ := os.Getwd()
-		session, err := c.agent.NewSession(cwd)
+		session, err := c.agent.NewSession(cwd, c.modelName)
 		if err != nil {
 			fmt.Printf("  %s %s\n\n", C(Red, "✗"), C(Red, err.Error()))
 			return true
@@ -225,7 +224,7 @@ func (c *CLI) handleConnect(parts []string) {
 			return
 		}
 		fmt.Printf("  %s Connected!\n\n", C(Green, "✓"))
-		c.tryInitAgent(name)
+		c.tryInitSession(name)
 
 	case types.CredTypeAPIKey:
 		key := c.readMasked(fmt.Sprintf("Enter %s API key", name))
@@ -238,7 +237,7 @@ func (c *CLI) handleConnect(parts []string) {
 			return
 		}
 		fmt.Printf("  %s %s connected (%d models)\n\n", C(Green, "✓"), C(Green, name), len(target.Models()))
-		c.tryInitAgent(name)
+		c.tryInitSession(name)
 	}
 }
 
@@ -346,8 +345,8 @@ func (c *CLI) printHelp() {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-// tryInitAgent creates the agent+session after a successful /connect.
-func (c *CLI) tryInitAgent(providerName string) {
+// tryInitSession creates a session after a successful /connect.
+func (c *CLI) tryInitSession(providerName string) {
 	// Find first available model for this provider
 	var model string
 	for _, p := range providers.All {
@@ -359,15 +358,8 @@ func (c *CLI) tryInitAgent(providerName string) {
 	if model == "" {
 		return
 	}
-	a, err := agent.New(agent.AgentOptions{
-		Model: model,
-	})
-	if err != nil {
-		return
-	}
-	c.agent = a
 	cwd, _ := os.Getwd()
-	session, err := a.NewSession(cwd)
+	session, err := c.agent.NewSession(cwd, model)
 	if err != nil {
 		return
 	}
