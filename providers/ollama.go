@@ -5,13 +5,30 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
-	llm "github.com/gurcuff91/harness/providers/llm"
 	"github.com/gurcuff91/harness/config"
+	llm "github.com/gurcuff91/harness/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
+
+const (
+	ollamaURLSettingKey = "ollama.url"
+	ollamaURLEnv        = "OLLAMA_URL"
+	ollamaURLDefault    = "http://localhost:11434"
+)
+
+func getOllamaURL() string {
+	if v := os.Getenv(ollamaURLEnv); v != "" {
+		return v
+	}
+	if v, ok := config.GetSettingsManager().Get(ollamaURLSettingKey); ok && v != "" {
+		return v
+	}
+	return ollamaURLDefault
+}
 
 // Ollama wraps OpenAI-compatible streaming for local Ollama instances.
 type Ollama struct {
@@ -23,7 +40,7 @@ type Ollama struct {
 
 func NewOllama() *Ollama {
 	o := &Ollama{
-		baseURL: config.GetOllamaURL(),
+		baseURL: getOllamaURL(),
 		client:  &http.Client{},
 		cache:   make(map[string]types.ModelMeta),
 	}
@@ -38,9 +55,13 @@ func (o *Ollama) IsActive() bool { return OllamaAvailable() }
 
 func (o *Ollama) CredentialType() types.CredentialType { return types.CredTypeNone }
 
-func (o *Ollama) SetCredentials(creds types.Credentials) error {
-	return fmt.Errorf("ollama is auto-detected — no credentials needed")
+// ResolveCredentials — no-op, ollama is auto-detected via ping.
+func (o *Ollama) ResolveCredentials() (types.Credentials, error) {
+	return types.Credentials{Type: types.CredTypeNone}, nil
 }
+
+// SaveCredentials — no-op.
+func (o *Ollama) SaveCredentials(_ types.Credentials) error { return nil }
 
 func (o *Ollama) ClearCredentials() error { return nil }
 
@@ -83,7 +104,7 @@ func (o *Ollama) CompleteStream(ctx context.Context, req *types.Request, cb type
 
 
 func OllamaAvailable() bool {
-	url := config.GetOllamaURL()
+	url := getOllamaURL()
 	resp, err := (&http.Client{Timeout: 2 * time.Second}).Get(url + "/api/version")
 	if err != nil {
 		return false

@@ -257,6 +257,8 @@ func BuildAnthropicThinking(model, level string, maxTokens int) (map[string]any,
 	return map[string]any{"type": "enabled", "budget_tokens": b}, maxTokens
 }
 
+func IsAdaptiveThinking(model string) bool { return isAdaptive(model) }
+
 func isAdaptive(model string) bool {
 	return isAdaptiveRecommended(model) || isAdaptiveOnly(model)
 }

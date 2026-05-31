@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"sync"
 
-	"github.com/gurcuff91/harness/config"
 	llm "github.com/gurcuff91/harness/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
@@ -27,16 +25,12 @@ const (
 )
 
 func NewOpenAI() *OpenAI {
-	apiKey := os.Getenv(openAIAPIKeyEnv)
-	if apiKey == "" {
-		apiKey, _ = config.LoadCred(openAIAPIKeyCred)
-	}
 	o := &OpenAI{
-		apiKey:  apiKey,
 		baseURL: "https://api.openai.com/v1",
 		client:  &http.Client{},
 		cache:   make(map[string]types.ModelMeta),
 	}
+	o.ResolveCredentials() //nolint:errcheck
 	if o.IsActive() {
 		o.FetchModels()
 	}
@@ -45,28 +39,32 @@ func NewOpenAI() *OpenAI {
 
 func (o *OpenAI) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
 
-func (o *OpenAI) SetCredentials(creds types.Credentials) error {
+func (o *OpenAI) ResolveCredentials() (types.Credentials, error) {
+	return resolveAPIKey(&o.apiKey, openAIAPIKeyEnv, openAIAPIKeyCred)
+}
+
+func (o *OpenAI) SaveCredentials(creds types.Credentials) error {
 	if creds.Type != types.CredTypeAPIKey {
 		return fmt.Errorf("openai expects api_key credentials, got %s", creds.Type)
 	}
 	if creds.APIKey == "" {
 		return fmt.Errorf("api_key cannot be empty")
 	}
+	if err := saveAPIKey(&o.apiKey, openAIAPIKeyCred, creds.APIKey); err != nil {
+		return err
+	}
 	o.mu.Lock()
-	o.apiKey = creds.APIKey
 	o.cache = make(map[string]types.ModelMeta)
 	o.mu.Unlock()
-	config.StoreCred(openAIAPIKeyCred, creds.APIKey)
 	o.FetchModels()
 	return nil
 }
 
 func (o *OpenAI) ClearCredentials() error {
 	o.mu.Lock()
-	o.apiKey = ""
 	o.cache = make(map[string]types.ModelMeta)
 	o.mu.Unlock()
-	return config.DeleteCred(openAIAPIKeyCred)
+	return clearAPIKey(&o.apiKey, openAIAPIKeyCred)
 }
 
 func NewOpenAIWithConfig(apiKey, baseURL string) *OpenAI {
@@ -79,7 +77,10 @@ func NewOpenAIWithConfig(apiKey, baseURL string) *OpenAI {
 }
 
 func (o *OpenAI) Name() string   { return "openai" }
-func (o *OpenAI) IsActive() bool { return o.apiKey != "" }
+func (o *OpenAI) IsActive() bool {
+	_, err := o.ResolveCredentials()
+	return err == nil
+}
 
 func (o *OpenAI) Models() []types.ModelMeta {
 	o.mu.RLock()

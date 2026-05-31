@@ -1,7 +1,6 @@
 package providers
 
 import (
-	"github.com/gurcuff91/harness/types"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -17,36 +16,46 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gurcuff91/harness/config"
 	llm "github.com/gurcuff91/harness/providers/llm"
-	
+	"github.com/gurcuff91/harness/types"
 )
+
+// ── Constants ────────────────────────────────────────────────────────────
 
 const (
 	anthropicOAuthAPI = "https://api.anthropic.com/v1/messages"
+	oauthTokenURL     = "https://claude.ai/v1/oauth/token"
+	oauthClientID     = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+	expiryBufferMs    = 60_000
+
+	// Claude Code stealth identity
+	billingSalt = "59cf53e54c78"
+	mcpPrefix   = "mcp__extensions__"
 )
+
+var ccVersion = envOrDefault("ANTHROPIC_CLI_VERSION", "2.1.90")
+
+// ── ClaudeOAuth ──────────────────────────────────────────────────────────
 
 // ClaudeOAuth implements llm.Provider using Claude Code's OAuth subscription.
 // Makes requests indistinguishable from Claude Code — uses your existing
 // subscription instead of paying API rates.
 type ClaudeOAuth struct {
-	client       *http.Client
-	tokens       *TokenManager
-	session      string // persistent session ID per harness instance
-	cache        map[string]types.ModelMeta
-	mu           sync.Mutex
+	client  *http.Client
+	tokens  *tokenManager // private — token lifecycle is internal
+	session string        // stable session ID per harness instance
+	cache   map[string]types.ModelMeta
+	mu      sync.RWMutex
 }
 
 func NewClaudeOAuth() (*ClaudeOAuth, error) {
-	tm, err := NewTokenManager()
-	if err != nil {
-		return nil, fmt.Errorf("oauth init: %w", err)
-	}
 	c := &ClaudeOAuth{
-		cache: make(map[string]types.ModelMeta),
 		client:  &http.Client{Timeout: 5 * time.Minute},
-		tokens:  tm,
-		session: generateUUID(),
+		tokens:  newTokenManager(),
+		session: uuid.New().String(),
+		cache:   make(map[string]types.ModelMeta),
 	}
 	if c.IsActive() {
 		c.FetchModels()
@@ -54,14 +63,63 @@ func NewClaudeOAuth() (*ClaudeOAuth, error) {
 	return c, nil
 }
 
-func (c *ClaudeOAuth) Name() string   { return "claude-oauth" }
+func (c *ClaudeOAuth) Name() string { return "claude-oauth" }
+
 func (c *ClaudeOAuth) IsActive() bool {
-	return c.tokens != nil && c.tokens.creds != nil && c.tokens.creds.AccessToken != ""
+	_, err := c.ResolveCredentials()
+	return err == nil
 }
 
 func (c *ClaudeOAuth) CredentialType() types.CredentialType { return types.CredTypeOAuth }
 
-func (c *ClaudeOAuth) SetCredentials(creds types.Credentials) error {
+// ── Credential management ────────────────────────────────────────────────
+
+// ResolveCredentials reads from the credential chain AND validates the token.
+// Chain: cache → credentials.json → keychain (bootstrap only).
+// Refreshes expired tokens automatically.
+// Returns error if no credentials found or refresh fails (revoked).
+func (c *ClaudeOAuth) ResolveCredentials() (types.Credentials, error) {
+	if err := c.loadCredentialsFromSources(); err != nil {
+		return types.Credentials{}, err
+	}
+	tok, err := c.tokens.getValidToken()
+	if err != nil {
+		return types.Credentials{}, fmt.Errorf("claude-oauth credentials invalid or expired: %w", err)
+	}
+	creds := *c.tokens.creds
+	creds.AccessToken = tok
+	return creds, nil
+}
+
+// loadCredentialsFromSources populates tokens.creds from:
+// cache → credentials.json → keychain (bootstrap, persists on first load).
+func (c *ClaudeOAuth) loadCredentialsFromSources() error {
+	if c.tokens.creds != nil && c.tokens.creds.AccessToken != "" {
+		return nil // already cached
+	}
+	cm := config.GetCredentialsManager()
+	if at, ok := cm.Load(oauthCredPrefix + "access_token"); ok && at != "" {
+		rt, _ := cm.Load(oauthCredPrefix + "refresh_token")
+		var ea int64
+		if eas, ok := cm.Load(oauthCredPrefix + "expires_at"); ok {
+			fmt.Sscanf(eas, "%d", &ea)
+		}
+		st, _ := cm.Load(oauthCredPrefix + "subscription_type")
+		creds := types.OAuthCredentials(at, rt, ea, st)
+		c.tokens.creds = &creds
+		return nil
+	}
+	// Keychain bootstrap — import and persist on first use
+	if t := readClaudeFromKeychain(); t != nil {
+		c.tokens.creds = t
+		persistOAuthCreds(t)
+		return nil
+	}
+	return fmt.Errorf("claude-oauth: no credentials found")
+}
+
+// SaveCredentials persists OAuth tokens and activates the provider.
+func (c *ClaudeOAuth) SaveCredentials(creds types.Credentials) error {
 	if creds.Type != types.CredTypeOAuth {
 		return fmt.Errorf("claude-oauth expects oauth credentials, got %s", creds.Type)
 	}
@@ -69,7 +127,7 @@ func (c *ClaudeOAuth) SetCredentials(creds types.Credentials) error {
 		return fmt.Errorf("access_token cannot be empty")
 	}
 	c.tokens.creds = &creds
-	c.tokens.SaveLogin(&creds)
+	persistOAuthCreds(&creds)
 	c.FetchModels()
 	return nil
 }
@@ -79,20 +137,14 @@ func (c *ClaudeOAuth) ClearCredentials() error {
 	c.mu.Lock()
 	c.cache = make(map[string]types.ModelMeta)
 	c.mu.Unlock()
-	return config.DeletePrefix("claude-oauth.")
+	return config.GetCredentialsManager().DeletePrefix(oauthCredPrefix)
 }
 
-func (c *ClaudeOAuth) ModelMeta(modelID string) *types.ModelMeta {
-	if m, ok := c.cache[modelID]; ok {
-		cp := m
-		return &cp
-	}
-	return nil
-}
+// ── Model cache ──────────────────────────────────────────────────────────
 
 func (c *ClaudeOAuth) Models() []types.ModelMeta {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	out := make([]types.ModelMeta, 0, len(c.cache))
 	for _, m := range c.cache {
 		out = append(out, m)
@@ -100,57 +152,57 @@ func (c *ClaudeOAuth) Models() []types.ModelMeta {
 	return out
 }
 
-// Complete sends a non-streaming request (fallback).
-func (c *ClaudeOAuth) Complete(ctx context.Context, req *types.Request) (*types.Response, error) {
-	return c.CompleteStream(ctx, req, nil)
+func (c *ClaudeOAuth) ModelMeta(modelID string) *types.ModelMeta {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if m, ok := c.cache[modelID]; ok {
+		cp := m
+		return &cp
+	}
+	return nil
 }
 
-// CompleteStream sends a streaming request and emits events via callback.
-// If cb is nil, it behaves like Complete (collects everything silently).
-func (c *ClaudeOAuth) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
+func (c *ClaudeOAuth) FetchModels() []types.ModelMeta {
+	// Use the existing token — no new tokenManager needed
+	tok, err := c.tokens.getValidToken()
+	if err != nil {
+		return nil
+	}
+	metas := fetchAnthropicModels(tok)
 	c.mu.Lock()
+	c.cache = make(map[string]types.ModelMeta, len(metas))
+	for _, m := range metas {
+		c.cache[m.ID] = m
+	}
+	c.mu.Unlock()
+	return metas
+}
 
-	// Ensure token is fresh
-	token, err := c.tokens.GetValidToken()
+// ── Streaming ────────────────────────────────────────────────────────────
+
+func (c *ClaudeOAuth) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
+	// Get token under lock, release before HTTP call
+	c.mu.Lock()
+	token, err := c.tokens.getValidToken()
+	c.mu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("oauth token: %w", err)
 	}
-
-	// Convert tools with MCP stealth naming
-	var aTools []llm.AnthropicTool
-	for _, t := range req.Tools {
-		aTools = append(aTools, llm.AnthropicTool{
-			Name:        mapToolNameToCC(t.Name),
-			Description: t.Description,
-			InputSchema: t.InputSchema,
-		})
+	if token == "" {
+		return nil, fmt.Errorf("oauth: empty token")
 	}
 
-	// Build system blocks (stable for prompt caching)
-	systemBlocks := []map[string]any{
-		{
-			"type":          "text",
-			"text":          "You are Claude Code, Anthropic's official CLI for Claude.",
-			"cache_control": map[string]string{"type": "ephemeral"},
-		},
-	}
-	if req.SystemPrompt != "" {
-		systemBlocks = append(systemBlocks, map[string]any{
-			"type":          "text",
-			"text":          req.SystemPrompt,
-			"cache_control": map[string]string{"type": "ephemeral"},
-		})
-	}
+	// Tools — MCP stealth naming + cache_control on last + eager streaming
+	aTools := buildOAuthTools(req.Tools)
 
-	// Build thinking config based on model generation
+	// System blocks — stable for prompt caching
+	systemBlocks := buildSystemBlocks(req.SystemPrompt)
+
+	// Thinking config
 	thinkingCfg, maxTokens := llm.BuildAnthropicThinking(req.Model, req.ThinkingLevel, req.MaxTokens)
 
-	wireMsgs := make([]json.RawMessage, 0, len(req.Messages))
-	for _, m := range req.Messages {
-		for _, w := range llm.TranslateMessageToAnthropic(m) {
-			wireMsgs = append(wireMsgs, w)
-		}
-	}
+	// Messages — drop non-redacted thinking, add cache_control on last user msg
+	wireMsgs := buildWireMessages(req.Messages)
 
 	body := map[string]any{
 		"model":      req.Model,
@@ -172,61 +224,165 @@ func (c *ClaudeOAuth) CompleteStream(ctx context.Context, req *types.Request, cb
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	// Claude Code identity headers
 	billingHeader := buildBillingHeader(wireMsgs)
 	setCCHeaders(httpReq, token, billingHeader, c.session)
+
+	// Interleaved thinking for non-adaptive models
+	if req.ThinkingLevel != "" && req.ThinkingLevel != "disable" && !llm.IsAdaptiveThinking(req.Model) {
+		existing := httpReq.Header.Get("anthropic-beta")
+		httpReq.Header.Set("anthropic-beta", existing+",interleaved-thinking-2025-05-14")
+	}
 
 	httpResp, err := c.client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("http request: %w", err)
 	}
+	defer httpResp.Body.Close()
 
 	if httpResp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(httpResp.Body)
-		return nil, fmt.Errorf("anthropic OAuth API error %d: %s", httpResp.StatusCode, string(respBody))
+		body, _ := io.ReadAll(httpResp.Body)
+		return nil, fmt.Errorf("anthropic OAuth API error %d: %s", httpResp.StatusCode, string(body))
 	}
 
-	// Parse SSE stream
-	return c.parseStream(httpResp.Body, cb)
+	return llm.ParseAnthropicStream(httpResp.Body, cb, unmapToolNameFromCC)
 }
 
-// parseStream processes Anthropic SSE events into a types.Response.
-func (c *ClaudeOAuth) parseStream(body io.Reader, cb types.StreamCallback) (*types.Response, error) {
-	return llm.ParseAnthropicStream(body, cb, unmapToolNameFromCC)
+// ── Request builders ─────────────────────────────────────────────────────
+
+type oauthTool struct {
+	Name               string          `json:"name"`
+	Description        string          `json:"description"`
+	InputSchema        json.RawMessage `json:"input_schema"`
+	EagerInputStreaming bool            `json:"eager_input_streaming,omitempty"`
+	CacheControl       *cacheCtrl      `json:"cache_control,omitempty"`
 }
 
-func (c *ClaudeOAuth) FormatUserMessage(text string) json.RawMessage {
-	data, _ := json.Marshal(map[string]any{"role": "user", "content": text})
-	return data
+type cacheCtrl struct {
+	Type string `json:"type"`
 }
 
-func (c *ClaudeOAuth) FormatUserMessageWithImages(text string, images []types.ImageData) json.RawMessage {
-	var content []map[string]any
-	for _, img := range images {
-		content = append(content, map[string]any{
-			"type": "image",
-			"source": map[string]string{
-				"type": "base64", "media_type": img.MimeType, "data": img.Base64,
-			},
+var ephemeralCC = &cacheCtrl{Type: "ephemeral"}
+
+func buildOAuthTools(defs []types.ToolDef) []oauthTool {
+	tools := make([]oauthTool, len(defs))
+	for i, t := range defs {
+		tools[i] = oauthTool{
+			Name:               mapToolNameToCC(t.Name),
+			Description:        t.Description,
+			InputSchema:        t.InputSchema,
+			EagerInputStreaming: true,
+		}
+	}
+	if len(tools) > 0 {
+		tools[len(tools)-1].CacheControl = ephemeralCC
+	}
+	return tools
+}
+
+func buildSystemBlocks(systemPrompt string) []map[string]any {
+	blocks := []map[string]any{{
+		"type":          "text",
+		"text":          "You are Claude Code, Anthropic's official CLI for Claude.",
+		"cache_control": map[string]string{"type": "ephemeral"},
+	}}
+	if systemPrompt != "" {
+		blocks = append(blocks, map[string]any{
+			"type":          "text",
+			"text":          systemPrompt,
+			"cache_control": map[string]string{"type": "ephemeral"},
 		})
 	}
-	if text != "" {
-		content = append(content, map[string]any{"type": "text", "text": text})
-	}
-	data, _ := json.Marshal(map[string]any{"role": "user", "content": content})
-	return data
+	return blocks
 }
 
-// ============================================================
-// Claude Code Identity & Stealth
-// ============================================================
+func buildWireMessages(messages []types.Message) []json.RawMessage {
+	wire := make([]json.RawMessage, 0, len(messages))
+	for _, m := range messages {
+		for _, w := range translateMessageOAuth(m) {
+			wire = append(wire, w)
+		}
+	}
+	return addLastUserCacheControl(wire)
+}
 
-const (
-	billingSalt   = "59cf53e54c78"
-	mcpPrefix     = "mcp__extensions__"
-)
+// translateMessageOAuth converts messages for OAuth:
+// drops non-redacted thinking (saves ~1-2K tokens/turn), keeps only signatures.
+func translateMessageOAuth(msg types.Message) []json.RawMessage {
+	switch msg.Role {
+	case types.RoleUser:
+		return llm.TranslateMessageToAnthropic(msg)
+	case types.RoleAssistant:
+		var content []map[string]any
+		for _, p := range msg.Parts {
+			switch {
+			case p.Thinking != nil:
+				// Only redacted thinking (signature, zero token cost).
+				// Non-redacted dropped — unbounded token growth otherwise.
+				if p.Thinking.Signature != "" && p.Thinking.Content == "" {
+					content = append(content, map[string]any{
+						"type": "redacted_thinking",
+						"data": p.Thinking.Signature,
+					})
+				}
+			case p.Text != "":
+				content = append(content, map[string]any{"type": "text", "text": p.Text})
+			case p.ToolCall != nil:
+				content = append(content, map[string]any{
+					"type":  "tool_use",
+					"id":    p.ToolCall.ID,
+					"name":  mapToolNameToCC(p.ToolCall.Name),
+					"input": json.RawMessage(p.ToolCall.Input),
+				})
+			}
+		}
+		if len(content) == 0 {
+			return nil
+		}
+		d, _ := json.Marshal(map[string]any{"role": "assistant", "content": content})
+		return []json.RawMessage{d}
+	}
+	return nil
+}
 
-// CC-native tools that keep their canonical casing
+// addLastUserCacheControl marks the last text/tool_result in the last user
+// message for prompt caching (~90% cost reduction on cache hits).
+func addLastUserCacheControl(msgs []json.RawMessage) []json.RawMessage {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		var msg map[string]any
+		if err := json.Unmarshal(msgs[i], &msg); err != nil || msg["role"] != "user" {
+			continue
+		}
+		content, ok := msg["content"].([]any)
+		if !ok {
+			msg["content"] = []any{map[string]any{
+				"type": "text", "text": msg["content"],
+				"cache_control": map[string]string{"type": "ephemeral"},
+			}}
+		} else {
+			for j := len(content) - 1; j >= 0; j-- {
+				block, ok := content[j].(map[string]any)
+				if !ok {
+					continue
+				}
+				t, _ := block["type"].(string)
+				if t == "text" || t == "tool_result" {
+					block["cache_control"] = map[string]string{"type": "ephemeral"}
+					content[j] = block
+					break
+				}
+			}
+			msg["content"] = content
+		}
+		data, _ := json.Marshal(msg)
+		msgs[i] = data
+		return msgs
+	}
+	return msgs
+}
+
+// ── Claude Code stealth identity ─────────────────────────────────────────
+
+// CC-native tools keep canonical casing; everything else gets MCP prefix.
 var ccToolNames = map[string]string{
 	"read": "Read", "write": "Write", "edit": "Edit", "bash": "Bash",
 	"grep": "Grep", "glob": "Glob", "askuserquestion": "AskUserQuestion",
@@ -236,10 +392,6 @@ var ccToolNames = map[string]string{
 	"todowrite": "TodoWrite", "webfetch": "WebFetch", "websearch": "WebSearch",
 }
 
-var ccVersion = envOrDefault("ANTHROPIC_CLI_VERSION", "2.1.90")
-
-// mapToolNameToCC converts harness tool names to Claude Code format.
-// CC-native tools keep canonical casing; everything else gets MCP prefix.
 func mapToolNameToCC(name string) string {
 	if cc, ok := ccToolNames[strings.ToLower(name)]; ok {
 		return cc
@@ -247,12 +399,10 @@ func mapToolNameToCC(name string) string {
 	return mcpPrefix + name
 }
 
-// unmapToolNameFromCC reverses the tool name mapping.
 func unmapToolNameFromCC(name string) string {
 	if strings.HasPrefix(name, mcpPrefix) {
 		return strings.TrimPrefix(name, mcpPrefix)
 	}
-	// Reverse CC canonical names
 	for original, cc := range ccToolNames {
 		if name == cc {
 			return original
@@ -261,7 +411,6 @@ func unmapToolNameFromCC(name string) string {
 	return name
 }
 
-// setCCHeaders sets all headers to make the request look like Claude Code.
 func setCCHeaders(req *http.Request, token, billingHeader, sessionID string) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -270,35 +419,28 @@ func setCCHeaders(req *http.Request, token, billingHeader, sessionID string) {
 	req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
 	req.Header.Set("x-app", "cli")
 	req.Header.Set("user-agent", "claude-cli/"+ccVersion+" (external, cli)")
-	req.Header.Set("x-client-request-id", generateUUID())
+	req.Header.Set("x-client-request-id", uuid.New().String())
 	req.Header.Set("X-Claude-Code-Session-Id", sessionID)
 	if billingHeader != "" {
 		req.Header.Set("x-anthropic-billing-header", billingHeader)
 	}
 }
 
-// buildBillingHeader creates the billing header that Anthropic uses to
-// verify this is a Claude Code session (uses subscription, not extra usage).
 func buildBillingHeader(messages []json.RawMessage) string {
 	text := extractFirstUserText(messages)
 	sampled := sampleChars(text, []int{4, 7, 20})
-	suffixInput := billingSalt + sampled + ccVersion
-	suffix := sha256hex(suffixInput)[:3]
+	suffix := sha256hex(billingSalt+sampled+ccVersion)[:3]
 	cch := sha256hex(text)[:5]
 	return fmt.Sprintf("cc_version=%s.%s; cc_entrypoint=cli; cch=%s;", ccVersion, suffix, cch)
 }
 
-// extractFirstUserText gets the text from the first user message.
 func extractFirstUserText(messages []json.RawMessage) string {
 	for _, raw := range messages {
 		var msg struct {
 			Role    string `json:"role"`
 			Content any    `json:"content"`
 		}
-		if err := json.Unmarshal(raw, &msg); err != nil {
-			continue
-		}
-		if msg.Role != "user" {
+		if err := json.Unmarshal(raw, &msg); err != nil || msg.Role != "user" {
 			continue
 		}
 		switch v := msg.Content.(type) {
@@ -321,12 +463,12 @@ func extractFirstUserText(messages []json.RawMessage) string {
 
 func sampleChars(text string, indices []int) string {
 	runes := []rune(text)
-	var result []rune
-	for _, i := range indices {
-		if i < len(runes) {
-			result = append(result, runes[i])
+	result := make([]rune, len(indices))
+	for i, idx := range indices {
+		if idx < len(runes) {
+			result[i] = runes[idx]
 		} else {
-			result = append(result, '0')
+			result[i] = '0'
 		}
 	}
 	return string(result)
@@ -337,97 +479,61 @@ func sha256hex(input string) string {
 	return fmt.Sprintf("%x", h)
 }
 
-// ============================================================
-// Utilities
-// ============================================================
+// ── tokenManager (private) ───────────────────────────────────────────────
 
-func generateUUID() string {
-	// Simple UUID v4 using crypto/rand via os
-	b := make([]byte, 16)
-	f, _ := os.Open("/dev/urandom")
-	defer f.Close()
-	f.Read(b)
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}
-
-func envOrDefault(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-// ============================================================
-// Keychain reader (macOS) — exported for oauth package
-
-const (
-	oauthTokenURL  = "https://claude.ai/v1/oauth/token"
-	oauthClientID  = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-	expiryBufferMs = 60_000
-)
-
-// TokenManager handles OAuth token lifecycle using credentials.json.
-type TokenManager struct {
+// tokenManager handles the OAuth token lifecycle.
+// Private — callers interact with ClaudeOAuth, not tokenManager directly.
+type tokenManager struct {
 	mu    sync.Mutex
 	creds *types.Credentials
 }
 
-func NewTokenManager() (*TokenManager, error) {
-	tm := &TokenManager{}
-	at, _ := config.LoadCred("claude-oauth.access_token")
-	rt, _ := config.LoadCred("claude-oauth.refresh_token")
+func newTokenManager() *tokenManager {
+	tm := &tokenManager{}
+	// Load from credentials.json at startup
+	cm := config.GetCredentialsManager()
+	at, _ := cm.Load(oauthCredPrefix + "access_token")
+	if at == "" {
+		return tm
+	}
+	rt, _ := cm.Load(oauthCredPrefix + "refresh_token")
 	var ea int64
-	if eas, ok := config.LoadCred("claude-oauth.expires_at"); ok {
+	if eas, ok := cm.Load(oauthCredPrefix + "expires_at"); ok {
 		fmt.Sscanf(eas, "%d", &ea)
 	}
-	st, _ := config.LoadCred("claude-oauth.subscription_type")
-	var c *types.Credentials
-	if at != "" {
-		c = &types.Credentials{Type: types.CredTypeOAuth, AccessToken: at, RefreshToken: rt, ExpiresAt: ea, SubscriptionType: st}
-	}
-	if c != nil {
-		tm.creds = c
-	}
-	return tm, nil
+	st, _ := cm.Load(oauthCredPrefix + "subscription_type")
+	creds := types.OAuthCredentials(at, rt, ea, st)
+	tm.creds = &creds
+	return tm
 }
 
-func (tm *TokenManager) GetValidToken() (string, error) {
+// getValidToken returns a valid access token, refreshing if necessary.
+func (tm *tokenManager) getValidToken() (string, error) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	if tm.creds == nil {
-		return "", fmt.Errorf("claude-oauth not connected — use /connect claude-oauth")
+		return "", fmt.Errorf("not connected — use /connect claude-oauth")
 	}
 	if tm.creds.ExpiresAt > time.Now().UnixMilli()+expiryBufferMs {
 		return tm.creds.AccessToken, nil
 	}
-	refreshed, err := tm.refreshToken(tm.creds.RefreshToken)
+	refreshed, err := tm.refresh(tm.creds.RefreshToken)
 	if err != nil {
 		return "", fmt.Errorf("token expired — use /connect claude-oauth")
 	}
 	tm.creds = refreshed
-	tm.SaveLogin(refreshed)
+	persistOAuthCreds(refreshed)
 	return refreshed.AccessToken, nil
 }
 
-func (tm *TokenManager) GetTokenInfo() (expiresAt int64, subType string) {
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
-	if tm.creds == nil {
-		return 0, ""
-	}
-	return tm.creds.ExpiresAt, tm.creds.SubscriptionType
-}
-
-func (tm *TokenManager) refreshToken(refreshToken string) (*types.Credentials, error) {
+func (tm *tokenManager) refresh(refreshToken string) (*types.Credentials, error) {
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
 		"client_id":     {oauthClientID},
 		"refresh_token": {refreshToken},
 	}
-	resp, err := http.Post(oauthTokenURL, "application/x-www-form-urlencoded", bytes.NewBufferString(form.Encode()))
+	resp, err := http.Post(oauthTokenURL, "application/x-www-form-urlencoded",
+		bytes.NewBufferString(form.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("refresh request: %w", err)
 	}
@@ -441,11 +547,8 @@ func (tm *TokenManager) refreshToken(refreshToken string) (*types.Credentials, e
 		RefreshToken string `json:"refresh_token"`
 		ExpiresIn    int    `json:"expires_in"`
 	}
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil || result.AccessToken == "" {
 		return nil, fmt.Errorf("parse refresh response: %w", err)
-	}
-	if result.AccessToken == "" {
-		return nil, fmt.Errorf("no access_token in refresh response")
 	}
 	expiresIn := result.ExpiresIn
 	if expiresIn <= 0 {
@@ -456,6 +559,7 @@ func (tm *TokenManager) refreshToken(refreshToken string) (*types.Credentials, e
 		newRefresh = refreshToken
 	}
 	return &types.Credentials{
+		Type:             types.CredTypeOAuth,
 		AccessToken:      result.AccessToken,
 		RefreshToken:     newRefresh,
 		ExpiresAt:        time.Now().UnixMilli() + int64(expiresIn)*1000,
@@ -463,51 +567,53 @@ func (tm *TokenManager) refreshToken(refreshToken string) (*types.Credentials, e
 	}, nil
 }
 
-func (tm *TokenManager) SaveLogin(creds *types.Credentials) error {
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
-	tm.creds = creds
-	config.StoreCred("claude-oauth.access_token", creds.AccessToken)
-	config.StoreCred("claude-oauth.refresh_token", creds.RefreshToken)
-	config.StoreCred("claude-oauth.expires_at", fmt.Sprintf("%d", creds.ExpiresAt))
-	config.StoreCred("claude-oauth.subscription_type", creds.SubscriptionType)
-	return nil
+// ── Credential persistence ───────────────────────────────────────────────
+
+const oauthCredPrefix = "claude-oauth."
+
+func persistOAuthCreds(creds *types.Credentials) {
+	cm := config.GetCredentialsManager()
+	cm.Store(oauthCredPrefix+"access_token", creds.AccessToken)
+	cm.Store(oauthCredPrefix+"refresh_token", creds.RefreshToken)
+	cm.Store(oauthCredPrefix+"expires_at", fmt.Sprintf("%d", creds.ExpiresAt))
+	cm.Store(oauthCredPrefix+"subscription_type", creds.SubscriptionType)
 }
 
-// ── OAuth Login ──────────────────────────────────────────
+// ── OAuth login flow ─────────────────────────────────────────────────────
 
-// RunOAuthFlow executes the OAuth flow and returns the resulting credentials.
-// Called by the CLI transport — not interactive inside the provider itself.
+// RunOAuthFlow executes the OAuth login flow and returns credentials.
+// Called by the CLI transport — UI interaction lives here, not in the provider.
 func RunOAuthFlow() *types.Credentials {
-	if err := Login(); err != nil {
+	if err := login(); err != nil {
 		return nil
 	}
-	tm, _ := NewTokenManager()
-	if tm == nil || tm.creds == nil {
+	// Re-read from credentials.json (login() just wrote them)
+	cm := config.GetCredentialsManager()
+	at, ok := cm.Load(oauthCredPrefix + "access_token")
+	if !ok || at == "" {
 		return nil
 	}
-	return tm.creds
+	rt, _ := cm.Load(oauthCredPrefix + "refresh_token")
+	var ea int64
+	if eas, ok := cm.Load(oauthCredPrefix + "expires_at"); ok {
+		fmt.Sscanf(eas, "%d", &ea)
+	}
+	st, _ := cm.Load(oauthCredPrefix + "subscription_type")
+	creds := types.OAuthCredentials(at, rt, ea, st)
+	return &creds
 }
 
-// Login authenticates via Claude Code's official login flow,
-// then imports the resulting tokens into ~/.harness/credentials.json
-func Login() error {
+// login runs `claude auth login`, imports tokens, persists them.
+func login() error {
 	fmt.Println("\n  🔑 Starting authentication via Claude Code...")
-
 	cmd := exec.Command("claude", "auth", "login")
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err := cmd.Run()
-
-	// Reset terminal — claude may have changed settings
-	resetTerminal()
-
-	if err != nil {
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		resetTerminal()
 		return fmt.Errorf("claude auth login failed: %w\n  Install: npm install -g @anthropic-ai/claude-code", err)
 	}
+	resetTerminal()
 
-	tm, _ := NewTokenManager()
 	token := readClaudeFromKeychain()
 	if token == nil {
 		token = readClaudeCredentialsFile()
@@ -515,46 +621,26 @@ func Login() error {
 	if token == nil {
 		return fmt.Errorf("login completed but couldn't import tokens — try again")
 	}
-
-	tm.SaveLogin(token)
-	RefreshProviderModels("claude-oauth")
-
-	// Auto-select first model if user hasn't chosen one yet
-	s := config.ReadSettings()
-	if s.Model == "" {
-		RefreshProviderModels("claude-oauth")
-		for _, p := range All {
-			if p.Name() == "claude-oauth" && len(p.Models()) > 0 {
-				fullName := "claude-oauth/" + p.Models()[0].ID
-				config.SetActiveModel(fullName)
-				fmt.Printf("  Auto-selected: %s\n", fullName)
-				break
-			}
-		}
-	}
-
-	fmt.Println("\n  ✅ Authenticated! Tokens saved.")
+	persistOAuthCreds(token)
 	return nil
 }
 
 func resetTerminal() {
 	exec.Command("stty", "sane").Run()
-	fmt.Print("\033[?25h")
-	fmt.Print("\033[0m")
+	fmt.Print("\033[?25h\033[0m")
 }
 
+// ── Keychain readers (macOS) ─────────────────────────────────────────────
+
 func readClaudeFromKeychain() *types.Credentials {
-	// Primary: Claude Code credentials
 	if t := readKeychainItem("Claude Code-credentials"); t != nil {
 		return t
 	}
-	// Fallback: older keychain name
 	return readKeychainItem("claude-code")
 }
 
 func readKeychainItem(service string) *types.Credentials {
-	out, err := exec.Command("security", "find-generic-password",
-		"-s", service, "-w").Output()
+	out, err := exec.Command("security", "find-generic-password", "-s", service, "-w").Output()
 	if err != nil {
 		return nil
 	}
@@ -573,7 +659,10 @@ func readKeychainItem(service string) *types.Credentials {
 	if at == "" || rt == "" {
 		return nil
 	}
-	return &types.Credentials{Type: types.CredTypeOAuth, AccessToken: at, RefreshToken: rt, ExpiresAt: int64(ea), SubscriptionType: st}
+	return &types.Credentials{
+		Type: types.CredTypeOAuth, AccessToken: at, RefreshToken: rt,
+		ExpiresAt: int64(ea), SubscriptionType: st,
+	}
 }
 
 func readClaudeCredentialsFile() *types.Credentials {
@@ -594,28 +683,17 @@ func readClaudeCredentialsFile() *types.Credentials {
 		return nil
 	}
 	t := creds.OAuthTokens[0]
-	return &types.Credentials{Type: types.CredTypeOAuth, AccessToken: t.AccessToken, RefreshToken: t.RefreshToken, ExpiresAt: t.ExpiresAt, SubscriptionType: t.SubType}
+	return &types.Credentials{
+		Type: types.CredTypeOAuth, AccessToken: t.AccessToken,
+		RefreshToken: t.RefreshToken, ExpiresAt: t.ExpiresAt, SubscriptionType: t.SubType,
+	}
 }
 
+// ── Utilities ────────────────────────────────────────────────────────────
 
-// FetchModels returns all models available via Claude OAuth.
-// Capabilities are authoritative from the API; pricing comes from llm-registry.
-func (c *ClaudeOAuth) FetchModels() []types.ModelMeta {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	tm, err := NewTokenManager()
-	if err != nil || tm == nil {
-		return nil
+func envOrDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
 	}
-	tok, err := tm.GetValidToken()
-	if err != nil {
-		return nil
-	}
-	metas := fetchAnthropicModels(tok)
-	c.cache = make(map[string]types.ModelMeta, len(metas))
-	for _, m := range metas {
-		c.cache[m.ID] = m
-	}
-	return metas
+	return fallback
 }

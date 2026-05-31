@@ -4,69 +4,80 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 )
 
-// credentials.go — neutral key-value store for provider credentials.
-// No knowledge of specific providers, env vars, or credential types.
+// CredentialsManager is a thread-safe key-value store for provider credentials.
+// Backed by ~/.harness/credentials.json.
+// Keys are namespaced by provider: "anthropic.api_key", "claude-oauth.access_token", etc.
+type CredentialsManager struct {
+	mu   sync.RWMutex
+	path string
+	data map[string]string
+}
 
-type credsFile map[string]string
-
-func credsPath() string {
+func newCredentialsManager() *CredentialsManager {
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".harness")
 	_ = os.MkdirAll(dir, 0700)
-	return filepath.Join(dir, "credentials.json")
-}
-
-func loadCredsFile() credsFile {
-	data, err := os.ReadFile(credsPath())
-	if err != nil {
-		return make(credsFile)
+	m := &CredentialsManager{
+		path: filepath.Join(dir, "credentials.json"),
+		data: make(map[string]string),
 	}
-	var f credsFile
-	if err := json.Unmarshal(data, &f); err != nil {
-		return make(credsFile)
-	}
-	return f
+	m.load()
+	return m
 }
 
-func saveCredsFile(f credsFile) {
-	data, _ := json.MarshalIndent(f, "", "  ")
-	os.WriteFile(credsPath(), data, 0600)
+// Store persists a credential value by key.
+func (m *CredentialsManager) Store(key, value string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data[key] = value
+	return m.save()
 }
 
-// StoreCred persists a credential value by key.
-func StoreCred(key, value string) error {
-	f := loadCredsFile()
-	f[key] = value
-	saveCredsFile(f)
-	return nil
-}
-
-// LoadCred retrieves a credential value by key.
+// Load retrieves a credential value by key.
 // Returns ("", false) if the key does not exist.
-func LoadCred(key string) (string, bool) {
-	f := loadCredsFile()
-	v, ok := f[key]
+func (m *CredentialsManager) Load(key string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	v, ok := m.data[key]
 	return v, ok
 }
 
-// DeleteCred removes a credential by key.
-func DeleteCred(key string) error {
-	f := loadCredsFile()
-	delete(f, key)
-	saveCredsFile(f)
-	return nil
+// Delete removes a credential by key.
+func (m *CredentialsManager) Delete(key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.data, key)
+	return m.save()
 }
 
 // DeletePrefix removes all credentials whose keys start with prefix.
-func DeletePrefix(prefix string) error {
-	f := loadCredsFile()
-	for k := range f {
-		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
-			delete(f, k)
+func (m *CredentialsManager) DeletePrefix(prefix string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for k := range m.data {
+		if strings.HasPrefix(k, prefix) {
+			delete(m.data, k)
 		}
 	}
-	saveCredsFile(f)
-	return nil
+	return m.save()
+}
+
+func (m *CredentialsManager) load() {
+	data, err := os.ReadFile(m.path)
+	if err != nil {
+		return
+	}
+	json.Unmarshal(data, &m.data)
+}
+
+func (m *CredentialsManager) save() error {
+	data, err := json.MarshalIndent(m.data, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(m.path, data, 0600)
 }

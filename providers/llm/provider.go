@@ -31,12 +31,17 @@ type Provider interface {
 	ModelMeta(modelID string) *types.ModelMeta
 
 	// CredentialType returns what kind of credentials this provider expects.
-	// Used by transports to decide what UI flow to present.
 	CredentialType() types.CredentialType
 
-	// SetCredentials validates, persists, and applies credentials.
-	// Returns error if the credential type doesn't match what the provider expects.
-	SetCredentials(creds types.Credentials) error
+	// ResolveCredentials reads from the credential chain:
+	// cache (in-memory) → env var → credentials.json → keychain (OAuth only)
+	// Returns error if no credentials found in any source.
+	// Ollama: always returns (CredTypeNone, nil) — no credentials needed.
+	ResolveCredentials() (types.Credentials, error)
+
+	// SaveCredentials persists credentials to credentials.json and updates in-memory cache.
+	// Ollama: no-op, always returns nil.
+	SaveCredentials(creds types.Credentials) error
 
 	// ClearCredentials removes all stored credentials and deactivates the provider.
 	ClearCredentials() error

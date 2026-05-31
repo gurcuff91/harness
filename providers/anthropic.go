@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"sync"
 
-	"github.com/gurcuff91/harness/config"
 	llm "github.com/gurcuff91/harness/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
+
+// Ensure Anthropic implements llm.Provider at compile time.
+var _ llm.Provider = (*Anthropic)(nil)
 
 // Anthropic implements llm.Provider for the Anthropic Messages API.
 type Anthropic struct {
@@ -27,11 +28,9 @@ const (
 )
 
 func NewAnthropic() *Anthropic {
-	apiKey := os.Getenv(anthropicAPIKeyEnv)
-	if apiKey == "" {
-		apiKey, _ = config.LoadCred(anthropicAPIKeyCred)
-	}
-	a := &Anthropic{client: &http.Client{}, cache: make(map[string]types.ModelMeta), apiKey: apiKey}
+	a := &Anthropic{client: &http.Client{}, cache: make(map[string]types.ModelMeta)}
+	// ResolveCredentials populates a.apiKey from env or file
+	a.ResolveCredentials() //nolint:errcheck
 	if a.IsActive() {
 		a.FetchModels()
 	}
@@ -39,32 +38,36 @@ func NewAnthropic() *Anthropic {
 }
 
 func (a *Anthropic) Name() string   { return "anthropic" }
-func (a *Anthropic) IsActive() bool { return a.apiKey != "" }
+func (a *Anthropic) IsActive() bool {
+	_, err := a.ResolveCredentials()
+	return err == nil
+}
 
 func (a *Anthropic) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
 
-func (a *Anthropic) SetCredentials(creds types.Credentials) error {
+func (a *Anthropic) ResolveCredentials() (types.Credentials, error) {
+	return resolveAPIKey(&a.apiKey, anthropicAPIKeyEnv, anthropicAPIKeyCred)
+}
+
+func (a *Anthropic) SaveCredentials(creds types.Credentials) error {
 	if creds.Type != types.CredTypeAPIKey {
 		return fmt.Errorf("anthropic expects api_key credentials, got %s", creds.Type)
 	}
-	if creds.APIKey == "" {
-		return fmt.Errorf("api_key cannot be empty")
+	if err := saveAPIKey(&a.apiKey, anthropicAPIKeyCred, creds.APIKey); err != nil {
+		return err
 	}
-	a.apiKey = creds.APIKey
 	a.mu.Lock()
 	a.cache = make(map[string]types.ModelMeta)
 	a.mu.Unlock()
-	config.StoreCred(anthropicAPIKeyCred, creds.APIKey)
 	a.FetchModels()
 	return nil
 }
 
 func (a *Anthropic) ClearCredentials() error {
-	a.apiKey = ""
 	a.mu.Lock()
 	a.cache = make(map[string]types.ModelMeta)
 	a.mu.Unlock()
-	return config.DeleteCred(anthropicAPIKeyCred)
+	return clearAPIKey(&a.apiKey, anthropicAPIKeyCred)
 }
 
 func (a *Anthropic) Models() []types.ModelMeta {

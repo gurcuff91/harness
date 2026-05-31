@@ -29,7 +29,7 @@ func NewCLI(a *agent.Agent) *CLI {
 
 func (c *CLI) Run(ctx context.Context) error {
 	// Try to create session with the saved active model
-	if model := config.GetActiveModel(); model != "" {
+	if model := config.GetSettingsManager().ActiveModel(); model != "" {
 		cwd, _ := os.Getwd()
 		if session, err := c.agent.NewSession(cwd, model); err == nil {
 			defer session.Close()
@@ -120,7 +120,7 @@ func (c *CLI) rebuildRenderer() {
 		ModelID: c.modelName,
 	}
 	if llm.ModelSupportsThinking(c.modelName) {
-		if lvl := config.GetThinking(); lvl != "disable" {
+		if lvl := config.GetSettingsManager().ThinkingLevel(); lvl != "disable" {
 			rCfg.ThinkingLevel = lvl
 		}
 	}
@@ -156,6 +156,10 @@ func (c *CLI) handleCommand(ctx context.Context, input string) bool {
 
 	case "/connect":
 		c.handleConnect(parts)
+		return true
+
+	case "/disconnect":
+		c.handleDisconnect(parts)
 		return true
 
 	case "/thinking":
@@ -219,7 +223,7 @@ func (c *CLI) handleConnect(parts []string) {
 			fmt.Printf("  %s OAuth flow failed\n\n", C(Red, "✗"))
 			return
 		}
-		if err := target.SetCredentials(*token); err != nil {
+		if err := target.SaveCredentials(*token); err != nil {
 			fmt.Printf("  %s %s\n\n", C(Red, "✗"), C(Red, err.Error()))
 			return
 		}
@@ -232,7 +236,7 @@ func (c *CLI) handleConnect(parts []string) {
 			fmt.Printf("  %s Cancelled\n\n", C(Red, "✗"))
 			return
 		}
-		if err := target.SetCredentials(types.APIKeyCredentials(key)); err != nil {
+		if err := target.SaveCredentials(types.APIKeyCredentials(key)); err != nil {
 			fmt.Printf("  %s %s\n\n", C(Red, "✗"), C(Red, err.Error()))
 			return
 		}
@@ -241,9 +245,49 @@ func (c *CLI) handleConnect(parts []string) {
 	}
 }
 
+func (c *CLI) handleDisconnect(parts []string) {
+	if len(parts) < 2 {
+		fmt.Println(C(Dim, "  Usage: /disconnect <provider>"))
+		fmt.Println()
+		return
+	}
+	name := parts[1]
+	var target llm.Provider
+	for _, p := range providers.All {
+		if p.Name() == name {
+			target = p
+			break
+		}
+	}
+	if target == nil {
+		fmt.Printf("  %s Unknown provider: %s\n\n", C(Red, "✗"), C(Dim, name))
+		return
+	}
+	if target.CredentialType() == types.CredTypeNone {
+		fmt.Printf("  %s %s is auto-detected — cannot disconnect\n\n", C(Yellow, "⚠"), name)
+		return
+	}
+	if err := target.ClearCredentials(); err != nil {
+		fmt.Printf("  %s %s\n\n", C(Red, "✗"), C(Red, err.Error()))
+		return
+	}
+	// If active session was using this provider, close it
+	if c.session != nil && c.modelName != "" {
+		providerName := strings.SplitN(c.modelName, "/", 2)[0]
+		if providerName == name {
+			c.session.Close()
+			c.session = nil
+			c.modelName = ""
+			fmt.Printf("  %s %s disconnected — session closed\n\n", C(Green, "✓"), C(Yellow, name))
+			return
+		}
+	}
+	fmt.Printf("  %s %s disconnected\n\n", C(Green, "✓"), C(Yellow, name))
+}
+
 func (c *CLI) handleThinking(parts []string) {
 	if len(parts) < 2 {
-		current := config.GetThinking()
+		current := config.GetSettingsManager().ThinkingLevel()
 		for _, l := range []string{"disable", "low", "medium", "high", "xhigh"} {
 			marker := "  "
 			if l == current {
@@ -263,7 +307,7 @@ func (c *CLI) handleThinking(parts []string) {
 		fmt.Println()
 		return
 	}
-	config.SetThinking(level)
+	config.GetSettingsManager().SetThinkingLevel(level)
 	c.session.SwitchThinking(level)
 	if llm.ModelSupportsThinking(c.modelName) {
 		c.renderer.SetThinkingLevel(level)
@@ -315,7 +359,7 @@ func (c *CLI) switchModel(selector string) {
 	c.modelName = c.session.Meta().Model
 	c.rebuildRenderer()
 	c.session.Subscribe(c.renderer.Handle)
-	config.SetActiveModel(c.modelName)
+	config.GetSettingsManager().SetActiveModel(c.modelName)
 	fmt.Printf("  %s Using %s\n\n", C(Green, "✓"), C(Green, c.modelName))
 }
 
@@ -323,7 +367,8 @@ func (c *CLI) printHelp() {
 	fmt.Println()
 	fmt.Println(C(Bold, "  Providers"))
 	fmt.Println(C(Dim, "    /connect              — List providers and status"))
-	fmt.Println(C(Dim, "    /connect <provider>   — Connect a provider"))
+	fmt.Println(C(Dim, "    /connect <provider>      — Connect a provider"))
+	fmt.Println(C(Dim, "    /disconnect <provider>   — Remove credentials for a provider"))
 	fmt.Println(C(Dim, "      providers: claude-oauth, anthropic, openai, opencode-go, ollama-cloud"))
 	fmt.Println(C(Dim, "      ollama is auto-detected (no connect needed)"))
 	fmt.Println()
@@ -370,7 +415,7 @@ func (c *CLI) tryInitSession(providerName string) {
 	c.modelName = model
 	c.rebuildRenderer()
 	session.Subscribe(c.renderer.Handle)
-	config.SetActiveModel(model)
+	config.GetSettingsManager().SetActiveModel(model)
 	fmt.Printf("  %s Active model: %s\n\n", C(Green, "✓"), C(BrightCyan, model))
 }
 

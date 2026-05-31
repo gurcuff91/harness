@@ -16,30 +16,39 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
-const ollamaCloudURL = "https://ollama.com/v1"
+const (
+	ollamaCloudAPIKeyCred = "ollama-cloud.api_key"
+	ollamaCloudAPIKeyEnv  = "OLLAMA_CLOUD_API_KEY"
+	ollamaCloudURLSettingKey = "ollama-cloud.url"
+	ollamaCloudURLEnv        = "OLLAMA_CLOUD_URL"
+	ollamaCloudURLDefault    = "https://ollama.com/v1"
+)
+
+func getOllamaCloudURL() string {
+	if v := os.Getenv(ollamaCloudURLEnv); v != "" {
+		return v
+	}
+	if v, ok := config.GetSettingsManager().Get(ollamaCloudURLSettingKey); ok && v != "" {
+		return v
+	}
+	return ollamaCloudURLDefault
+}
 
 type OllamaCloud struct {
 	apiKey string
+	baseURL string
 	client *http.Client
 	cache  map[string]types.ModelMeta
 	mu     sync.RWMutex
 }
 
-const (
-	ollamaCloudAPIKeyCred = "ollama-cloud.api_key"
-	ollamaCloudAPIKeyEnv  = "OLLAMA_API_KEY"
-)
-
 func NewOllamaCloud() *OllamaCloud {
-	apiKey := os.Getenv(ollamaCloudAPIKeyEnv)
-	if apiKey == "" {
-		apiKey, _ = config.LoadCred(ollamaCloudAPIKeyCred)
-	}
 	o := &OllamaCloud{
-		apiKey: apiKey,
-		client: &http.Client{},
-		cache:  make(map[string]types.ModelMeta),
+		client:  &http.Client{},
+		cache:   make(map[string]types.ModelMeta),
 	}
+	o.baseURL = getOllamaCloudURL()
+	o.ResolveCredentials() //nolint:errcheck
 	if o.IsActive() {
 		o.FetchModels()
 	}
@@ -47,32 +56,39 @@ func NewOllamaCloud() *OllamaCloud {
 }
 
 func (o *OllamaCloud) Name() string   { return "ollama-cloud" }
-func (o *OllamaCloud) IsActive() bool { return o.apiKey != "" }
+func (o *OllamaCloud) IsActive() bool {
+	_, err := o.ResolveCredentials()
+	return err == nil
+}
 
 func (o *OllamaCloud) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
 
-func (o *OllamaCloud) SetCredentials(creds types.Credentials) error {
+func (o *OllamaCloud) ResolveCredentials() (types.Credentials, error) {
+	return resolveAPIKey(&o.apiKey, ollamaCloudAPIKeyEnv, ollamaCloudAPIKeyCred)
+}
+
+func (o *OllamaCloud) SaveCredentials(creds types.Credentials) error {
 	if creds.Type != types.CredTypeAPIKey {
 		return fmt.Errorf("ollama-cloud expects api_key credentials, got %s", creds.Type)
 	}
 	if creds.APIKey == "" {
 		return fmt.Errorf("api_key cannot be empty")
 	}
+	if err := saveAPIKey(&o.apiKey, ollamaCloudAPIKeyCred, creds.APIKey); err != nil {
+		return err
+	}
 	o.mu.Lock()
-	o.apiKey = creds.APIKey
 	o.cache = make(map[string]types.ModelMeta)
 	o.mu.Unlock()
-	config.StoreCred(ollamaCloudAPIKeyCred, creds.APIKey)
 	o.FetchModels()
 	return nil
 }
 
 func (o *OllamaCloud) ClearCredentials() error {
 	o.mu.Lock()
-	o.apiKey = ""
 	o.cache = make(map[string]types.ModelMeta)
 	o.mu.Unlock()
-	return config.DeleteCred(ollamaCloudAPIKeyCred)
+	return clearAPIKey(&o.apiKey, ollamaCloudAPIKeyCred)
 }
 
 func (o *OllamaCloud) Models() []types.ModelMeta {
@@ -96,7 +112,7 @@ func (o *OllamaCloud) ModelMeta(modelID string) *types.ModelMeta {
 }
 
 func (o *OllamaCloud) FetchModels() []types.ModelMeta {
-	req, _ := http.NewRequest("GET", ollamaCloudURL+"/models", nil)
+	req, _ := http.NewRequest("GET", o.baseURL+"/models", nil)
 	req.Header.Set("Authorization", "Bearer "+o.apiKey)
 	resp, err := o.client.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
@@ -137,7 +153,7 @@ func (o *OllamaCloud) FetchModels() []types.ModelMeta {
 }
 
 func (o *OllamaCloud) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
-	return llm.DoOpenAIStream(ctx, o.client, o.apiKey, ollamaCloudURL, req, nil, cb)
+	return llm.DoOpenAIStream(ctx, o.client, o.apiKey, o.baseURL, req, nil, cb)
 }
 
 

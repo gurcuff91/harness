@@ -24,7 +24,7 @@ func main() {
 	if envModel := os.Getenv("HARNESS_MODEL"); envModel != "" {
 		cfg.Model = envModel
 	} else {
-		cfg.Model = config.GetActiveModel()
+		cfg.Model = config.GetSettingsManager().ActiveModel()
 		// No model persisted yet — auto-detect first available provider/model
 		if cfg.Model == "" {
 			providers.EnsureRegistry()
@@ -37,7 +37,7 @@ func main() {
 				}
 				if len(p.Models()) > 0 {
 					cfg.Model = p.Name() + "/" + p.Models()[0].ID
-					config.SetActiveModel(cfg.Model)
+					config.GetSettingsManager().SetActiveModel(cfg.Model)
 					break
 				}
 			}

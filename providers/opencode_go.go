@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
-	"github.com/gurcuff91/harness/config"
 	llm "github.com/gurcuff91/harness/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
@@ -29,13 +27,8 @@ const (
 )
 
 func NewOpenCodeGo() *OpenCodeGo {
-	apiKey := os.Getenv(openCodeGoAPIKeyEnv)
-	if apiKey == "" {
-		apiKey, _ = config.LoadCred(openCodeGoAPIKeyCred)
-	}
 	o := &OpenCodeGo{
-		apiKey: apiKey,
-		client: &http.Client{},
+				client: &http.Client{},
 		cache:  make(map[string]types.ModelMeta),
 	}
 	if o.IsActive() {
@@ -45,32 +38,39 @@ func NewOpenCodeGo() *OpenCodeGo {
 }
 
 func (o *OpenCodeGo) Name() string   { return "opencode-go" }
-func (o *OpenCodeGo) IsActive() bool { return o.apiKey != "" }
+func (o *OpenCodeGo) IsActive() bool {
+	_, err := o.ResolveCredentials()
+	return err == nil
+}
 
 func (o *OpenCodeGo) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
 
-func (o *OpenCodeGo) SetCredentials(creds types.Credentials) error {
+func (o *OpenCodeGo) ResolveCredentials() (types.Credentials, error) {
+	return resolveAPIKey(&o.apiKey, openCodeGoAPIKeyEnv, openCodeGoAPIKeyCred)
+}
+
+func (o *OpenCodeGo) SaveCredentials(creds types.Credentials) error {
 	if creds.Type != types.CredTypeAPIKey {
 		return fmt.Errorf("opencode-go expects api_key credentials, got %s", creds.Type)
 	}
 	if creds.APIKey == "" {
 		return fmt.Errorf("api_key cannot be empty")
 	}
+	if err := saveAPIKey(&o.apiKey, openCodeGoAPIKeyCred, creds.APIKey); err != nil {
+		return err
+	}
 	o.mu.Lock()
-	o.apiKey = creds.APIKey
 	o.cache = make(map[string]types.ModelMeta)
 	o.mu.Unlock()
-	config.StoreCred(openCodeGoAPIKeyCred, creds.APIKey)
 	o.FetchModels()
 	return nil
 }
 
 func (o *OpenCodeGo) ClearCredentials() error {
 	o.mu.Lock()
-	o.apiKey = ""
 	o.cache = make(map[string]types.ModelMeta)
 	o.mu.Unlock()
-	return config.DeleteCred(openCodeGoAPIKeyCred)
+	return clearAPIKey(&o.apiKey, openCodeGoAPIKeyCred)
 }
 
 func (o *OpenCodeGo) Models() []types.ModelMeta {
