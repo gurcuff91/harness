@@ -1,7 +1,5 @@
 package types
 
-import "encoding/json"
-
 // ── LLM request/response types ───────────────────────────────────────────
 
 // ImageData holds a base64-encoded image for vision requests.
@@ -12,21 +10,20 @@ type ImageData struct {
 
 // Request represents an LLM completion request.
 type Request struct {
-	Model         string            `json:"model"`
-	SystemPrompt  string            `json:"system_prompt"`
-	Messages      []json.RawMessage `json:"messages"`
-	Tools         []ToolDef         `json:"tools,omitempty"`
-	MaxTokens     int               `json:"max_tokens"`
-	ThinkingLevel string            `json:"thinking_level,omitempty"` // disable|low|medium|high|xhigh
+	Model         string    `json:"model"`
+	SystemPrompt  string    `json:"system_prompt"`
+	Messages      []Message `json:"messages"` // provider-agnostic — translated internally
+	Tools         []ToolDef `json:"tools,omitempty"`
+	MaxTokens     int       `json:"max_tokens"`
+	ThinkingLevel string    `json:"thinking_level,omitempty"` // disable|low|medium|high|xhigh
 }
 
 // Response represents an LLM completion response.
 type Response struct {
-	Text             string          `json:"text"`
-	Thinking         string          `json:"thinking,omitempty"`
-	AssistantMessage json.RawMessage `json:"assistant_message"`
-	ToolCalls        []ToolCall      `json:"tool_calls,omitempty"`
-	Usage            Usage           `json:"usage"`
+	Text      string     `json:"text"`
+	Message   Message    `json:"message"` // the assistant message to add to history
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	Usage     Usage      `json:"usage"`
 }
 
 // Usage tracks token consumption.

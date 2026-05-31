@@ -71,17 +71,8 @@ func (o *Ollama) CompleteStream(ctx context.Context, req *types.Request, cb type
 	return llm.DoOpenAIStream(ctx, o.client, "", o.baseURL+"/v1", req, nil, cb)
 }
 
-func (o *Ollama) FormatUserMessage(text string) json.RawMessage {
-	return llm.FormatUserMessage(text)
-}
 
-func (o *Ollama) FormatUserMessageWithImages(text string, images []types.ImageData) json.RawMessage {
-	return llm.FormatUserMessageWithImages(text, images)
-}
 
-func (o *Ollama) FormatToolResults(results []types.ToolResult) []json.RawMessage {
-	return llm.FormatToolResults(results)
-}
 
 func OllamaAvailable() bool {
 	url := config.GetOllamaURL()

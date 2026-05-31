@@ -29,9 +29,16 @@ func DoAnthropicStream(ctx context.Context, client *http.Client, apiURL, apiKey 
 
 	thinkingCfg, maxTokens := BuildAnthropicThinking(req.Model, req.ThinkingLevel, req.MaxTokens)
 
+	wireMsgs := make([]json.RawMessage, 0, len(req.Messages))
+	for _, m := range req.Messages {
+		for _, w := range TranslateMessageToAnthropic(m) {
+			wireMsgs = append(wireMsgs, w)
+		}
+	}
+
 	body := map[string]any{
 		"model": req.Model, "max_tokens": maxTokens,
-		"system": req.SystemPrompt, "messages": req.Messages,
+		"system": req.SystemPrompt, "messages": wireMsgs,
 		"tools": aTools, "stream": true, "thinking": thinkingCfg,
 	}
 
@@ -74,7 +81,8 @@ func ParseAnthropicStream(body io.Reader, cb types.StreamCallback, unmapTool fun
 	}
 
 	resp := &types.Response{}
-	var thinkingBlocks []map[string]any
+	var thinkingBuf string   // accumulated thinking content
+	var lastThinkingSig string // last thinking block signature
 
 	type blockState struct {
 		blockType string
@@ -149,13 +157,11 @@ func ParseAnthropicStream(body io.Reader, cb types.StreamCallback, unmapTool fun
 				if resp.Text != "" { resp.Text += "\n" }
 				resp.Text += bs.text
 			case "thinking":
-				if resp.Thinking != "" { resp.Thinking += "\n" }
-				resp.Thinking += bs.thinking
-				tb := map[string]any{"type": "thinking", "thinking": bs.thinking}
+				if thinkingBuf != "" { thinkingBuf += "\n" }
+				thinkingBuf += bs.thinking
 				if bs.signature != "" {
-					tb["signature"] = bs.signature
+					lastThinkingSig = bs.signature
 				}
-				thinkingBlocks = append(thinkingBlocks, tb)
 			case "tool_use":
 				input := json.RawMessage(bs.toolJSON)
 				if len(input) == 0 { input = json.RawMessage("{}") }
@@ -179,20 +185,58 @@ func ParseAnthropicStream(body io.Reader, cb types.StreamCallback, unmapTool fun
 		}
 	}
 
-	var contentBlocks []map[string]any
-	for _, tb := range thinkingBlocks {
-		contentBlocks = append(contentBlocks, tb)
-	}
-	if resp.Text != "" {
-		contentBlocks = append(contentBlocks, map[string]any{"type": "text", "text": resp.Text})
-	}
-	for _, tc := range resp.ToolCalls {
-		contentBlocks = append(contentBlocks, map[string]any{
-			"type": "tool_use", "id": tc.ID, "name": tc.Name, "input": json.RawMessage(tc.Input),
-		})
-	}
-	resp.AssistantMessage, _ = json.Marshal(map[string]any{"role": "assistant", "content": contentBlocks})
+	resp.Message = types.NewAssistantToolCallMessage(resp.Text, thinkingBuf, lastThinkingSig, resp.ToolCalls)
 	return resp, nil
+}
+
+// TranslateMessageToAnthropic converts a types.Message to Anthropic wire format.
+func TranslateMessageToAnthropic(msg types.Message) []json.RawMessage {
+	switch msg.Role {
+	case types.RoleUser:
+		var content []map[string]any
+		for _, p := range msg.Parts {
+			if p.ToolResult != nil {
+				block := map[string]any{
+					"type": "tool_result", "tool_use_id": p.ToolResult.ID, "content": p.ToolResult.Output,
+				}
+				if p.ToolResult.IsErr {
+					block["is_error"] = true
+				}
+				content = append(content, block)
+			} else if p.Image != nil {
+				content = append(content, map[string]any{
+					"type": "image",
+					"source": map[string]string{"type": "base64", "media_type": p.Image.MimeType, "data": p.Image.Base64},
+				})
+			} else if p.Text != "" {
+				content = append(content, map[string]any{"type": "text", "text": p.Text})
+			}
+		}
+		d, _ := json.Marshal(map[string]any{"role": "user", "content": content})
+		return []json.RawMessage{d}
+
+	case types.RoleAssistant:
+		var content []map[string]any
+		for _, p := range msg.Parts {
+			if p.Thinking != nil {
+				block := map[string]any{"type": "thinking", "thinking": p.Thinking.Content}
+				if p.Thinking.Signature != "" {
+					block["signature"] = p.Thinking.Signature
+				}
+				content = append(content, block)
+			} else if p.Text != "" {
+				content = append(content, map[string]any{"type": "text", "text": p.Text})
+			} else if p.ToolCall != nil {
+				content = append(content, map[string]any{
+					"type": "tool_use", "id": p.ToolCall.ID,
+					"name": p.ToolCall.Name, "input": json.RawMessage(p.ToolCall.Input),
+				})
+			}
+		}
+		d, _ := json.Marshal(map[string]any{"role": "assistant", "content": content})
+		return []json.RawMessage{d}
+	}
+	return nil
 }
 
 func BuildAnthropicThinking(model, level string, maxTokens int) (map[string]any, int) {

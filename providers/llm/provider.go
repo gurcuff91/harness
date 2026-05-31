@@ -1,24 +1,19 @@
 package llm
 
 import (
-	"github.com/gurcuff91/harness/types"
 	"context"
-	"encoding/json"
 
+	"github.com/gurcuff91/harness/types"
 )
 
 // Provider abstracts LLM API differences.
 // All providers implement streaming — there is no non-streaming fallback.
+// Messages are provider-agnostic (types.Message) — each provider translates
+// to its own wire format internally before making API calls.
 type Provider interface {
 	// CompleteStream sends a request and streams events via callback.
 	// The final types.Response is returned when the stream completes.
 	CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error)
-	// FormatUserMessage wraps user text into the provider's message format.
-	FormatUserMessage(text string) json.RawMessage
-	// FormatUserMessageWithImages wraps user text + images.
-	FormatUserMessageWithImages(text string, images []types.ImageData) json.RawMessage
-	// FormatToolResults wraps tool results into the provider's message format.
-	FormatToolResults(results []types.ToolResult) []json.RawMessage
 	// Name returns the provider slug (e.g. "anthropic", "openai", "ollama").
 	Name() string
 	// IsActive returns true if this provider has valid credentials and is reachable.

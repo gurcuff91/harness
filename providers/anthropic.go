@@ -89,21 +89,6 @@ func (a *Anthropic) FormatUserMessageWithImages(text string, images []types.Imag
 	return data
 }
 
-func (a *Anthropic) FormatToolResults(results []types.ToolResult) []json.RawMessage {
-	var content []map[string]any
-	for _, r := range results {
-		block := map[string]any{
-			"type": "tool_result", "tool_use_id": r.ID, "content": r.Output,
-		}
-		if r.IsErr {
-			block["is_error"] = true
-		}
-		content = append(content, block)
-	}
-	data, _ := json.Marshal(map[string]any{"role": "user", "content": content})
-	return []json.RawMessage{data}
-}
-
 const anthropicAPI = "https://api.anthropic.com/v1/messages"
 
 func fetchAnthropicModels(tokenOrKey string) []types.ModelMeta {

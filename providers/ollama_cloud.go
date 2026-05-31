@@ -103,17 +103,8 @@ func (o *OllamaCloud) CompleteStream(ctx context.Context, req *types.Request, cb
 	return llm.DoOpenAIStream(ctx, o.client, o.apiKey, ollamaCloudURL, req, nil, cb)
 }
 
-func (o *OllamaCloud) FormatUserMessage(text string) json.RawMessage {
-	return llm.FormatUserMessage(text)
-}
 
-func (o *OllamaCloud) FormatUserMessageWithImages(text string, images []types.ImageData) json.RawMessage {
-	return llm.FormatUserMessageWithImages(text, images)
-}
 
-func (o *OllamaCloud) FormatToolResults(results []types.ToolResult) []json.RawMessage {
-	return llm.FormatToolResults(results)
-}
 
 func fetchOllamaCloudModelInfo(name string) *types.ModelMeta {
 	body, _ := json.Marshal(map[string]string{"name": name})

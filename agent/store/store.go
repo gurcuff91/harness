@@ -2,7 +2,6 @@
 package store
 
 import (
-	"encoding/json"
 	"time"
 
 	"github.com/gurcuff91/harness/types"
@@ -44,10 +43,10 @@ type SessionStore interface {
 	UpdateMeta(meta SessionMeta) error
 
 	// Messages returns all messages for LLM history reconstruction.
-	Messages() []json.RawMessage
+	Messages() []types.Message
 
 	// AddMessage appends a message to the log. Thread-safe.
-	AddMessage(msg json.RawMessage) error
+	AddMessage(msg types.Message) error
 
 	// Truncate keeps only the last N messages.
 	Truncate(keepLast int) error

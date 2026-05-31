@@ -71,17 +71,8 @@ func (o *OpenCodeGo) CompleteStream(ctx context.Context, req *types.Request, cb 
 	return llm.DoOpenAIStream(ctx, o.client, o.apiKey, openCodeGoURL, req, nil, cb)
 }
 
-func (o *OpenCodeGo) FormatUserMessage(text string) json.RawMessage {
-	return llm.FormatUserMessage(text)
-}
 
-func (o *OpenCodeGo) FormatUserMessageWithImages(text string, images []types.ImageData) json.RawMessage {
-	return llm.FormatUserMessageWithImages(text, images)
-}
 
-func (o *OpenCodeGo) FormatToolResults(results []types.ToolResult) []json.RawMessage {
-	return llm.FormatToolResults(results)
-}
 
 func fetchOpenCodeGoModels(apiKey string) []types.ModelMeta {
 	req, _ := http.NewRequest("GET", openCodeGoURL+"/models", nil)

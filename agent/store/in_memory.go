@@ -1,9 +1,10 @@
 package store
 
 import (
-	"encoding/json"
 	"fmt"
 	"sync"
+
+	"github.com/gurcuff91/harness/types"
 )
 
 // ── InMemorySessionStoreManager ─────────────────────────────────────────────────
@@ -83,7 +84,7 @@ func (m *InMemorySessionStoreManager) Rename(sessionID, name string) error {
 type InMemorySessionStore struct {
 	mu       sync.Mutex
 	meta     SessionMeta
-	messages []json.RawMessage
+	messages []types.Message
 }
 
 func (s *InMemorySessionStore) Meta() SessionMeta {
@@ -99,15 +100,15 @@ func (s *InMemorySessionStore) UpdateMeta(meta SessionMeta) error {
 	return nil
 }
 
-func (s *InMemorySessionStore) Messages() []json.RawMessage {
+func (s *InMemorySessionStore) Messages() []types.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]json.RawMessage, len(s.messages))
+	out := make([]types.Message, len(s.messages))
 	copy(out, s.messages)
 	return out
 }
 
-func (s *InMemorySessionStore) AddMessage(msg json.RawMessage) error {
+func (s *InMemorySessionStore) AddMessage(msg types.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.messages = append(s.messages, msg)

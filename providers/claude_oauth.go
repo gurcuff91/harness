@@ -120,11 +120,18 @@ func (c *ClaudeOAuth) CompleteStream(ctx context.Context, req *types.Request, cb
 	// Build thinking config based on model generation
 	thinkingCfg, maxTokens := llm.BuildAnthropicThinking(req.Model, req.ThinkingLevel, req.MaxTokens)
 
+	wireMsgs := make([]json.RawMessage, 0, len(req.Messages))
+	for _, m := range req.Messages {
+		for _, w := range llm.TranslateMessageToAnthropic(m) {
+			wireMsgs = append(wireMsgs, w)
+		}
+	}
+
 	body := map[string]any{
 		"model":      req.Model,
 		"max_tokens": maxTokens,
 		"system":     systemBlocks,
-		"messages":   req.Messages,
+		"messages":   wireMsgs,
 		"tools":      aTools,
 		"stream":     true,
 		"thinking":   thinkingCfg,
@@ -141,7 +148,7 @@ func (c *ClaudeOAuth) CompleteStream(ctx context.Context, req *types.Request, cb
 	}
 
 	// Claude Code identity headers
-	billingHeader := buildBillingHeader(req.Messages)
+	billingHeader := buildBillingHeader(wireMsgs)
 	setCCHeaders(httpReq, token, billingHeader, c.session)
 
 	httpResp, err := c.client.Do(httpReq)
@@ -183,21 +190,6 @@ func (c *ClaudeOAuth) FormatUserMessageWithImages(text string, images []types.Im
 	}
 	data, _ := json.Marshal(map[string]any{"role": "user", "content": content})
 	return data
-}
-
-func (c *ClaudeOAuth) FormatToolResults(results []types.ToolResult) []json.RawMessage {
-	var content []map[string]any
-	for _, r := range results {
-		block := map[string]any{
-			"type": "tool_result", "tool_use_id": r.ID, "content": r.Output,
-		}
-		if r.IsErr {
-			block["is_error"] = true
-		}
-		content = append(content, block)
-	}
-	data, _ := json.Marshal(map[string]any{"role": "user", "content": content})
-	return []json.RawMessage{data}
 }
 
 // ============================================================

@@ -2,7 +2,6 @@ package providers
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"sync"
 
@@ -84,14 +83,5 @@ func (o *OpenAI) CompleteStream(ctx context.Context, req *types.Request, cb type
 	return llm.DoOpenAIStream(ctx, o.client, o.apiKey, o.baseURL, req, nil, cb)
 }
 
-func (o *OpenAI) FormatUserMessage(text string) json.RawMessage {
-	return llm.FormatUserMessage(text)
-}
 
-func (o *OpenAI) FormatUserMessageWithImages(text string, images []types.ImageData) json.RawMessage {
-	return llm.FormatUserMessageWithImages(text, images)
-}
 
-func (o *OpenAI) FormatToolResults(results []types.ToolResult) []json.RawMessage {
-	return llm.FormatToolResults(results)
-}

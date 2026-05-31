@@ -107,7 +107,12 @@ func (s *Session) Prompt(ctx context.Context, text string, images []types.ImageD
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	userMsg := s.formatUser(text, images)
+	var userMsg types.Message
+	if len(images) > 0 {
+		userMsg = types.NewUserImageMessage(text, images)
+	} else {
+		userMsg = types.NewUserTextMessage(text)
+	}
 	if err := s.store.AddMessage(userMsg); err != nil {
 		return "", fmt.Errorf("store user: %w", err)
 	}
@@ -141,7 +146,7 @@ func (s *Session) Prompt(ctx context.Context, text string, images []types.ImageD
 			return "", err
 		}
 
-		if err := s.store.AddMessage(resp.AssistantMessage); err != nil {
+		if err := s.store.AddMessage(resp.Message); err != nil {
 			return "", fmt.Errorf("store assistant: %w", err)
 		}
 
@@ -151,10 +156,9 @@ func (s *Session) Prompt(ctx context.Context, text string, images []types.ImageD
 			return resp.Text, nil
 		}
 
-		for _, tr := range toolResults {
-			msg := s.formatToolResult(tr)
-			if err := s.store.AddMessage(msg); err != nil {
-				return "", fmt.Errorf("store tool result: %w", err)
+		if len(toolResults) > 0 {
+			if err := s.store.AddMessage(types.NewToolResultMessage(toolResults)); err != nil {
+				return "", fmt.Errorf("store tool results: %w", err)
 			}
 		}
 	}
@@ -369,8 +373,7 @@ func (s *Session) requestSummary(ctx context.Context) (string, error) {
 		"and (3) ask the user if they want you to continue or if they'd like to change direction."
 
 	// Inject summary request into history
-	summaryMsg := s.provider.FormatUserMessage(summaryPrompt)
-	if err := s.store.AddMessage(summaryMsg); err != nil {
+	if err := s.store.AddMessage(types.NewUserTextMessage(summaryPrompt)); err != nil {
 		return "", err
 	}
 
@@ -388,7 +391,7 @@ func (s *Session) requestSummary(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	if err := s.store.AddMessage(resp.AssistantMessage); err != nil {
+	if err := s.store.AddMessage(resp.Message); err != nil {
 		return "", err
 	}
 
@@ -401,19 +404,6 @@ func (s *Session) emit(e types.Event) {
 	}
 }
 
-func (s *Session) formatUser(text string, images []types.ImageData) []byte {
-	if len(images) > 0 {
-		return s.provider.FormatUserMessageWithImages(text, images)
-	}
-	return s.provider.FormatUserMessage(text)
-}
 
-func (s *Session) formatToolResult(tr types.ToolResult) []byte {
-	msgs := s.provider.FormatToolResults([]types.ToolResult{tr})
-	if len(msgs) > 0 {
-		return msgs[0]
-	}
-	return nil
-}
 
 

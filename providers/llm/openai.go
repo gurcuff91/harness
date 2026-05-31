@@ -71,13 +71,77 @@ func DoOpenAIStream(ctx context.Context, client *http.Client, apiKey, baseURL st
 	return ParseOpenAIStream(httpResp.Body, cb)
 }
 
+// translateMessageToOpenAI converts a types.Message to OpenAI wire format.
+func translateMessageToOpenAI(msg types.Message) []json.RawMessage {
+	switch msg.Role {
+	case types.RoleUser:
+		// Check if it's a tool result message
+		var toolResults []map[string]any
+		var contentParts []map[string]any
+		for _, p := range msg.Parts {
+			if p.ToolResult != nil {
+				toolResults = append(toolResults, map[string]any{
+					"role": "tool", "tool_call_id": p.ToolResult.ID, "content": p.ToolResult.Output,
+				})
+			} else if p.Image != nil {
+				contentParts = append(contentParts, map[string]any{
+					"type": "image_url",
+					"image_url": map[string]string{"url": "data:" + p.Image.MimeType + ";base64," + p.Image.Base64},
+				})
+			} else if p.Text != "" {
+				contentParts = append(contentParts, map[string]any{"type": "text", "text": p.Text})
+			}
+		}
+		// Tool results become individual tool messages
+		if len(toolResults) > 0 {
+			var msgs []json.RawMessage
+			for _, tr := range toolResults {
+				d, _ := json.Marshal(tr)
+				msgs = append(msgs, d)
+			}
+			return msgs
+		}
+		// User text/image message
+		if len(contentParts) == 1 && contentParts[0]["type"] == "text" {
+			d, _ := json.Marshal(map[string]string{"role": "user", "content": contentParts[0]["text"].(string)})
+			return []json.RawMessage{d}
+		}
+		d, _ := json.Marshal(map[string]any{"role": "user", "content": contentParts})
+		return []json.RawMessage{d}
+
+	case types.RoleAssistant:
+		wire := map[string]any{"role": "assistant", "content": ""}
+		var tcs []map[string]any
+		for _, p := range msg.Parts {
+			if p.Text != "" {
+				wire["content"] = p.Text
+			} else if p.Thinking != nil {
+				wire["reasoning_content"] = p.Thinking.Content
+			} else if p.ToolCall != nil {
+				tcs = append(tcs, map[string]any{
+					"id": p.ToolCall.ID, "type": "function",
+					"function": map[string]any{"name": p.ToolCall.Name, "arguments": string(p.ToolCall.Input)},
+				})
+			}
+		}
+		if len(tcs) > 0 {
+			wire["tool_calls"] = tcs
+		}
+		d, _ := json.Marshal(wire)
+		return []json.RawMessage{d}
+	}
+	return nil
+}
+
 func BuildOpenAIBody(req *types.Request) (*openAIRequest, error) {
 	messages := make([]json.RawMessage, 0, len(req.Messages)+1)
 	if req.SystemPrompt != "" {
 		sysMsg, _ := json.Marshal(map[string]string{"role": "system", "content": req.SystemPrompt})
 		messages = append(messages, sysMsg)
 	}
-	messages = append(messages, req.Messages...)
+	for _, m := range req.Messages {
+		messages = append(messages, translateMessageToOpenAI(m)...)
+	}
 
 	var tools []openAITool
 	for _, t := range req.Tools {
@@ -220,21 +284,7 @@ func ParseOpenAIStream(body io.Reader, cb types.StreamCallback) (*types.Response
 	})
 	emit(types.StreamEvent{Type: types.StreamDone})
 
-	assistantMsg := map[string]any{"role": "assistant", "content": textBuf}
-	if len(resp.ToolCalls) > 0 {
-		if reasoningBuf != "" {
-			assistantMsg["reasoning_content"] = reasoningBuf
-		}
-		var tcs []map[string]any
-		for _, tc := range resp.ToolCalls {
-			tcs = append(tcs, map[string]any{
-				"id": tc.ID, "type": "function",
-				"function": map[string]any{"name": tc.Name, "arguments": string(tc.Input)},
-			})
-		}
-		assistantMsg["tool_calls"] = tcs
-	}
-	resp.AssistantMessage, _ = json.Marshal(assistantMsg)
+	resp.Message = types.NewAssistantToolCallMessage(textBuf, reasoningBuf, "", resp.ToolCalls)
 	return resp, nil
 }
 
