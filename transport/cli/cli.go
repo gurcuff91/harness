@@ -119,7 +119,15 @@ func (c *CLI) rebuildRenderer() {
 	rCfg := RendererConfig{
 		ModelID: c.modelName,
 	}
-	if llm.ModelSupportsThinking(c.modelName) {
+	// Use provider cache for authoritative thinking support detection
+	var lookup func(string) *types.ModelMeta
+	if c.session != nil {
+		meta := c.session.Meta()
+		if p, _, err := providers.Resolve(meta.Model); err == nil {
+			lookup = p.ModelMeta
+		}
+	}
+	if llm.ModelSupportsThinkingWithLookup(c.modelName, lookup) {
 		if lvl := config.GetSettingsManager().ThinkingLevel(); lvl != "disable" {
 			rCfg.ThinkingLevel = lvl
 		}

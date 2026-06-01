@@ -270,19 +270,39 @@ func stripDateSuffix(id string) string {
 // modelSupportsThinking checks if a model has thinking capability.
 // Checks: in-memory model cache → hardcoded registry → llm-registry → false.
 // ModelSupportsThinking is the public API — accepts "provider/model" or bare model ID.
+// ModelSupportsThinking checks if a model supports extended thinking.
+// Uses a provider lookup function to check the authoritative provider cache first.
+// Falls back to hardcoded registry and remote llm-registry.
 func ModelSupportsThinking(fullModel string) bool {
-	provider, model := parseModel(fullModel)
-	return modelSupportsThinking(provider, model)
+	_, model := parseModel(fullModel)
+	return modelSupportsThinking(model)
 }
 
-func modelSupportsThinking(provider, model string) bool {
-	// Check hardcoded registry
+// ModelSupportsThinkingWithLookup checks thinking support using a provider cache lookup.
+// Use this when a provider instance is available for authoritative data.
+func ModelSupportsThinkingWithLookup(fullModel string, lookup func(modelID string) *types.ModelMeta) bool {
+	_, modelID := parseModel(fullModel)
+	if lookup != nil {
+		if meta := lookup(modelID); meta != nil {
+			return meta.Thinking
+		}
+	}
+	return modelSupportsThinking(modelID)
+}
+
+func modelSupportsThinking(model string) bool {
+	// 1. Remote llm-registry — community-maintained, more up to date than hardcoded
+	if r := lookupRemote(model); r != nil {
+		return r.Thinking
+	}
+	// 2. Hardcoded registry — our static data for models not in llm-registry
 	if meta, ok := hardcodedRegistry[model]; ok {
 		return meta.Thinking
 	}
-	// Check remote llm-registry
-	if r := lookupRemote(model); r != nil {
-		return r.Thinking
+	// 3. Infer from model name — last resort for very new models
+	lower := strings.ToLower(model)
+	if strings.Contains(lower, "claude") && (strings.Contains(lower, "opus") || strings.Contains(lower, "sonnet")) {
+		return true
 	}
 	return false
 }
