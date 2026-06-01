@@ -31,9 +31,6 @@ func NewOpenCodeGo() *OpenCodeGo {
 				client: &http.Client{},
 		cache:  make(map[string]types.ModelMeta),
 	}
-	if o.IsActive() {
-		o.FetchModels()
-	}
 	return o
 }
 

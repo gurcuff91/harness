@@ -31,9 +31,6 @@ func NewAnthropic() *Anthropic {
 	a := &Anthropic{client: &http.Client{}, cache: make(map[string]types.ModelMeta)}
 	// ResolveCredentials populates a.apiKey from env or file
 	a.ResolveCredentials() //nolint:errcheck
-	if a.IsActive() {
-		a.FetchModels()
-	}
 	return a
 }
 

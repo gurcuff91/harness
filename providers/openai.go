@@ -31,9 +31,6 @@ func NewOpenAI() *OpenAI {
 		cache:   make(map[string]types.ModelMeta),
 	}
 	o.ResolveCredentials() //nolint:errcheck
-	if o.IsActive() {
-		o.FetchModels()
-	}
 	return o
 }
 

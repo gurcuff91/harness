@@ -44,9 +44,6 @@ func NewOllama() *Ollama {
 		client:  &http.Client{},
 		cache:   make(map[string]types.ModelMeta),
 	}
-	if o.IsActive() {
-		o.FetchModels()
-	}
 	return o
 }
 

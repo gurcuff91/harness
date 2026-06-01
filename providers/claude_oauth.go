@@ -57,9 +57,6 @@ func NewClaudeOAuth() (*ClaudeOAuth, error) {
 		session: uuid.New().String(),
 		cache:   make(map[string]types.ModelMeta),
 	}
-	if c.IsActive() {
-		c.FetchModels()
-	}
 	return c, nil
 }
 

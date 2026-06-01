@@ -49,9 +49,6 @@ func NewOllamaCloud() *OllamaCloud {
 	}
 	o.baseURL = getOllamaCloudURL()
 	o.ResolveCredentials() //nolint:errcheck
-	if o.IsActive() {
-		o.FetchModels()
-	}
 	return o
 }
 
