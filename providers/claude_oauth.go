@@ -192,85 +192,41 @@ func (c *ClaudeOAuth) CompleteStream(ctx context.Context, req *types.Request, cb
 		return nil, fmt.Errorf("oauth: empty token")
 	}
 
-	// Tools — MCP stealth naming + cache_control on last + eager streaming
-	aTools := buildOAuthTools(req.Tools)
+	// Pre-resolve thinking from ModelMeta (authoritative)
+	thinkingFull := llm.BuildAnthropicThinkingFromMeta(c.ModelMeta(req.Model), req.ThinkingLevel, req.MaxTokens)
 
-	// System blocks — stable for prompt caching
-	systemBlocks := buildSystemBlocks(req.SystemPrompt)
-
-	// Thinking config — output_config must be top-level, not inside thinking
-	thinkingFull, _ := llm.BuildAnthropicThinkingFull(req.Model, req.ThinkingLevel, req.MaxTokens)
-
-	// Messages — drop non-redacted thinking, add cache_control on last user msg
+	// Pre-build wire messages (OAuth: drop non-redacted thinking + cache_control)
 	wireMsgs := buildWireMessages(req.Messages)
 
-	body := map[string]any{
-		"model":      req.Model,
-		"max_tokens": thinkingFull.MaxTokens,
-		"system":     systemBlocks,
-		"messages":   wireMsgs,
-		"tools":      aTools,
-		"stream":     true,
-		"thinking":   thinkingFull.Thinking,
-	}
-	// output_config is top-level (adaptive models only)
-	if thinkingFull.OutputConfig != nil {
-		body["output_config"] = thinkingFull.OutputConfig
-	}
-
-	data, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", anthropicOAuthAPI, bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-
+	// CC identity headers (billing header needs wire messages)
 	billingHeader := buildBillingHeader(wireMsgs)
-	setCCHeaders(httpReq, token, billingHeader, c.session)
+	headers := buildCCHeaders(token, billingHeader, c.session)
 
-	// Interleaved thinking for non-adaptive models
-	if req.ThinkingLevel != "" && req.ThinkingLevel != "disable" && !llm.IsAdaptiveThinking(req.Model) {
-		existing := httpReq.Header.Get("anthropic-beta")
-		httpReq.Header.Set("anthropic-beta", existing+",interleaved-thinking-2025-05-14")
+	// Interleaved-thinking beta only for non-adaptive models
+	if req.ThinkingLevel != "" && req.ThinkingLevel != "disable" && thinkingFull.OutputConfig == nil {
+		headers["anthropic-beta"] += ",interleaved-thinking-2025-05-14"
 	}
 
-	httpResp, err := c.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
-	}
-	defer httpResp.Body.Close()
-
-	if httpResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(httpResp.Body)
-		return nil, fmt.Errorf("anthropic OAuth API error %d: %s", httpResp.StatusCode, string(body))
+	anthrReq := &llm.AnthropicRequest{
+		Request:        req,
+		ThinkingConfig: &thinkingFull,
+		WireMessages:   wireMsgs,
+		SystemBlocks:   buildSystemBlocks(req.SystemPrompt),
+		Tools:          buildOAuthTools(req.Tools),
+		UnmapTool:      unmapToolNameFromCC,
 	}
 
-	return llm.ParseAnthropicStream(httpResp.Body, cb, unmapToolNameFromCC)
+	return llm.DoAnthropicStream(ctx, c.client, anthropicOAuthAPI, token, anthrReq, headers, cb)
 }
 
 // ── Request builders ─────────────────────────────────────────────────────
 
-type oauthTool struct {
-	Name               string          `json:"name"`
-	Description        string          `json:"description"`
-	InputSchema        json.RawMessage `json:"input_schema"`
-	EagerInputStreaming bool            `json:"eager_input_streaming,omitempty"`
-	CacheControl       *cacheCtrl      `json:"cache_control,omitempty"`
-}
+var ephemeralCC = &llm.AnthropicCacheControl{Type: "ephemeral"}
 
-type cacheCtrl struct {
-	Type string `json:"type"`
-}
-
-var ephemeralCC = &cacheCtrl{Type: "ephemeral"}
-
-func buildOAuthTools(defs []types.ToolDef) []oauthTool {
-	tools := make([]oauthTool, len(defs))
+func buildOAuthTools(defs []types.ToolDef) []llm.AnthropicTool {
+	tools := make([]llm.AnthropicTool, len(defs))
 	for i, t := range defs {
-		tools[i] = oauthTool{
+		tools[i] = llm.AnthropicTool{
 			Name:               mapToolNameToCC(t.Name),
 			Description:        t.Description,
 			InputSchema:        t.InputSchema,
@@ -426,6 +382,25 @@ func unmapToolNameFromCC(name string) string {
 	return name
 }
 
+// buildCCHeaders returns Claude Code identity headers as a map.
+func buildCCHeaders(token, billingHeader, sessionID string) map[string]string {
+	headers := map[string]string{
+		"Authorization":                           "Bearer " + token,
+		"anthropic-version":                       "2023-06-01",
+		"anthropic-beta":                          "claude-code-20250219,oauth-2025-04-20",
+		"anthropic-dangerous-direct-browser-access": "true",
+		"x-app":                                   "cli",
+		"user-agent":                              "claude-cli/" + ccVersion + " (external, cli)",
+		"x-client-request-id":                    uuid.New().String(),
+		"X-Claude-Code-Session-Id":               sessionID,
+	}
+	if billingHeader != "" {
+		headers["x-anthropic-billing-header"] = billingHeader
+	}
+	return headers
+}
+
+// setCCHeaders sets Claude Code identity headers on an http.Request (kept for compatibility).
 func setCCHeaders(req *http.Request, token, billingHeader, sessionID string) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)

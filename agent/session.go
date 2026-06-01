@@ -88,10 +88,14 @@ func newSession(storeInst store.SessionStore,
 func (s *Session) loadModelMeta(modelID string) {
 	meta := s.provider.ModelMeta(modelID)
 	if meta == nil {
-		s.contextWindow = 128000 // safe default
+		s.contextWindow = 128000
 		return
 	}
 	s.contextWindow = meta.ContextWindow
+	// Update maxTokens to match the new model's capability
+	if meta.MaxTokens > 0 {
+		s.maxTokens = meta.MaxTokens
+	}
 	s.pricing = modelPricing{
 		InputPrice:  meta.InputPrice,
 		OutputPrice: meta.OutputPrice,
@@ -420,8 +424,9 @@ func (s *Session) updateStats(se types.StreamEvent) {
 		float64(se.CacheWrite)*s.pricing.CacheWrite) / 1_000_000
 	s.stats.CostUSD += turnCost
 
-	// Context % — last input tokens / model context window
-	s.lastInputTokens = se.InputTokens
+	// Context usage = (fresh input + cache reads) / context window
+	// Cache reads count because they were sent to the model as context
+	s.lastInputTokens = se.InputTokens + se.CacheRead
 	if s.contextWindow > 0 {
 		s.stats.ContextUsage = float64(s.lastInputTokens) / float64(s.contextWindow)
 	}
@@ -436,7 +441,7 @@ func (s *Session) updateStats(se types.StreamEvent) {
 	s.emit(types.Event{
 		Type: types.EventTokens,
 		Tokens: types.TokenUsage{
-			Input:           se.InputTokens,
+			Input:           s.lastInputTokens, // fresh + cache = total context sent
 			Output:          se.OutputTokens,
 			CacheRead:       se.CacheRead,
 			CacheWrite:      se.CacheWrite,

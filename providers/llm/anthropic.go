@@ -1,45 +1,120 @@
 package llm
 
 import (
-	"github.com/gurcuff91/harness/types"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/gurcuff91/harness/types"
 )
 
+// ── AnthropicTool ────────────────────────────────────────────────────────
+
 type AnthropicTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name               string          `json:"name"`
+	Description        string          `json:"description"`
+	InputSchema        json.RawMessage `json:"input_schema"`
+	EagerInputStreaming bool            `json:"eager_input_streaming,omitempty"`
+	CacheControl       *AnthropicCacheControl `json:"cache_control,omitempty"`
 }
 
+// AnthropicCacheControl marks content blocks for Anthropic prompt caching.
+type AnthropicCacheControl struct {
+	Type string `json:"type"`
+}
+
+// Keep unexported alias for internal use
+type anthropicCache = AnthropicCacheControl
+
+// ── AnthropicRequest ─────────────────────────────────────────────────────
+
+// AnthropicRequest extends types.Request with Anthropic-specific fields.
+// Built by each Anthropic provider before calling DoAnthropicStream.
+// Allows providers to pre-resolve thinking config and wire messages using
+// authoritative data (ModelMeta, OAuth stealth, cache_control, etc.)
+// while sharing a single streaming implementation.
+type AnthropicRequest struct {
+	*types.Request
+
+	// Pre-resolved thinking config from ModelMeta.
+	// nil = DoAnthropicStream resolves internally via string heuristic.
+	ThinkingConfig *ThinkingConfig
+
+	// Pre-built wire messages (Anthropic JSON format).
+	// nil = DoAnthropicStream builds from Request.Messages via TranslateMessageToAnthropic.
+	WireMessages []json.RawMessage
+
+	// Pre-built system blocks (supports cache_control, multiple blocks, etc.)
+	// nil = DoAnthropicStream uses Request.SystemPrompt as plain string.
+	SystemBlocks []map[string]any
+
+	// Pre-built tools (supports cache_control, eager_input_streaming, name mapping, etc.)
+	// nil = DoAnthropicStream builds from Request.Tools with AnthropicTool defaults.
+	Tools []AnthropicTool
+
+	// UnmapTool reverses tool name mapping on response (e.g. MCP stealth).
+	// nil = no mapping (tool names passed through as-is).
+	UnmapTool func(string) string
+}
+
+// ── DoAnthropicStream ────────────────────────────────────────────────────
+
+// DoAnthropicStream sends a streaming request to the Anthropic Messages API.
+// Accepts an AnthropicRequest that may carry pre-built wire messages, system blocks,
+// tools, and thinking config — allowing each provider to customize without
+// duplicating the HTTP + SSE parsing logic.
 func DoAnthropicStream(ctx context.Context, client *http.Client, apiURL, apiKey string,
-	req *types.Request, extraHeaders map[string]string, unmapTool func(string) string,
+	req *AnthropicRequest, extraHeaders map[string]string,
 	cb types.StreamCallback) (*types.Response, error) {
 
-	var aTools []AnthropicTool
-	for _, t := range req.Tools {
-		aTools = append(aTools, AnthropicTool{
-			Name: t.Name, Description: t.Description, InputSchema: t.InputSchema,
-		})
+	// ── Thinking config ──────────────────────────────────────────────────
+	var thinkingFull ThinkingConfig
+	if req.ThinkingConfig != nil {
+		thinkingFull = *req.ThinkingConfig // authoritative — from ModelMeta
+	} else {
+		thinkingFull, _ = BuildAnthropicThinkingFull(req.Model, req.ThinkingLevel, req.MaxTokens)
 	}
 
-	thinkingCfg, maxTokens := BuildAnthropicThinking(req.Model, req.ThinkingLevel, req.MaxTokens)
+	// ── Tools ────────────────────────────────────────────────────────────
+	tools := req.Tools
+	if tools == nil {
+		tools = defaultAnthropicTools(req.Request.Tools)
+	}
 
-	wireMsgs := make([]json.RawMessage, 0, len(req.Messages))
-	for _, m := range req.Messages {
-		for _, w := range TranslateMessageToAnthropic(m) {
-			wireMsgs = append(wireMsgs, w)
+	// ── System ───────────────────────────────────────────────────────────
+	var system any
+	if req.SystemBlocks != nil {
+		system = req.SystemBlocks
+	} else {
+		system = req.SystemPrompt
+	}
+
+	// ── Wire messages ────────────────────────────────────────────────────
+	wireMsgs := req.WireMessages
+	if wireMsgs == nil {
+		wireMsgs = make([]json.RawMessage, 0, len(req.Messages))
+		for _, m := range req.Messages {
+			for _, w := range TranslateMessageToAnthropic(m) {
+				wireMsgs = append(wireMsgs, w)
+			}
 		}
 	}
 
+	// ── Build body ───────────────────────────────────────────────────────
 	body := map[string]any{
-		"model": req.Model, "max_tokens": maxTokens,
-		"system": req.SystemPrompt, "messages": wireMsgs,
-		"tools": aTools, "stream": true, "thinking": thinkingCfg,
+		"model":      req.Model,
+		"max_tokens": thinkingFull.MaxTokens,
+		"system":     system,
+		"messages":   wireMsgs,
+		"tools":      tools,
+		"stream":     true,
+		"thinking":   thinkingFull.Thinking,
+	}
+	if thinkingFull.OutputConfig != nil {
+		body["output_config"] = thinkingFull.OutputConfig
 	}
 
 	data, err := json.Marshal(body)
@@ -47,15 +122,20 @@ func DoAnthropicStream(ctx context.Context, client *http.Client, apiURL, apiKey 
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
+	// ── HTTP request ─────────────────────────────────────────────────────
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", apiKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	// Apply extra headers first — they may override defaults (e.g. OAuth uses Authorization instead of x-api-key)
 	for k, v := range extraHeaders {
 		httpReq.Header.Set(k, v)
+	}
+	// Only set x-api-key if Authorization is not already set (OAuth providers set Authorization: Bearer)
+	if httpReq.Header.Get("Authorization") == "" && apiKey != "" {
+		httpReq.Header.Set("x-api-key", apiKey)
 	}
 
 	httpResp, err := client.Do(httpReq)
@@ -69,10 +149,22 @@ func DoAnthropicStream(ctx context.Context, client *http.Client, apiURL, apiKey 
 		return nil, fmt.Errorf("anthropic API error %d: %s", httpResp.StatusCode, string(b))
 	}
 
+	unmapTool := req.UnmapTool
 	if unmapTool == nil {
 		unmapTool = func(s string) string { return s }
 	}
 	return ParseAnthropicStream(httpResp.Body, cb, unmapTool)
+}
+
+// defaultAnthropicTools converts types.ToolDef slice to AnthropicTool slice.
+func defaultAnthropicTools(defs []types.ToolDef) []AnthropicTool {
+	tools := make([]AnthropicTool, len(defs))
+	for i, t := range defs {
+		tools[i] = AnthropicTool{
+			Name: t.Name, Description: t.Description, InputSchema: t.InputSchema,
+		}
+	}
+	return tools
 }
 
 func ParseAnthropicStream(body io.Reader, cb types.StreamCallback, unmapTool func(string) string) (*types.Response, error) {
@@ -121,10 +213,28 @@ func ParseAnthropicStream(body io.Reader, cb types.StreamCallback, unmapTool fun
 			bt, _ := cb2["type"].(string)
 			bs := &blockState{blockType: bt}
 			blocks[idx] = bs
-			if bt == "tool_use" {
+			switch bt {
+			case "tool_use":
 				bs.toolID, _ = cb2["id"].(string)
 				bs.toolName = unmapTool(jsonStr(cb2, "name"))
 				emit(types.StreamEvent{Type: types.StreamToolStart, ToolID: bs.toolID, ToolName: bs.toolName})
+			case "thinking":
+				// Adaptive thinking may deliver content in block_start (summarized display)
+				if t, ok := cb2["thinking"].(string); ok && t != "" {
+					bs.thinking = t
+					emit(types.StreamEvent{Type: types.StreamThinkingDelta, Delta: t})
+				}
+				if sig, ok := cb2["signature"].(string); ok {
+					bs.signature = sig
+				}
+			case "redacted_thinking":
+				// Adaptive thinking may return redacted blocks (signature only)
+				bs.blockType = "thinking" // treat as thinking for stop handling
+				if sig, ok := cb2["data"].(string); ok {
+					bs.signature = sig
+				}
+				// Emit a minimal thinking delta so the renderer shows the thinking indicator
+				emit(types.StreamEvent{Type: types.StreamThinkingDelta, Delta: "[thinking]"})
 			}
 		case "content_block_delta":
 			idx := jsonInt(event, "index")
@@ -270,7 +380,10 @@ func BuildAnthropicThinkingFull(model, level string, maxTokens int) (ThinkingCon
 		}
 		// output_config is TOP-LEVEL in the request body, not inside thinking
 		if level != "" {
-			cfg.OutputConfig = map[string]any{"effort": level}
+			// Map harness xhigh → Anthropic max (supported: low, medium, high, max)
+		effort := level
+		if effort == "xhigh" { effort = "max" }
+		cfg.OutputConfig = map[string]any{"effort": effort}
 		}
 		return cfg, nil
 	}
@@ -308,3 +421,42 @@ func containsStr(s, sub string) bool { return bytes.Contains([]byte(s), []byte(s
 
 func jsonInt(m map[string]any, key string) int { v, _ := m[key].(float64); return int(v) }
 func jsonStr(m map[string]any, key string) string { v, _ := m[key].(string); return v }
+
+// BuildAnthropicThinkingFromMeta builds thinking config using authoritative ModelMeta.
+// Eliminates version-string heuristics — uses capabilities reported by the API.
+func BuildAnthropicThinkingFromMeta(meta *types.ModelMeta, level string, maxTokens int) ThinkingConfig {
+	if meta == nil {
+		cfg, _ := BuildAnthropicThinkingFull("", level, maxTokens)
+		return cfg
+	}
+	cfg, _ := buildThinkingConfig(meta.ThinkingAdaptive, level, maxTokens)
+	return cfg
+}
+
+func buildThinkingConfig(adaptive bool, level string, maxTokens int) (ThinkingConfig, error) {
+	if level == "" || level == "disable" {
+		return ThinkingConfig{Thinking: map[string]any{"type": "disabled"}, MaxTokens: maxTokens}, nil
+	}
+	if adaptive {
+		cfg := ThinkingConfig{Thinking: map[string]any{"type": "adaptive"}, MaxTokens: maxTokens}
+		if cfg.MaxTokens < 16000 {
+			cfg.MaxTokens = 16000
+		}
+		if level != "" {
+			// Map harness xhigh → Anthropic max (supported: low, medium, high, max)
+		effort := level
+		if effort == "xhigh" { effort = "max" }
+		cfg.OutputConfig = map[string]any{"effort": effort}
+		}
+		return cfg, nil
+	}
+	budget := map[string]int{"low": 2048, "medium": 5000, "high": 10240, "xhigh": 32000}
+	b, ok := budget[level]
+	if !ok {
+		b = 10240
+	}
+	if maxTokens <= b {
+		maxTokens = b + 8192
+	}
+	return ThinkingConfig{Thinking: map[string]any{"type": "enabled", "budget_tokens": b}, MaxTokens: maxTokens}, nil
+}

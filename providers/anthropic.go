@@ -102,10 +102,20 @@ func (a *Anthropic) FetchModels() []types.ModelMeta {
 }
 
 func (a *Anthropic) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
-	return llm.DoAnthropicStream(ctx, a.client, anthropicAPI,
-		a.apiKey, req,
-		map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14"},
-		nil, cb)
+	meta := a.ModelMeta(req.Model)
+	thinkingFull := llm.BuildAnthropicThinkingFromMeta(meta, req.ThinkingLevel, req.MaxTokens)
+
+	extraHeaders := map[string]string{}
+	// Interleaved-thinking beta only for non-adaptive models
+	if req.ThinkingLevel != "" && req.ThinkingLevel != "disable" && thinkingFull.OutputConfig == nil {
+		extraHeaders["anthropic-beta"] = "interleaved-thinking-2025-05-14"
+	}
+
+	anthrReq := &llm.AnthropicRequest{
+		Request:        req,
+		ThinkingConfig: &thinkingFull,
+	}
+	return llm.DoAnthropicStream(ctx, a.client, anthropicAPI, a.apiKey, anthrReq, extraHeaders, cb)
 }
 
 func (a *Anthropic) FormatUserMessage(text string) json.RawMessage {
@@ -158,16 +168,14 @@ func fetchAnthropicModels(tokenOrKey string) []types.ModelMeta {
 	}
 	defer resp.Body.Close()
 
+	// Use a flexible structure to capture the nested capabilities
 	var result struct {
 		Data []struct {
-			ID              string `json:"id"`
-			DisplayName     string `json:"display_name"`
-			MaxInputTokens  int    `json:"max_input_tokens"`
-			MaxOutputTokens int    `json:"max_tokens"`
-			Capabilities    struct {
-				Vision   bool `json:"vision"`
-				Thinking bool `json:"extended_thinking"`
-			} `json:"capabilities"`
+			ID              string         `json:"id"`
+			DisplayName     string         `json:"display_name"`
+			MaxInputTokens  int            `json:"max_input_tokens"`
+			MaxOutputTokens int            `json:"max_tokens"`
+			Capabilities    map[string]any `json:"capabilities"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -180,18 +188,35 @@ func fetchAnthropicModels(tokenOrKey string) []types.ModelMeta {
 			continue
 		}
 		cw := m.MaxInputTokens
-		if cw <= 0 {
-			cw = 200000
-		}
+		if cw <= 0 { cw = 200000 }
 		mt := m.MaxOutputTokens
-		if mt <= 0 {
-			mt = 64000
-		}
+		if mt <= 0 { mt = 64000 }
+
 		meta := types.ModelMeta{
 			ID: m.ID, DisplayName: m.DisplayName,
 			ContextWindow: cw, MaxTokens: mt,
-			Vision: m.Capabilities.Vision, Thinking: m.Capabilities.Thinking,
 		}
+
+		// Parse capabilities
+		if m.Capabilities != nil {
+			// Vision
+			if img, ok := m.Capabilities["image_input"].(map[string]any); ok {
+				meta.Vision, _ = img["supported"].(bool)
+			}
+			// Thinking capabilities
+			if t, ok := m.Capabilities["thinking"].(map[string]any); ok {
+				meta.Thinking, _ = t["supported"].(bool)
+				if types2, ok := t["types"].(map[string]any); ok {
+					if adaptive, ok := types2["adaptive"].(map[string]any); ok {
+						meta.ThinkingAdaptive, _ = adaptive["supported"].(bool)
+					}
+					if enabled, ok := types2["enabled"].(map[string]any); ok {
+						meta.ThinkingLegacy, _ = enabled["supported"].(bool)
+					}
+				}
+			}
+		}
+
 		llm.ApplyRegistryPricing(&meta)
 		metas = append(metas, meta)
 	}
