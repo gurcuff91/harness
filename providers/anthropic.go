@@ -11,10 +11,10 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
-// Ensure Anthropic implements llm.Provider at compile time.
-var _ llm.Provider = (*Anthropic)(nil)
+// Ensure Anthropic implements Provider at compile time.
+var _ Provider = (*Anthropic)(nil)
 
-// Anthropic implements llm.Provider for the Anthropic Messages API.
+// Anthropic implements Provider for the Anthropic Messages API.
 type Anthropic struct {
 	client *http.Client
 	apiKey string
@@ -118,27 +118,6 @@ func (a *Anthropic) CompleteStream(ctx context.Context, req *types.Request, cb t
 	return llm.DoAnthropicStream(ctx, a.client, anthropicAPI, a.apiKey, anthrReq, extraHeaders, cb)
 }
 
-func (a *Anthropic) FormatUserMessage(text string) json.RawMessage {
-	data, _ := json.Marshal(map[string]any{"role": "user", "content": text})
-	return data
-}
-
-func (a *Anthropic) FormatUserMessageWithImages(text string, images []types.ImageData) json.RawMessage {
-	var content []map[string]any
-	for _, img := range images {
-		content = append(content, map[string]any{
-			"type": "image",
-			"source": map[string]string{
-				"type": "base64", "media_type": img.MimeType, "data": img.Base64,
-			},
-		})
-	}
-	if text != "" {
-		content = append(content, map[string]any{"type": "text", "text": text})
-	}
-	data, _ := json.Marshal(map[string]any{"role": "user", "content": content})
-	return data
-}
 
 const anthropicAPI = "https://api.anthropic.com/v1/messages"
 

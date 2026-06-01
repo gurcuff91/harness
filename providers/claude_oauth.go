@@ -39,7 +39,7 @@ var ccVersion = envOrDefault("ANTHROPIC_CLI_VERSION", "2.1.90")
 
 // ── ClaudeOAuth ──────────────────────────────────────────────────────────
 
-// ClaudeOAuth implements llm.Provider using Claude Code's OAuth subscription.
+// ClaudeOAuth implements Provider using Claude Code's OAuth subscription.
 // Makes requests indistinguishable from Claude Code — uses your existing
 // subscription instead of paying API rates.
 type ClaudeOAuth struct {

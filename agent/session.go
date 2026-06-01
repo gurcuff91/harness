@@ -9,7 +9,6 @@ import (
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/providers"
-	pllm "github.com/gurcuff91/harness/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -30,7 +29,7 @@ type Session struct {
 
 	// Dependencies
 	store        store.SessionStore
-	provider     pllm.Provider
+	provider     providers.Provider
 	modelID      string
 	thinkingLvl  string
 	tools        *tools.Registry
@@ -60,7 +59,7 @@ type modelPricing struct {
 // ── Constructor (called by Agent.NewSession) ───────────────────────────
 
 func newSession(storeInst store.SessionStore,
-	provider pllm.Provider, modelID, thinkingLvl string,
+	provider providers.Provider, modelID, thinkingLvl string,
 	toolReg *tools.Registry, systemPrompt string,
 	maxTurns, maxTokens int) *Session {
 

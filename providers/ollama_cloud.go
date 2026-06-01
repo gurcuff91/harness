@@ -153,7 +153,7 @@ func (o *OllamaCloud) FetchModels() []types.ModelMeta {
 }
 
 func (o *OllamaCloud) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
-	return llm.DoOpenAIStream(ctx, o.client, o.apiKey, o.baseURL, req, nil, cb)
+	return llm.DoOpenAIStream(ctx, o.client, o.baseURL+"/chat/completions", o.apiKey, &llm.OpenAIRequest{Request: req}, nil, cb)
 }
 
 

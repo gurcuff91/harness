@@ -1,10 +1,14 @@
-package llm
+package providers
 
 import (
 	"context"
 
 	"github.com/gurcuff91/harness/types"
 )
+
+// Provider is the core interface implemented by all LLM providers.
+// It lives in providers/ (not providers/llm/) because it's the contract
+// of the providers package, not an implementation detail.
 
 // Provider abstracts LLM API differences.
 // All providers implement streaming — there is no non-streaming fallback.

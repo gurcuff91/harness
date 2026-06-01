@@ -5,16 +5,15 @@ import (
 	"strings"
 	"sync"
 
-	llm "github.com/gurcuff91/harness/providers/llm"
 )
 
 // All is the fixed registry of provider instances.
-var All = []llm.Provider{}
+var All = []Provider{}
 
 var initOnce sync.Once
 
 func initRegistry() {
-	All = []llm.Provider{}
+	All = []Provider{}
 	if oauth, err := NewClaudeOAuth(); err == nil {
 		All = append(All, oauth)
 	}
@@ -39,7 +38,7 @@ func EnsureRegistry() {
 //  4. Validates the model exists in that provider
 //
 // If only "provider" is given (no model), the first available model is used.
-func Resolve(fullModel string) (llm.Provider, string, error) {
+func Resolve(fullModel string) (Provider, string, error) {
 	EnsureRegistry()
 
 	// 1. Split "provider/model" — inline, no external dependency
@@ -51,7 +50,7 @@ func Resolve(fullModel string) (llm.Provider, string, error) {
 	}
 
 	// 2. Find provider + check credentials
-	var p llm.Provider
+	var p Provider
 	for _, candidate := range All {
 		if candidate.Name() == providerName {
 			p = candidate

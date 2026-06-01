@@ -11,6 +11,15 @@ import (
 	"strings"
 )
 
+// OpenAIRequest wraps types.Request for OpenAI-compatible providers.
+// Embed and extend when provider-specific overrides are needed.
+// Today it's a thin wrapper — future providers can add fields without
+// changing the DoOpenAIStream signature.
+type OpenAIRequest struct {
+	*types.Request
+}
+
+// openAIWireRequest is the internal wire format sent to the API.
 type openAIRequest struct {
 	Model           string          `json:"model"`
 	Messages        []json.RawMessage `json:"messages"`
@@ -34,10 +43,10 @@ type openAIFunction struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 
-func DoOpenAIStream(ctx context.Context, client *http.Client, apiKey, baseURL string,
-	req *types.Request, extraHeaders map[string]string, cb types.StreamCallback) (*types.Response, error) {
+func DoOpenAIStream(ctx context.Context, client *http.Client, apiURL, apiKey string,
+	req *OpenAIRequest, extraHeaders map[string]string, cb types.StreamCallback) (*types.Response, error) {
 
-	body, err := BuildOpenAIBody(req)
+	body, err := buildOpenAIBody(req.Request)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +55,7 @@ func DoOpenAIStream(ctx context.Context, client *http.Client, apiKey, baseURL st
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/chat/completions", bytes.NewReader(data))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -68,7 +77,7 @@ func DoOpenAIStream(ctx context.Context, client *http.Client, apiKey, baseURL st
 		b, _ := io.ReadAll(httpResp.Body)
 		return nil, fmt.Errorf("openai API error %d: %s", httpResp.StatusCode, string(b))
 	}
-	return ParseOpenAIStream(httpResp.Body, cb)
+	return parseOpenAIStream(httpResp.Body, cb)
 }
 
 // translateMessageToOpenAI converts a types.Message to OpenAI wire format.
@@ -133,7 +142,7 @@ func translateMessageToOpenAI(msg types.Message) []json.RawMessage {
 	return nil
 }
 
-func BuildOpenAIBody(req *types.Request) (*openAIRequest, error) {
+func buildOpenAIBody(req *types.Request) (*openAIRequest, error) {
 	messages := make([]json.RawMessage, 0, len(req.Messages)+1)
 	if req.SystemPrompt != "" {
 		sysMsg, _ := json.Marshal(map[string]string{"role": "system", "content": req.SystemPrompt})
@@ -169,7 +178,7 @@ func BuildOpenAIBody(req *types.Request) (*openAIRequest, error) {
 		} else {
 			t := true
 			body.Think = &t
-			body.ReasoningEffort = TranslateThinkingLevel(req.Model, level)
+			body.ReasoningEffort = translateThinkingLevel(req.Model, level)
 			if isDeepSeek {
 				body.Thinking = map[string]any{"type": "enabled"}
 			}
@@ -178,7 +187,7 @@ func BuildOpenAIBody(req *types.Request) (*openAIRequest, error) {
 	return body, nil
 }
 
-func TranslateThinkingLevel(model, level string) string {
+func translateThinkingLevel(model, level string) string {
 	if strings.Contains(model, "deepseek") {
 		if level == "xhigh" {
 			return "max"
@@ -198,7 +207,7 @@ func TranslateThinkingLevel(model, level string) string {
 	return ""
 }
 
-func ParseOpenAIStream(body io.Reader, cb types.StreamCallback) (*types.Response, error) {
+func parseOpenAIStream(body io.Reader, cb types.StreamCallback) (*types.Response, error) {
 	emit := func(e types.StreamEvent) {
 		if cb != nil {
 			cb(e)
@@ -223,8 +232,8 @@ func ParseOpenAIStream(body io.Reader, cb types.StreamCallback) (*types.Response
 			continue
 		}
 		if u, ok := event["usage"].(map[string]any); ok {
-			resp.Usage.InputTokens = int(JsonFloat(u, "prompt_tokens"))
-			resp.Usage.OutputTokens = int(JsonFloat(u, "completion_tokens"))
+			resp.Usage.InputTokens = int(jsonFloat(u, "prompt_tokens"))
+			resp.Usage.OutputTokens = int(jsonFloat(u, "completion_tokens"))
 		}
 		choices, _ := event["choices"].([]any)
 		if len(choices) == 0 {
@@ -247,7 +256,7 @@ func ParseOpenAIStream(body io.Reader, cb types.StreamCallback) (*types.Response
 		if tcs, ok := delta["tool_calls"].([]any); ok {
 			for _, tc := range tcs {
 				tcMap, _ := tc.(map[string]any)
-				idx := int(JsonFloat(tcMap, "index"))
+				idx := int(jsonFloat(tcMap, "index"))
 				if _, exists := toolsByIdx[idx]; !exists {
 					ts := &toolState{}
 					if fn, ok := tcMap["function"].(map[string]any); ok {
@@ -288,38 +297,8 @@ func ParseOpenAIStream(body io.Reader, cb types.StreamCallback) (*types.Response
 	return resp, nil
 }
 
-func JsonFloat(m map[string]any, key string) float64 {
+// jsonFloat is an internal helper for parsing float64 from SSE event maps.
+func jsonFloat(m map[string]any, key string) float64 {
 	v, _ := m[key].(float64)
 	return v
-}
-
-func FormatUserMessage(text string) json.RawMessage {
-	data, _ := json.Marshal(map[string]string{"role": "user", "content": text})
-	return data
-}
-
-func FormatUserMessageWithImages(text string, images []types.ImageData) json.RawMessage {
-	var content []map[string]any
-	for _, img := range images {
-		content = append(content, map[string]any{
-			"type":      "image_url",
-			"image_url": map[string]string{"url": "data:" + img.MimeType + ";base64," + img.Base64},
-		})
-	}
-	if text != "" {
-		content = append(content, map[string]any{"type": "text", "text": text})
-	}
-	data, _ := json.Marshal(map[string]any{"role": "user", "content": content})
-	return data
-}
-
-func FormatToolResults(results []types.ToolResult) []json.RawMessage {
-	var msgs []json.RawMessage
-	for _, r := range results {
-		data, _ := json.Marshal(map[string]string{
-			"role": "tool", "tool_call_id": r.ID, "content": r.Output,
-		})
-		msgs = append(msgs, data)
-	}
-	return msgs
 }

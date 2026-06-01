@@ -199,7 +199,7 @@ func (c *CLI) handleConnect(parts []string) {
 	}
 
 	name := parts[1]
-	var target llm.Provider
+	var target providers.Provider
 	for _, p := range providers.All {
 		if p.Name() == name {
 			target = p
@@ -252,7 +252,7 @@ func (c *CLI) handleDisconnect(parts []string) {
 		return
 	}
 	name := parts[1]
-	var target llm.Provider
+	var target providers.Provider
 	for _, p := range providers.All {
 		if p.Name() == name {
 			target = p

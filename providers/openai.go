@@ -10,7 +10,7 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
-// OpenAI implements llm.Provider for the OpenAI API.
+// OpenAI implements Provider for the OpenAI API.
 type OpenAI struct {
 	apiKey  string
 	baseURL string
@@ -118,7 +118,7 @@ func (o *OpenAI) FetchModels() []types.ModelMeta {
 }
 
 func (o *OpenAI) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
-	return llm.DoOpenAIStream(ctx, o.client, o.apiKey, o.baseURL, req, nil, cb)
+	return llm.DoOpenAIStream(ctx, o.client, o.baseURL+"/chat/completions", o.apiKey, &llm.OpenAIRequest{Request: req}, nil, cb)
 }
 
 

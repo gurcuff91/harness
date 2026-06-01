@@ -1,13 +1,29 @@
 package llm
 
 import (
-	"github.com/gurcuff91/harness/types"
 	"encoding/json"
+	"github.com/gurcuff91/harness/types"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
 )
+
+// ── Model metadata lookup ──────────────────────────────────────────────────
+
+// FindMeta searches all registries (provider caches + hardcoded + remote) for a model ID.
+// Returns nil if the model is not found anywhere.
+func FindMeta(full string) *types.ModelMeta {
+	_, modelID := parseModel(full)
+	if meta := LookupModel(modelID); meta != nil {
+		return meta
+	}
+	enriched := EnrichMeta(types.ModelMeta{ID: modelID})
+	if enriched.ID != "" {
+		return &enriched
+	}
+	return nil
+}
 
 // ── In-memory registry cache (no disk, fetched once per session) ───────────
 
