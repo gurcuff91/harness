@@ -38,11 +38,9 @@ func main() {
 	}
 
 	// ── Create agent ──────────────────────────────────────────────
+	// Store defaults to FileSessionStoreManager (~/.harness/agent/sessions/)
 	a := agent.New(agent.AgentOptions{
 		ThinkingLevel: config.GetSettingsManager().ThinkingLevel(),
-		// SystemPrompt: "" → agent uses defaultSystemPrompt internally
-		// MaxTurns:     0  → agent uses default (25)
-		// MaxTokens:    0  → agent resolves from ModelMeta per session
 	})
 
 	// ── Graceful shutdown ─────────────────────────────────────────

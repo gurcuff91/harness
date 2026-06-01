@@ -120,6 +120,9 @@ func (s *Session) Prompt(ctx context.Context, text string, images []types.ImageD
 		return "", fmt.Errorf("store user: %w", err)
 	}
 
+	// Auto-name session from first prompt (like Claude Code)
+	s.autoNameFromPrompt(text)
+
 	s.emit(types.Event{Type: types.EventTurnStart})
 
 	// Reserve one turn for the summary call if max turns is reached mid-task.
@@ -261,7 +264,7 @@ func (s *Session) Compact(ctx context.Context) error {
 	}
 
 	// Commit checkpoint — append-only, no data lost
-	if err := s.store.AddCheckpoint(summary); err != nil {
+	if err := s.store.AddCompactionSummary(summary); err != nil {
 		s.emit(types.Event{Type: types.EventError, Output: fmt.Sprintf("compact checkpoint failed: %v", err)})
 		return fmt.Errorf("compact: checkpoint: %w", err)
 	}
@@ -316,9 +319,7 @@ func (s *Session) Rename(name string) error {
 func (s *Session) Stats() types.SessionStats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	stats := s.stats
-	stats.ContextWindow = s.contextWindow
-	return stats
+	return s.stats
 }
 
 // Meta returns a snapshot of session metadata.
@@ -426,6 +427,7 @@ func (s *Session) updateStats(se types.StreamEvent) {
 	// Context usage = (fresh input + cache reads) / context window
 	// Cache reads count because they were sent to the model as context
 	s.lastInputTokens = se.InputTokens + se.CacheRead
+	s.stats.ContextWindow = s.contextWindow // persist current model's context window
 	if s.contextWindow > 0 {
 		s.stats.ContextUsage = float64(s.lastInputTokens) / float64(s.contextWindow)
 	}
@@ -487,6 +489,25 @@ func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 
 	return resp.Text, nil
 }
+
+// autoNameFromPrompt sets the session name from the first user prompt
+// if the session still has the default date-based name.
+// Does nothing if the session was already explicitly renamed.
+func (s *Session) autoNameFromPrompt(text string) {
+	meta := s.store.Meta()
+	// Only auto-name if name looks like the default ("YYYY-MM-DD HH:MM")
+	// or is empty — don't overwrite explicit renames
+	if meta.Name != "" && !isDefaultSessionName(meta.Name) {
+		return
+	}
+	name := sessionNameFromPrompt(text)
+	if name == "" {
+		return
+	}
+	meta.Name = name
+	s.store.UpdateMeta(meta)
+}
+
 
 func (s *Session) emit(e types.Event) {
 	if s.handler != nil {

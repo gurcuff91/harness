@@ -53,11 +53,11 @@ type SessionStore interface {
 	// AddMessage appends a message to the log. Thread-safe.
 	AddMessage(msg types.Message) error
 
-	// AddCheckpoint appends a compaction checkpoint.
+	// AddCompactionSummary appends a compaction checkpoint to the log.
 	// summary is the LLM-generated conversation summary.
 	// After this call, Messages() returns only messages from this checkpoint onward.
 	// The store is append-only — pre-checkpoint messages are preserved, not deleted.
-	AddCheckpoint(summary string) error
+	AddCompactionSummary(summary string) error
 
 	// Close flushes and closes the store.
 	Close() error

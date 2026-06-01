@@ -102,7 +102,7 @@ func (c *CLI) printBanner() {
 	fmt.Println()
 	fmt.Println(C(Bold+Cyan, "  ╦ ╦╔═╗╦═╗╔╗╔╔═╗╔═╗╔═╗"))
 	fmt.Println(C(Bold+Cyan, "  ╠═╣╠═╣╠╦╝║║║║╣ ╚═╗╚═╗"))
-	fmt.Println(C(Bold+Cyan, "  ╩ ╩╩ ╩╩╚═╝╚╝╚═╝╚═╝╚═╝") + C(Dim, "  v0.5.0"))
+	fmt.Println(C(Bold+Cyan, "  ╩ ╩╩ ╩╩╚═╝╚╝╚═╝╚═╝╚═╝") + C(Dim, "  v0.6.0"))
 	fmt.Println()
 	if c.agent == nil {
 		fmt.Printf("  %s\n", C(Yellow, "⚠  No provider connected"))

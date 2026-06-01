@@ -119,15 +119,13 @@ func (s *InMemorySessionStore) AddMessage(msg types.Message) error {
 	return nil
 }
 
-// AddCheckpoint appends the summary as a user message, moves the compact offset
+// AddCompactionSummary appends the summary as a user message, moves the compact offset
 // to that position, and increments the compact count.
 // Full history is preserved (append-only — nothing is deleted).
-func (s *InMemorySessionStore) AddCheckpoint(summary string) error {
+func (s *InMemorySessionStore) AddCompactionSummary(summary string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	summaryMsg := types.NewUserTextMessage(
-		"Previous conversation summary:\n\n" + summary,
-	)
+	summaryMsg := compactionMessage(summary)
 	s.messages = append(s.messages, summaryMsg)
 	// CompactOffset points to the summary — it becomes the first message LLM sees
 	s.meta.CompactOffset = len(s.messages) - 1
@@ -136,3 +134,8 @@ func (s *InMemorySessionStore) AddCheckpoint(summary string) error {
 }
 
 func (s *InMemorySessionStore) Close() error { return nil }
+
+// compactionMessage builds the standard user message used as a compaction checkpoint.
+func compactionMessage(summary string) types.Message {
+	return types.NewUserTextMessage("Previous conversation summary:\n\n" + summary)
+}

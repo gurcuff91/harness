@@ -2,6 +2,97 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-06-01
+
+### Architecture — Major Redesign
+
+#### `types/` — New top-level shared types
+- `types.Message` — provider-agnostic conversation format (replaces `[]json.RawMessage`)
+- `types.ContentPart` — discriminated union: text, image, thinking, tool_call, tool_result
+- `types.ThinkingPart` — reasoning content with signature for Anthropic prompt caching
+- `types.TokenUsage` — named struct replacing anonymous inline struct in Event
+- `types.SessionStats` — `ContextWindow` now persisted (was always 0 in meta)
+- `types.Credentials` — shared credential type with `CredentialType` enum
+
+#### `providers/` — Redesigned credential system
+- `Provider` interface moved from `providers/llm/` → `providers/` (correct ownership)
+- `Provider` interface now includes `CredentialType()`, `ResolveCredentials()`, `SaveCredentials()`, `ClearCredentials()`
+- Each provider manages its own credential chain: cache → env var → credentials.json → keychain (OAuth)
+- `config.CredentialsManager` — neutral key-value store, no provider knowledge
+- `config.SettingsManager` — model, thinking level, plus generic KV for provider settings
+- `GetOllamaURL()` moved from config → Ollama provider (provider owns its config)
+- `/disconnect <provider>` command added to CLI
+
+#### `providers/llm/` — Cleaned up
+- `models_catalog.go` + `models_registry.go` merged → `models.go`
+- `provider.go` removed (moved to `providers/`)
+- `FormatUserMessage*` and `FormatToolResults` removed (replaced by `types.Message` translation)
+- `BuildOpenAIBody`, `ParseOpenAIStream`, `TranslateThinkingLevel` unexported (internal only)
+- `JsonFloat` unexported → `jsonFloat`
+- `OpenAIRequest` struct added — wraps `*types.Request` for OpenAI-compatible providers
+- `AnthropicRequest` — `tools` now include `CacheControl` + `EagerInputStreaming` fields
+- `AnthropicCacheControl` exported for use by `claude_oauth.go`
+- `DoOpenAIStream` signature aligned with `DoAnthropicStream`: `(ctx, client, apiURL, apiKey, req, headers, cb)`
+
+#### `providers/llm/anthropic.go` — Thinking improvements
+- `ThinkingConfig` — `output_config` is top-level in body, NOT nested inside `thinking` (was breaking adaptive models)
+- `BuildAnthropicThinkingFull` / `BuildAnthropicThinkingFromMeta` — uses `ModelMeta.ThinkingAdaptive` from API
+- `isAdaptiveOnly` — added `4-8`, `4-9` patterns
+- `xhigh` effort level mapped to `max` for adaptive models (Anthropic API doesn't accept `xhigh`)
+- `ParseAnthropicStream` — handles `redacted_thinking` blocks and inline thinking in `content_block_start`
+- `ModelMeta.ThinkingAdaptive` + `ModelMeta.ThinkingLegacy` — from API `capabilities.thinking.types`
+- `ModelSupportsThinking` — now checks provider cache first, then llm-registry, then name inference
+
+#### `agent/` — Session-centric architecture
+- `Agent.New()` returns `*Agent` (not error) — provider resolved per session
+- `Agent.NewSession(cwd, model)` — model required, provider resolved internally
+- `Session.SwitchModel(ctx, fullModel)` — now accepts `ctx` for compact-before-switch
+- `loadModelMeta()` — now updates `s.maxTokens` on model switch (was keeping old model's limit)
+- `s.stats.ContextWindow` — now persisted correctly (was always 0)
+- `defaultSessionName()` — sessions get `"YYYY-MM-DD HH:MM"` name on creation
+- `autoNameFromPrompt()` — first Prompt() auto-renames from user text (like Claude Code)
+- `isDefaultSessionName()` — guards against overwriting explicit renames
+
+#### `agent/store/` — FileSessionStore
+- `FileSessionStoreManager` + `FileSessionStore` implemented
+- Layout: `~/.harness/agent/sessions/<cwd-slug>/<session-id>.meta.json` + `.jsonl`
+- `cwd-slug` — path sanitized (/ → -, spaces → _)
+- `SessionStore.AddCheckpoint` renamed → `AddCompactionSummary` (more explicit)
+- `compactionMessage()` — shared helper, no code duplication
+- Write strategy: in-memory only during session, flush on `Close()` and `AddCompactionSummary()`
+- `diskReadOffset` — JSONL lines skipped at Open() (pre-compact)
+- `diskWriteCount` — messages already on disk, only `messages[diskWriteCount:]` needs appending
+- `FileSessionStoreManager` is now the default store for Agent (fallback to InMemory if FS unavailable)
+- `Rename()` added to `SessionStoreManager` interface
+
+#### `agent/session.go` — Compact implementation
+- `Compact(ctx)` — real LLM summarization via `generateCompactionSummary()`
+- `compactSystemPrompt` — dedicated prompt for compaction (produces checkpoint content)
+- `requestProgressUpdate()` renamed from `requestSummary()` (used for max-turns UX)
+- Auto-compact at 98% context usage (in ReAct loop)
+- `SwitchModel` — mandatory compact if new model's context window < current usage
+- `EventCompactStart/End` — `EventCompactEnd` carries summary in `Output` field
+
+### Bug Fixes
+- `max_tokens: 128000 > 64000` error on model switch — `loadModelMeta()` now updates `maxTokens`
+- `xhigh` effort level error — mapped to `max` for Anthropic adaptive models
+- Thinking not shown in footer for opus-4-7/4-8 — `ModelSupportsThinking` now checks provider cache
+- `ContextWindow: 0` in meta.json — `updateStats()` now syncs `s.stats.ContextWindow`
+- `↑3` input tokens with heavy cache — now shows `Input + CacheRead` (total context)
+- claude_oauth mutex deadlock on 2nd turn — fixed (lock released before HTTP call)
+- `req.Model` empty — fixed in agent options flow
+- OpenCode-Go models not showing — FetchModels missing Authorization header
+- `output_config` nested inside `thinking` — moved to top-level body (adaptive thinking)
+
+### CLI
+- `/disconnect <provider>` — removes credentials and closes active session if using that provider
+- No-provider startup — CLI shows hint instead of `exit 1`
+- `/connect` auto-initializes session after successful connection
+- `tryInitSession()` replaces `tryInitAgent()` — agent is now always available
+- `ModelSupportsThinkingWithLookup` — uses provider cache for authoritative thinking detection
+
+---
+
 ## [0.5.0] - 2025-05-28
 
 ### Agent — Session & Loop Improvements
