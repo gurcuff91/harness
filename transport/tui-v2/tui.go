@@ -895,6 +895,10 @@ func (t *TUI) renderSessionInfo() string {
 	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(cwd, home) {
 		cwd = "~" + cwd[len(home):]
 	}
+	// Git branch
+	if branch := gitBranch(t.sessionCwd); branch != "" {
+		cwd += " (" + branch + ")"
+	}
 	name := ""
 	if t.session != nil {
 		name = t.session.Name()
@@ -1168,6 +1172,16 @@ func iconFor(name string) string {
 	default:
 		return "🔧"
 	}
+}
+
+func gitBranch(cwd string) string {
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func trunc(s string, max int) string {
