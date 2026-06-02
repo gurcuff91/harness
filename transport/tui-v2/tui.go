@@ -559,6 +559,7 @@ func (t *TUI) Run(ctx context.Context) error {
 	t.term.Clear()
 
 	t.printBanner()
+	t.updateFooter()
 	t.render()
 
 	for {
@@ -689,6 +690,19 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 		t.output.Add("  \033[31m✗ " + e.Output + "\033[0m")
 		t.streaming = false
 	}
+}
+
+func (t *TUI) updateFooter() {
+	contextWindow := 0
+	if t.model != "" {
+		if meta := llm.FindMeta(t.model); meta != nil {
+			contextWindow = meta.ContextWindow
+		}
+	}
+	t.footer.Set(BuildFooter(
+		0, 0, 0, 0, 0, 0, contextWindow,
+		t.model, t.thinkingLevel, llm.ModelSupportsThinking(t.model),
+	))
 }
 
 func (t *TUI) printBanner() {
