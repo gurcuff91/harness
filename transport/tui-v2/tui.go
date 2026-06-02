@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/providers"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -26,10 +27,356 @@ type TUI struct {
 	cancelFn         context.CancelFunc
 
 	// Command palette
-	cmds     []paletteCmd // available commands
-	cmdSel   int      // selected index
-	cmdOpen  bool     // palette visible
+	palette palette
 }
+
+// --- Palette ---
+
+type paletteItem struct{ name, desc string }
+
+type paletteLevel struct {
+	items     []paletteItem // full list (before filter)
+	filter    string        // current filter text
+	sel       int           // selected index in filtered
+	parentCmd string        // which command opened this sub-level
+}
+
+type palette struct {
+	open   bool
+	levels []paletteLevel // stack: level 0 = commands, level 1 = sub-items
+}
+
+var rootCmds = []paletteItem{
+	{"model", "Select model"},
+	{"thinking", "Set thinking level"},
+	{"connect", "Connect provider"},
+	{"disconnect", "Disconnect provider"},
+	{"clear", "Clear conversation"},
+	{"help", "Show commands"},
+	{"exit", "Exit harness"},
+}
+
+func (p *palette) depth() int { return len(p.levels) }
+
+func (p *palette) current() *paletteLevel {
+	if len(p.levels) == 0 {
+		return nil
+	}
+	return &p.levels[len(p.levels)-1]
+}
+
+func (p *palette) filtered() []paletteItem {
+	lv := p.current()
+	if lv == nil {
+		return nil
+	}
+	if lv.filter == "" {
+		return lv.items
+	}
+	var out []paletteItem
+	f := strings.ToLower(lv.filter)
+	for _, it := range lv.items {
+		if strings.Contains(strings.ToLower(it.name), f) {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+func (p *palette) openRoot() {
+	p.open = true
+	p.levels = []paletteLevel{{items: rootCmds}}
+}
+
+func (p *palette) pushSub(parentCmd string, items []paletteItem) {
+	p.levels = append(p.levels, paletteLevel{items: items, parentCmd: parentCmd})
+}
+
+func (p *palette) popLevel() bool {
+	if len(p.levels) > 1 {
+		p.levels = p.levels[:len(p.levels)-1]
+		return true
+	}
+	return false
+}
+
+func (p *palette) close() {
+	p.open = false
+	p.levels = nil
+}
+
+func (p *palette) setFilter(f string) {
+	if lv := p.current(); lv != nil {
+		lv.filter = f
+		// clamp selection
+		filtered := p.filtered()
+		if lv.sel >= len(filtered) {
+			lv.sel = 0
+		}
+	}
+}
+
+func (p *palette) moveUp() {
+	lv := p.current()
+	if lv == nil {
+		return
+	}
+	n := len(p.filtered())
+	if n == 0 {
+		return
+	}
+	lv.sel--
+	if lv.sel < 0 {
+		lv.sel = n - 1
+	}
+}
+
+func (p *palette) moveDown() {
+	lv := p.current()
+	if lv == nil {
+		return
+	}
+	n := len(p.filtered())
+	if n == 0 {
+		return
+	}
+	lv.sel++
+	if lv.sel >= n {
+		lv.sel = 0
+	}
+}
+
+func (p *palette) selected() (paletteItem, bool) {
+	items := p.filtered()
+	lv := p.current()
+	if lv == nil || len(items) == 0 {
+		return paletteItem{}, false
+	}
+	return items[lv.sel], true
+}
+
+// --- Palette rendering ---
+
+func (t *TUI) renderPalette() []string {
+	if !t.palette.open {
+		return nil
+	}
+	items := t.palette.filtered()
+	if len(items) == 0 {
+		return []string{"   \033[2mNo matches found\033[0m"}
+	}
+
+	lv := t.palette.current()
+	maxVisible := 5
+	total := len(items)
+	start := 0
+	end := total
+	if total > maxVisible {
+		start = lv.sel - maxVisible/2
+		if start < 0 {
+			start = 0
+		}
+		end = start + maxVisible
+		if end > total {
+			end = total
+			start = end - maxVisible
+		}
+	}
+
+	// Find max name width for alignment
+	maxName := 0
+	for i := start; i < end; i++ {
+		if len(items[i].name) > maxName {
+			maxName = len(items[i].name)
+		}
+	}
+	pad := maxName + 2
+
+	var lines []string
+	for i := start; i < end; i++ {
+		it := items[i]
+		spacing := strings.Repeat(" ", pad-len(it.name))
+		if i == lv.sel {
+			lines = append(lines, " \033[32m→ "+it.name+spacing+"\033[0m\033[90m"+it.desc+"\033[0m")
+		} else {
+			lines = append(lines, "   "+it.name+spacing+"\033[90m"+it.desc+"\033[0m")
+		}
+	}
+	if total > maxVisible {
+		lines = append(lines, fmt.Sprintf("   \033[90m(%d/%d)\033[0m", lv.sel+1, total))
+	}
+	return lines
+}
+
+// --- Sub-palette: model list ---
+
+func (t *TUI) modelItems() []paletteItem {
+	providers.EnsureRegistry()
+	var items []paletteItem
+	for _, p := range providers.All {
+		if !p.IsActive() {
+			continue
+		}
+		if len(p.Models()) == 0 {
+			p.FetchModels()
+		}
+		for _, m := range p.Models() {
+			full := p.Name() + "/" + m.ID
+			desc := ""
+			if m.ContextWindow > 0 {
+				desc = fmt.Sprintf("%dk ctx", m.ContextWindow/1000)
+			}
+			items = append(items, paletteItem{name: full, desc: desc})
+		}
+	}
+	return items
+}
+
+// Commands that have sub-palettes
+var subPaletteCmds = map[string]bool{"model": true}
+
+// --- Key handling ---
+
+func (t *TUI) handleKey(data []byte) bool {
+	if t.palette.open {
+		return t.handlePaletteKey(data)
+	}
+
+	// Enter on sub-palette command
+	if (data[0] == '\r' || data[0] == '\n') && strings.HasPrefix(t.input.value, "/") {
+		parts := strings.Fields(t.input.value)
+		if len(parts) >= 1 {
+			cmd := strings.TrimPrefix(parts[0], "/")
+			if subPaletteCmds[cmd] && len(parts) < 2 {
+				// Incomplete — open sub-palette
+				t.palette.openRoot()
+				subItems := t.getSubItems(cmd)
+				t.palette.pushSub(cmd, subItems)
+				t.input.value = ""
+				return true
+			}
+		}
+	}
+
+	// Pass to input
+	changed := t.input.HandleKey(data)
+
+	// Open palette on /
+	if strings.HasPrefix(t.input.value, "/") {
+		t.palette.openRoot()
+		filter := strings.TrimPrefix(t.input.value, "/")
+		t.palette.setFilter(filter)
+	}
+
+	return changed
+}
+
+func (t *TUI) handlePaletteKey(data []byte) bool {
+	// Arrow keys
+	if len(data) >= 3 && data[0] == 27 && data[1] == '[' {
+		switch data[2] {
+		case 'A':
+			t.palette.moveUp()
+			return true
+		case 'B':
+			t.palette.moveDown()
+			return true
+		}
+	}
+
+	// Tab — autocomplete into input
+	if data[0] == '\t' {
+		sel, ok := t.palette.selected()
+		if !ok {
+			return false
+		}
+		if t.palette.depth() == 1 {
+			// Level 1: command name
+			t.input.value = "/" + sel.name + " "
+			t.palette.close()
+		} else {
+			// Level 2: autocomplete full command
+			parentCmd := t.palette.current().parentCmd
+			t.input.value = "/" + parentCmd + " " + sel.name
+			t.palette.close()
+		}
+		return true
+	}
+
+	// Enter — execute or drill into sub-palette
+	if data[0] == '\r' || data[0] == '\n' {
+		sel, ok := t.palette.selected()
+		if !ok {
+			return false
+		}
+		if t.palette.depth() == 1 {
+			// Level 1
+			if subPaletteCmds[sel.name] {
+				// Open sub-palette
+				t.input.value = ""
+				subItems := t.getSubItems(sel.name)
+				t.palette.pushSub(sel.name, subItems)
+				return true
+			}
+			// No sub-palette — execute directly
+			t.input.value = ""
+			t.palette.close()
+			if t.input.onSubmit != nil {
+				t.input.onSubmit("/" + sel.name)
+			}
+			return true
+		}
+		// Level 2 — execute with param
+		parentCmd := t.palette.current().parentCmd
+		t.input.value = ""
+		t.palette.close()
+		if t.input.onSubmit != nil {
+			t.input.onSubmit("/" + parentCmd + " " + sel.name)
+		}
+		return true
+	}
+
+	// Esc — go back or close
+	if data[0] == 27 && len(data) == 1 {
+		if t.palette.popLevel() {
+			t.input.value = "/"
+			t.palette.setFilter("")
+			return true
+		}
+		t.input.value = ""
+		t.palette.close()
+		return true
+	}
+
+	// Typing — update filter
+	changed := t.input.HandleKey(data)
+
+	// Check if still valid
+	if t.palette.depth() == 1 {
+		if !strings.HasPrefix(t.input.value, "/") {
+			t.palette.close()
+		} else {
+			filter := strings.TrimPrefix(t.input.value, "/")
+			t.palette.setFilter(filter)
+		}
+	} else {
+		// Level 2: filter is the raw input
+		t.palette.setFilter(t.input.value)
+	}
+
+	return changed
+}
+
+func (t *TUI) getSubItems(cmd string) []paletteItem {
+	switch cmd {
+	case "model":
+		return t.modelItems()
+	default:
+		return nil
+	}
+}
+
+// --- TUI lifecycle ---
 
 func New(a *agent.Agent, model string) *TUI {
 	term, err := NewTerminal()
@@ -44,7 +391,7 @@ func New(a *agent.Agent, model string) *TUI {
 		footer: NewFooter(),
 		events: make(chan types.Event, 4),
 	}
-	t.output.SetWrap(term.Width()-3, "   ") // wrap with 3-space continuation indent
+	t.output.SetWrap(term.Width()-3, "   ")
 	t.input = NewInput("Type a message...", term.Width(), t.submit)
 	if model != "" {
 		if sess, err := a.NewSession(".", model); err == nil {
@@ -59,7 +406,7 @@ func (t *TUI) Run(ctx context.Context) error {
 	defer t.term.Restore()
 	t.term.HideCursor()
 	defer t.term.ShowCursor()
-	t.term.Clear() // clear on startup — removes shell artifacts
+	t.term.Clear()
 
 	t.printBanner()
 	t.render()
@@ -90,129 +437,29 @@ func (t *TUI) render() {
 	lines = append(lines, t.input.Render(width)...)
 	lines = append(lines, "\033[90m"+strings.Repeat("─", width)+"\033[0m")
 
-	// Command palette below input — PI-style, max 5 visible
-	if t.cmdOpen && len(t.cmds) > 0 {
-		maxVisible := 5
-		total := len(t.cmds)
-		start := 0
-		end := total
-		if total > maxVisible {
-			// Scroll window around selection
-			start = t.cmdSel - maxVisible/2
-			if start < 0 { start = 0 }
-			end = start + maxVisible
-			if end > total { end = total; start = end - maxVisible }
-		}
-		for i := start; i < end; i++ {
-			cmd := t.cmds[i]
-			padded := cmd.name + strings.Repeat(" ", 16-len(cmd.name))
-			if i == t.cmdSel {
-				lines = append(lines, " \033[32m→ "+cmd.name+strings.Repeat(" ", 16-len(cmd.name))+"\033[0m\033[90m"+cmd.desc+"\033[0m")
-			} else {
-				lines = append(lines, "   "+padded+"\033[90m"+cmd.desc+"\033[0m")
-			}
-		}
-		if total > maxVisible {
-			lines = append(lines, fmt.Sprintf("   \033[90m(%d/%d)\033[0m", t.cmdSel+1, total))
-		}
+	// Palette
+	if pl := t.renderPalette(); len(pl) > 0 {
+		lines = append(lines, pl...)
 	}
+
 	if f := t.footer.Render(width); len(f) > 0 {
 		lines = append(lines, f...)
 	}
 	t.term.Clear()
 	t.term.WriteString("\033[?2026h")
 	for i, line := range lines {
-		if i > 0 { t.term.WriteString("\r\n") }
+		if i > 0 {
+			t.term.WriteString("\r\n")
+		}
 		t.term.WriteString(line)
 	}
 	t.term.WriteString("\033[?2026l")
 }
 
-type paletteCmd struct { name, desc string }
-
-var paletteCmds = []paletteCmd{
-	{"model", "Select model"},
-	{"thinking", "Set thinking level"},
-	{"connect", "Connect provider"},
-	{"disconnect", "Disconnect provider"},
-	{"clear", "Clear conversation"},
-	{"help", "Show commands"},
-	{"exit", "Exit harness"},
-}
-
-func (t *TUI) handleKey(data []byte) bool {
-	// Up/Down arrows when palette is open
-	if t.cmdOpen && len(data) >= 3 && data[0] == 27 && data[1] == '[' {
-		switch data[2] {
-		case 'A': // Up
-			t.cmdSel--
-			if t.cmdSel < 0 { t.cmdSel = len(t.cmds) - 1 }
-			return true
-		case 'B': // Down
-			t.cmdSel++
-			if t.cmdSel >= len(t.cmds) { t.cmdSel = 0 }
-			return true
-		}
-	}
-
-	// Tab when palette open — autocomplete into input
-	if t.cmdOpen && data[0] == '\t' && len(t.cmds) > 0 {
-		t.input.value = "/" + t.cmds[t.cmdSel].name + " "
-		t.cmdOpen = false
-		return true
-	}
-
-	// Enter when palette open — execute command directly
-	if t.cmdOpen && (data[0] == '\r' || data[0] == '\n') && len(t.cmds) > 0 {
-		cmd := t.cmds[t.cmdSel].name
-		t.input.value = ""
-		t.cmdOpen = false
-		if t.input.onSubmit != nil {
-			t.input.onSubmit("/" + cmd)
-		}
-		return true
-	}
-
-	// Esc when palette open — dismiss
-	if t.cmdOpen && data[0] == 27 {
-		t.input.value = ""
-		t.cmdOpen = false
-		return true
-	}
-
-	// Pass to input handler
-	changed := t.input.HandleKey(data)
-
-	// Check for / prefix to open palette
-	if strings.HasPrefix(t.input.value, "/") {
-		if !t.cmdOpen {
-			t.cmdOpen = true
-			t.cmdSel = 0
-		}
-		t.refreshCmds()
-	} else if t.cmdOpen {
-		t.cmdOpen = false
-		t.cmds = nil
-	}
-
-	return changed
-}
-
-func (t *TUI) refreshCmds() {
-	filter := strings.TrimPrefix(t.input.value, "/")
-	if filter == "" {
-		t.cmds = paletteCmds
+func (t *TUI) submit(text string) {
+	if text == "" {
 		return
 	}
-	t.cmds = nil
-	for _, c := range paletteCmds {
-		if strings.HasPrefix(c.name, filter) { t.cmds = append(t.cmds, c) }
-	}
-	if t.cmdSel >= len(t.cmds) { t.cmdSel = 0 }
-}
-
-func (t *TUI) submit(text string) {
-	if text == "" { return }
 	if strings.HasPrefix(text, "/") {
 		t.output.Add("\033[90m  /" + strings.TrimPrefix(text, "/") + "\033[0m")
 		return
@@ -271,7 +518,9 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 		t.output.Add(fmt.Sprintf("  %s %s %s", iconFor(e.ToolName), e.ToolName, trunc(e.ToolArgs, 40)))
 	case types.EventToolResult:
 		mark := "✓"
-		if e.IsError { mark = "✗" }
+		if e.IsError {
+			mark = "✗"
+		}
 		t.output.Add(fmt.Sprintf("  %s %s [%s]", mark, trunc(e.Output, 60), e.Duration.Round(1000000)))
 	case types.EventTokens:
 		t.footer.Set(BuildFooter(
@@ -303,16 +552,24 @@ func (t *TUI) printBanner() {
 
 func iconFor(name string) string {
 	switch strings.ToLower(name) {
-	case "bash": return "⚡"
-	case "read": return "📄"
-	case "write": return "✏️"
-	case "edit": return "🔧"
-	case "fetch", "webfetch": return "🔍"
-	default: return "🔧"
+	case "bash":
+		return "⚡"
+	case "read":
+		return "📄"
+	case "write":
+		return "✏️"
+	case "edit":
+		return "🔧"
+	case "fetch", "webfetch":
+		return "🔍"
+	default:
+		return "🔧"
 	}
 }
 
 func trunc(s string, max int) string {
-	if len(s) <= max { return s }
+	if len(s) <= max {
+		return s
+	}
 	return s[:max] + "…"
 }
