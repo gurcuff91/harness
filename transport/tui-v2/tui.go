@@ -669,15 +669,20 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 		t.output.Add("")
 		t.agentLineStarted = false
 	case types.EventToolStart:
-		t.output.Add(fmt.Sprintf("  %s %s", iconFor(e.ToolName), e.ToolName))
+		// Buffer — wait for EventToolCall to render complete line
+	case types.EventToolArgsDelta:
+		// Buffer — accumulated in ToolArgs at EventToolCall
 	case types.EventToolCall:
-		t.output.Add(fmt.Sprintf("  %s %s %s", iconFor(e.ToolName), e.ToolName, trunc(e.ToolArgs, 40)))
+		// Render complete tool call: Name(args) atomic
+		t.output.Add(" \033[33m" + e.ToolName + "(\033[0m\033[2m" + trunc(e.ToolArgs, 80) + "\033[0m\033[33m)\033[0m")
 	case types.EventToolResult:
-		mark := "✓"
 		if e.IsError {
-			mark = "✗"
+			t.output.Add("   \033[31m✗ " + trunc(e.Output, 60) + " [" + e.Duration.Round(1000000).String() + "]\033[0m")
+		} else {
+			result := summarizeToolResult(e.ToolName, e.Output)
+			t.output.Add("   \033[32m✓\033[0m\033[2m " + result + " [" + e.Duration.Round(1000000).String() + "]\033[0m")
 		}
-		t.output.Add(fmt.Sprintf("  %s %s [%s]", mark, trunc(e.Output, 60), e.Duration.Round(1000000)))
+		t.output.Add("")
 	case types.EventTokens:
 		t.footer.Set(BuildFooter(
 			e.Tokens.Input, int(e.Tokens.TotalOutput),
@@ -1157,20 +1162,34 @@ func (t *TUI) shutdown() {
 	}
 }
 
-func iconFor(name string) string {
-	switch strings.ToLower(name) {
+
+func summarizeToolResult(toolName, output string) string {
+	if output == "" {
+		return "done"
+	}
+	lines := strings.Count(output, "\n")
+	if lines > 0 {
+		lines++ // count last line without trailing newline
+	}
+	switch strings.ToLower(toolName) {
 	case "bash":
-		return "⚡"
+		if lines > 1 {
+			return fmt.Sprintf("%d lines", lines)
+		}
+		return trunc(strings.TrimSpace(output), 50)
 	case "read":
-		return "📄"
+		return fmt.Sprintf("%d lines", lines)
 	case "write":
-		return "✏️"
+		return fmt.Sprintf("%d lines written", lines)
 	case "edit":
-		return "🔧"
-	case "fetch", "webfetch":
-		return "🔍"
+		return trunc(strings.TrimSpace(output), 50)
+	case "fetch":
+		return fmt.Sprintf("%d lines", lines)
 	default:
-		return "🔧"
+		if lines > 3 {
+			return fmt.Sprintf("%d lines", lines)
+		}
+		return trunc(strings.TrimSpace(output), 50)
 	}
 }
 
