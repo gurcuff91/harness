@@ -24,6 +24,11 @@ type TUI struct {
 	streaming        bool
 	agentLineStarted bool
 	cancelFn         context.CancelFunc
+
+	// Command palette
+	cmds     []paletteCmd // available commands
+	cmdSel   int      // selected index
+	cmdOpen  bool     // palette visible
 }
 
 func New(a *agent.Agent, model string) *TUI {
@@ -64,7 +69,7 @@ func (t *TUI) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case data := <-t.term.Input():
-			if t.input.HandleKey(data) {
+			if t.handleKey(data) {
 				t.render()
 			}
 		case <-t.term.Resize():
@@ -84,6 +89,33 @@ func (t *TUI) render() {
 	lines = append(lines, "\033[90m"+strings.Repeat("─", width)+"\033[0m")
 	lines = append(lines, t.input.Render(width)...)
 	lines = append(lines, "\033[90m"+strings.Repeat("─", width)+"\033[0m")
+
+	// Command palette below input — PI-style, max 5 visible
+	if t.cmdOpen && len(t.cmds) > 0 {
+		maxVisible := 5
+		total := len(t.cmds)
+		start := 0
+		end := total
+		if total > maxVisible {
+			// Scroll window around selection
+			start = t.cmdSel - maxVisible/2
+			if start < 0 { start = 0 }
+			end = start + maxVisible
+			if end > total { end = total; start = end - maxVisible }
+		}
+		for i := start; i < end; i++ {
+			cmd := t.cmds[i]
+			padded := cmd.name + strings.Repeat(" ", 16-len(cmd.name))
+			if i == t.cmdSel {
+				lines = append(lines, " \033[32m→ "+cmd.name+strings.Repeat(" ", 16-len(cmd.name))+"\033[0m\033[90m"+cmd.desc+"\033[0m")
+			} else {
+				lines = append(lines, "   "+padded+"\033[90m"+cmd.desc+"\033[0m")
+			}
+		}
+		if total > maxVisible {
+			lines = append(lines, fmt.Sprintf("   \033[90m(%d/%d)\033[0m", t.cmdSel+1, total))
+		}
+	}
 	if f := t.footer.Render(width); len(f) > 0 {
 		lines = append(lines, f...)
 	}
@@ -94,6 +126,89 @@ func (t *TUI) render() {
 		t.term.WriteString(line)
 	}
 	t.term.WriteString("\033[?2026l")
+}
+
+type paletteCmd struct { name, desc string }
+
+var paletteCmds = []paletteCmd{
+	{"model", "Select model"},
+	{"thinking", "Set thinking level"},
+	{"connect", "Connect provider"},
+	{"disconnect", "Disconnect provider"},
+	{"clear", "Clear conversation"},
+	{"help", "Show commands"},
+	{"exit", "Exit harness"},
+}
+
+func (t *TUI) handleKey(data []byte) bool {
+	// Up/Down arrows when palette is open
+	if t.cmdOpen && len(data) >= 3 && data[0] == 27 && data[1] == '[' {
+		switch data[2] {
+		case 'A': // Up
+			t.cmdSel--
+			if t.cmdSel < 0 { t.cmdSel = len(t.cmds) - 1 }
+			return true
+		case 'B': // Down
+			t.cmdSel++
+			if t.cmdSel >= len(t.cmds) { t.cmdSel = 0 }
+			return true
+		}
+	}
+
+	// Tab when palette open — autocomplete into input
+	if t.cmdOpen && data[0] == '\t' && len(t.cmds) > 0 {
+		t.input.value = "/" + t.cmds[t.cmdSel].name + " "
+		t.cmdOpen = false
+		return true
+	}
+
+	// Enter when palette open — execute command directly
+	if t.cmdOpen && (data[0] == '\r' || data[0] == '\n') && len(t.cmds) > 0 {
+		cmd := t.cmds[t.cmdSel].name
+		t.input.value = ""
+		t.cmdOpen = false
+		if t.input.onSubmit != nil {
+			t.input.onSubmit("/" + cmd)
+		}
+		return true
+	}
+
+	// Esc when palette open — dismiss
+	if t.cmdOpen && data[0] == 27 {
+		t.input.value = ""
+		t.cmdOpen = false
+		return true
+	}
+
+	// Pass to input handler
+	changed := t.input.HandleKey(data)
+
+	// Check for / prefix to open palette
+	if strings.HasPrefix(t.input.value, "/") {
+		if !t.cmdOpen {
+			t.cmdOpen = true
+			t.cmdSel = 0
+		}
+		t.refreshCmds()
+	} else if t.cmdOpen {
+		t.cmdOpen = false
+		t.cmds = nil
+	}
+
+	return changed
+}
+
+func (t *TUI) refreshCmds() {
+	filter := strings.TrimPrefix(t.input.value, "/")
+	if filter == "" {
+		t.cmds = paletteCmds
+		return
+	}
+	t.cmds = nil
+	for _, c := range paletteCmds {
+		if strings.HasPrefix(c.name, filter) { t.cmds = append(t.cmds, c) }
+	}
+	if t.cmdSel >= len(t.cmds) { t.cmdSel = 0 }
 }
 
 func (t *TUI) submit(text string) {
