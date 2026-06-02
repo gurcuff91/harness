@@ -45,6 +45,13 @@ type TUI struct {
 	pendingArg    string // e.g. "anthropic"
 	pendingPrompt string // e.g. "Insert your API key"
 	pendingMasked bool   // mask input (for secrets)
+
+	// Spinner
+	spinnerActive bool
+	spinnerFrame  int
+	spinnerStart  time.Time
+	spinnerLabel  string
+	spinnerStop   chan struct{}
 }
 
 // --- Palette ---
@@ -588,6 +595,9 @@ func (t *TUI) render() {
 	t.output.SetWrap(width-3, "   ")
 	var lines []string
 	lines = append(lines, t.output.Lines()...)
+	if t.spinnerActive {
+		lines = append(lines, t.renderSpinner())
+	}
 	lines = append(lines, "\033[90m"+strings.Repeat("─", width)+"\033[0m")
 	lines = append(lines, t.input.Render(width)...)
 	lines = append(lines, "\033[90m"+strings.Repeat("─", width)+"\033[0m")
@@ -630,6 +640,7 @@ func (t *TUI) submit(text string) {
 	t.output.Add("")
 	t.streaming = true
 	t.agentLineStarted = false
+	t.startSpinner()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancelFn = cancel
 	go func() {
@@ -644,6 +655,7 @@ func (t *TUI) submit(text string) {
 func (t *TUI) handleAgentEvent(e types.Event) {
 	switch e.Type {
 	case types.EventStreamThinkingDelta:
+		t.stopSpinner()
 		if !t.agentLineStarted {
 			t.output.Add("   \033[2m" + e.Delta)
 			t.agentLineStarted = true
@@ -654,23 +666,36 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 		t.output.Add("")
 		t.agentLineStarted = false
 	case types.EventStreamTextDelta:
+		t.stopSpinner()
 		parts := strings.Split(e.Delta, "\n")
 		for i, part := range parts {
 			if i == 0 {
 				if !t.agentLineStarted {
+					if part == "" {
+						continue // skip empty first delta
+					}
 					t.output.Add(" \033[96m←\033[0m " + part)
 					t.agentLineStarted = true
 				} else {
 					t.output.AddStream(part)
 				}
-			} else if part != "" {
-				t.output.Add("   " + part)
+			} else {
+				if !t.agentLineStarted {
+					if part == "" {
+						continue
+					}
+					t.output.Add(" \033[96m←\033[0m " + part)
+					t.agentLineStarted = true
+				} else if part != "" {
+					t.output.Add("   " + part)
+				}
 			}
 		}
 	case types.EventStreamTextEnd:
 		t.output.Add("")
 		t.agentLineStarted = false
 	case types.EventToolStart:
+		t.stopSpinner()
 		// Buffer — wait for EventToolCall to render complete line
 	case types.EventToolArgsDelta:
 		// Buffer — accumulated in ToolArgs at EventToolCall
@@ -700,6 +725,9 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 			t.output.Add("   \033[32m✓\033[0m\033[2m " + result + " [" + dur + "]\033[0m")
 		}
 		t.output.Add("")
+		if t.streaming {
+			t.startSpinner() // waiting for next LLM response after tool
+		}
 	case types.EventTokens:
 		t.footer.Set(BuildFooter(
 			e.Tokens.Input, int(e.Tokens.TotalOutput),
@@ -708,9 +736,11 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 			t.model, t.thinkingLevel, llm.ModelSupportsThinking(t.model), t.isSubscription(),
 		))
 	case types.EventTurnEnd:
+		t.stopSpinner()
 		t.streaming = false
 		t.agentLineStarted = false
 	case types.EventError:
+		t.stopSpinner()
 		t.output.Add("  \033[31m✗ " + e.Output + "\033[0m")
 		t.streaming = false
 	}
@@ -1257,6 +1287,63 @@ func gitBranch(cwd string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// --- Spinner ---
+
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+var spinnerLabels = []string{
+	"Boostaffing", "Maskarizing", "Outworlding", "Khanifying",
+	"Emeraldizing", "Razoranging", "Guardianing", "Edenianating",
+	"Tactifying", "Perimetering", "Loyaltizing", "Kitanizing",
+	"Flawlessing", "Sentineling", "Kombatizing", "Vortexing",
+}
+var spinnerLabelIdx int
+
+func nextSpinnerLabel() string {
+	l := spinnerLabels[spinnerLabelIdx%len(spinnerLabels)]
+	spinnerLabelIdx++
+	return l
+}
+
+func (t *TUI) startSpinner() {
+	if t.spinnerActive {
+		return
+	}
+	t.spinnerActive = true
+	t.spinnerFrame = 0
+	t.spinnerStart = time.Now()
+	t.spinnerLabel = nextSpinnerLabel()
+	t.spinnerStop = make(chan struct{})
+
+	go func() {
+		ticker := time.NewTicker(80 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-t.spinnerStop:
+				return
+			case <-ticker.C:
+				t.spinnerFrame++
+				t.render()
+			}
+		}
+	}()
+}
+
+func (t *TUI) stopSpinner() {
+	if !t.spinnerActive {
+		return
+	}
+	close(t.spinnerStop)
+	t.spinnerActive = false
+}
+
+func (t *TUI) renderSpinner() string {
+	frame := spinnerFrames[t.spinnerFrame%len(spinnerFrames)]
+	elapsed := time.Since(t.spinnerStart).Round(time.Millisecond)
+	return fmt.Sprintf(" \033[96m%s\033[0m \033[2m%s\033[0m \033[90m[%s]\033[0m", frame, t.spinnerLabel, elapsed)
 }
 
 func formatDuration(d time.Duration) string {

@@ -71,7 +71,6 @@ func (o *Output) findBreak(s string, maxVis int) int {
 // AddStream appends text with word-wrap at the configured width.
 func (o *Output) AddStream(text string) {
 	if o.width <= 0 {
-		// No wrapping configured — just append
 		if len(o.lines) == 0 {
 			o.lines = append(o.lines, text)
 		} else {
@@ -79,35 +78,51 @@ func (o *Output) AddStream(text string) {
 		}
 		return
 	}
-	// Word-wrap at configured width
 	for len(text) > 0 {
 		if len(o.lines) == 0 {
 			o.lines = append(o.lines, "")
 		}
 		last := &o.lines[len(o.lines)-1]
 		curLen := visibleLen(*last)
+
+		// Line already at width — need to wrap
 		if curLen >= o.width {
-			o.lines = append(o.lines, o.indent)
-			last = &o.lines[len(o.lines)-1]
-			curLen = visibleLen(*last)
+			// Look for last space in current line to re-break cleanly
+			raw := *last
+			if idx := lastVisibleSpace(raw); idx > len(o.indent) {
+				// Move text after last space to new line
+				*last = raw[:idx]
+				o.lines = append(o.lines, o.indent+raw[idx+1:])
+			} else {
+				o.lines = append(o.lines, o.indent)
+			}
+			continue
 		}
+
 		remaining := o.width - curLen
-		if remaining <= 0 {
-			o.lines = append(o.lines, o.indent+text)
-			return
-		}
 		take := len(text)
 		if take > remaining {
 			take = remaining
-			// Don't break mid-word — find last space within remaining
-			if idx := strings.LastIndexByte(text[:take], ' '); idx > 0 {
-				take = idx + 1
-			}
-			// If no space found, break at remaining (word too long)
 		}
 		*last += text[:take]
 		text = text[take:]
 	}
+}
+
+// lastVisibleSpace finds the byte index of the last space in s,
+// ignoring spaces inside ANSI escape sequences.
+func lastVisibleSpace(s string) int {
+	last := -1
+	esc := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\033' { esc = true; continue }
+		if esc {
+			if (s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z') { esc = false }
+			continue
+		}
+		if s[i] == ' ' { last = i }
+	}
+	return last
 }
 
 func visibleLen(s string) int {
