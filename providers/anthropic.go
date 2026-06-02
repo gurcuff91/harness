@@ -35,6 +35,9 @@ func NewAnthropic() *Anthropic {
 }
 
 func (a *Anthropic) Name() string   { return "anthropic" }
+func (a *Anthropic) ActivationSource() ActivationSource {
+	return activationSourceAPIKey(anthropicAPIKeyEnv, anthropicAPIKeyCred)
+}
 func (a *Anthropic) IsActive() bool {
 	_, err := a.ResolveCredentials()
 	return err == nil
@@ -56,7 +59,7 @@ func (a *Anthropic) SaveCredentials(creds types.Credentials) error {
 	a.mu.Lock()
 	a.cache = make(map[string]types.ModelMeta)
 	a.mu.Unlock()
-	a.FetchModels()
+	_, _ = a.FetchModels()
 	return nil
 }
 
@@ -87,15 +90,18 @@ func (a *Anthropic) ModelMeta(modelID string) *types.ModelMeta {
 	return nil
 }
 
-func (a *Anthropic) FetchModels() []types.ModelMeta {
-	metas := fetchAnthropicModels(a.apiKey)
+func (a *Anthropic) FetchModels() ([]types.ModelMeta, error) {
+	metas, err := fetchAnthropicModels(a.apiKey)
+	if err != nil {
+		return nil, err
+	}
 	a.mu.Lock()
 	a.cache = make(map[string]types.ModelMeta, len(metas))
 	for _, m := range metas {
 		a.cache[m.ID] = m
 	}
 	a.mu.Unlock()
-	return metas
+	return metas, nil
 }
 
 func (a *Anthropic) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
@@ -118,7 +124,7 @@ func (a *Anthropic) CompleteStream(ctx context.Context, req *types.Request, cb t
 
 const anthropicAPI = "https://api.anthropic.com/v1/messages"
 
-func fetchAnthropicModels(tokenOrKey string) []types.ModelMeta {
+func fetchAnthropicModels(tokenOrKey string) ([]types.ModelMeta, error) {
 	req, _ := http.NewRequest("GET", "https://api.anthropic.com/v1/models", nil)
 	req.Header.Set("x-api-key", tokenOrKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
@@ -133,14 +139,18 @@ func fetchAnthropicModels(tokenOrKey string) []types.ModelMeta {
 		req.Header.Set("x-app", "cli")
 		resp, err = http.DefaultClient.Do(req)
 		if err != nil {
-			return nil
+			return nil, fmt.Errorf("provider unreachable")
 		}
 	}
-	if resp == nil || resp.StatusCode != http.StatusOK {
+	if resp == nil || resp.StatusCode == 401 || resp.StatusCode == 403 {
 		if resp != nil {
 			resp.Body.Close()
 		}
-		return nil
+		return nil, fmt.Errorf("invalid API key")
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("API error (status %d)", resp.StatusCode)
 	}
 	defer resp.Body.Close()
 
@@ -155,7 +165,7 @@ func fetchAnthropicModels(tokenOrKey string) []types.ModelMeta {
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil
+		return nil, fmt.Errorf("failed to parse models response")
 	}
 
 	var metas []types.ModelMeta
@@ -196,5 +206,5 @@ func fetchAnthropicModels(tokenOrKey string) []types.ModelMeta {
 		llm.ApplyRegistryPricing(&meta)
 		metas = append(metas, meta)
 	}
-	return metas
+	return metas, nil
 }

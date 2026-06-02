@@ -76,6 +76,19 @@ func (t *Terminal) Restore() {
 	term.Restore(int(t.stdin.Fd()), t.oldState)
 }
 
+// SuspendRaw temporarily exits raw mode for a subprocess.
+// Does NOT close quit or stop goroutines.
+func (t *Terminal) SuspendRaw() {
+	term.Restore(int(t.stdin.Fd()), t.oldState)
+}
+
+// ResumeRaw re-enters raw mode after SuspendRaw.
+func (t *Terminal) ResumeRaw() {
+	if st, err := term.MakeRaw(int(t.stdin.Fd())); err == nil {
+		t.oldState = st
+	}
+}
+
 // ShowCursor enables the terminal cursor. HideCursor disables it.
 func (t *Terminal) ShowCursor() { t.WriteString("\033[?25h") }
 func (t *Terminal) HideCursor() { t.WriteString("\033[?25l") }

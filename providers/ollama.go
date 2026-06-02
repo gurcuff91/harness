@@ -48,6 +48,12 @@ func NewOllama() *Ollama {
 }
 
 func (o *Ollama) Name() string   { return "ollama" }
+func (o *Ollama) ActivationSource() ActivationSource {
+	if OllamaAvailable() {
+		return ActivationAuto
+	}
+	return ActivationNone
+}
 func (o *Ollama) IsActive() bool { return OllamaAvailable() }
 
 func (o *Ollama) CredentialType() types.CredentialType { return types.CredTypeNone }
@@ -82,15 +88,18 @@ func (o *Ollama) ModelMeta(modelID string) *types.ModelMeta {
 	return nil
 }
 
-func (o *Ollama) FetchModels() []types.ModelMeta {
+func (o *Ollama) FetchModels() ([]types.ModelMeta, error) {
 	metas := fetchOllamaModels(o.baseURL)
+	if metas == nil {
+		return nil, fmt.Errorf("ollama unreachable")
+	}
 	o.mu.Lock()
 	o.cache = make(map[string]types.ModelMeta, len(metas))
 	for _, m := range metas {
 		o.cache[m.ID] = m
 	}
 	o.mu.Unlock()
-	return metas
+	return metas, nil
 }
 
 func (o *Ollama) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {

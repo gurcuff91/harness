@@ -28,7 +28,8 @@ type Provider interface {
 	// FetchModels refreshes the internal model cache from the provider API.
 	// Each model is fully enriched: capabilities from the provider API
 	// and pricing from llm-registry.
-	FetchModels() []types.ModelMeta
+	// Returns error if credentials are invalid or provider is unreachable.
+	FetchModels() ([]types.ModelMeta, error)
 	// ModelMeta returns capability and pricing metadata for a specific model ID.
 	// Checks the provider's cache first; falls back to the registry and name inference.
 	// Returns nil if nothing is known about the model.
@@ -49,4 +50,22 @@ type Provider interface {
 
 	// ClearCredentials removes all stored credentials and deactivates the provider.
 	ClearCredentials() error
+
+	// ActivationSource returns how this provider was activated.
+	// Used by the TUI to determine if a provider can be connected/disconnected.
+	ActivationSource() ActivationSource
 }
+
+// ActivationSource describes how a provider got its credentials.
+type ActivationSource string
+
+const (
+	// ActivationNone — provider is not active.
+	ActivationNone ActivationSource = "none"
+	// ActivationCredentials — activated via credentials.json (manageable by TUI).
+	ActivationCredentials ActivationSource = "credentials"
+	// ActivationEnvVar — activated via environment variable (de-facto, not manageable).
+	ActivationEnvVar ActivationSource = "envvar"
+	// ActivationAuto — auto-detected (e.g. ollama running locally, not manageable).
+	ActivationAuto ActivationSource = "auto"
+)

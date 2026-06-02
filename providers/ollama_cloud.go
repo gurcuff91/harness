@@ -53,6 +53,9 @@ func NewOllamaCloud() *OllamaCloud {
 }
 
 func (o *OllamaCloud) Name() string   { return "ollama-cloud" }
+func (o *OllamaCloud) ActivationSource() ActivationSource {
+	return activationSourceAPIKey(ollamaCloudAPIKeyEnv, ollamaCloudAPIKeyCred)
+}
 func (o *OllamaCloud) IsActive() bool {
 	_, err := o.ResolveCredentials()
 	return err == nil
@@ -77,7 +80,7 @@ func (o *OllamaCloud) SaveCredentials(creds types.Credentials) error {
 	o.mu.Lock()
 	o.cache = make(map[string]types.ModelMeta)
 	o.mu.Unlock()
-	o.FetchModels()
+	_, _ = o.FetchModels()
 	return nil
 }
 
@@ -108,15 +111,20 @@ func (o *OllamaCloud) ModelMeta(modelID string) *types.ModelMeta {
 	return nil
 }
 
-func (o *OllamaCloud) FetchModels() []types.ModelMeta {
+func (o *OllamaCloud) FetchModels() ([]types.ModelMeta, error) {
+	// Validate API key first — /models is public on ollama.com, doesn't require auth
+	if !o.validateKey() {
+		return nil, fmt.Errorf("invalid API key")
+	}
 	req, _ := http.NewRequest("GET", o.baseURL+"/models", nil)
 	req.Header.Set("Authorization", "Bearer "+o.apiKey)
 	resp, err := o.client.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		if resp != nil {
-			resp.Body.Close()
-		}
-		return nil
+	if err != nil {
+		return nil, fmt.Errorf("provider unreachable")
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("API error (status %d)", resp.StatusCode)
 	}
 	defer resp.Body.Close()
 
@@ -126,7 +134,7 @@ func (o *OllamaCloud) FetchModels() []types.ModelMeta {
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
-		return nil
+		return nil, fmt.Errorf("failed to parse models response")
 	}
 
 	o.mu.Lock()
@@ -146,7 +154,22 @@ func (o *OllamaCloud) FetchModels() []types.ModelMeta {
 		o.cache[item.ID] = meta
 	}
 	o.mu.Unlock()
-	return o.Models()
+	return o.Models(), nil
+}
+
+// validateKey checks the API key by hitting an auth-required endpoint.
+func (o *OllamaCloud) validateKey() bool {
+	body := strings.NewReader(`{"model":"gemma3:4b","messages":[{"role":"user","content":"hi"}],"max_tokens":1}`)
+	req, _ := http.NewRequest("POST", o.baseURL+"/chat/completions", body)
+	req.Header.Set("Authorization", "Bearer "+o.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := o.client.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	// 401/403 = invalid key; anything else (200, 400, 429) = key is valid
+	return resp.StatusCode != 401 && resp.StatusCode != 403
 }
 
 func (o *OllamaCloud) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {

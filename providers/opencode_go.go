@@ -35,6 +35,9 @@ func NewOpenCodeGo() *OpenCodeGo {
 }
 
 func (o *OpenCodeGo) Name() string   { return "opencode-go" }
+func (o *OpenCodeGo) ActivationSource() ActivationSource {
+	return activationSourceAPIKey(openCodeGoAPIKeyEnv, openCodeGoAPIKeyCred)
+}
 func (o *OpenCodeGo) IsActive() bool {
 	_, err := o.ResolveCredentials()
 	return err == nil
@@ -59,7 +62,7 @@ func (o *OpenCodeGo) SaveCredentials(creds types.Credentials) error {
 	o.mu.Lock()
 	o.cache = make(map[string]types.ModelMeta)
 	o.mu.Unlock()
-	o.FetchModels()
+	_, _ = o.FetchModels()
 	return nil
 }
 
@@ -90,15 +93,18 @@ func (o *OpenCodeGo) ModelMeta(modelID string) *types.ModelMeta {
 	return nil
 }
 
-func (o *OpenCodeGo) FetchModels() []types.ModelMeta {
-	metas := fetchOpenCodeGoModels(o.apiKey)
+func (o *OpenCodeGo) FetchModels() ([]types.ModelMeta, error) {
+	metas, err := fetchOpenCodeGoModels(o.apiKey)
+	if err != nil {
+		return nil, err
+	}
 	o.mu.Lock()
 	o.cache = make(map[string]types.ModelMeta, len(metas))
 	for _, m := range metas {
 		o.cache[m.ID] = m
 	}
 	o.mu.Unlock()
-	return metas
+	return metas, nil
 }
 
 func (o *OpenCodeGo) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
@@ -108,19 +114,22 @@ func (o *OpenCodeGo) CompleteStream(ctx context.Context, req *types.Request, cb 
 
 
 
-func fetchOpenCodeGoModels(apiKey string) []types.ModelMeta {
+func fetchOpenCodeGoModels(apiKey string) ([]types.ModelMeta, error) {
 	req, _ := http.NewRequest("GET", openCodeGoURL+"/models", nil)
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		if resp != nil {
-			resp.Body.Close()
-		}
-		return nil
+	if err != nil {
+		return nil, fmt.Errorf("provider unreachable")
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		return nil, fmt.Errorf("invalid API key")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API error (status %d)", resp.StatusCode)
+	}
 
 	var result struct {
 		Data []struct {
@@ -128,7 +137,7 @@ func fetchOpenCodeGoModels(apiKey string) []types.ModelMeta {
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil
+		return nil, fmt.Errorf("failed to parse models response")
 	}
 
 	metas := make([]types.ModelMeta, 0, len(result.Data))
@@ -141,5 +150,5 @@ func fetchOpenCodeGoModels(apiKey string) []types.ModelMeta {
 		}
 		metas = append(metas, llm.EnrichMeta(meta))
 	}
-	return metas
+	return metas, nil
 }

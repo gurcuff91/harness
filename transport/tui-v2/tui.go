@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/gurcuff91/harness/agent"
@@ -36,6 +37,12 @@ type TUI struct {
 	// Command palette
 	palette   palette
 	paramHint string // shown when param-required cmd is missing its param
+
+	// Pending input: command waiting for user input (e.g. API key)
+	pendingCmd    string // e.g. "connect"
+	pendingArg    string // e.g. "anthropic"
+	pendingPrompt string // e.g. "Insert your API key"
+	pendingMasked bool   // mask input (for secrets)
 }
 
 // --- Palette ---
@@ -236,7 +243,7 @@ func (t *TUI) modelItems() []paletteItem {
 			continue
 		}
 		if len(p.Models()) == 0 {
-			p.FetchModels()
+			_, _ = p.FetchModels()
 		}
 		for _, m := range p.Models() {
 			full := p.Name() + "/" + m.ID
@@ -259,6 +266,11 @@ var paramRequiredCmds = map[string]string{"rename": "name"}
 // --- Key handling ---
 
 func (t *TUI) handleKey(data []byte) bool {
+	// Pending input mode: waiting for user to type a value (e.g. API key)
+	if t.pendingCmd != "" {
+		return t.handlePendingKey(data)
+	}
+
 	// Param hint mode: palette is open just for the hint, pass keys to input
 	if t.paramHint != "" {
 		if data[0] == 27 && len(data) == 1 {
@@ -453,11 +465,18 @@ func (t *TUI) thinkingItems() []paletteItem {
 	}
 }
 
+// isProviderManageable returns true if the provider can be connected/disconnected
+// via the TUI. Only credential-activated providers are manageable.
+func isProviderManageable(p providers.Provider) bool {
+	src := p.ActivationSource()
+	return src == providers.ActivationNone || src == providers.ActivationCredentials
+}
+
 func (t *TUI) connectItems() []paletteItem {
 	providers.EnsureRegistry()
 	var items []paletteItem
 	for _, p := range providers.All {
-		if !p.IsActive() {
+		if !p.IsActive() && isProviderManageable(p) {
 			status := "inactive"
 			switch p.CredentialType() {
 			case types.CredTypeAPIKey:
@@ -484,9 +503,9 @@ func (t *TUI) disconnectItems() []paletteItem {
 	providers.EnsureRegistry()
 	var items []paletteItem
 	for _, p := range providers.All {
-		if p.IsActive() {
+		if p.IsActive() && isProviderManageable(p) {
 			if len(p.Models()) == 0 {
-				p.FetchModels()
+					_, _ = p.FetchModels()
 			}
 			n := len(p.Models())
 			desc := fmt.Sprintf("%d models", n)
@@ -523,7 +542,7 @@ func New(a *agent.Agent, model string) *TUI {
 		t.shutdown()
 	}
 	if model != "" {
-		if sess, err := a.NewSession(".", model); err == nil {
+		if sess, err := a.NewSession(t.sessionCwd, model); err == nil {
 			t.session = sess
 			t.session.Subscribe(func(e types.Event) { t.events <- e })
 		}
@@ -678,6 +697,19 @@ func (t *TUI) printBanner() {
 	t.output.Add("   \033[96m╠═╣╠═╣╠╦╝║║║║╣ ╚═╗╚═╗\033[0m")
 	t.output.Add("   \033[96m╩ ╩╩ ╩╩╚═╝╚╝╚═╝╚═╝╚═╝\033[0m  \033[2mv0.6.0\033[0m")
 	t.output.Add("")
+	// Check for active providers
+	providers.EnsureRegistry()
+	hasActive := false
+	for _, p := range providers.All {
+		if p.IsActive() {
+			hasActive = true
+			break
+		}
+	}
+	if !hasActive {
+		t.output.Add("   \033[33m⚠ No active providers. Use /connect to add one.\033[0m")
+		t.output.Add("")
+	}
 }
 
 // --- Command execution ---
@@ -750,15 +782,33 @@ func (t *TUI) execCommand(text string) {
 		if arg == "" {
 			msg = "\033[33m<provider> required\033[0m"
 		} else {
-			msg = "\033[2mConnecting: " + arg + "\033[0m"
-			// TODO: provider connect flow
+			// Find provider and check credential type
+			providers.EnsureRegistry()
+			var target providers.Provider
+			for _, p := range providers.All {
+				if p.Name() == arg {
+					target = p
+					break
+				}
+			}
+			if target == nil {
+				msg = "\033[31mProvider not found: " + arg + "\033[0m"
+			} else if target.CredentialType() == types.CredTypeAPIKey {
+				t.startPending("connect", arg, "Enter API key:", true)
+				return
+			} else if target.CredentialType() == types.CredTypeOAuth {
+				t.execConnectOAuth(arg, target)
+				return
+			} else {
+				msg = "\033[33mProvider requires no credentials\033[0m"
+			}
 		}
 	case "disconnect":
 		if arg == "" {
 			msg = "\033[33m<provider> required\033[0m"
 		} else {
-			msg = "\033[2mDisconnected: " + arg + "\033[0m"
-			// TODO: provider disconnect flow
+			t.execDisconnect(arg)
+			return
 		}
 	default:
 		msg = "\033[33mUnknown command: /" + cmd + "\033[0m"
@@ -784,6 +834,244 @@ func (t *TUI) renderSessionInfo() string {
 		name = "new session"
 	}
 	return " \033[90m" + cwd + " \033[2m•\033[0m \033[90m" + name + "\033[0m"
+}
+
+// --- Pending input ---
+
+func (t *TUI) startPending(cmd, arg, prompt string, masked bool) {
+	t.pendingCmd = cmd
+	t.pendingArg = arg
+	t.pendingPrompt = prompt
+	t.pendingMasked = masked
+	t.input.value = ""
+	t.input.placeholder = prompt
+	t.output.Add("   \033[2m" + prompt + "\033[0m")
+}
+
+func (t *TUI) handlePendingKey(data []byte) bool {
+	// Esc — cancel pending
+	if data[0] == 27 && len(data) == 1 {
+		t.output.Add("   \033[90mcancelled\033[0m")
+		t.output.Add("")
+		t.clearPending()
+		return true
+	}
+
+	// Enter — submit pending value
+	if data[0] == '\r' || data[0] == '\n' {
+		val := strings.TrimSpace(t.input.value)
+		if val == "" {
+			return true // ignore empty
+		}
+		// Show masked or truncated value
+		if t.pendingMasked {
+			t.output.Add("   \033[90m" + maskValue(val) + "\033[0m")
+		} else {
+			t.output.Add("   \033[90m" + val + "\033[0m")
+		}
+		// Execute
+		t.execPending(val)
+		t.clearPending()
+		return true
+	}
+
+	// Pass to input
+	return t.input.HandleKey(data)
+}
+
+func (t *TUI) execPending(val string) {
+	switch t.pendingCmd {
+	case "connect":
+		t.execConnect(t.pendingArg, val)
+	}
+	t.output.Add("")
+}
+
+func (t *TUI) clearPending() {
+	t.pendingCmd = ""
+	t.pendingArg = ""
+	t.pendingPrompt = ""
+	t.pendingMasked = false
+	t.input.value = ""
+	t.input.placeholder = "Type a message..."
+}
+
+func maskValue(s string) string {
+	if len(s) <= 5 {
+		return strings.Repeat("*", len(s))
+	}
+	return s[:5] + strings.Repeat("*", min(len(s)-5, 20))
+}
+
+// --- Provider connect ---
+
+func (t *TUI) execConnect(providerName, apiKey string) {
+	providers.EnsureRegistry()
+	var target providers.Provider
+	for _, p := range providers.All {
+		if p.Name() == providerName {
+			target = p
+			break
+		}
+	}
+	if target == nil {
+		t.output.Add("   \033[31mProvider not found: " + providerName + "\033[0m")
+		return
+	}
+	// Save credentials and fetch models to validate the key
+	creds := types.Credentials{Type: types.CredTypeAPIKey, APIKey: apiKey}
+	if err := target.SaveCredentials(creds); err != nil {
+		t.output.Add("   \033[31mFailed to save credentials: " + err.Error() + "\033[0m")
+		return
+	}
+	models, err := target.FetchModels()
+	if err != nil {
+		_ = target.ClearCredentials()
+		t.output.Add("   \033[31m" + err.Error() + "\033[0m")
+		return
+	}
+	t.output.Add(fmt.Sprintf("   \033[32mProvider %s connected (%d models)\033[0m", providerName, len(models)))
+	t.autoSelectModel(providerName, models)
+}
+
+// autoSelectModel picks the first model from the provider and creates a session if needed.
+func (t *TUI) autoSelectModel(providerName string, models []types.ModelMeta) {
+	if t.session != nil && t.model != "" {
+		return // already have a model
+	}
+	if len(models) == 0 {
+		return
+	}
+	fullModel := providerName + "/" + models[0].ID
+	_ = config.GetSettingsManager().SetActiveModel(fullModel)
+	t.model = fullModel
+	if sess, err := t.agent.NewSession(t.sessionCwd, fullModel); err == nil {
+		t.session = sess
+		t.session.Subscribe(func(e types.Event) { t.events <- e })
+	}
+	t.output.Add("   \033[2mModel: " + fullModel + "\033[0m")
+}
+
+func (t *TUI) execDisconnect(providerName string) {
+	providers.EnsureRegistry()
+	var target providers.Provider
+	for _, p := range providers.All {
+		if p.Name() == providerName {
+			target = p
+			break
+		}
+	}
+	if target == nil {
+		t.output.Add("   \033[31mProvider not found: " + providerName + "\033[0m")
+		t.output.Add("")
+		return
+	}
+	if !target.IsActive() {
+		t.output.Add("   \033[33mProvider " + providerName + " is not connected\033[0m")
+		t.output.Add("")
+		return
+	}
+
+	// Clear credentials
+	if err := target.ClearCredentials(); err != nil {
+		t.output.Add("   \033[31mFailed to disconnect: " + err.Error() + "\033[0m")
+		t.output.Add("")
+		return
+	}
+
+	t.output.Add(fmt.Sprintf("   \033[32mProvider %s disconnected\033[0m", providerName))
+
+	// Check if active model was from this provider
+	sm := config.GetSettingsManager()
+	activeModel := sm.ActiveModel()
+	if strings.HasPrefix(activeModel, providerName+"/") {
+		// Find another model from a connected provider
+		newModel := ""
+		for _, p := range providers.All {
+			if p.IsActive() && len(p.Models()) > 0 {
+				newModel = p.Name() + "/" + p.Models()[0].ID
+				break
+			}
+		}
+		if newModel != "" {
+			_ = sm.SetActiveModel(newModel)
+			t.model = newModel
+			t.output.Add("   \033[2mSwitched to: " + newModel + "\033[0m")
+		} else {
+			_ = sm.SetActiveModel("")
+			t.model = ""
+			t.output.Add("   \033[33mNo active providers. Use /connect to add one.\033[0m")
+		}
+	}
+	t.output.Add("")
+}
+
+func (t *TUI) execConnectOAuth(providerName string, target providers.Provider) {
+	t.output.Add("   \033[2mStarting OAuth authentication...\033[0m")
+	t.render()
+
+	// Already connected? (credentials.json has tokens)
+	if target.IsActive() {
+		models, _ := target.FetchModels()
+		t.output.Add(fmt.Sprintf("   \033[32mProvider %s already connected (%d models)\033[0m", providerName, len(models)))
+		t.autoSelectModel(providerName, models)
+		t.output.Add("")
+		return
+	}
+
+	// Try importing from keychain (Claude already authed)
+	if tokens := providers.ReadClaudeFromKeychain(); tokens != nil {
+		if err := target.SaveCredentials(*tokens); err == nil {
+			models, _ := target.FetchModels()
+			t.output.Add(fmt.Sprintf("   \033[32mProvider %s connected (%d models)\033[0m", providerName, len(models)))
+			t.autoSelectModel(providerName, models)
+			t.output.Add("")
+			return
+		}
+	}
+
+	// Need to run claude auth login
+	t.output.Add("   \033[2mRunning claude auth login...\033[0m")
+	t.render()
+
+	// Temporarily suspend raw mode for claude auth login
+	t.term.SuspendRaw()
+	t.term.ShowCursor()
+
+	cmd := exec.Command("claude", "auth", "login")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	runErr := cmd.Run()
+
+	// Re-enter raw mode
+	exec.Command("stty", "sane").Run()
+	t.term.ResumeRaw()
+	t.term.HideCursor()
+
+	if runErr != nil {
+		t.output.Add("   \033[31mOAuth login failed: " + runErr.Error() + "\033[0m")
+		t.output.Add("   \033[90mInstall: npm install -g @anthropic-ai/claude-code\033[0m")
+		t.output.Add("")
+		return
+	}
+
+	// Import tokens from keychain and save to credentials
+	tokens := providers.ReadClaudeFromKeychain()
+	if tokens == nil {
+		t.output.Add("   \033[31mLogin completed but couldn't import tokens from keychain\033[0m")
+		t.output.Add("")
+		return
+	}
+	if err := target.SaveCredentials(*tokens); err != nil {
+		t.output.Add("   \033[31mFailed to save tokens: " + err.Error() + "\033[0m")
+		t.output.Add("")
+		return
+	}
+	models, _ := target.FetchModels()
+	t.output.Add(fmt.Sprintf("   \033[32mProvider %s connected (%d models)\033[0m", providerName, len(models)))
+	t.autoSelectModel(providerName, models)
+	t.output.Add("")
 }
 
 func (t *TUI) shutdown() {

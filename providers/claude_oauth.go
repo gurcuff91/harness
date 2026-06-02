@@ -62,6 +62,12 @@ func NewClaudeOAuth() (*ClaudeOAuth, error) {
 
 func (c *ClaudeOAuth) Name() string { return "claude-oauth" }
 
+func (c *ClaudeOAuth) ActivationSource() ActivationSource {
+	if _, err := c.ResolveCredentials(); err == nil {
+		return ActivationCredentials
+	}
+	return ActivationNone
+}
 func (c *ClaudeOAuth) IsActive() bool {
 	_, err := c.ResolveCredentials()
 	return err == nil
@@ -89,7 +95,7 @@ func (c *ClaudeOAuth) ResolveCredentials() (types.Credentials, error) {
 }
 
 // loadCredentialsFromSources populates tokens.creds from:
-// cache → credentials.json → keychain (bootstrap, persists on first load).
+// memory cache → credentials.json. Keychain is only read during /connect.
 func (c *ClaudeOAuth) loadCredentialsFromSources() error {
 	if c.tokens.creds != nil && c.tokens.creds.AccessToken != "" {
 		return nil // already cached
@@ -106,12 +112,6 @@ func (c *ClaudeOAuth) loadCredentialsFromSources() error {
 		c.tokens.creds = &creds
 		return nil
 	}
-	// Keychain bootstrap — import and persist on first use
-	if t := readClaudeFromKeychain(); t != nil {
-		c.tokens.creds = t
-		persistOAuthCreds(t)
-		return nil
-	}
 	return fmt.Errorf("claude-oauth: no credentials found")
 }
 
@@ -125,7 +125,7 @@ func (c *ClaudeOAuth) SaveCredentials(creds types.Credentials) error {
 	}
 	c.tokens.creds = &creds
 	persistOAuthCreds(&creds)
-	c.FetchModels()
+	_, _ = c.FetchModels()
 	return nil
 }
 
@@ -159,20 +159,22 @@ func (c *ClaudeOAuth) ModelMeta(modelID string) *types.ModelMeta {
 	return nil
 }
 
-func (c *ClaudeOAuth) FetchModels() []types.ModelMeta {
-	// Use the existing token — no new tokenManager needed
+func (c *ClaudeOAuth) FetchModels() ([]types.ModelMeta, error) {
 	tok, err := c.tokens.getValidToken()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("oauth token invalid: %w", err)
 	}
-	metas := fetchAnthropicModels(tok)
+	metas, err := fetchAnthropicModels(tok)
+	if err != nil {
+		return nil, err
+	}
 	c.mu.Lock()
 	c.cache = make(map[string]types.ModelMeta, len(metas))
 	for _, m := range metas {
 		c.cache[m.ID] = m
 	}
 	c.mu.Unlock()
-	return metas
+	return metas, nil
 }
 
 // ── Streaming ────────────────────────────────────────────────────────────
@@ -618,6 +620,12 @@ func resetTerminal() {
 }
 
 // ── Keychain readers (macOS) ─────────────────────────────────────────────
+
+// ReadClaudeFromKeychain reads OAuth tokens from macOS keychain.
+// Used by /connect to import tokens on demand.
+func ReadClaudeFromKeychain() *types.Credentials {
+	return readClaudeFromKeychain()
+}
 
 func readClaudeFromKeychain() *types.Credentials {
 	if t := readKeychainItem("Claude Code-credentials"); t != nil {

@@ -66,7 +66,7 @@ func Resolve(fullModel string) (Provider, string, error) {
 
 	// 3. Lazy fetch if cache is empty
 	if len(p.Models()) == 0 {
-		p.FetchModels()
+		_, _ = p.FetchModels()
 	}
 
 	// 4. Default model or validate
@@ -89,7 +89,7 @@ func RefreshModels() {
 	EnsureRegistry()
 	for _, p := range All {
 		if p.IsActive() {
-			p.FetchModels()
+			_, _ = p.FetchModels()
 		}
 	}
 }
@@ -99,7 +99,7 @@ func RefreshProviderModels(providerName string) {
 	EnsureRegistry()
 	for _, p := range All {
 		if p.Name() == providerName && p.IsActive() {
-			p.FetchModels()
+			_, _ = p.FetchModels()
 			return
 		}
 	}

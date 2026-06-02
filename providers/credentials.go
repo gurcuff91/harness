@@ -44,3 +44,15 @@ func clearAPIKey(cache *string, credKey string) error {
 	*cache = ""
 	return config.GetCredentialsManager().Delete(credKey)
 }
+
+// activationSourceAPIKey determines how an API key provider was activated.
+func activationSourceAPIKey(envVar, credKey string) ActivationSource {
+	if v := os.Getenv(envVar); v != "" {
+		return ActivationEnvVar
+	}
+	if v, ok := config.GetCredentialsManager().Load(credKey); ok && v != "" {
+		return ActivationCredentials
+	}
+	return ActivationNone
+}
+
