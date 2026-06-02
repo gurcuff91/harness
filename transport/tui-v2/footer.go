@@ -30,7 +30,7 @@ func (f *Footer) Render(width int) []string {
 }
 
 // Helpers for building the footer text (used by the harness TUI).
-func BuildFooter(input, output, cacheR, cacheW int, cost float64, contextPct float64, contextWindow int, modelName string, thinkingLevel string, modelSupportsThinking bool) string {
+func BuildFooter(input, output, cacheR, cacheW int, cost float64, contextPct float64, contextWindow int, modelName string, thinkingLevel string, modelSupportsThinking bool, isSubscription bool) string {
 	if modelName == "" {
 		return ""
 	}
@@ -43,7 +43,11 @@ func BuildFooter(input, output, cacheR, cacheW int, cost float64, contextPct flo
 	if cacheW > 0 {
 		parts = append(parts, "W"+compactNum(cacheW))
 	}
-	parts = append(parts, fmt.Sprintf("$%.3f", cost))
+	costStr := fmt.Sprintf("$%.3f", cost)
+	if isSubscription {
+		costStr += " (sub)"
+	}
+	parts = append(parts, costStr)
 	if contextWindow > 0 {
 		parts = append(parts, fmt.Sprintf("%.1f%%/%s", contextPct*100, compactNum(contextWindow)))
 	}

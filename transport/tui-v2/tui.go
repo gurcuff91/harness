@@ -683,7 +683,7 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 			e.Tokens.Input, int(e.Tokens.TotalOutput),
 			e.Tokens.CacheRead, e.Tokens.CacheWrite,
 			e.Tokens.CostUSD, e.Tokens.ContextUsage, e.Tokens.ContextWindow,
-			t.model, t.thinkingLevel, llm.ModelSupportsThinking(t.model),
+			t.model, t.thinkingLevel, llm.ModelSupportsThinking(t.model), t.isSubscription(),
 		))
 	case types.EventTurnEnd:
 		t.streaming = false
@@ -706,8 +706,22 @@ func (t *TUI) updateFooter() {
 	}
 	t.footer.Set(BuildFooter(
 		0, 0, 0, 0, 0, 0, contextWindow,
-		t.model, t.thinkingLevel, llm.ModelSupportsThinking(t.model),
+		t.model, t.thinkingLevel, llm.ModelSupportsThinking(t.model), t.isSubscription(),
 	))
+}
+
+func (t *TUI) isSubscription() bool {
+	parts := strings.SplitN(t.model, "/", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	providers.EnsureRegistry()
+	for _, p := range providers.All {
+		if p.Name() == parts[0] {
+			return p.CredentialType() == types.CredTypeOAuth
+		}
+	}
+	return false
 }
 
 func (t *TUI) resolveModelMeta() *types.ModelMeta {
