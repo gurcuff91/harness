@@ -1,7 +1,6 @@
 package tuiv2
 
 import (
-	"os"
 	"strings"
 )
 
@@ -9,6 +8,7 @@ type Input struct {
 	value       string
 	placeholder string
 	onSubmit    func(string)
+	onQuit      func() // Ctrl+C / Ctrl+D handler
 }
 
 func NewInput(placeholder string, _ int, onSubmit func(string)) *Input {
@@ -24,9 +24,11 @@ func (i *Input) HandleKey(data []byte) bool {
 	if len(data) == 0 { return false }
 	switch {
 	case data[0] == 3: // Ctrl+C
-		os.Exit(0)
+		if i.onQuit != nil { i.onQuit() }
+		return true
 	case data[0] == 4 && i.value == "": // Ctrl+D empty
-		os.Exit(0)
+		if i.onQuit != nil { i.onQuit() }
+		return true
 	case data[0] == '\r' || data[0] == '\n':
 		if i.value != "" && i.onSubmit != nil {
 			i.onSubmit(strings.TrimSpace(i.value))

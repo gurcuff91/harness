@@ -25,9 +25,11 @@ type TUI struct {
 	streaming        bool
 	agentLineStarted bool
 	cancelFn         context.CancelFunc
+	quitFn           context.CancelFunc // cancels Run's context
 
 	// Command palette
-	palette palette
+	palette   palette
+	paramHint string // shown when param-required cmd is missing its param
 }
 
 // --- Palette ---
@@ -51,8 +53,10 @@ var rootCmds = []paletteItem{
 	{"thinking", "Set thinking level"},
 	{"connect", "Connect provider"},
 	{"disconnect", "Disconnect provider"},
+	{"compact", "Compact session context"},
+	{"rename", "Rename current session"},
+	{"resume", "Resume a previous session"},
 	{"clear", "Clear conversation"},
-	{"help", "Show commands"},
 	{"exit", "Exit harness"},
 }
 
@@ -103,6 +107,11 @@ func (p *palette) popLevel() bool {
 func (p *palette) close() {
 	p.open = false
 	p.levels = nil
+}
+
+func (t *TUI) closePalette() {
+	t.palette.close()
+	t.paramHint = ""
 }
 
 func (p *palette) setFilter(f string) {
@@ -160,6 +169,9 @@ func (p *palette) selected() (paletteItem, bool) {
 func (t *TUI) renderPalette() []string {
 	if !t.palette.open {
 		return nil
+	}
+	if t.paramHint != "" {
+		return []string{"   \033[33m<" + t.paramHint + "> required\033[0m"}
 	}
 	items := t.palette.filtered()
 	if len(items) == 0 {
@@ -233,16 +245,38 @@ func (t *TUI) modelItems() []paletteItem {
 }
 
 // Commands that have sub-palettes
-var subPaletteCmds = map[string]bool{"model": true}
+var subPaletteCmds = map[string]bool{"model": true, "thinking": true, "connect": true, "disconnect": true, "resume": true}
+
+// Commands that require a free-text param (no sub-palette, just input)
+var paramRequiredCmds = map[string]string{"rename": "name"}
 
 // --- Key handling ---
 
 func (t *TUI) handleKey(data []byte) bool {
+	// Param hint mode: palette is open just for the hint, pass keys to input
+	if t.paramHint != "" {
+		if data[0] == 27 && len(data) == 1 {
+			// Esc — clear hint and input
+			t.input.value = ""
+			t.closePalette()
+			return true
+		}
+		// Pass to input
+		changed := t.input.HandleKey(data)
+		// Check if param is now filled
+		parts := strings.Fields(t.input.value)
+		if len(parts) >= 2 {
+			t.paramHint = "" // clear hint, param present
+			t.palette.close()
+		}
+		return changed
+	}
+
 	if t.palette.open {
 		return t.handlePaletteKey(data)
 	}
 
-	// Enter on sub-palette command
+	// Enter on sub-palette or param-required command
 	if (data[0] == '\r' || data[0] == '\n') && strings.HasPrefix(t.input.value, "/") {
 		parts := strings.Fields(t.input.value)
 		if len(parts) >= 1 {
@@ -255,17 +289,30 @@ func (t *TUI) handleKey(data []byte) bool {
 				t.input.value = ""
 				return true
 			}
+			if paramName, ok := paramRequiredCmds[cmd]; ok && len(parts) < 2 {
+				// Missing required param — show hint
+				t.palette.open = true
+				t.palette.levels = []paletteLevel{{items: nil, filter: "", parentCmd: cmd}}
+				t.paramHint = paramName
+				return true
+			}
 		}
 	}
 
 	// Pass to input
 	changed := t.input.HandleKey(data)
 
-	// Open palette on /
+	// Open palette on / — only for bare slash or single-word command
 	if strings.HasPrefix(t.input.value, "/") {
-		t.palette.openRoot()
-		filter := strings.TrimPrefix(t.input.value, "/")
-		t.palette.setFilter(filter)
+		parts := strings.Fields(t.input.value)
+		cmd := strings.TrimPrefix(parts[0], "/")
+		// Don't open palette if command already has a param
+		if len(parts) < 2 || subPaletteCmds[cmd] {
+			if !subPaletteCmds[cmd] || len(parts) < 2 {
+				t.palette.openRoot()
+				t.palette.setFilter(cmd)
+			}
+		}
 	}
 
 	return changed
@@ -291,14 +338,14 @@ func (t *TUI) handlePaletteKey(data []byte) bool {
 			return false
 		}
 		if t.palette.depth() == 1 {
-			// Level 1: command name
+			// Level 1: always put in input (param-required cmds need typing)
 			t.input.value = "/" + sel.name + " "
-			t.palette.close()
+			t.closePalette()
 		} else {
 			// Level 2: autocomplete full command
 			parentCmd := t.palette.current().parentCmd
 			t.input.value = "/" + parentCmd + " " + sel.name
-			t.palette.close()
+			t.closePalette()
 		}
 		return true
 	}
@@ -318,9 +365,15 @@ func (t *TUI) handlePaletteKey(data []byte) bool {
 				t.palette.pushSub(sel.name, subItems)
 				return true
 			}
-			// No sub-palette — execute directly
+			if _, needsParam := paramRequiredCmds[sel.name]; needsParam {
+				// Needs free-text param — put in input
+				t.input.value = "/" + sel.name + " "
+				t.closePalette()
+				return true
+			}
+			// No sub-palette, no param — execute directly
 			t.input.value = ""
-			t.palette.close()
+			t.closePalette()
 			if t.input.onSubmit != nil {
 				t.input.onSubmit("/" + sel.name)
 			}
@@ -329,7 +382,7 @@ func (t *TUI) handlePaletteKey(data []byte) bool {
 		// Level 2 — execute with param
 		parentCmd := t.palette.current().parentCmd
 		t.input.value = ""
-		t.palette.close()
+		t.closePalette()
 		if t.input.onSubmit != nil {
 			t.input.onSubmit("/" + parentCmd + " " + sel.name)
 		}
@@ -344,7 +397,7 @@ func (t *TUI) handlePaletteKey(data []byte) bool {
 			return true
 		}
 		t.input.value = ""
-		t.palette.close()
+		t.closePalette()
 		return true
 	}
 
@@ -354,7 +407,7 @@ func (t *TUI) handlePaletteKey(data []byte) bool {
 	// Check if still valid
 	if t.palette.depth() == 1 {
 		if !strings.HasPrefix(t.input.value, "/") {
-			t.palette.close()
+			t.closePalette()
 		} else {
 			filter := strings.TrimPrefix(t.input.value, "/")
 			t.palette.setFilter(filter)
@@ -371,9 +424,70 @@ func (t *TUI) getSubItems(cmd string) []paletteItem {
 	switch cmd {
 	case "model":
 		return t.modelItems()
+	case "thinking":
+		return t.thinkingItems()
+	case "connect":
+		return t.connectItems()
+	case "disconnect":
+		return t.disconnectItems()
+	case "resume":
+		return t.resumeItems()
 	default:
 		return nil
 	}
+}
+
+func (t *TUI) thinkingItems() []paletteItem {
+	return []paletteItem{
+		{"off", "Disable thinking"},
+		{"low", "Brief reasoning"},
+		{"medium", "Standard reasoning"},
+		{"high", "Extended reasoning"},
+		{"xhigh", "Maximum reasoning"},
+	}
+}
+
+func (t *TUI) connectItems() []paletteItem {
+	providers.EnsureRegistry()
+	var items []paletteItem
+	for _, p := range providers.All {
+		if !p.IsActive() {
+			status := "inactive"
+			switch p.CredentialType() {
+			case types.CredTypeAPIKey:
+				status = "needs API key"
+			case types.CredTypeOAuth:
+				status = "needs OAuth"
+			}
+			items = append(items, paletteItem{name: p.Name(), desc: status})
+		}
+	}
+	return items
+}
+
+func (t *TUI) resumeItems() []paletteItem {
+	// TODO: connect with real session store
+	return []paletteItem{
+		{"session-1", "May 24, 2026"},
+		{"session-2", "May 23, 2026"},
+		{"session-3", "May 22, 2026"},
+	}
+}
+
+func (t *TUI) disconnectItems() []paletteItem {
+	providers.EnsureRegistry()
+	var items []paletteItem
+	for _, p := range providers.All {
+		if p.IsActive() {
+			if len(p.Models()) == 0 {
+				p.FetchModels()
+			}
+			n := len(p.Models())
+			desc := fmt.Sprintf("%d models", n)
+			items = append(items, paletteItem{name: p.Name(), desc: desc})
+		}
+	}
+	return items
 }
 
 // --- TUI lifecycle ---
@@ -393,6 +507,11 @@ func New(a *agent.Agent, model string) *TUI {
 	}
 	t.output.SetWrap(term.Width()-3, "   ")
 	t.input = NewInput("Type a message...", term.Width(), t.submit)
+	t.input.onQuit = func() {
+		t.output.Add("   \033[2mGoodbye.\033[0m")
+		t.render()
+		t.shutdown()
+	}
 	if model != "" {
 		if sess, err := a.NewSession(".", model); err == nil {
 			t.session = sess
@@ -403,6 +522,8 @@ func New(a *agent.Agent, model string) *TUI {
 }
 
 func (t *TUI) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	t.quitFn = cancel
 	defer t.term.Restore()
 	t.term.HideCursor()
 	defer t.term.ShowCursor()
@@ -461,7 +582,7 @@ func (t *TUI) submit(text string) {
 		return
 	}
 	if strings.HasPrefix(text, "/") {
-		t.output.Add("\033[90m  /" + strings.TrimPrefix(text, "/") + "\033[0m")
+		t.execCommand(text)
 		return
 	}
 	if t.session == nil {
@@ -500,7 +621,7 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 		for i, part := range parts {
 			if i == 0 {
 				if !t.agentLineStarted {
-					t.output.Add(" \033[96m← \033[0m" + part)
+					t.output.Add(" \033[96m←\033[0m " + part)
 					t.agentLineStarted = true
 				} else {
 					t.output.AddStream(part)
@@ -540,14 +661,109 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 
 func (t *TUI) printBanner() {
 	t.output.Add("")
-	t.output.Add("  \033[96m╦ ╦╔═╗╦═╗╔╗╔╔═╗╔═╗╔═╗\033[0m")
-	t.output.Add("  \033[96m╠═╣╠═╣╠╦╝║║║║╣ ╚═╗╚═╗\033[0m")
-	t.output.Add("  \033[96m╩ ╩╩ ╩╩╚═╝╚╝╚═╝╚═╝╚═╝\033[0m  \033[2mv0.6.0\033[0m")
+	t.output.Add("   \033[96m╦ ╦╔═╗╦═╗╔╗╔╔═╗╔═╗╔═╗\033[0m")
+	t.output.Add("   \033[96m╠═╣╠═╣╠╦╝║║║║╣ ╚═╗╚═╗\033[0m")
+	t.output.Add("   \033[96m╩ ╩╩ ╩╩╚═╝╚╝╚═╝╚═╝╚═╝\033[0m  \033[2mv0.6.0\033[0m")
 	t.output.Add("")
-	if t.model != "" {
-		t.output.Add("  \033[2mmodel: \033[0m\033[96m" + t.model + "\033[0m")
+}
+
+// --- Command execution ---
+
+func (t *TUI) execCommand(text string) {
+	parts := strings.Fields(text)
+	cmd := strings.TrimPrefix(parts[0], "/")
+	arg := ""
+	if len(parts) > 1 {
+		arg = strings.Join(parts[1:], " ")
+	}
+
+	// Show command in output
+	t.output.Add("   \033[90m/" + cmd)
+	if arg != "" {
+		t.output.AddStream(" " + arg)
+	}
+	t.output.AddStream("\033[0m")
+
+	var msg string
+	switch cmd {
+	case "exit":
+		msg = "Goodbye."
+		t.output.Add("   \033[2m" + msg + "\033[0m")
+		t.render()
+		t.shutdown()
+		return
+	case "clear":
+		t.output.Clear()
+		msg = ""
+	case "compact":
+		if t.session == nil {
+			msg = "\033[33mNo active session\033[0m"
+		} else {
+			msg = "\033[2mCompaction started...\033[0m"
+			// TODO: call t.session.Compact()
+		}
+	case "rename":
+		if arg == "" {
+			msg = "\033[33m<name> required\033[0m"
+		} else if t.session == nil {
+			msg = "\033[33mNo active session\033[0m"
+		} else {
+			msg = "\033[2mSession renamed to: " + arg + "\033[0m"
+			// TODO: call t.session.Rename(arg)
+		}
+	case "resume":
+		if arg == "" {
+			msg = "\033[33m<session> required\033[0m"
+		} else {
+			msg = "\033[2mResuming session: " + arg + "\033[0m"
+			// TODO: call t.agent.ResumeSession()
+		}
+	case "model":
+		if arg == "" {
+			msg = "\033[33m<model> required\033[0m"
+		} else {
+			msg = "\033[2mSwitching to: " + arg + "\033[0m"
+			// TODO: call t.session.SwitchModel()
+			t.model = arg
+		}
+	case "thinking":
+		if arg == "" {
+			msg = "\033[33m<level> required\033[0m"
+		} else {
+			msg = "\033[2mThinking: " + arg + "\033[0m"
+			// TODO: call t.session.SwitchThinking()
+		}
+	case "connect":
+		if arg == "" {
+			msg = "\033[33m<provider> required\033[0m"
+		} else {
+			msg = "\033[2mConnecting: " + arg + "\033[0m"
+			// TODO: provider connect flow
+		}
+	case "disconnect":
+		if arg == "" {
+			msg = "\033[33m<provider> required\033[0m"
+		} else {
+			msg = "\033[2mDisconnected: " + arg + "\033[0m"
+			// TODO: provider disconnect flow
+		}
+	default:
+		msg = "\033[33mUnknown command: /" + cmd + "\033[0m"
+	}
+
+	if msg != "" {
+		t.output.Add("   " + msg)
 	}
 	t.output.Add("")
+}
+
+func (t *TUI) shutdown() {
+	if t.session != nil {
+		t.session.Close()
+	}
+	if t.quitFn != nil {
+		t.quitFn()
+	}
 }
 
 func iconFor(name string) string {
