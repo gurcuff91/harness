@@ -202,7 +202,7 @@ func (c *ClaudeOAuth) CompleteStream(ctx context.Context, req *types.Request, cb
 	headers := buildCCHeaders(token, billingHeader, c.session)
 
 	// Interleaved-thinking beta only for non-adaptive models
-	if req.ThinkingLevel != "" && req.ThinkingLevel != "disable" && thinkingFull.OutputConfig == nil {
+	if req.ThinkingLevel != "" && req.ThinkingLevel != "off" && thinkingFull.OutputConfig == nil {
 		headers["anthropic-beta"] += ",interleaved-thinking-2025-05-14"
 	}
 

@@ -262,39 +262,10 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) string {
 // defaultSessionName generates the initial session name — date + time.
 // Replaced automatically by the first user message after Prompt() is called.
 func defaultSessionName(t time.Time) string {
-	return t.Format("2006-01-02 15:04")
+	return "New Session " + t.Format("2006-01-02 15:04")
 }
 
 // isDefaultSessionName returns true if the name matches the auto-generated date format.
-func isDefaultSessionName(name string) bool {
-	if len(name) != 16 {
-		return false
-	}
-	_, err := time.Parse("2006-01-02 15:04", name)
-	return err == nil
-}
-
-// sessionNameFromPrompt truncates a user prompt to a short session title.
-// Matches Claude Code behavior: first ~40 chars, cleaned up.
-func sessionNameFromPrompt(text string) string {
-	// Remove leading whitespace and newlines
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return ""
-	}
-	// Take first line only
-	if idx := strings.IndexByte(text, '\n'); idx >= 0 {
-		text = text[:idx]
-	}
-	text = strings.TrimSpace(text)
-	// Truncate to 40 chars
-	const maxLen = 40
-	if len([]rune(text)) > maxLen {
-		runes := []rune(text)
-		text = string(runes[:maxLen]) + "…"
-	}
-	return text
-}
 
 func defaultTools() *tools.Registry {
 	r := tools.NewRegistry()

@@ -31,29 +31,24 @@ func (f *Footer) Render(width int) []string {
 
 // Helpers for building the footer text (used by the harness TUI).
 func BuildFooter(input, output, cacheR, cacheW int, cost float64, contextPct float64, contextWindow int, modelName string, thinkingLevel string, modelSupportsThinking bool) string {
+	if modelName == "" {
+		return ""
+	}
 	var parts []string
-	if input > 0 {
-		parts = append(parts, "↑"+compactNum(input))
-	}
-	if output > 0 {
-		parts = append(parts, "↓"+compactNum(output))
-	}
+	parts = append(parts, "↑"+compactNum(input))
+	parts = append(parts, "↓"+compactNum(output))
 	if cacheR > 0 {
 		parts = append(parts, "R"+compactNum(cacheR))
 	}
 	if cacheW > 0 {
 		parts = append(parts, "W"+compactNum(cacheW))
 	}
-	if cost > 0 {
-		parts = append(parts, fmt.Sprintf("$%.3f", cost))
-	}
-	if contextPct > 0 && contextWindow > 0 {
+	parts = append(parts, fmt.Sprintf("$%.3f", cost))
+	if contextWindow > 0 {
 		parts = append(parts, fmt.Sprintf("%.1f%%/%s", contextPct*100, compactNum(contextWindow)))
 	}
-	if modelName != "" {
-		parts = append(parts, modelName)
-	}
-	if thinkingLevel != "" && thinkingLevel != "off" && thinkingLevel != "disable" && modelSupportsThinking {
+	parts = append(parts, modelName)
+	if thinkingLevel != "" && thinkingLevel != "off" && modelSupportsThinking {
 		parts = append(parts, "• "+thinkingLevel)
 	}
 	return strings.Join(parts, " ")

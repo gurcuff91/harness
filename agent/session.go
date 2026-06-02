@@ -121,7 +121,6 @@ func (s *Session) Prompt(ctx context.Context, text string, images []types.ImageD
 	}
 
 	// Auto-name session from first prompt (like Claude Code)
-	s.autoNameFromPrompt(text)
 
 	s.emit(types.Event{Type: types.EventTurnStart})
 
@@ -307,6 +306,9 @@ func (s *Session) generateCompactionSummary(ctx context.Context) (string, error)
 	return summaryText, nil
 }
 
+// Name returns the session's display name.
+func (s *Session) Name() string { return s.name }
+
 // Rename sets a friendly display name.
 func (s *Session) Rename(name string) error {
 	s.name = name
@@ -490,23 +492,7 @@ func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 	return resp.Text, nil
 }
 
-// autoNameFromPrompt sets the session name from the first user prompt
-// if the session still has the default date-based name.
-// Does nothing if the session was already explicitly renamed.
-func (s *Session) autoNameFromPrompt(text string) {
-	meta := s.store.Meta()
-	// Only auto-name if name looks like the default ("YYYY-MM-DD HH:MM")
-	// or is empty — don't overwrite explicit renames
-	if meta.Name != "" && !isDefaultSessionName(meta.Name) {
-		return
-	}
-	name := sessionNameFromPrompt(text)
-	if name == "" {
-		return
-	}
-	meta.Name = name
-	s.store.UpdateMeta(meta)
-}
+
 
 
 func (s *Session) emit(e types.Event) {

@@ -110,7 +110,7 @@ func (a *Anthropic) CompleteStream(ctx context.Context, req *types.Request, cb t
 
 	extraHeaders := map[string]string{}
 	// Interleaved-thinking beta only for non-adaptive models
-	if req.ThinkingLevel != "" && req.ThinkingLevel != "disable" && thinkingFull.OutputConfig == nil {
+	if req.ThinkingLevel != "" && req.ThinkingLevel != "off" && thinkingFull.OutputConfig == nil {
 		extraHeaders["anthropic-beta"] = "interleaved-thinking-2025-05-14"
 	}
 

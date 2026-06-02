@@ -364,7 +364,7 @@ func BuildAnthropicThinking(model, level string, maxTokens int) (map[string]any,
 
 // BuildAnthropicThinkingFull returns full thinking config including output_config.
 func BuildAnthropicThinkingFull(model, level string, maxTokens int) (ThinkingConfig, error) {
-	if level == "" || level == "disable" {
+	if level == "" || level == "off" {
 		return ThinkingConfig{
 			Thinking:  map[string]any{"type": "disabled"},
 			MaxTokens: maxTokens,
@@ -434,7 +434,7 @@ func BuildAnthropicThinkingFromMeta(meta *types.ModelMeta, level string, maxToke
 }
 
 func buildThinkingConfig(adaptive bool, level string, maxTokens int) (ThinkingConfig, error) {
-	if level == "" || level == "disable" {
+	if level == "" || level == "off" {
 		return ThinkingConfig{Thinking: map[string]any{"type": "disabled"}, MaxTokens: maxTokens}, nil
 	}
 	if adaptive {

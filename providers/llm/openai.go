@@ -169,7 +169,7 @@ func buildOpenAIBody(req *types.Request) (*openAIRequest, error) {
 	if req.ThinkingLevel != "" {
 		level := req.ThinkingLevel
 		isDeepSeek := strings.Contains(req.Model, "deepseek")
-		if level == "disable" {
+		if level == "off" {
 			t := false
 			body.Think = &t
 			if isDeepSeek {

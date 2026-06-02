@@ -128,7 +128,7 @@ func (c *CLI) rebuildRenderer() {
 		}
 	}
 	if llm.ModelSupportsThinkingWithLookup(c.modelName, lookup) {
-		if lvl := config.GetSettingsManager().ThinkingLevel(); lvl != "disable" {
+		if lvl := config.GetSettingsManager().ThinkingLevel(); lvl != "off" {
 			rCfg.ThinkingLevel = lvl
 		}
 	}
@@ -296,7 +296,7 @@ func (c *CLI) handleDisconnect(parts []string) {
 func (c *CLI) handleThinking(parts []string) {
 	if len(parts) < 2 {
 		current := config.GetSettingsManager().ThinkingLevel()
-		for _, l := range []string{"disable", "low", "medium", "high", "xhigh"} {
+		for _, l := range []string{"off", "low", "medium", "high", "xhigh"} {
 			marker := "  "
 			if l == current {
 				marker = C(Green, "● ")
@@ -308,7 +308,7 @@ func (c *CLI) handleThinking(parts []string) {
 		return
 	}
 	level := strings.ToLower(parts[1])
-	valid := map[string]bool{"disable": true, "low": true, "medium": true, "high": true, "xhigh": true}
+	valid := map[string]bool{"off": true, "low": true, "medium": true, "high": true, "xhigh": true}
 	if !valid[level] {
 		fmt.Printf("  %s Invalid level: %s\n\n", C(Red, "✗"), level)
 		fmt.Println(C(Dim, "  Valid: disable / low / medium / high / xhigh"))

@@ -519,7 +519,7 @@ func (r *Renderer) buildFooter(dur time.Duration) string {
 func (r *Renderer) SetThinkingLevel(level string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if level == "disable" {
+	if level == "off" {
 		r.thinkingLevel = ""
 	} else {
 		r.thinkingLevel = level

@@ -547,6 +547,7 @@ func New(a *agent.Agent, model string) *TUI {
 			t.session.Subscribe(func(e types.Event) { t.events <- e })
 		}
 	}
+	t.updateFooter()
 	return t
 }
 
@@ -561,6 +562,7 @@ func (t *TUI) Run(ctx context.Context) error {
 	t.printBanner()
 	t.updateFooter()
 	t.render()
+
 
 	for {
 		select {
@@ -695,7 +697,10 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 func (t *TUI) updateFooter() {
 	contextWindow := 0
 	if t.model != "" {
-		if meta := llm.FindMeta(t.model); meta != nil {
+		// Try provider cache first (has real data from API), then fallback to registry
+		if meta := t.resolveModelMeta(); meta != nil {
+			contextWindow = meta.ContextWindow
+		} else if meta := llm.FindMeta(t.model); meta != nil {
 			contextWindow = meta.ContextWindow
 		}
 	}
@@ -703,6 +708,20 @@ func (t *TUI) updateFooter() {
 		0, 0, 0, 0, 0, 0, contextWindow,
 		t.model, t.thinkingLevel, llm.ModelSupportsThinking(t.model),
 	))
+}
+
+func (t *TUI) resolveModelMeta() *types.ModelMeta {
+	parts := strings.SplitN(t.model, "/", 2)
+	if len(parts) != 2 {
+		return nil
+	}
+	providers.EnsureRegistry()
+	for _, p := range providers.All {
+		if p.Name() == parts[0] {
+			return p.ModelMeta(parts[1])
+		}
+	}
+	return nil
 }
 
 func (t *TUI) printBanner() {
@@ -781,16 +800,35 @@ func (t *TUI) execCommand(text string) {
 		if arg == "" {
 			msg = "\033[33m<model> required\033[0m"
 		} else {
-			msg = "\033[2mSwitching to: " + arg + "\033[0m"
-			// TODO: call t.session.SwitchModel()
-			t.model = arg
+			if t.session != nil {
+				if err := t.session.SwitchModel(context.Background(), arg); err != nil {
+					msg = "\033[31m" + err.Error() + "\033[0m"
+				} else {
+					t.model = arg
+					_ = config.GetSettingsManager().SetActiveModel(arg)
+					t.updateFooter()
+					msg = "\033[32mModel: " + arg + "\033[0m"
+				}
+			} else {
+				msg = "\033[33mNo active session\033[0m"
+			}
 		}
 	case "thinking":
 		if arg == "" {
 			msg = "\033[33m<level> required\033[0m"
 		} else {
-			msg = "\033[2mThinking: " + arg + "\033[0m"
-			// TODO: call t.session.SwitchThinking()
+			if t.session != nil {
+				if err := t.session.SwitchThinking(arg); err != nil {
+					msg = "\033[31m" + err.Error() + "\033[0m"
+				} else {
+					t.thinkingLevel = arg
+					_ = config.GetSettingsManager().SetThinkingLevel(arg)
+					t.updateFooter()
+					msg = "\033[32mThinking: " + arg + "\033[0m"
+				}
+			} else {
+				msg = "\033[33mNo active session\033[0m"
+			}
 		}
 	case "connect":
 		if arg == "" {
@@ -843,9 +881,12 @@ func (t *TUI) renderSessionInfo() string {
 	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(cwd, home) {
 		cwd = "~" + cwd[len(home):]
 	}
-	name := t.sessionName
+	name := ""
+	if t.session != nil {
+		name = t.session.Name()
+	}
 	if name == "" {
-		name = "new session"
+		name = "no session"
 	}
 	return " \033[90m" + cwd + " \033[2m•\033[0m \033[90m" + name + "\033[0m"
 }
@@ -964,6 +1005,7 @@ func (t *TUI) autoSelectModel(providerName string, models []types.ModelMeta) {
 		t.session.Subscribe(func(e types.Event) { t.events <- e })
 	}
 	t.output.Add("   \033[2mModel: " + fullModel + "\033[0m")
+	t.updateFooter()
 }
 
 func (t *TUI) execDisconnect(providerName string) {
