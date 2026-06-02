@@ -369,14 +369,14 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 				s.emit(types.Event{Type: types.EventStreamTextEnd})
 				hadText = false
 			}
-			s.emit(types.Event{Type: types.EventToolStart, ToolName: se.ToolName})
+			s.emit(types.Event{Type: types.EventToolStart, ToolID: se.ToolID, ToolName: se.ToolName})
 
 		case types.StreamToolDelta:
-			s.emit(types.Event{Type: types.EventToolArgsDelta, ToolName: se.ToolName, Delta: se.Delta})
+			s.emit(types.Event{Type: types.EventToolArgsDelta, ToolID: se.ToolID, ToolName: se.ToolName, Delta: se.Delta})
 
 		case types.StreamToolEnd:
 			if len(se.ToolArgs) > 0 {
-				s.emit(types.Event{Type: types.EventToolCall, ToolName: se.ToolName, ToolArgs: string(se.ToolArgs)})
+				s.emit(types.Event{Type: types.EventToolCall, ToolID: se.ToolID, ToolName: se.ToolName, ToolArgs: string(se.ToolArgs)})
 				start := time.Now()
 				output, execErr := s.tools.Run(se.ToolName, se.ToolArgs)
 				dur := time.Since(start)
@@ -385,7 +385,7 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 					output = output[:maxOut] + "\n...(truncated)"
 				}
 				isErr := execErr != nil
-				s.emit(types.Event{Type: types.EventToolResult, ToolName: se.ToolName, Output: output, Duration: dur, IsError: isErr})
+				s.emit(types.Event{Type: types.EventToolResult, ToolID: se.ToolID, ToolName: se.ToolName, Output: output, Duration: dur, IsError: isErr})
 				streamResults = append(streamResults, types.ToolResult{ID: se.ToolID, Output: output, IsErr: isErr})
 			}
 

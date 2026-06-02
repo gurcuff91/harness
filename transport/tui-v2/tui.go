@@ -2,10 +2,12 @@ package tuiv2
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/config"
@@ -673,14 +675,29 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 	case types.EventToolArgsDelta:
 		// Buffer — accumulated in ToolArgs at EventToolCall
 	case types.EventToolCall:
-		// Render complete tool call: Name(args) atomic
-		t.output.Add(" \033[33m" + e.ToolName + "(\033[0m\033[2m" + trunc(e.ToolArgs, 80) + "\033[0m\033[33m)\033[0m")
+		// Render complete tool call: Name(key=val, ...)
+		formatted := formatToolArgs(e.ToolArgs)
+		lines := strings.Split(formatted, "\n")
+		if len(lines) <= 1 {
+			t.output.AddWrapped(" \033[1;33m"+e.ToolName+"(\033[0m\033[2m"+formatted+"\033[0m\033[1;33m)\033[0m", " ")
+		} else {
+			// First line: Name(first_line
+			t.output.Add(" \033[1;33m" + e.ToolName + "(\033[0m\033[2m" + lines[0])
+			// Middle lines: indented content
+			for _, line := range lines[1 : len(lines)-1] {
+				t.output.Add(" " + line)
+			}
+			// Last line: last_content)
+			t.output.Add(" " + lines[len(lines)-1] + "\033[0m\033[1;33m)\033[0m")
+		}
 	case types.EventToolResult:
+		dur := formatDuration(e.Duration)
 		if e.IsError {
-			t.output.Add("   \033[31m✗ " + trunc(e.Output, 60) + " [" + e.Duration.Round(1000000).String() + "]\033[0m")
+			errMsg := strings.ReplaceAll(strings.ReplaceAll(e.Output, "\n", " "), "\r", "")
+			t.output.Add("   \033[31m✗ " + trunc(errMsg, 60) + " [" + dur + "]\033[0m")
 		} else {
 			result := summarizeToolResult(e.ToolName, e.Output)
-			t.output.Add("   \033[32m✓\033[0m\033[2m " + result + " [" + e.Duration.Round(1000000).String() + "]\033[0m")
+			t.output.Add("   \033[32m✓\033[0m\033[2m " + result + " [" + dur + "]\033[0m")
 		}
 		t.output.Add("")
 	case types.EventTokens:
@@ -1163,7 +1180,46 @@ func (t *TUI) shutdown() {
 }
 
 
+func formatToolArgs(jsonArgs string) string {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(jsonArgs), &raw); err != nil {
+		return sanitizeArg(jsonArgs)
+	}
+	var parts []string
+	for k, v := range raw {
+		switch val := v.(type) {
+		case string:
+			parts = append(parts, k+"="+sanitizeArg(val))
+		case float64:
+			if val == float64(int(val)) {
+				parts = append(parts, fmt.Sprintf("%s=%d", k, int(val)))
+			} else {
+				parts = append(parts, fmt.Sprintf("%s=%g", k, val))
+			}
+		case bool:
+			parts = append(parts, fmt.Sprintf("%s=%v", k, val))
+		default:
+			b, _ := json.Marshal(val)
+			parts = append(parts, k+"="+sanitizeArg(string(b)))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// sanitizeArg preserves newlines within values but strips carriage returns
+// and trailing newlines (to prevent `)` from dropping to a new line).
+func sanitizeArg(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.TrimRight(s, "\n")
+	return s
+}
+
 func summarizeToolResult(toolName, output string) string {
+	if output == "" {
+		return "done"
+	}
+	// Strip leading status marks that would duplicate our ✓
+	output = strings.TrimLeft(output, "✓✗ ")
 	if output == "" {
 		return "done"
 	}
@@ -1180,7 +1236,7 @@ func summarizeToolResult(toolName, output string) string {
 	case "read":
 		return fmt.Sprintf("%d lines", lines)
 	case "write":
-		return fmt.Sprintf("%d lines written", lines)
+		return trunc(strings.TrimSpace(output), 50)
 	case "edit":
 		return trunc(strings.TrimSpace(output), 50)
 	case "fetch":
@@ -1201,6 +1257,14 @@ func gitBranch(cwd string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func formatDuration(d time.Duration) string {
+	ms := d.Milliseconds()
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
 }
 
 func trunc(s string, max int) string {

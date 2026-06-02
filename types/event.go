@@ -65,6 +65,7 @@ type TokenUsage struct {
 type Event struct {
 	Type     EventType
 	Loop     int
+	ToolID   string // unique tool call ID (from LLM) — correlates Start/ArgsDelta/Call/Result
 	ToolName string
 	ToolArgs string
 	Output   string
