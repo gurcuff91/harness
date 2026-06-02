@@ -23,8 +23,12 @@ func main() {
 	if model == "" {
 		providers.EnsureRegistry()
 		for _, p := range providers.All {
-			if !p.IsActive() { continue }
-			if len(p.Models()) == 0 { p.FetchModels() }
+			if !p.IsActive() {
+				continue
+			}
+			if len(p.Models()) == 0 {
+				p.FetchModels()
+			}
 			if len(p.Models()) > 0 {
 				model = p.Name() + "/" + p.Models()[0].ID
 				config.GetSettingsManager().SetActiveModel(model)

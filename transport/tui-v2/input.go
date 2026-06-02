@@ -21,13 +21,19 @@ func NewInput(placeholder string, _ int, onSubmit func(string)) *Input {
 func (i *Input) Value() string { return i.value }
 
 func (i *Input) HandleKey(data []byte) bool {
-	if len(data) == 0 { return false }
+	if len(data) == 0 {
+		return false
+	}
 	switch {
 	case data[0] == 3: // Ctrl+C
-		if i.onQuit != nil { i.onQuit() }
+		if i.onQuit != nil {
+			i.onQuit()
+		}
 		return true
 	case data[0] == 4 && i.value == "": // Ctrl+D empty
-		if i.onQuit != nil { i.onQuit() }
+		if i.onQuit != nil {
+			i.onQuit()
+		}
 		return true
 	case data[0] == '\r' || data[0] == '\n':
 		if i.value != "" && i.onSubmit != nil {
@@ -36,7 +42,9 @@ func (i *Input) HandleKey(data []byte) bool {
 		i.value = ""
 		return true
 	case data[0] == 127 || data[0] == 8: // Backspace
-		if len(i.value) > 0 { i.value = i.value[:len(i.value)-1] }
+		if len(i.value) > 0 {
+			i.value = i.value[:len(i.value)-1]
+		}
 		return true
 	case data[0] == 27: // Escape — ignore
 		return true

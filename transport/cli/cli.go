@@ -470,8 +470,6 @@ func statusColor(s string) string {
 	}
 }
 
-
-
 var imagePathRe = regexp.MustCompile(`(?:^|\s)((?:/|\./|~/)[^\s]+\.(?:png|jpg|jpeg|gif|webp))`)
 
 func extractImages(input string) (string, []types.ImageData) {

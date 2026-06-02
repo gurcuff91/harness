@@ -12,10 +12,10 @@ type ModelMeta struct {
 	MaxTokens     int
 
 	// Capabilities
-	Vision          bool
-	Thinking        bool // supports any thinking
+	Vision           bool
+	Thinking         bool // supports any thinking
 	ThinkingAdaptive bool // supports adaptive thinking (output_config effort)
-	ThinkingLegacy  bool // supports legacy thinking (budget_tokens)
+	ThinkingLegacy   bool // supports legacy thinking (budget_tokens)
 
 	// Pricing (per million tokens, USD)
 	InputPrice  float64

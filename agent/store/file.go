@@ -17,8 +17,9 @@ import (
 
 // FileSessionStoreManager persists sessions to the filesystem.
 // Layout:
-//   ~/.harness/agent/sessions/<cwd-slug>/<session-id>.meta.json
-//   ~/.harness/agent/sessions/<cwd-slug>/<session-id>.jsonl
+//
+//	~/.harness/agent/sessions/<cwd-slug>/<session-id>.meta.json
+//	~/.harness/agent/sessions/<cwd-slug>/<session-id>.jsonl
 //
 // .meta.json → SessionMeta (rewritten on each UpdateMeta)
 // .jsonl     → one types.Message per line, append-only forever
@@ -64,11 +65,11 @@ func (m *FileSessionStoreManager) Create(meta SessionMeta) (SessionStore, error)
 
 	inner := &InMemorySessionStore{meta: meta}
 	return &FileSessionStore{
-		metaPath:         metaPath,
-		jsonlPath:        jsonlPath,
-		diskReadOffset:  0,
-		diskWriteCount:  0, // new session, nothing on disk yet
-		inner:            inner,
+		metaPath:       metaPath,
+		jsonlPath:      jsonlPath,
+		diskReadOffset: 0,
+		diskWriteCount: 0, // new session, nothing on disk yet
+		inner:          inner,
 	}, nil
 }
 
@@ -189,12 +190,12 @@ func cwdSlug(cwd string) string {
 // loadStart tracks how many JSONL lines were skipped at load time, so
 // CompactOffset can be translated between absolute (disk) and relative (memory).
 type FileSessionStore struct {
-	mu              sync.Mutex
-	metaPath        string
-	jsonlPath       string
-	diskReadOffset  int // JSONL lines skipped at Open() — used to translate memory→disk CompactOffset
-	diskWriteCount  int // messages already persisted to JSONL — only messages[diskWriteCount:] need appending
-	inner           *InMemorySessionStore
+	mu             sync.Mutex
+	metaPath       string
+	jsonlPath      string
+	diskReadOffset int // JSONL lines skipped at Open() — used to translate memory→disk CompactOffset
+	diskWriteCount int // messages already persisted to JSONL — only messages[diskWriteCount:] need appending
+	inner          *InMemorySessionStore
 }
 
 func openFileSessionStore(metaPath, jsonlPath string) (*FileSessionStore, error) {
@@ -222,11 +223,11 @@ func openFileSessionStore(metaPath, jsonlPath string) (*FileSessionStore, error)
 	}
 
 	return &FileSessionStore{
-		metaPath:         metaPath,
-		jsonlPath:        jsonlPath,
-		diskReadOffset:  absoluteOffset,
-		diskWriteCount:  len(messages), // all loaded messages are already on disk
-		inner:            inner,
+		metaPath:       metaPath,
+		jsonlPath:      jsonlPath,
+		diskReadOffset: absoluteOffset,
+		diskWriteCount: len(messages), // all loaded messages are already on disk
+		inner:          inner,
 	}, nil
 }
 

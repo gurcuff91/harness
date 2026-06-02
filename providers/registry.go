@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-
 )
 
 // All is the fixed registry of provider instances.

@@ -17,9 +17,9 @@ import (
 )
 
 type TUI struct {
-	term   *Terminal
-	agent  *agent.Agent
-	model  string
+	term  *Terminal
+	agent *agent.Agent
+	model string
 
 	output *Output
 	input  *Input
@@ -28,10 +28,10 @@ type TUI struct {
 	session *agent.Session
 	events  chan types.Event
 
-	sessionCwd    string
-	sessionName   string
-	thinkingLevel string
-	streaming   bool
+	sessionCwd       string
+	sessionName      string
+	thinkingLevel    string
+	streaming        bool
 	agentLineStarted bool
 	cancelFn         context.CancelFunc
 	quitFn           context.CancelFunc // cancels Run's context
@@ -514,7 +514,7 @@ func (t *TUI) disconnectItems() []paletteItem {
 	for _, p := range providers.All {
 		if p.IsActive() && isProviderManageable(p) {
 			if len(p.Models()) == 0 {
-					_, _ = p.FetchModels()
+				_, _ = p.FetchModels()
 			}
 			n := len(p.Models())
 			desc := fmt.Sprintf("%d models", n)
@@ -571,7 +571,6 @@ func (t *TUI) Run(ctx context.Context) error {
 	t.printBanner()
 	t.updateFooter()
 	t.render()
-
 
 	for {
 		select {
@@ -1208,7 +1207,6 @@ func (t *TUI) shutdown() {
 		t.quitFn()
 	}
 }
-
 
 func formatToolArgs(jsonArgs string) string {
 	var raw map[string]any

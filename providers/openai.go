@@ -74,7 +74,7 @@ func NewOpenAIWithConfig(apiKey, baseURL string) *OpenAI {
 	}
 }
 
-func (o *OpenAI) Name() string   { return "openai" }
+func (o *OpenAI) Name() string { return "openai" }
 func (o *OpenAI) ActivationSource() ActivationSource {
 	return activationSourceAPIKey(openAIAPIKeyEnv, openAIAPIKeyCred)
 }
@@ -171,6 +171,3 @@ func isOpenAIChatModel(id string) bool {
 func (o *OpenAI) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
 	return llm.DoOpenAIStream(ctx, o.client, o.baseURL+"/chat/completions", o.apiKey, &llm.OpenAIRequest{Request: req}, nil, cb)
 }
-
-
-

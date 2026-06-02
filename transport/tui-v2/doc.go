@@ -2,11 +2,12 @@
 // inspired by @mariozechner/pi-tui. Zero external TUI dependencies — only x/term + stdlib.
 //
 // Architecture:
-//   Terminal (raw mode, stdin, resize signals)
-//      ↓
-//   TUI (event loop + diff render)
-//      ↓
-//   Components: Output | Footer | Input
+//
+//	Terminal (raw mode, stdin, resize signals)
+//	   ↓
+//	TUI (event loop + diff render)
+//	   ↓
+//	Components: Output | Footer | Input
 //
 // Each component implements Render(width int) []string and returns ANSI-styled lines.
 // The TUI diffs previous vs new lines and writes only changed rows to the terminal.

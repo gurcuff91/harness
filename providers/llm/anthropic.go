@@ -14,11 +14,11 @@ import (
 // ── AnthropicTool ────────────────────────────────────────────────────────
 
 type AnthropicTool struct {
-	Name               string          `json:"name"`
-	Description        string          `json:"description"`
-	InputSchema        json.RawMessage `json:"input_schema"`
-	EagerInputStreaming bool            `json:"eager_input_streaming,omitempty"`
-	CacheControl       *AnthropicCacheControl `json:"cache_control,omitempty"`
+	Name                string                 `json:"name"`
+	Description         string                 `json:"description"`
+	InputSchema         json.RawMessage        `json:"input_schema"`
+	EagerInputStreaming bool                   `json:"eager_input_streaming,omitempty"`
+	CacheControl        *AnthropicCacheControl `json:"cache_control,omitempty"`
 }
 
 // AnthropicCacheControl marks content blocks for Anthropic prompt caching.
@@ -169,11 +169,13 @@ func defaultAnthropicTools(defs []types.ToolDef) []AnthropicTool {
 
 func ParseAnthropicStream(body io.Reader, cb types.StreamCallback, unmapTool func(string) string) (*types.Response, error) {
 	emit := func(e types.StreamEvent) {
-		if cb != nil { cb(e) }
+		if cb != nil {
+			cb(e)
+		}
 	}
 
 	resp := &types.Response{}
-	var thinkingBuf string   // accumulated thinking content
+	var thinkingBuf string     // accumulated thinking content
 	var lastThinkingSig string // last thinking block signature
 
 	type blockState struct {
@@ -239,7 +241,9 @@ func ParseAnthropicStream(body io.Reader, cb types.StreamCallback, unmapTool fun
 		case "content_block_delta":
 			idx := jsonInt(event, "index")
 			bs := blocks[idx]
-			if bs == nil { continue }
+			if bs == nil {
+				continue
+			}
 			delta, _ := event["delta"].(map[string]any)
 			switch delta["type"].(string) {
 			case "text_delta":
@@ -261,20 +265,28 @@ func ParseAnthropicStream(body io.Reader, cb types.StreamCallback, unmapTool fun
 		case "content_block_stop":
 			idx := jsonInt(event, "index")
 			bs := blocks[idx]
-			if bs == nil { continue }
+			if bs == nil {
+				continue
+			}
 			switch bs.blockType {
 			case "text":
-				if resp.Text != "" { resp.Text += "\n" }
+				if resp.Text != "" {
+					resp.Text += "\n"
+				}
 				resp.Text += bs.text
 			case "thinking":
-				if thinkingBuf != "" { thinkingBuf += "\n" }
+				if thinkingBuf != "" {
+					thinkingBuf += "\n"
+				}
 				thinkingBuf += bs.thinking
 				if bs.signature != "" {
 					lastThinkingSig = bs.signature
 				}
 			case "tool_use":
 				input := json.RawMessage(bs.toolJSON)
-				if len(input) == 0 { input = json.RawMessage("{}") }
+				if len(input) == 0 {
+					input = json.RawMessage("{}")
+				}
 				resp.ToolCalls = append(resp.ToolCalls, types.ToolCall{
 					ID: bs.toolID, Name: bs.toolName, Input: input,
 				})
@@ -315,7 +327,7 @@ func TranslateMessageToAnthropic(msg types.Message) []json.RawMessage {
 				content = append(content, block)
 			} else if p.Image != nil {
 				content = append(content, map[string]any{
-					"type": "image",
+					"type":   "image",
 					"source": map[string]string{"type": "base64", "media_type": p.Image.MimeType, "data": p.Image.Base64},
 				})
 			} else if p.Text != "" {
@@ -381,9 +393,11 @@ func BuildAnthropicThinkingFull(model, level string, maxTokens int) (ThinkingCon
 		// output_config is TOP-LEVEL in the request body, not inside thinking
 		if level != "" {
 			// Map harness xhigh → Anthropic max (supported: low, medium, high, max)
-		effort := level
-		if effort == "xhigh" { effort = "max" }
-		cfg.OutputConfig = map[string]any{"effort": effort}
+			effort := level
+			if effort == "xhigh" {
+				effort = "max"
+			}
+			cfg.OutputConfig = map[string]any{"effort": effort}
 		}
 		return cfg, nil
 	}
@@ -419,7 +433,7 @@ func isAdaptiveRecommended(model string) bool {
 
 func containsStr(s, sub string) bool { return bytes.Contains([]byte(s), []byte(sub)) }
 
-func jsonInt(m map[string]any, key string) int { v, _ := m[key].(float64); return int(v) }
+func jsonInt(m map[string]any, key string) int    { v, _ := m[key].(float64); return int(v) }
 func jsonStr(m map[string]any, key string) string { v, _ := m[key].(string); return v }
 
 // BuildAnthropicThinkingFromMeta builds thinking config using authoritative ModelMeta.
@@ -444,9 +458,11 @@ func buildThinkingConfig(adaptive bool, level string, maxTokens int) (ThinkingCo
 		}
 		if level != "" {
 			// Map harness xhigh → Anthropic max (supported: low, medium, high, max)
-		effort := level
-		if effort == "xhigh" { effort = "max" }
-		cfg.OutputConfig = map[string]any{"effort": effort}
+			effort := level
+			if effort == "xhigh" {
+				effort = "max"
+			}
+			cfg.OutputConfig = map[string]any{"effort": effort}
 		}
 		return cfg, nil
 	}

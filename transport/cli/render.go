@@ -1,10 +1,10 @@
 package cli
 
 import (
-	"github.com/gurcuff91/harness/types"
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"github.com/gurcuff91/harness/types"
 	"os"
 	"strings"
 	"sync"
@@ -35,13 +35,13 @@ type Renderer struct {
 	turnStart        time.Time
 
 	// Per-block state
-	startTime     time.Time
-	spinner       int
-	stopSpin      chan struct{}
-	spinning      bool
-	streaming     bool // currently printing streamed text
+	startTime      time.Time
+	spinner        int
+	stopSpin       chan struct{}
+	spinning       bool
+	streaming      bool // currently printing streamed text
 	thinkStreaming bool // currently printing streamed thinking
-	col           int  // current column position in the active line
+	col            int  // current column position in the active line
 
 	// Stats from session — set on EventTokens, used in footer
 	// Per-turn (last turn only)
@@ -51,7 +51,7 @@ type Renderer struct {
 	lastCacheWrite int
 	// Accumulated across session (calculated by session, not renderer)
 	totalCost     float64 // USD
-	contextUsage    float64 // 0.0–1.0
+	contextUsage  float64 // 0.0–1.0
 	contextWindow int     // model context window size (tokens)
 
 	// Display config
@@ -99,17 +99,15 @@ func (r *Renderer) Handle(e types.Event) {
 		r.col = 0
 		r.startSpinner(e.Loop)
 
-
-
 	case types.EventStreamThinkingDelta:
-		
+
 		r.renderThinkingDelta(e.Delta)
 
 	case types.EventStreamThinkingEnd:
 		r.finishThinkingStream()
 
 	case types.EventStreamTextDelta:
-		
+
 		if r.thinkStreaming {
 			// Thinking was streaming — the agent should have closed it,
 			// but safety fallback
@@ -129,14 +127,12 @@ func (r *Renderer) Handle(e types.Event) {
 		r.startSpinner(0)
 
 	case types.EventToolCall:
-		
+
 		r.finishAnyStream()
 		r.renderToolCall(e.ToolName, e.ToolArgs)
 
 	case types.EventToolResult:
 		r.renderToolResult(e.ToolName, e.Output, e.Duration, e.IsError)
-
-
 
 	case types.EventTokens:
 		r.finishAnyStream()
@@ -386,20 +382,28 @@ func (r *Renderer) renderThinkingDelta(delta string) {
 	buf := make([]byte, 0, len(clean))
 	for _, ch := range clean {
 		if ch == '\n' {
-			if len(buf) > 0 { fmt.Print(C(Dim+Italic, string(buf))); buf = buf[:0] }
+			if len(buf) > 0 {
+				fmt.Print(C(Dim+Italic, string(buf)))
+				buf = buf[:0]
+			}
 			printf("\n  %s ", bar)
 			r.col = 0
 			continue
 		}
 		if r.col >= mc {
-			if len(buf) > 0 { fmt.Print(C(Dim+Italic, string(buf))); buf = buf[:0] }
+			if len(buf) > 0 {
+				fmt.Print(C(Dim+Italic, string(buf)))
+				buf = buf[:0]
+			}
 			printf("\n  %s ", bar)
 			r.col = 0
 		}
 		buf = append(buf, string(ch)...)
 		r.col++
 	}
-	if len(buf) > 0 { fmt.Print(C(Dim+Italic, string(buf))) }
+	if len(buf) > 0 {
+		fmt.Print(C(Dim+Italic, string(buf)))
+	}
 }
 
 // finishThinkingStream closes the thinking block.
@@ -430,20 +434,28 @@ func (r *Renderer) renderTextDelta(delta string) {
 	buf := make([]byte, 0, len(clean))
 	for _, ch := range clean {
 		if ch == '\n' {
-			if len(buf) > 0 { fmt.Print(string(buf)); buf = buf[:0] }
+			if len(buf) > 0 {
+				fmt.Print(string(buf))
+				buf = buf[:0]
+			}
 			printf("\n  %s ", bar)
 			r.col = 0
 			continue
 		}
 		if r.col >= mc {
-			if len(buf) > 0 { fmt.Print(string(buf)); buf = buf[:0] }
+			if len(buf) > 0 {
+				fmt.Print(string(buf))
+				buf = buf[:0]
+			}
 			printf("\n  %s ", bar)
 			r.col = 0
 		}
 		buf = append(buf, string(ch)...)
 		r.col++
 	}
-	if len(buf) > 0 { fmt.Print(string(buf)) }
+	if len(buf) > 0 {
+		fmt.Print(string(buf))
+	}
 }
 
 // finishTextStream closes the text block and prints the compact footer.
@@ -525,8 +537,6 @@ func (r *Renderer) SetThinkingLevel(level string) {
 		r.thinkingLevel = level
 	}
 }
-
-
 
 // ============================================================
 // Non-streaming Renderers

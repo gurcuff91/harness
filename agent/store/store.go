@@ -20,7 +20,7 @@ type SessionMeta struct {
 	Name string `json:"name,omitempty"`
 
 	// Runtime state — mutable, persisted on change
-	Model    string `json:"model"`             // "provider/model"
+	Model    string `json:"model"`              // "provider/model"
 	Thinking string `json:"thinking,omitempty"` // thinking level
 
 	// Compaction

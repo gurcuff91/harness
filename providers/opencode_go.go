@@ -29,13 +29,13 @@ const (
 
 func NewOpenCodeGo() *OpenCodeGo {
 	o := &OpenCodeGo{
-				client: &http.Client{},
+		client: &http.Client{},
 		cache:  make(map[string]types.ModelMeta),
 	}
 	return o
 }
 
-func (o *OpenCodeGo) Name() string   { return "opencode-go" }
+func (o *OpenCodeGo) Name() string { return "opencode-go" }
 func (o *OpenCodeGo) ActivationSource() ActivationSource {
 	return activationSourceAPIKey(openCodeGoAPIKeyEnv, openCodeGoAPIKeyCred)
 }
@@ -128,9 +128,6 @@ func (o *OpenCodeGo) validateKey() bool {
 func (o *OpenCodeGo) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
 	return llm.DoOpenAIStream(ctx, o.client, openCodeGoURL+"/chat/completions", o.apiKey, &llm.OpenAIRequest{Request: req}, nil, cb)
 }
-
-
-
 
 func fetchOpenCodeGoModels(apiKey string) ([]types.ModelMeta, error) {
 	req, _ := http.NewRequest("GET", openCodeGoURL+"/models", nil)

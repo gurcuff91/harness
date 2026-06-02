@@ -1,9 +1,8 @@
 package providers
 
 import (
-	"github.com/gurcuff91/harness/types"
 	"fmt"
-
+	"github.com/gurcuff91/harness/types"
 )
 
 // ProviderStatus describes a provider and its current connection state.
@@ -19,12 +18,12 @@ func GetProviderStatuses() []ProviderStatus {
 	EnsureRegistry()
 
 	labels := map[string]string{
-		"claude-oauth":  "Claude OAuth",
-		"anthropic":     "Anthropic",
-		"openai":        "OpenAI",
-		"opencode-go":   "OpenCode Go",
-		"ollama-cloud":  "Ollama Cloud",
-		"ollama":        "Ollama",
+		"claude-oauth": "Claude OAuth",
+		"anthropic":    "Anthropic",
+		"openai":       "OpenAI",
+		"opencode-go":  "OpenCode Go",
+		"ollama-cloud": "Ollama Cloud",
+		"ollama":       "Ollama",
 	}
 
 	var statuses []ProviderStatus
@@ -58,12 +57,12 @@ func GetModelGroups(currentModel string) []ModelGroup {
 	EnsureRegistry()
 
 	labels := map[string]string{
-		"claude-oauth":  "Claude OAuth",
-		"anthropic":     "Anthropic API",
-		"openai":        "OpenAI API",
-		"opencode-go":   "OpenCode Go",
-		"ollama-cloud":  "Ollama Cloud",
-		"ollama":        "Ollama (local)",
+		"claude-oauth": "Claude OAuth",
+		"anthropic":    "Anthropic API",
+		"openai":       "OpenAI API",
+		"opencode-go":  "OpenCode Go",
+		"ollama-cloud": "Ollama Cloud",
+		"ollama":       "Ollama (local)",
 	}
 
 	order := []string{"claude-oauth", "anthropic", "openai", "opencode-go", "ollama-cloud", "ollama"}

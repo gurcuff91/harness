@@ -22,7 +22,7 @@ type Credentials struct {
 	// CredTypeOAuth
 	AccessToken      string `json:"access_token,omitempty"`
 	RefreshToken     string `json:"refresh_token,omitempty"`
-	ExpiresAt        int64  `json:"expires_at,omitempty"`  // Unix ms
+	ExpiresAt        int64  `json:"expires_at,omitempty"` // Unix ms
 	SubscriptionType string `json:"subscription_type,omitempty"`
 }
 

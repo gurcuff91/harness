@@ -226,9 +226,9 @@ func buildOAuthTools(defs []types.ToolDef) []llm.AnthropicTool {
 	tools := make([]llm.AnthropicTool, len(defs))
 	for i, t := range defs {
 		tools[i] = llm.AnthropicTool{
-			Name:               mapToolNameToCC(t.Name),
-			Description:        t.Description,
-			InputSchema:        t.InputSchema,
+			Name:                mapToolNameToCC(t.Name),
+			Description:         t.Description,
+			InputSchema:         t.InputSchema,
 			EagerInputStreaming: true,
 		}
 	}
@@ -384,14 +384,14 @@ func unmapToolNameFromCC(name string) string {
 // buildCCHeaders returns Claude Code identity headers as a map.
 func buildCCHeaders(token, billingHeader, sessionID string) map[string]string {
 	headers := map[string]string{
-		"Authorization":                           "Bearer " + token,
-		"anthropic-version":                       "2023-06-01",
-		"anthropic-beta":                          "claude-code-20250219,oauth-2025-04-20",
+		"Authorization":     "Bearer " + token,
+		"anthropic-version": "2023-06-01",
+		"anthropic-beta":    "claude-code-20250219,oauth-2025-04-20",
 		"anthropic-dangerous-direct-browser-access": "true",
-		"x-app":                                   "cli",
-		"user-agent":                              "claude-cli/" + ccVersion + " (external, cli)",
-		"x-client-request-id":                    uuid.New().String(),
-		"X-Claude-Code-Session-Id":               sessionID,
+		"x-app":                    "cli",
+		"user-agent":               "claude-cli/" + ccVersion + " (external, cli)",
+		"x-client-request-id":      uuid.New().String(),
+		"X-Claude-Code-Session-Id": sessionID,
 	}
 	if billingHeader != "" {
 		headers["x-anthropic-billing-header"] = billingHeader
@@ -418,7 +418,7 @@ func setCCHeaders(req *http.Request, token, billingHeader, sessionID string) {
 func buildBillingHeader(messages []json.RawMessage) string {
 	text := extractFirstUserText(messages)
 	sampled := sampleChars(text, []int{4, 7, 20})
-	suffix := sha256hex(billingSalt+sampled+ccVersion)[:3]
+	suffix := sha256hex(billingSalt + sampled + ccVersion)[:3]
 	cch := sha256hex(text)[:5]
 	return fmt.Sprintf("cc_version=%s.%s; cc_entrypoint=cli; cch=%s;", ccVersion, suffix, cch)
 }

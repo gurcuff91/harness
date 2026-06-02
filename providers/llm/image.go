@@ -1,9 +1,9 @@
 package llm
 
 import (
-	"github.com/gurcuff91/harness/types"
 	"encoding/base64"
 	"fmt"
+	"github.com/gurcuff91/harness/types"
 	"os"
 	"path/filepath"
 	"strings"

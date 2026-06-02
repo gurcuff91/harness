@@ -74,11 +74,21 @@ var defaultMeta = types.ModelMeta{
 func EnrichMeta(m types.ModelMeta) types.ModelMeta {
 	// 1. Try remote llm-registry (in-memory, fetched once)
 	if r := lookupRemote(m.ID); r != nil {
-		if m.ContextWindow <= 0  { m.ContextWindow = r.ContextWindow }
-		if m.MaxTokens <= 0      { m.MaxTokens = r.MaxTokens }
-		if !m.Vision             { m.Vision = r.Vision }
-		if !m.Thinking           { m.Thinking = r.Thinking }
-		if m.DisplayName == ""   { m.DisplayName = r.DisplayName }
+		if m.ContextWindow <= 0 {
+			m.ContextWindow = r.ContextWindow
+		}
+		if m.MaxTokens <= 0 {
+			m.MaxTokens = r.MaxTokens
+		}
+		if !m.Vision {
+			m.Vision = r.Vision
+		}
+		if !m.Thinking {
+			m.Thinking = r.Thinking
+		}
+		if m.DisplayName == "" {
+			m.DisplayName = r.DisplayName
+		}
 		// Pricing always from registry
 		m.InputPrice = r.InputPrice
 		m.OutputPrice = r.OutputPrice
@@ -89,23 +99,41 @@ func EnrichMeta(m types.ModelMeta) types.ModelMeta {
 
 	// 2. Hardcoded known models
 	if r, ok := hardcodedRegistry[m.ID]; ok {
-		if m.ContextWindow <= 0 { m.ContextWindow = r.ContextWindow }
-		if m.MaxTokens <= 0    { m.MaxTokens = r.MaxTokens }
-		if !m.Vision           { m.Vision = r.Vision }
-		if !m.Thinking         { m.Thinking = r.Thinking }
+		if m.ContextWindow <= 0 {
+			m.ContextWindow = r.ContextWindow
+		}
+		if m.MaxTokens <= 0 {
+			m.MaxTokens = r.MaxTokens
+		}
+		if !m.Vision {
+			m.Vision = r.Vision
+		}
+		if !m.Thinking {
+			m.Thinking = r.Thinking
+		}
 		// Pricing always from registry (hardcoded registry has no prices)
 		ApplyRegistryPricing(&m)
 		return m
 	}
 
 	// 3. Infer from model name
-	if m.ContextWindow <= 0 { m.ContextWindow = InferContextWindow(m.ID) }
-	if m.MaxTokens <= 0    { m.MaxTokens = 32000 }
-	if !m.Vision           { m.Vision = InferVision(m.ID) }
+	if m.ContextWindow <= 0 {
+		m.ContextWindow = InferContextWindow(m.ID)
+	}
+	if m.MaxTokens <= 0 {
+		m.MaxTokens = 32000
+	}
+	if !m.Vision {
+		m.Vision = InferVision(m.ID)
+	}
 
 	// 4. Generic defaults for anything still missing
-	if m.ContextWindow <= 0 { m.ContextWindow = defaultMeta.ContextWindow }
-	if m.MaxTokens <= 0    { m.MaxTokens = defaultMeta.MaxTokens }
+	if m.ContextWindow <= 0 {
+		m.ContextWindow = defaultMeta.ContextWindow
+	}
+	if m.MaxTokens <= 0 {
+		m.MaxTokens = defaultMeta.MaxTokens
+	}
 
 	// Pricing: try registry one last time (even unknown models might partially match)
 	ApplyRegistryPricing(&m)
@@ -155,7 +183,9 @@ func fetchRemoteRegistry() map[string]types.ModelMeta {
 	req, _ := http.NewRequest("GET", url, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
-		if resp != nil { resp.Body.Close() }
+		if resp != nil {
+			resp.Body.Close()
+		}
 		return nil
 	}
 	defer resp.Body.Close()
@@ -306,8 +336,6 @@ func modelSupportsThinking(model string) bool {
 	}
 	return false
 }
-
-
 
 // ── Inference helpers ─────────────────────────────────────────────────────
 

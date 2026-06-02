@@ -23,9 +23,9 @@ import (
 //
 // All Prompt() calls are serialized via mu.
 type Session struct {
-	id           string
-	cwd          string
-	name         string
+	id   string
+	cwd  string
+	name string
 
 	// Dependencies
 	store        store.SessionStore
@@ -36,9 +36,9 @@ type Session struct {
 	systemPrompt string
 
 	// Stats — accumulated over the session lifetime
-	stats          types.SessionStats
-	lastInputTokens int    // last turn input tokens — used to compute ContextUsage
-	contextWindow   int    // from model meta, updated on SwitchModel
+	stats           types.SessionStats
+	lastInputTokens int // last turn input tokens — used to compute ContextUsage
+	contextWindow   int // from model meta, updated on SwitchModel
 	pricing         modelPricing
 
 	handler Handler
@@ -492,15 +492,8 @@ func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 	return resp.Text, nil
 }
 
-
-
-
 func (s *Session) emit(e types.Event) {
 	if s.handler != nil {
 		s.handler(e)
 	}
 }
-
-
-
-

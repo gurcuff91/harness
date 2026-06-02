@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	ollamaCloudAPIKeyCred = "ollama-cloud.api_key"
-	ollamaCloudAPIKeyEnv  = "OLLAMA_CLOUD_API_KEY"
+	ollamaCloudAPIKeyCred    = "ollama-cloud.api_key"
+	ollamaCloudAPIKeyEnv     = "OLLAMA_CLOUD_API_KEY"
 	ollamaCloudURLSettingKey = "ollama-cloud.url"
 	ollamaCloudURLEnv        = "OLLAMA_CLOUD_URL"
 	ollamaCloudURLDefault    = "https://ollama.com/v1"
@@ -35,24 +35,24 @@ func getOllamaCloudURL() string {
 }
 
 type OllamaCloud struct {
-	apiKey string
+	apiKey  string
 	baseURL string
-	client *http.Client
-	cache  map[string]types.ModelMeta
-	mu     sync.RWMutex
+	client  *http.Client
+	cache   map[string]types.ModelMeta
+	mu      sync.RWMutex
 }
 
 func NewOllamaCloud() *OllamaCloud {
 	o := &OllamaCloud{
-		client:  &http.Client{},
-		cache:   make(map[string]types.ModelMeta),
+		client: &http.Client{},
+		cache:  make(map[string]types.ModelMeta),
 	}
 	o.baseURL = getOllamaCloudURL()
 	o.ResolveCredentials() //nolint:errcheck
 	return o
 }
 
-func (o *OllamaCloud) Name() string   { return "ollama-cloud" }
+func (o *OllamaCloud) Name() string { return "ollama-cloud" }
 func (o *OllamaCloud) ActivationSource() ActivationSource {
 	return activationSourceAPIKey(ollamaCloudAPIKeyEnv, ollamaCloudAPIKeyCred)
 }
@@ -175,9 +175,6 @@ func (o *OllamaCloud) validateKey() bool {
 func (o *OllamaCloud) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
 	return llm.DoOpenAIStream(ctx, o.client, o.baseURL+"/chat/completions", o.apiKey, &llm.OpenAIRequest{Request: req}, nil, cb)
 }
-
-
-
 
 func fetchOllamaCloudModelInfo(name string) *types.ModelMeta {
 	body, _ := json.Marshal(map[string]string{"name": name})

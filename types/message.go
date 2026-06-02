@@ -23,11 +23,11 @@ type Message struct {
 // ContentPart is one element within a message.
 // Exactly one field is non-nil/non-empty per part.
 type ContentPart struct {
-	Text       string       `json:"text,omitempty"`        // plain text
-	Image      *ImageData   `json:"image,omitempty"`       // base64 image (user only)
-	Thinking   *ThinkingPart `json:"thinking,omitempty"`   // reasoning block (assistant only)
-	ToolCall   *ToolCall    `json:"tool_call,omitempty"`   // tool invocation (assistant only)
-	ToolResult *ToolResult  `json:"tool_result,omitempty"` // tool output (user only)
+	Text       string        `json:"text,omitempty"`        // plain text
+	Image      *ImageData    `json:"image,omitempty"`       // base64 image (user only)
+	Thinking   *ThinkingPart `json:"thinking,omitempty"`    // reasoning block (assistant only)
+	ToolCall   *ToolCall     `json:"tool_call,omitempty"`   // tool invocation (assistant only)
+	ToolResult *ToolResult   `json:"tool_result,omitempty"` // tool output (user only)
 }
 
 // ThinkingPart holds the model's reasoning content.

@@ -55,4 +55,3 @@ func activationSourceAPIKey(envVar, credKey string) ActivationSource {
 	}
 	return ActivationNone
 }
-

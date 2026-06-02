@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 
 	"github.com/gurcuff91/harness/agent"
@@ -27,9 +27,9 @@ type model struct {
 	modelName string
 
 	// UI components
-	input     textinput.Model
-	viewport  *linesBuf    // scrollable output above the input
-	footer    string       // compact footer line
+	input    textinput.Model
+	viewport *linesBuf // scrollable output above the input
+	footer   string    // compact footer line
 
 	// State
 	streaming        bool
@@ -38,9 +38,9 @@ type model struct {
 	cancelFn         context.CancelFunc
 
 	// Command palette
-	showCmds   bool
-	cmdFilter  string
-	cmdSel     int
+	showCmds  bool
+	cmdFilter string
+	cmdSel    int
 }
 
 // linesBuf is a simple ring buffer for the scrollable output area.
@@ -84,7 +84,9 @@ func New(a *agent.Agent, defaultModel string) *model {
 	// Keyboard: Enter submits, no CharLimit
 
 	w, _, _ := term.GetSize(0)
-	if w <= 0 { w = 80 }
+	if w <= 0 {
+		w = 80
+	}
 
 	return &model{
 		a:            a,
@@ -139,9 +141,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "up", "down":
 			if m.showCmds {
-				if msg.String() == "up" { m.cmdSel-- } else { m.cmdSel++ }
-				if m.cmdSel < 0 { m.cmdSel = len(m.filteredCmds()) - 1 }
-				if m.cmdSel >= len(m.filteredCmds()) { m.cmdSel = 0 }
+				if msg.String() == "up" {
+					m.cmdSel--
+				} else {
+					m.cmdSel++
+				}
+				if m.cmdSel < 0 {
+					m.cmdSel = len(m.filteredCmds()) - 1
+				}
+				if m.cmdSel >= len(m.filteredCmds()) {
+					m.cmdSel = 0
+				}
 				return m, nil
 			}
 
@@ -208,10 +218,14 @@ func (m *model) View() string {
 		cmds := m.filteredCmds()
 		for i, cmd := range cmds {
 			prefix := "  "
-			if i == m.cmdSel { prefix = ansiBCyan + "→ " + ansiReset }
+			if i == m.cmdSel {
+				prefix = ansiBCyan + "→ " + ansiReset
+			}
 			cmdView += prefix + ansiDim + "/" + ansiReset + cmd + "\n"
 		}
-		if cmdView != "" { cmdView += "\n" }
+		if cmdView != "" {
+			cmdView += "\n"
+		}
 	}
 
 	output := m.viewport.view()
@@ -228,7 +242,9 @@ type agentEventMsg struct{ event types.Event }
 func (m *model) listenEvents() tea.Cmd {
 	return func() tea.Msg {
 		e, ok := <-m.events
-		if !ok { return nil }
+		if !ok {
+			return nil
+		}
 		return agentEventMsg{event: e}
 	}
 }
@@ -242,8 +258,7 @@ const (
 	ansiReset  = "\033[0m"
 )
 
-var (
-)
+var ()
 
 func (m *model) handleAgentEvent(e types.Event) {
 	switch e.Type {
@@ -285,7 +300,9 @@ func (m *model) handleAgentEvent(e types.Event) {
 
 	case types.EventToolResult:
 		mark := "✓"
-		if e.IsError { mark = "✗" }
+		if e.IsError {
+			mark = "✗"
+		}
 		m.viewport.add(fmt.Sprintf("  %s %s [%s]", mark, trunc(e.Output, 60), e.Duration.Round(1000000)))
 
 	case types.EventTokens:
@@ -334,10 +351,14 @@ var cmdNames = []string{"exit", "quit", "clear", "model", "connect", "disconnect
 // filteredCmds returns commands matching the current input filter
 func (m *model) filteredCmds() []string {
 	v := strings.TrimPrefix(m.input.Value(), "/")
-	if v == "" { return cmdNames }
+	if v == "" {
+		return cmdNames
+	}
 	var out []string
 	for _, cmd := range cmdNames {
-		if strings.HasPrefix(cmd, v) { out = append(out, cmd) }
+		if strings.HasPrefix(cmd, v) {
+			out = append(out, cmd)
+		}
 	}
 	return out
 }
@@ -355,12 +376,16 @@ func (m *model) checkCommandPalette() {
 
 func (m *model) handleCommand(input string) {
 	parts := strings.Fields(strings.ToLower(input))
-	if len(parts) == 0 { return }
+	if len(parts) == 0 {
+		return
+	}
 	switch parts[0] {
 	case "/exit", "/quit", "/q":
 		m.cancelCurrentStream()
 	case "/clear":
-		if m.session != nil { m.session.Close() }
+		if m.session != nil {
+			m.session.Close()
+		}
 		if sess, err := m.a.NewSession(".", m.modelName); err == nil {
 			m.session = sess
 			m.session.Subscribe(func(e types.Event) { m.events <- e })
@@ -390,7 +415,9 @@ func (m *model) handleCommand(input string) {
 		} else {
 			level := parts[1]
 			config.GetSettingsManager().SetThinkingLevel(level)
-			if m.session != nil { m.session.SwitchThinking(level) }
+			if m.session != nil {
+				m.session.SwitchThinking(level)
+			}
 			m.viewport.add("  ✓ Thinking: " + level)
 		}
 	case "/help":
@@ -403,7 +430,9 @@ func (m *model) handleCommand(input string) {
 func (m *model) switchModel(selector string) {
 	if !strings.Contains(selector, "/") {
 		for _, p := range providers.All {
-			if !p.IsActive() { continue }
+			if !p.IsActive() {
+				continue
+			}
 			for _, md := range p.Models() {
 				if md.ID == selector {
 					selector = p.Name() + "/" + selector
@@ -423,7 +452,9 @@ func (m *model) switchModel(selector string) {
 		return
 	}
 	if sess, err := m.a.NewSession(".", selector); err == nil {
-		if m.session != nil { m.session.Close() }
+		if m.session != nil {
+			m.session.Close()
+		}
 		m.session = sess
 		m.modelName = selector
 		m.session.Subscribe(func(e types.Event) { m.events <- e })
@@ -457,7 +488,9 @@ func (m *model) printBanner() {
 
 func (m *model) disconnectProvider(name string) {
 	for _, p := range providers.All {
-		if p.Name() != name { continue }
+		if p.Name() != name {
+			continue
+		}
 		if p.CredentialType() == types.CredTypeNone {
 			m.viewport.add(fmt.Sprintf("  %s is auto-detected — cannot disconnect", name))
 			return
@@ -497,7 +530,9 @@ func (m *model) printModels() {
 		m.viewport.add("  " + g.Label)
 		for _, md := range g.Models {
 			marker := "  "
-			if md.Active { marker = "● " }
+			if md.Active {
+				marker = "● "
+			}
 			m.viewport.add(fmt.Sprintf("  %s%s/%s", marker, md.Provider, md.ID))
 		}
 	}
@@ -506,7 +541,9 @@ func (m *model) printModels() {
 func (m *model) printProviders() {
 	for _, p := range providers.All {
 		status := "disconnected"
-		if p.IsActive() { status = "connected" }
+		if p.IsActive() {
+			status = "connected"
+		}
 		m.viewport.add(fmt.Sprintf("  %-18s (%s)", p.Name(), status))
 	}
 }
@@ -535,24 +572,35 @@ func buildFooter(tokens types.TokenUsage, model string) string {
 
 func compactNum(n int) string {
 	switch {
-	case n >= 1_000_000: return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
-	case n >= 1_000:     return fmt.Sprintf("%.1fk", float64(n)/1_000)
-	default:             return fmt.Sprintf("%d", n)
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
 	}
 }
 
 func toolIcon(name string) string {
 	switch strings.ToLower(name) {
-	case "bash":   return "⚡"
-	case "read":   return "📄"
-	case "write":  return "✏️"
-	case "edit":   return "🔧"
-	case "fetch", "webfetch": return "🔍"
-	default:       return "🔧"
+	case "bash":
+		return "⚡"
+	case "read":
+		return "📄"
+	case "write":
+		return "✏️"
+	case "edit":
+		return "🔧"
+	case "fetch", "webfetch":
+		return "🔍"
+	default:
+		return "🔧"
 	}
 }
 
 func trunc(s string, max int) string {
-	if len(s) <= max { return s }
+	if len(s) <= max {
+		return s
+	}
 	return s[:max] + "…"
 }

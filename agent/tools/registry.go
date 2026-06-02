@@ -18,8 +18,8 @@ type Tool struct {
 
 // Registry manages available tools.
 type Registry struct {
-	tools  map[string]Tool
-	order  []string // insertion order for deterministic output
+	tools map[string]Tool
+	order []string // insertion order for deterministic output
 }
 
 func NewRegistry() *Registry {

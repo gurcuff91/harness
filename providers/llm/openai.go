@@ -1,11 +1,11 @@
 package llm
 
 import (
-	"github.com/gurcuff91/harness/types"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/gurcuff91/harness/types"
 	"io"
 	"net/http"
 	"strings"
@@ -21,18 +21,20 @@ type OpenAIRequest struct {
 
 // openAIWireRequest is the internal wire format sent to the API.
 type openAIRequest struct {
-	Model           string          `json:"model"`
+	Model           string            `json:"model"`
 	Messages        []json.RawMessage `json:"messages"`
-	Tools           []openAITool    `json:"tools,omitempty"`
-	MaxTokens       int             `json:"max_tokens,omitempty"`
-	Stream          bool            `json:"stream"`
-	StreamOptions   *streamOpts     `json:"stream_options,omitempty"`
-	Think           *bool           `json:"think,omitempty"`
-	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
-	Thinking        map[string]any  `json:"thinking,omitempty"`
+	Tools           []openAITool      `json:"tools,omitempty"`
+	MaxTokens       int               `json:"max_tokens,omitempty"`
+	Stream          bool              `json:"stream"`
+	StreamOptions   *streamOpts       `json:"stream_options,omitempty"`
+	Think           *bool             `json:"think,omitempty"`
+	ReasoningEffort string            `json:"reasoning_effort,omitempty"`
+	Thinking        map[string]any    `json:"thinking,omitempty"`
 }
 
-type streamOpts struct{ IncludeUsage bool `json:"include_usage"` }
+type streamOpts struct {
+	IncludeUsage bool `json:"include_usage"`
+}
 type openAITool struct {
 	Type     string         `json:"type"`
 	Function openAIFunction `json:"function"`
@@ -94,7 +96,7 @@ func translateMessageToOpenAI(msg types.Message) []json.RawMessage {
 				})
 			} else if p.Image != nil {
 				contentParts = append(contentParts, map[string]any{
-					"type": "image_url",
+					"type":      "image_url",
 					"image_url": map[string]string{"url": "data:" + p.Image.MimeType + ";base64," + p.Image.Base64},
 				})
 			} else if p.Text != "" {
@@ -155,7 +157,7 @@ func buildOpenAIBody(req *types.Request) (*openAIRequest, error) {
 	var tools []openAITool
 	for _, t := range req.Tools {
 		tools = append(tools, openAITool{
-			Type: "function",
+			Type:     "function",
 			Function: openAIFunction{Name: t.Name, Description: t.Description, Parameters: t.InputSchema},
 		})
 	}

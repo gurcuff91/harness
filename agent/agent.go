@@ -44,8 +44,8 @@ type AgentOptions struct {
 	AllowedTools []string     // tool names allowed — empty = all
 
 	// ── Infrastructure (optional) ────────────────────────────────────────
-	Store          store.SessionStoreManager  // default: InMemorySessionStoreManager
-	ResourceLoader resources.ResourceLoader   // default: FileResourceLoader(cwd) per session
+	Store          store.SessionStoreManager // default: InMemorySessionStoreManager
+	ResourceLoader resources.ResourceLoader  // default: FileResourceLoader(cwd) per session
 	//                                         // pass NilLoader{} to disable discovery
 }
 

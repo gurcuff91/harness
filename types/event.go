@@ -17,8 +17,8 @@ const (
 	EventLoopEnd   // one ReAct iteration finished
 
 	// ── Streaming — text ───────────────────────────────────────────────────
-	EventStreamTextDelta    // streamed text fragment from LLM
-	EventStreamTextEnd      // text stream finished (footer should render)
+	EventStreamTextDelta // streamed text fragment from LLM
+	EventStreamTextEnd   // text stream finished (footer should render)
 
 	// ── Streaming — thinking ───────────────────────────────────────────────
 	EventStreamThinkingDelta // streamed thinking/reasoning fragment

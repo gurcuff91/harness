@@ -34,7 +34,7 @@ func NewAnthropic() *Anthropic {
 	return a
 }
 
-func (a *Anthropic) Name() string   { return "anthropic" }
+func (a *Anthropic) Name() string { return "anthropic" }
 func (a *Anthropic) ActivationSource() ActivationSource {
 	return activationSourceAPIKey(anthropicAPIKeyEnv, anthropicAPIKeyCred)
 }
@@ -121,7 +121,6 @@ func (a *Anthropic) CompleteStream(ctx context.Context, req *types.Request, cb t
 	return llm.DoAnthropicStream(ctx, a.client, anthropicAPI, a.apiKey, anthrReq, extraHeaders, cb)
 }
 
-
 const anthropicAPI = "https://api.anthropic.com/v1/messages"
 
 func fetchAnthropicModels(tokenOrKey string) ([]types.ModelMeta, error) {
@@ -174,9 +173,13 @@ func fetchAnthropicModels(tokenOrKey string) ([]types.ModelMeta, error) {
 			continue
 		}
 		cw := m.MaxInputTokens
-		if cw <= 0 { cw = 200000 }
+		if cw <= 0 {
+			cw = 200000
+		}
 		mt := m.MaxOutputTokens
-		if mt <= 0 { mt = 64000 }
+		if mt <= 0 {
+			mt = 64000
+		}
 
 		meta := types.ModelMeta{
 			ID: m.ID, DisplayName: m.DisplayName,

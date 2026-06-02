@@ -47,7 +47,7 @@ func NewOllama() *Ollama {
 	return o
 }
 
-func (o *Ollama) Name() string   { return "ollama" }
+func (o *Ollama) Name() string { return "ollama" }
 func (o *Ollama) ActivationSource() ActivationSource {
 	if OllamaAvailable() {
 		return ActivationAuto
@@ -105,9 +105,6 @@ func (o *Ollama) FetchModels() ([]types.ModelMeta, error) {
 func (o *Ollama) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
 	return llm.DoOpenAIStream(ctx, o.client, o.baseURL+"/v1/chat/completions", "", &llm.OpenAIRequest{Request: req}, nil, cb)
 }
-
-
-
 
 func OllamaAvailable() bool {
 	url := getOllamaURL()

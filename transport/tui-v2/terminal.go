@@ -10,14 +10,14 @@ import (
 
 // Terminal manages raw terminal input/output and resize signals.
 type Terminal struct {
-	stdin       *os.File
-	oldState    *term.State
-	width       int
-	height      int
-	inputCh     chan []byte
-	resizeCh    chan struct{}
-	sigwinchCh  chan os.Signal
-	quit        chan struct{}
+	stdin      *os.File
+	oldState   *term.State
+	width      int
+	height     int
+	inputCh    chan []byte
+	resizeCh   chan struct{}
+	sigwinchCh chan os.Signal
+	quit       chan struct{}
 }
 
 // NewTerminal enters raw mode and starts reading stdin.
@@ -29,8 +29,12 @@ func NewTerminal() (*Terminal, error) {
 	}
 
 	w, h, _ := term.GetSize(int(stdin.Fd()))
-	if w <= 0 { w = 80 }
-	if h <= 0 { h = 24 }
+	if w <= 0 {
+		w = 80
+	}
+	if h <= 0 {
+		h = 24
+	}
 
 	t := &Terminal{
 		stdin:      stdin,

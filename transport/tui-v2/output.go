@@ -53,15 +53,24 @@ func (o *Output) findBreak(s string, maxVis int) int {
 	esc := false
 	lastSpace := -1
 	for i := 0; i < len(s); i++ {
-		if s[i] == '\033' { esc = true; continue }
+		if s[i] == '\033' {
+			esc = true
+			continue
+		}
 		if esc {
-			if (s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z') { esc = false }
+			if (s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z') {
+				esc = false
+			}
 			continue
 		}
 		vis++
-		if s[i] == ' ' { lastSpace = i + 1 }
+		if s[i] == ' ' {
+			lastSpace = i + 1
+		}
 		if vis >= maxVis {
-			if lastSpace > 0 { return lastSpace }
+			if lastSpace > 0 {
+				return lastSpace
+			}
 			return i + 1
 		}
 	}
@@ -115,12 +124,19 @@ func lastVisibleSpace(s string) int {
 	last := -1
 	esc := false
 	for i := 0; i < len(s); i++ {
-		if s[i] == '\033' { esc = true; continue }
-		if esc {
-			if (s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z') { esc = false }
+		if s[i] == '\033' {
+			esc = true
 			continue
 		}
-		if s[i] == ' ' { last = i }
+		if esc {
+			if (s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z') {
+				esc = false
+			}
+			continue
+		}
+		if s[i] == ' ' {
+			last = i
+		}
 	}
 	return last
 }
@@ -129,9 +145,14 @@ func visibleLen(s string) int {
 	n := 0
 	esc := false
 	for i := 0; i < len(s); i++ {
-		if s[i] == '\033' { esc = true; continue }
+		if s[i] == '\033' {
+			esc = true
+			continue
+		}
 		if esc {
-			if (s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z') { esc = false }
+			if (s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z') {
+				esc = false
+			}
 			continue
 		}
 		n++

@@ -13,10 +13,10 @@ import (
 //   - SYSTEM.md:  ~/.harness/agent/SYSTEM.md (global only)
 //   - AGENTS.md:  <cwd>/AGENTS.md walking up to maxDepth levels
 //   - Skills:     loaded from 4 directories in precedence order:
-//                   1. ~/.agents/skills/              (global system — lowest prio)
-//                   2. ~/.harness/agent/skills/        (global user)
-//                   3. <cwd>/.agents/skills/           (local system)
-//                   4. <cwd>/.harness/agent/skills/    (local project — highest prio)
+//     1. ~/.agents/skills/              (global system — lowest prio)
+//     2. ~/.harness/agent/skills/        (global user)
+//     3. <cwd>/.agents/skills/           (local system)
+//     4. <cwd>/.harness/agent/skills/    (local project — highest prio)
 //
 // Skills with the same name: higher priority directory wins.
 // All SKILL.md content is eagerly loaded at Load() time.
