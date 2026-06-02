@@ -3,10 +3,13 @@ package tuiv2
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/config"
 	"github.com/gurcuff91/harness/providers"
+	"github.com/gurcuff91/harness/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -22,7 +25,10 @@ type TUI struct {
 	session *agent.Session
 	events  chan types.Event
 
-	streaming        bool
+	sessionCwd    string
+	sessionName   string
+	thinkingLevel string
+	streaming   bool
 	agentLineStarted bool
 	cancelFn         context.CancelFunc
 	quitFn           context.CancelFunc // cancels Run's context
@@ -506,6 +512,10 @@ func New(a *agent.Agent, model string) *TUI {
 		events: make(chan types.Event, 4),
 	}
 	t.output.SetWrap(term.Width()-3, "   ")
+	if cwd, err := os.Getwd(); err == nil {
+		t.sessionCwd = cwd
+	}
+	t.thinkingLevel = config.GetSettingsManager().ThinkingLevel()
 	t.input = NewInput("Type a message...", term.Width(), t.submit)
 	t.input.onQuit = func() {
 		t.output.Add("   \033[2mGoodbye.\033[0m")
@@ -562,6 +572,9 @@ func (t *TUI) render() {
 	if pl := t.renderPalette(); len(pl) > 0 {
 		lines = append(lines, pl...)
 	}
+
+	// Session info line
+	lines = append(lines, t.renderSessionInfo())
 
 	if f := t.footer.Render(width); len(f) > 0 {
 		lines = append(lines, f...)
@@ -648,7 +661,7 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 			e.Tokens.Input, int(e.Tokens.TotalOutput),
 			e.Tokens.CacheRead, e.Tokens.CacheWrite,
 			e.Tokens.CostUSD, e.Tokens.ContextUsage, e.Tokens.ContextWindow,
-			t.model,
+			t.model, t.thinkingLevel, llm.ModelSupportsThinking(t.model),
 		))
 	case types.EventTurnEnd:
 		t.streaming = false
@@ -755,6 +768,22 @@ func (t *TUI) execCommand(text string) {
 		t.output.Add("   " + msg)
 	}
 	t.output.Add("")
+}
+
+func (t *TUI) renderSessionInfo() string {
+	cwd := t.sessionCwd
+	if cwd == "" {
+		cwd = "~"
+	}
+	// Shorten home dir
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(cwd, home) {
+		cwd = "~" + cwd[len(home):]
+	}
+	name := t.sessionName
+	if name == "" {
+		name = "new session"
+	}
+	return " \033[90m" + cwd + " \033[2m•\033[0m \033[90m" + name + "\033[0m"
 }
 
 func (t *TUI) shutdown() {
