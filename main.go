@@ -1,20 +1,21 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
-
-	tea "github.com/charmbracelet/bubbletea"
+	"os/signal"
+	"syscall"
 
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/config"
 	"github.com/gurcuff91/harness/providers"
-	// "github.com/gurcuff91/harness/transport/cli"  ← CLI kept, inactive
-	"github.com/gurcuff91/harness/transport/tui"
+	// "github.com/gurcuff91/harness/transport/cli"  ← CLI (inactive)
+	// "github.com/gurcuff91/harness/transport/tui"  ← Bubbletea TUI (inactive)
+	tuiv2 "github.com/gurcuff91/harness/transport/tui-v2"
 )
 
 func main() {
-	// ── Model selection ──────────────────────────────────────────
 	model := os.Getenv("HARNESS_MODEL")
 	if model == "" {
 		model = config.GetSettingsManager().ActiveModel()
@@ -32,18 +33,15 @@ func main() {
 		}
 	}
 
-	// ── Create agent ──────────────────────────────────────────────
 	a := agent.New(agent.AgentOptions{
 		ThinkingLevel: config.GetSettingsManager().ThinkingLevel(),
 	})
 
-	// ── Launch TUI ────────────────────────────────────────────────
-	// CLI is kept at transport/cli/
-	p := tea.NewProgram(
-		tui.New(a, model),
-		tea.WithInputTTY(),
-	)
-	if _, err := p.Run(); err != nil {
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	t := tuiv2.New(a, model)
+	if err := t.Run(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
