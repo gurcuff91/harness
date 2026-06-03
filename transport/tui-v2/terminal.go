@@ -97,6 +97,12 @@ func (t *Terminal) ResumeRaw() {
 func (t *Terminal) ShowCursor() { t.WriteString("\033[?25h") }
 func (t *Terminal) HideCursor() { t.WriteString("\033[?25l") }
 
+// EnterAltScreen switches to the alternate screen buffer.
+func (t *Terminal) EnterAltScreen() { t.WriteString("\033[?1049h") }
+
+// ExitAltScreen returns to the normal screen buffer.
+func (t *Terminal) ExitAltScreen() { t.WriteString("\033[?1049l") }
+
 // Clear clears the entire screen and homes the cursor.
 func (t *Terminal) Clear() { t.WriteString("\033[2J\033[H") }
 

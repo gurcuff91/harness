@@ -40,8 +40,6 @@ type TUI struct {
 	prevLines  []string
 	prevWidth  int
 	prevHeight int
-	cursorRow  int
-	maxRendered int
 
 	// Command palette
 	palette   palette
@@ -571,6 +569,8 @@ func (t *TUI) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	t.quitFn = cancel
 	defer t.term.Restore()
+	t.term.EnterAltScreen()
+	defer t.term.ExitAltScreen()
 	t.term.HideCursor()
 	defer t.term.ShowCursor()
 	t.term.Clear()
@@ -598,41 +598,64 @@ func (t *TUI) Run(ctx context.Context) error {
 
 func (t *TUI) render() {
 	width := t.term.Width()
+	height := t.term.Height()
 	t.output.SetWrap(width-3, "   ")
-	var lines []string
-	lines = append(lines, t.output.Lines()...)
+
+	// ── Build fixed chrome (bottom) ────────────────────────────────
+	var chrome []string
+	chrome = append(chrome, "\033[90m"+strings.Repeat("─", width)+"\033[0m") // top separator
+	chrome = append(chrome, t.input.Render(width)...)
+	chrome = append(chrome, "\033[90m"+strings.Repeat("─", width)+"\033[0m") // bottom separator
+	if pl := t.renderPalette(); len(pl) > 0 {
+		chrome = append(chrome, pl...)
+	}
+	chrome = append(chrome, t.renderSessionInfo())
+	if f := t.footer.Render(width); len(f) > 0 {
+		chrome = append(chrome, f...)
+	}
+
+	chromeHeight := len(chrome)
+	contentHeight := height - chromeHeight
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+
+	// ── Build scrollable content (top) ─────────────────────────────
+	var content []string
+	content = append(content, t.output.Lines()...)
 	if t.spinnerActive {
-		if len(lines) > 0 && lines[len(lines)-1] != "" {
-			lines = append(lines, "") // margin above spinner
+		if len(content) > 0 && content[len(content)-1] != "" {
+			content = append(content, "") // margin above spinner
 		}
-		lines = append(lines, t.renderSpinner())
+		content = append(content, t.renderSpinner())
 	}
 	// Queue indicator
 	if t.session != nil && t.streaming {
 		if qLen := t.session.FollowUpCount(); qLen > 0 {
-			lines = append(lines, fmt.Sprintf(" \033[2m%d message%s queued\033[0m", qLen, pluralS(qLen)))
+			content = append(content, fmt.Sprintf(" \033[2m%d message%s queued\033[0m", qLen, pluralS(qLen)))
 		}
 	}
-	// Always ensure margin before separator
-	if len(lines) > 0 && lines[len(lines)-1] != "" {
-		lines = append(lines, "")
-	}
-	lines = append(lines, "\033[90m"+strings.Repeat("─", width)+"\033[0m")
-	lines = append(lines, t.input.Render(width)...)
-	lines = append(lines, "\033[90m"+strings.Repeat("─", width)+"\033[0m")
-
-	// Palette
-	if pl := t.renderPalette(); len(pl) > 0 {
-		lines = append(lines, pl...)
+	// Ensure margin before chrome
+	if len(content) > 0 && content[len(content)-1] != "" {
+		content = append(content, "")
 	}
 
-	// Session info line
-	lines = append(lines, t.renderSessionInfo())
-
-	if f := t.footer.Render(width); len(f) > 0 {
-		lines = append(lines, f...)
+	// ── Viewport: take last N content lines ────────────────────────
+	if len(content) > contentHeight {
+		content = content[len(content)-contentHeight:]
 	}
-	// Append \033[0m to each line to prevent color bleed
+
+	// Pad content to fill viewport (pushes chrome to bottom)
+	for len(content) < contentHeight {
+		content = append([]string{""}, content...)
+	}
+
+	// ── Assemble final frame ───────────────────────────────────────
+	lines := make([]string, 0, height)
+	lines = append(lines, content...)
+	lines = append(lines, chrome...)
+
+	// Reset each line to prevent color bleed
 	for i := range lines {
 		lines[i] = lines[i] + "\033[0m"
 	}
@@ -640,22 +663,17 @@ func (t *TUI) render() {
 	t.diffRender(lines)
 }
 
-// diffRender updates only changed lines. Uses cursor movement instead of full clear.
+// diffRender uses alternate screen buffer. Homes cursor + rewrites from first
+// changed line. Alt screen makes \033[H reliable across all terminals.
 func (t *TUI) diffRender(newLines []string) {
 	width := t.term.Width()
 	height := t.term.Height()
 
-	// Size changed — full re-render
-	if t.prevWidth != width || t.prevHeight != height {
-		t.fullRender(newLines, true)
+	// Size changed or first render — full redraw
+	if len(t.prevLines) == 0 || t.prevWidth != width || t.prevHeight != height {
+		t.fullRender(newLines)
 		t.prevWidth = width
 		t.prevHeight = height
-		return
-	}
-
-	// First render
-	if len(t.prevLines) == 0 {
-		t.fullRender(newLines, false)
 		return
 	}
 
@@ -674,37 +692,17 @@ func (t *TUI) diffRender(newLines []string) {
 	if firstChanged == -1 && len(newLines) != len(t.prevLines) {
 		firstChanged = minLen
 	}
-
-	// No changes
 	if firstChanged == -1 {
-		return
-	}
-
-	// Check if first change is above visible viewport
-	prevViewportTop := 0
-	if len(t.prevLines) > height {
-		prevViewportTop = len(t.prevLines) - height
-	}
-	if firstChanged < prevViewportTop {
-		t.fullRender(newLines, true)
-		return
+		return // no changes
 	}
 
 	var buf strings.Builder
 	buf.WriteString("\033[?2026h") // begin sync
 
-	// Move cursor to firstChanged
-	if firstChanged > t.cursorRow {
-		n := firstChanged - t.cursorRow
-		for i := 0; i < n; i++ {
-			buf.WriteString("\r\n")
-		}
-	} else if firstChanged < t.cursorRow {
-		buf.WriteString(fmt.Sprintf("\033[%dA", t.cursorRow-firstChanged))
-	}
-	buf.WriteString("\r")
+	// Move cursor to firstChanged row (1-indexed)
+	buf.WriteString(fmt.Sprintf("\033[%d;1H", firstChanged+1))
 
-	// Rewrite from firstChanged to end of newLines
+	// Rewrite from firstChanged to end
 	for i := firstChanged; i < len(newLines); i++ {
 		if i > firstChanged {
 			buf.WriteString("\r\n")
@@ -713,39 +711,25 @@ func (t *TUI) diffRender(newLines []string) {
 		buf.WriteString(newLines[i])
 	}
 
-	// Clear leftover lines from previous render
+	// Clear leftover lines if content shrunk
 	if len(t.prevLines) > len(newLines) {
-		extra := len(t.prevLines) - len(newLines)
-		for i := 0; i < extra; i++ {
+		for i := len(newLines); i < len(t.prevLines); i++ {
 			buf.WriteString("\r\n\033[2K")
 		}
-		if extra > 0 {
-			buf.WriteString(fmt.Sprintf("\033[%dA", extra))
-		}
 	}
 
-	buf.WriteString("\033[?2026l")
+	buf.WriteString("\033[?2026l") // end sync
 	t.term.WriteString(buf.String())
 
-	// Update state
-	t.cursorRow = len(newLines) - 1
-	if t.cursorRow < 0 {
-		t.cursorRow = 0
-	}
-	if len(newLines) > t.maxRendered {
-		t.maxRendered = len(newLines)
-	}
 	t.prevLines = make([]string, len(newLines))
 	copy(t.prevLines, newLines)
 }
 
-// fullRender clears and writes everything. Used for first render and resize.
-func (t *TUI) fullRender(newLines []string, clear bool) {
+// fullRender clears alternate screen and writes everything.
+func (t *TUI) fullRender(newLines []string) {
 	var buf strings.Builder
-	buf.WriteString("\033[?2026h")
-	if clear {
-		buf.WriteString("\033[3J\033[2J\033[H") // clear scrollback + screen + home
-	}
+	buf.WriteString("\033[?2026h") // begin sync
+	buf.WriteString("\033[2J\033[H")   // clear + home
 	for i, line := range newLines {
 		if i > 0 {
 			buf.WriteString("\r\n")
@@ -755,15 +739,6 @@ func (t *TUI) fullRender(newLines []string, clear bool) {
 	buf.WriteString("\033[?2026l")
 	t.term.WriteString(buf.String())
 
-	t.cursorRow = len(newLines) - 1
-	if t.cursorRow < 0 {
-		t.cursorRow = 0
-	}
-	if clear {
-		t.maxRendered = len(newLines)
-	} else if len(newLines) > t.maxRendered {
-		t.maxRendered = len(newLines)
-	}
 	t.prevLines = make([]string, len(newLines))
 	copy(t.prevLines, newLines)
 }
