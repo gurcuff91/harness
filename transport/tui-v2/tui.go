@@ -718,11 +718,17 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 		t.output.Add("")
 		t.agentLineStarted = false
 	case types.EventToolStart:
-		t.stopSpinner()
-		// Buffer — wait for EventToolCall to render complete line
+		// Keep spinner running while args stream in
+		if !t.spinnerActive {
+			t.startSpinner()
+		}
 	case types.EventToolArgsDelta:
 		// Buffer — accumulated in ToolArgs at EventToolCall
 	case types.EventToolCall:
+		if t.spinnerActive {
+			t.stopSpinner()
+			t.output.Add("") // margin after spinner
+		}
 		// Render complete tool call: Name(key=val, ...)
 		formatted := formatToolArgs(e.ToolArgs)
 		lines := strings.Split(formatted, "\n")
@@ -735,6 +741,7 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 			}
 			t.output.Add("   " + lines[len(lines)-1] + "\033[0m\033[1;93m)\033[0m")
 		}
+		t.output.Add("") // margin before tool execution spinner
 		t.startSpinner() // spin while tool executes
 	case types.EventToolResult:
 		t.stopSpinner()
