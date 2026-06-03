@@ -36,6 +36,13 @@ type TUI struct {
 	cancelFn         context.CancelFunc
 	quitFn           context.CancelFunc // cancels Run's context
 
+	// Diff renderer state
+	prevLines  []string
+	prevWidth  int
+	prevHeight int
+	cursorRow  int
+	maxRendered int
+
 	// Command palette
 	palette   palette
 	paramHint string // shown when param-required cmd is missing its param
@@ -625,15 +632,140 @@ func (t *TUI) render() {
 	if f := t.footer.Render(width); len(f) > 0 {
 		lines = append(lines, f...)
 	}
-	t.term.Clear()
-	t.term.WriteString("\033[?2026h")
-	for i, line := range lines {
-		if i > 0 {
-			t.term.WriteString("\r\n")
-		}
-		t.term.WriteString(line)
+	// Append \033[0m to each line to prevent color bleed
+	for i := range lines {
+		lines[i] = lines[i] + "\033[0m"
 	}
-	t.term.WriteString("\033[?2026l")
+
+	t.diffRender(lines)
+}
+
+// diffRender updates only changed lines. Uses cursor movement instead of full clear.
+func (t *TUI) diffRender(newLines []string) {
+	width := t.term.Width()
+	height := t.term.Height()
+
+	// Size changed — full re-render
+	if t.prevWidth != width || t.prevHeight != height {
+		t.fullRender(newLines, true)
+		t.prevWidth = width
+		t.prevHeight = height
+		return
+	}
+
+	// First render
+	if len(t.prevLines) == 0 {
+		t.fullRender(newLines, false)
+		return
+	}
+
+	// Find first changed line
+	firstChanged := -1
+	minLen := len(newLines)
+	if len(t.prevLines) < minLen {
+		minLen = len(t.prevLines)
+	}
+	for i := 0; i < minLen; i++ {
+		if t.prevLines[i] != newLines[i] {
+			firstChanged = i
+			break
+		}
+	}
+	if firstChanged == -1 && len(newLines) != len(t.prevLines) {
+		firstChanged = minLen
+	}
+
+	// No changes
+	if firstChanged == -1 {
+		return
+	}
+
+	// Check if first change is above visible viewport
+	prevViewportTop := 0
+	if len(t.prevLines) > height {
+		prevViewportTop = len(t.prevLines) - height
+	}
+	if firstChanged < prevViewportTop {
+		t.fullRender(newLines, true)
+		return
+	}
+
+	var buf strings.Builder
+	buf.WriteString("\033[?2026h") // begin sync
+
+	// Move cursor to firstChanged
+	if firstChanged > t.cursorRow {
+		n := firstChanged - t.cursorRow
+		for i := 0; i < n; i++ {
+			buf.WriteString("\r\n")
+		}
+	} else if firstChanged < t.cursorRow {
+		buf.WriteString(fmt.Sprintf("\033[%dA", t.cursorRow-firstChanged))
+	}
+	buf.WriteString("\r")
+
+	// Rewrite from firstChanged to end of newLines
+	for i := firstChanged; i < len(newLines); i++ {
+		if i > firstChanged {
+			buf.WriteString("\r\n")
+		}
+		buf.WriteString("\033[2K")
+		buf.WriteString(newLines[i])
+	}
+
+	// Clear leftover lines from previous render
+	if len(t.prevLines) > len(newLines) {
+		extra := len(t.prevLines) - len(newLines)
+		for i := 0; i < extra; i++ {
+			buf.WriteString("\r\n\033[2K")
+		}
+		if extra > 0 {
+			buf.WriteString(fmt.Sprintf("\033[%dA", extra))
+		}
+	}
+
+	buf.WriteString("\033[?2026l")
+	t.term.WriteString(buf.String())
+
+	// Update state
+	t.cursorRow = len(newLines) - 1
+	if t.cursorRow < 0 {
+		t.cursorRow = 0
+	}
+	if len(newLines) > t.maxRendered {
+		t.maxRendered = len(newLines)
+	}
+	t.prevLines = make([]string, len(newLines))
+	copy(t.prevLines, newLines)
+}
+
+// fullRender clears and writes everything. Used for first render and resize.
+func (t *TUI) fullRender(newLines []string, clear bool) {
+	var buf strings.Builder
+	buf.WriteString("\033[?2026h")
+	if clear {
+		buf.WriteString("\033[3J\033[2J\033[H") // clear scrollback + screen + home
+	}
+	for i, line := range newLines {
+		if i > 0 {
+			buf.WriteString("\r\n")
+		}
+		buf.WriteString(line)
+	}
+	buf.WriteString("\033[?2026l")
+	t.term.WriteString(buf.String())
+
+	t.cursorRow = len(newLines) - 1
+	if t.cursorRow < 0 {
+		t.cursorRow = 0
+	}
+	if clear {
+		t.maxRendered = len(newLines)
+	} else if len(newLines) > t.maxRendered {
+		t.maxRendered = len(newLines)
+	}
+	t.prevLines = make([]string, len(newLines))
+	copy(t.prevLines, newLines)
 }
 
 func (t *TUI) submit(text string) {
