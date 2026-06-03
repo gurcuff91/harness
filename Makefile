@@ -60,7 +60,7 @@ install: build
 	@mkdir -p $(INSTALL_DIR)
 	cp $(BINARY_DIR)/$(BINARY_NAME) $(INSTALL_DIR)/$(BINARY_NAME)
 	@echo "✅ Installed to $(INSTALL_DIR)/$(BINARY_NAME)"
-	@$(INSTALL_DIR)/$(BINARY_NAME) --version 2>/dev/null || echo "Run 'harness' to start"
+	@echo "Run 'harness' to start"
 
 # Build and run
 run: build

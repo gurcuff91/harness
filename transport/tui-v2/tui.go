@@ -595,8 +595,8 @@ func (t *TUI) render() {
 	var lines []string
 	lines = append(lines, t.output.Lines()...)
 	if t.spinnerActive {
-		lines = append(lines, "") // margin above spinner
 		lines = append(lines, t.renderSpinner())
+		lines = append(lines, "") // margin below spinner before separator
 	}
 	lines = append(lines, "\033[90m"+strings.Repeat("─", width)+"\033[0m")
 	lines = append(lines, t.input.Render(width)...)
@@ -656,13 +656,33 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 	switch e.Type {
 	case types.EventStreamThinkingDelta:
 		t.stopSpinner()
-		if !t.agentLineStarted {
-			t.output.Add("   \033[2m" + e.Delta)
-			t.agentLineStarted = true
-		} else {
-			t.output.AddStream("\033[2m" + e.Delta)
+		parts := strings.Split(e.Delta, "\n")
+		for i, part := range parts {
+			if i == 0 {
+				if !t.agentLineStarted {
+					if part == "" {
+						continue
+					}
+					t.output.Add("   \033[2m" + part)
+					t.agentLineStarted = true
+				} else {
+					t.output.AddStream("\033[2m" + part)
+				}
+			} else {
+				if !t.agentLineStarted {
+					if part == "" {
+						continue
+					}
+					t.output.Add("   \033[2m" + part)
+					t.agentLineStarted = true
+				} else {
+					t.output.Add("   \033[2m" + part)
+				}
+			}
 		}
 	case types.EventStreamThinkingEnd:
+		// Close any unclosed dim on last thinking line
+		t.output.AddStream("\033[0m")
 		t.output.Add("")
 		t.agentLineStarted = false
 	case types.EventStreamTextDelta:
@@ -672,7 +692,7 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 			if i == 0 {
 				if !t.agentLineStarted {
 					if part == "" {
-						continue // skip empty first delta
+						continue
 					}
 					t.output.Add(" \033[96m←\033[0m " + part)
 					t.agentLineStarted = true
@@ -686,7 +706,7 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 					}
 					t.output.Add(" \033[96m←\033[0m " + part)
 					t.agentLineStarted = true
-				} else if part != "" {
+				} else {
 					t.output.Add("   " + part)
 				}
 			}
@@ -704,13 +724,13 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 		formatted := formatToolArgs(e.ToolArgs)
 		lines := strings.Split(formatted, "\n")
 		if len(lines) <= 1 {
-			t.output.AddWrapped(" \033[1;33m"+e.ToolName+"(\033[0m\033[2m"+formatted+"\033[0m\033[1;33m)\033[0m", " ")
+			t.output.AddWrapped("   \033[1;93m"+e.ToolName+"(\033[0m\033[2m"+formatted+"\033[0m\033[1;93m)\033[0m", "   ")
 		} else {
-			t.output.Add(" \033[1;33m" + e.ToolName + "(\033[0m\033[2m" + lines[0])
+			t.output.Add("   \033[1;93m" + e.ToolName + "(\033[0m\033[2m" + lines[0])
 			for _, line := range lines[1 : len(lines)-1] {
-				t.output.Add(" " + line)
+				t.output.Add("   " + line)
 			}
-			t.output.Add(" " + lines[len(lines)-1] + "\033[0m\033[1;33m)\033[0m")
+			t.output.Add("   " + lines[len(lines)-1] + "\033[0m\033[1;93m)\033[0m")
 		}
 		t.startSpinner() // spin while tool executes
 	case types.EventToolResult:
@@ -718,10 +738,10 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 		dur := formatDuration(e.Duration)
 		if e.IsError {
 			errMsg := strings.ReplaceAll(strings.ReplaceAll(e.Output, "\n", " "), "\r", "")
-			t.output.Add("   \033[31m✗ " + trunc(errMsg, 60) + " [" + dur + "]\033[0m")
+			t.output.Add("     \033[31m✗ " + trunc(errMsg, 60) + " [" + dur + "]\033[0m")
 		} else {
 			result := summarizeToolResult(e.ToolName, e.Output)
-			t.output.Add("   \033[32m✓\033[0m \033[2m" + result + " [" + dur + "]\033[0m")
+			t.output.Add("     \033[32m✓\033[0m \033[2m" + result + " [" + dur + "]\033[0m")
 		}
 		t.output.Add("")
 		if t.streaming {
