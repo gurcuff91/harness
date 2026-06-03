@@ -59,6 +59,7 @@ install: build
 	@echo "Installing to $(INSTALL_DIR)/..."
 	@mkdir -p $(INSTALL_DIR)
 	cp $(BINARY_DIR)/$(BINARY_NAME) $(INSTALL_DIR)/$(BINARY_NAME)
+	@codesign -f -s - $(INSTALL_DIR)/$(BINARY_NAME) 2>/dev/null || true
 	@echo "✅ Installed to $(INSTALL_DIR)/$(BINARY_NAME)"
 	@echo "Run 'harness' to start"
 
