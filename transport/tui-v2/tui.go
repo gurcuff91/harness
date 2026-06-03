@@ -595,6 +595,7 @@ func (t *TUI) render() {
 	var lines []string
 	lines = append(lines, t.output.Lines()...)
 	if t.spinnerActive {
+		lines = append(lines, "") // margin above spinner
 		lines = append(lines, t.renderSpinner())
 	}
 	lines = append(lines, "\033[90m"+strings.Repeat("─", width)+"\033[0m")
@@ -705,23 +706,22 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 		if len(lines) <= 1 {
 			t.output.AddWrapped(" \033[1;33m"+e.ToolName+"(\033[0m\033[2m"+formatted+"\033[0m\033[1;33m)\033[0m", " ")
 		} else {
-			// First line: Name(first_line
 			t.output.Add(" \033[1;33m" + e.ToolName + "(\033[0m\033[2m" + lines[0])
-			// Middle lines: indented content
 			for _, line := range lines[1 : len(lines)-1] {
 				t.output.Add(" " + line)
 			}
-			// Last line: last_content)
 			t.output.Add(" " + lines[len(lines)-1] + "\033[0m\033[1;33m)\033[0m")
 		}
+		t.startSpinner() // spin while tool executes
 	case types.EventToolResult:
+		t.stopSpinner()
 		dur := formatDuration(e.Duration)
 		if e.IsError {
 			errMsg := strings.ReplaceAll(strings.ReplaceAll(e.Output, "\n", " "), "\r", "")
 			t.output.Add("   \033[31m✗ " + trunc(errMsg, 60) + " [" + dur + "]\033[0m")
 		} else {
 			result := summarizeToolResult(e.ToolName, e.Output)
-			t.output.Add("   \033[32m✓\033[0m\033[2m " + result + " [" + dur + "]\033[0m")
+			t.output.Add("   \033[32m✓\033[0m \033[2m" + result + " [" + dur + "]\033[0m")
 		}
 		t.output.Add("")
 		if t.streaming {
@@ -1247,7 +1247,7 @@ func summarizeToolResult(toolName, output string) string {
 		return "done"
 	}
 	// Strip leading status marks that would duplicate our ✓
-	output = strings.TrimLeft(output, "✓✗ ")
+	output = strings.TrimLeft(output, "✓✔✗✘✖ ")
 	if output == "" {
 		return "done"
 	}
