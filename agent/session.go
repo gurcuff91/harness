@@ -47,11 +47,11 @@ type Session struct {
 	maxTurns  int
 	maxTokens int
 
-	// Prompt queue — separate mutex to avoid deadlock with mu
-	queueMu  sync.Mutex
-	queue    []string
+	// Follow-up prompts — separate mutex to avoid deadlock with mu
+	followMu  sync.Mutex
+	followUps []string
 	busy     bool
-	queueCtx context.Context
+	followCtx context.Context
 }
 
 // modelPricing holds per-million-token rates for cost calculation.
@@ -112,61 +112,57 @@ func (s *Session) loadModelMeta(modelID string) {
 // ── Public methods ──────────────────────────────────────────────────────
 
 // Prompt runs one full turn: user message → ReAct loop → final response.
-// EnqueuePrompt adds a message to the queue. If no turn is active, it starts
+// FollowUp adds a message to the queue. If no turn is active, it starts
 // processing immediately. If a turn is running, the message waits and is
 // processed automatically when the current turn finishes.
 // Safe to call from any goroutine — SDK and TUI friendly.
-func (s *Session) EnqueuePrompt(ctx context.Context, text string) {
-	s.queueMu.Lock()
-	s.queue = append(s.queue, text)
-	queued := s.busy // only emit enqueued if there's an active turn
+func (s *Session) FollowUp(ctx context.Context, text string) {
+	s.followMu.Lock()
+	s.followUps = append(s.followUps, text)
 	if !s.busy {
 		s.busy = true
-		s.queueCtx = ctx
-		s.queueMu.Unlock()
-		go s.drainQueue()
+		s.followCtx = ctx
+		s.followMu.Unlock()
+		go s.drainFollowUps()
 		return
 	}
-	s.queueMu.Unlock()
-	if queued {
-		go s.emit(types.Event{Type: types.EventPromptEnqueued, Output: text})
-	}
+	s.followMu.Unlock()
 }
 
-// QueueLen returns the number of messages waiting in the queue.
-func (s *Session) QueueLen() int {
-	s.queueMu.Lock()
-	defer s.queueMu.Unlock()
-	return len(s.queue)
+// FollowUpCount returns the number of messages waiting in the queue.
+func (s *Session) FollowUpCount() int {
+	s.followMu.Lock()
+	defer s.followMu.Unlock()
+	return len(s.followUps)
 }
 
 // PeekQueue calls fn with the next queued message without removing it.
 // Does nothing if the queue is empty.
 func (s *Session) PeekQueue(fn func(string)) {
-	s.queueMu.Lock()
-	defer s.queueMu.Unlock()
-	if len(s.queue) > 0 {
-		fn(s.queue[0])
+	s.followMu.Lock()
+	defer s.followMu.Unlock()
+	if len(s.followUps) > 0 {
+		fn(s.followUps[0])
 	}
 }
 
-func (s *Session) drainQueue() {
+func (s *Session) drainFollowUps() {
 	first := true
 	for {
-		s.queueMu.Lock()
-		if len(s.queue) == 0 {
+		s.followMu.Lock()
+		if len(s.followUps) == 0 {
 			s.busy = false
-			s.queueMu.Unlock()
+			s.followMu.Unlock()
 			return
 		}
-		text := s.queue[0]
-		s.queue = s.queue[1:]
-		ctx := s.queueCtx
-		s.queueMu.Unlock()
+		text := s.followUps[0]
+		s.followUps = s.followUps[1:]
+		ctx := s.followCtx
+		s.followMu.Unlock()
 
 		// Emit dequeued event — skip first (TUI already displayed it in submit)
 		if !first {
-			s.emit(types.Event{Type: types.EventPromptDequeued, Output: text})
+			s.emit(types.Event{Type: types.EventFollowUpStart, Output: text})
 		}
 		first = false
 

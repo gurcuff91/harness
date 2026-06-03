@@ -602,7 +602,7 @@ func (t *TUI) render() {
 	}
 	// Queue indicator
 	if t.session != nil && t.streaming {
-		if qLen := t.session.QueueLen(); qLen > 0 {
+		if qLen := t.session.FollowUpCount(); qLen > 0 {
 			lines = append(lines, fmt.Sprintf(" \033[2m%d message%s queued\033[0m", qLen, pluralS(qLen)))
 		}
 	}
@@ -652,7 +652,7 @@ func (t *TUI) submit(text string) {
 		// Turn active — enqueue silently, will show when it's processed
 		ctx, cancel := context.WithCancel(context.Background())
 		t.cancelFn = cancel
-		t.session.EnqueuePrompt(ctx, text)
+		t.session.FollowUp(ctx, text)
 		return
 	}
 	t.output.Add(" \033[32m→ \033[0m" + text)
@@ -662,7 +662,7 @@ func (t *TUI) submit(text string) {
 	t.startSpinner()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancelFn = cancel
-	t.session.EnqueuePrompt(ctx, text)
+	t.session.FollowUp(ctx, text)
 }
 
 func (t *TUI) handleAgentEvent(e types.Event) {
@@ -761,15 +761,13 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 			e.Tokens.CostUSD, e.Tokens.ContextUsage, e.Tokens.ContextWindow,
 			t.model, t.thinkingLevel, llm.ModelSupportsThinking(t.model), t.isSubscription(),
 		))
-	case types.EventPromptEnqueued:
-		// Message added to queue while turn active — render will show counter
-	case types.EventPromptDequeued:
+	case types.EventFollowUpStart:
 		// Next queued message about to process — show as user input
 		t.output.Add(" \033[32m→ \033[0m" + e.Output)
 		t.output.Add("")
 	case types.EventTurnEnd:
 		t.agentLineStarted = false
-		if t.session == nil || t.session.QueueLen() == 0 {
+		if t.session == nil || t.session.FollowUpCount() == 0 {
 			t.stopSpinner()
 			t.streaming = false
 		}

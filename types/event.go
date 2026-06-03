@@ -38,8 +38,7 @@ const (
 
 	// ── Limits ─────────────────────────────────────────────────────────────
 	EventMaxTurnsReached // agent reached max turns limit (LLM summarized progress)
-	EventPromptEnqueued  // prompt added to queue (Output = text)
-	EventPromptDequeued  // prompt popped from queue, about to process (Output = text)
+	EventFollowUpStart // follow-up prompt about to process (Output = text)
 
 	// ── Compaction ─────────────────────────────────────────────────────────
 	EventCompactStart // session compaction started
