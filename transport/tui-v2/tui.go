@@ -37,9 +37,9 @@ type TUI struct {
 	quitFn           context.CancelFunc // cancels Run's context
 
 	// Diff renderer state
-	prevLines  []string
-	prevWidth  int
-	prevHeight int
+	prevLines     []string
+	prevWidth     int
+	contentHighWM int // high water mark: max content lines ever rendered
 
 	// Command palette
 	palette   palette
@@ -57,6 +57,7 @@ type TUI struct {
 	spinnerStart  time.Time
 	spinnerLabel  string
 	spinnerStop   chan struct{}
+
 }
 
 // --- Palette ---
@@ -569,11 +570,8 @@ func (t *TUI) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	t.quitFn = cancel
 	defer t.term.Restore()
-	t.term.EnterAltScreen()
-	defer t.term.ExitAltScreen()
 	t.term.HideCursor()
 	defer t.term.ShowCursor()
-	t.term.Clear()
 
 	t.printBanner()
 	t.updateFooter()
@@ -598,29 +596,9 @@ func (t *TUI) Run(ctx context.Context) error {
 
 func (t *TUI) render() {
 	width := t.term.Width()
-	height := t.term.Height()
 	t.output.SetWrap(width-3, "   ")
 
-	// ── Build fixed chrome (bottom) ────────────────────────────────
-	var chrome []string
-	chrome = append(chrome, "\033[90m"+strings.Repeat("─", width)+"\033[0m") // top separator
-	chrome = append(chrome, t.input.Render(width)...)
-	chrome = append(chrome, "\033[90m"+strings.Repeat("─", width)+"\033[0m") // bottom separator
-	if pl := t.renderPalette(); len(pl) > 0 {
-		chrome = append(chrome, pl...)
-	}
-	chrome = append(chrome, t.renderSessionInfo())
-	if f := t.footer.Render(width); len(f) > 0 {
-		chrome = append(chrome, f...)
-	}
-
-	chromeHeight := len(chrome)
-	contentHeight := height - chromeHeight
-	if contentHeight < 1 {
-		contentHeight = 1
-	}
-
-	// ── Build scrollable content (top) ─────────────────────────────
+	// ── Build content ────────────────────────────────────────────
 	var content []string
 	content = append(content, t.output.Lines()...)
 	if t.spinnerActive {
@@ -635,25 +613,32 @@ func (t *TUI) render() {
 			content = append(content, fmt.Sprintf(" \033[2m%d message%s queued\033[0m", qLen, pluralS(qLen)))
 		}
 	}
-	// Ensure margin before chrome
+	// Margin before chrome
 	if len(content) > 0 && content[len(content)-1] != "" {
 		content = append(content, "")
 	}
 
-	// ── Viewport: take last N content lines ────────────────────────
-	if len(content) > contentHeight {
-		content = content[len(content)-contentHeight:]
+	// ── High water mark: pad so chrome never jumps up ─────────
+	if len(content) > t.contentHighWM {
+		t.contentHighWM = len(content)
+	}
+	for len(content) < t.contentHighWM {
+		content = append(content, "")
 	}
 
-	// Pad content to fill viewport (pushes chrome to bottom)
-	for len(content) < contentHeight {
-		content = append([]string{""}, content...)
-	}
-
-	// ── Assemble final frame ───────────────────────────────────────
-	lines := make([]string, 0, height)
+	// ── Build chrome ─────────────────────────────────────────────
+	var lines []string
 	lines = append(lines, content...)
-	lines = append(lines, chrome...)
+	lines = append(lines, "\033[90m"+strings.Repeat("─", width)+"\033[0m")
+	lines = append(lines, t.input.Render(width)...)
+	lines = append(lines, "\033[90m"+strings.Repeat("─", width)+"\033[0m")
+	if pl := t.renderPalette(); len(pl) > 0 {
+		lines = append(lines, pl...)
+	}
+	lines = append(lines, t.renderSessionInfo())
+	if f := t.footer.Render(width); len(f) > 0 {
+		lines = append(lines, f...)
+	}
 
 	// Reset each line to prevent color bleed
 	for i := range lines {
@@ -663,17 +648,21 @@ func (t *TUI) render() {
 	t.diffRender(lines)
 }
 
-// diffRender uses alternate screen buffer. Homes cursor + rewrites from first
-// changed line. Alt screen makes \033[H reliable across all terminals.
+// diffRender updates only changed lines using cursor-up movement.
+// Normal screen buffer — native terminal scrollback works naturally.
 func (t *TUI) diffRender(newLines []string) {
 	width := t.term.Width()
-	height := t.term.Height()
 
-	// Size changed or first render — full redraw
-	if len(t.prevLines) == 0 || t.prevWidth != width || t.prevHeight != height {
+	// Size changed — full re-render
+	if t.prevWidth != width {
 		t.fullRender(newLines)
 		t.prevWidth = width
-		t.prevHeight = height
+		return
+	}
+
+	// First render
+	if len(t.prevLines) == 0 {
+		t.fullRender(newLines)
 		return
 	}
 
@@ -699,10 +688,15 @@ func (t *TUI) diffRender(newLines []string) {
 	var buf strings.Builder
 	buf.WriteString("\033[?2026h") // begin sync
 
-	// Move cursor to firstChanged row (1-indexed)
-	buf.WriteString(fmt.Sprintf("\033[%d;1H", firstChanged+1))
+	// Cursor is at the last line of previous render.
+	// Move up to firstChanged.
+	cursorAt := len(t.prevLines) - 1
+	if firstChanged < cursorAt {
+		buf.WriteString(fmt.Sprintf("\033[%dA", cursorAt-firstChanged))
+	}
+	buf.WriteString("\r")
 
-	// Rewrite from firstChanged to end
+	// Rewrite from firstChanged to end of newLines
 	for i := firstChanged; i < len(newLines); i++ {
 		if i > firstChanged {
 			buf.WriteString("\r\n")
@@ -711,10 +705,15 @@ func (t *TUI) diffRender(newLines []string) {
 		buf.WriteString(newLines[i])
 	}
 
-	// Clear leftover lines if content shrunk
+	// Clear leftover lines from previous render
 	if len(t.prevLines) > len(newLines) {
-		for i := len(newLines); i < len(t.prevLines); i++ {
+		extra := len(t.prevLines) - len(newLines)
+		for i := 0; i < extra; i++ {
 			buf.WriteString("\r\n\033[2K")
+		}
+		// Move back up so cursor stays at last real line
+		if extra > 0 {
+			buf.WriteString(fmt.Sprintf("\033[%dA", extra))
 		}
 	}
 
@@ -725,11 +724,10 @@ func (t *TUI) diffRender(newLines []string) {
 	copy(t.prevLines, newLines)
 }
 
-// fullRender clears alternate screen and writes everything.
+// fullRender writes all lines. Used for first render and resize.
 func (t *TUI) fullRender(newLines []string) {
 	var buf strings.Builder
-	buf.WriteString("\033[?2026h") // begin sync
-	buf.WriteString("\033[2J\033[H")   // clear + home
+	buf.WriteString("\033[?2026h")
 	for i, line := range newLines {
 		if i > 0 {
 			buf.WriteString("\r\n")
@@ -977,6 +975,8 @@ func (t *TUI) execCommand(text string) {
 		return
 	case "clear":
 		t.output.Clear()
+		t.contentHighWM = 0
+		t.prevLines = nil
 		msg = ""
 	case "compact":
 		if t.session == nil {
