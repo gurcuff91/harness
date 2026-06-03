@@ -595,6 +595,9 @@ func (t *TUI) render() {
 	var lines []string
 	lines = append(lines, t.output.Lines()...)
 	if t.spinnerActive {
+		if len(lines) > 0 && lines[len(lines)-1] != "" {
+			lines = append(lines, "") // margin above spinner
+		}
 		lines = append(lines, t.renderSpinner())
 	}
 	// Always ensure margin before separator
@@ -658,7 +661,6 @@ func (t *TUI) submit(text string) {
 func (t *TUI) handleAgentEvent(e types.Event) {
 	switch e.Type {
 	case types.EventStreamThinkingDelta:
-		t.stopSpinner()
 		parts := strings.Split(e.Delta, "\n")
 		for i, part := range parts {
 			if i == 0 {
@@ -689,7 +691,6 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 		t.output.Add("")
 		t.agentLineStarted = false
 	case types.EventStreamTextDelta:
-		t.stopSpinner()
 		parts := strings.Split(e.Delta, "\n")
 		for i, part := range parts {
 			if i == 0 {
@@ -718,17 +719,10 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 		t.output.Add("")
 		t.agentLineStarted = false
 	case types.EventToolStart:
-		// Keep spinner running while args stream in
-		if !t.spinnerActive {
-			t.startSpinner()
-		}
+		// Buffer — wait for EventToolCall to render complete line
 	case types.EventToolArgsDelta:
 		// Buffer — accumulated in ToolArgs at EventToolCall
 	case types.EventToolCall:
-		if t.spinnerActive {
-			t.stopSpinner()
-			t.output.Add("") // margin after spinner
-		}
 		// Render complete tool call: Name(key=val, ...)
 		formatted := formatToolArgs(e.ToolArgs)
 		lines := strings.Split(formatted, "\n")
@@ -741,10 +735,8 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 			}
 			t.output.Add("   " + lines[len(lines)-1] + "\033[0m\033[1;93m)\033[0m")
 		}
-		t.output.Add("") // margin before tool execution spinner
-		t.startSpinner() // spin while tool executes
+
 	case types.EventToolResult:
-		t.stopSpinner()
 		dur := formatDuration(e.Duration)
 		if e.IsError {
 			errMsg := strings.ReplaceAll(strings.ReplaceAll(e.Output, "\n", " "), "\r", "")
@@ -754,9 +746,7 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 			t.output.Add("     \033[32m✓\033[0m \033[2m" + result + " [" + dur + "]\033[0m")
 		}
 		t.output.Add("")
-		if t.streaming {
-			t.startSpinner() // waiting for next LLM response after tool
-		}
+
 	case types.EventTokens:
 		t.footer.Set(BuildFooter(
 			e.Tokens.Input, int(e.Tokens.TotalOutput),
