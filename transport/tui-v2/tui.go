@@ -600,6 +600,12 @@ func (t *TUI) render() {
 		}
 		lines = append(lines, t.renderSpinner())
 	}
+	// Queue indicator
+	if t.session != nil && t.streaming {
+		if qLen := t.session.QueueLen(); qLen > 0 {
+			lines = append(lines, fmt.Sprintf(" \033[2m%d message%s queued\033[0m", qLen, pluralS(qLen)))
+		}
+	}
 	// Always ensure margin before separator
 	if len(lines) > 0 && lines[len(lines)-1] != "" {
 		lines = append(lines, "")
@@ -642,6 +648,13 @@ func (t *TUI) submit(text string) {
 		t.output.Add("  \033[33m⚠ No provider connected. /connect <provider>\033[0m")
 		return
 	}
+	if t.streaming {
+		// Turn active — enqueue silently, will show when it's processed
+		ctx, cancel := context.WithCancel(context.Background())
+		t.cancelFn = cancel
+		t.session.EnqueuePrompt(ctx, text)
+		return
+	}
 	t.output.Add(" \033[32m→ \033[0m" + text)
 	t.output.Add("")
 	t.streaming = true
@@ -649,13 +662,7 @@ func (t *TUI) submit(text string) {
 	t.startSpinner()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancelFn = cancel
-	go func() {
-		_, err := t.session.Prompt(ctx, text, nil)
-		if err != nil && !strings.Contains(err.Error(), "canceled") {
-			t.events <- types.Event{Type: types.EventError, Output: err.Error()}
-			t.render()
-		}
-	}()
+	t.session.EnqueuePrompt(ctx, text)
 }
 
 func (t *TUI) handleAgentEvent(e types.Event) {
@@ -754,10 +761,18 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 			e.Tokens.CostUSD, e.Tokens.ContextUsage, e.Tokens.ContextWindow,
 			t.model, t.thinkingLevel, llm.ModelSupportsThinking(t.model), t.isSubscription(),
 		))
+	case types.EventPromptEnqueued:
+		// Message added to queue while turn active — render will show counter
+	case types.EventPromptDequeued:
+		// Next queued message about to process — show as user input
+		t.output.Add(" \033[32m→ \033[0m" + e.Output)
+		t.output.Add("")
 	case types.EventTurnEnd:
-		t.stopSpinner()
-		t.streaming = false
 		t.agentLineStarted = false
+		if t.session == nil || t.session.QueueLen() == 0 {
+			t.stopSpinner()
+			t.streaming = false
+		}
 	case types.EventError:
 		t.stopSpinner()
 		t.output.Add("  \033[31m✗ " + e.Output + "\033[0m")
@@ -1362,6 +1377,11 @@ func (t *TUI) renderSpinner() string {
 	frame := spinnerFrames[t.spinnerFrame%len(spinnerFrames)]
 	elapsed := time.Since(t.spinnerStart).Round(time.Millisecond)
 	return fmt.Sprintf(" \033[96m%s\033[0m \033[2m%s\033[0m \033[90m[%s]\033[0m", frame, t.spinnerLabel, elapsed)
+}
+
+func pluralS(n int) string {
+	if n == 1 { return "" }
+	return "s"
 }
 
 func formatDuration(d time.Duration) string {
