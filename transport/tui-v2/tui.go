@@ -596,7 +596,10 @@ func (t *TUI) render() {
 	lines = append(lines, t.output.Lines()...)
 	if t.spinnerActive {
 		lines = append(lines, t.renderSpinner())
-		lines = append(lines, "") // margin below spinner before separator
+	}
+	// Always ensure margin before separator
+	if len(lines) > 0 && lines[len(lines)-1] != "" {
+		lines = append(lines, "")
 	}
 	lines = append(lines, "\033[90m"+strings.Repeat("─", width)+"\033[0m")
 	lines = append(lines, t.input.Render(width)...)
