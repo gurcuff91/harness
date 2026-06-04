@@ -135,6 +135,13 @@ func (s *Session) FollowUpCount() int {
 	return len(s.followUps)
 }
 
+// IsBusy returns whether the session is currently processing a turn.
+func (s *Session) IsBusy() bool {
+	s.followMu.Lock()
+	defer s.followMu.Unlock()
+	return s.busy
+}
+
 // PeekQueue calls fn with the next queued message without removing it.
 // Does nothing if the queue is empty.
 func (s *Session) PeekQueue(fn func(string)) {

@@ -222,8 +222,14 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	busy := proxy.session.IsBusy()
 	proxy.session.Prompt(context.Background(), req.Text)
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued"})
+
+	status := "started"
+	if busy {
+		status = "queued"
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": status})
 }
 
 // handleEvents streams agent events as SSE.
