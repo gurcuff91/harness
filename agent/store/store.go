@@ -20,8 +20,8 @@ type SessionMeta struct {
 	Name string `json:"name,omitempty"`
 
 	// Runtime state — mutable, persisted on change
-	Model    string `json:"model"`              // "provider/model"
-	Thinking string `json:"thinking,omitempty"` // thinking level
+	Model    string `json:"model"`                // "provider/model"
+	Thinking string `json:"thinking"`              // thinking level ("off" if disabled)
 
 	// Compaction
 	CompactOffset int `json:"compact_offset,omitempty"` // message index of last checkpoint

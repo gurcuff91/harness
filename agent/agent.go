@@ -121,12 +121,16 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 	systemPrompt := a.buildSystemPrompt(cwd, res)
 
 	now := time.Now()
+	thinking := a.thinkingLevel
+	if thinking == "" {
+		thinking = "off"
+	}
 	meta := store.SessionMeta{
 		ID:           uuid.New().String(),
 		CWD:          cwd,
 		Name:         defaultSessionName(now),
 		Model:        model,
-		Thinking:     a.thinkingLevel,
+		Thinking:     thinking,
 		CreatedAt:    now,
 		LastActiveAt: now,
 	}

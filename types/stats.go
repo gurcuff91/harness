@@ -6,13 +6,13 @@ type SessionStats struct {
 	// Accumulated across all turns — for billing analysis
 	// Note: InputTokens grows exponentially (each turn includes full history)
 	// Use CostUSD for actual spend tracking.
-	InputTokens  int // sum of input tokens across all turns (billing reference)
-	OutputTokens int // sum of output tokens across all turns
-	CacheRead    int // sum of cache read tokens across all turns
-	CacheWrite   int // sum of cache write tokens across all turns
+	InputTokens  int     `json:"input_tokens"`
+	OutputTokens int     `json:"output_tokens"`
+	CacheRead    int     `json:"cache_read"`
+	CacheWrite   int     `json:"cache_write"`
 
 	// Derived — calculated by the session
-	CostUSD       float64 // accumulated USD cost (always calculated from model pricing)
-	ContextUsage  float64 // last turn input / context window (0.0–1.0)
-	ContextWindow int     // model context window size (tokens)
+	CostUSD       float64 `json:"cost_usd"`
+	ContextUsage  float64 `json:"context_usage"`
+	ContextWindow int     `json:"context_window"`
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/agent/store"
 )
 
 // Server is the HTTP transport for the agent harness.
@@ -46,8 +47,11 @@ func (s *Server) ListenAndServe(addr string) error {
 	r.Use(corsMiddleware)
 
 	// Routes
+	r.Get("/api/sessions", s.handleListSessions)
 	r.Post("/api/sessions", s.handleCreateSession)
 	r.Get("/api/sessions/{id}", s.handleGetSession)
+	r.Delete("/api/sessions/{id}", s.handleDeleteSession)
+	r.Post("/api/sessions/{id}/close", s.handleCloseSession)
 	r.Post("/api/sessions/{id}/prompt", s.handlePrompt)
 	r.Get("/api/sessions/{id}/events", s.handleEvents)
 
@@ -98,6 +102,66 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleListSessions returns all sessions, optionally filtered by ?cwd=
+func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	cwd := r.URL.Query().Get("cwd")
+	var sessions []store.SessionMeta
+	var err error
+	if cwd != "" {
+		sessions, err = s.agent.ListSessions(cwd)
+	} else {
+		sessions, err = s.agent.ListAllSessions()
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if sessions == nil {
+		sessions = []store.SessionMeta{}
+	}
+	writeJSON(w, http.StatusOK, sessions)
+}
+
+// handleDeleteSession deletes a session permanently.
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	// Close and remove from in-memory if active
+	s.mu.Lock()
+	proxy, ok := s.sessions[id]
+	if ok {
+		delete(s.sessions, id)
+		proxy.close()
+	}
+	s.mu.Unlock()
+
+	if err := s.agent.DeleteSession(id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleCloseSession closes an active session (flushes store, disconnects SSE clients).
+func (s *Server) handleCloseSession(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	s.mu.Lock()
+	proxy, ok := s.sessions[id]
+	if ok {
+		delete(s.sessions, id)
+		proxy.close()
+	}
+	s.mu.Unlock()
+
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not active"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "closed"})
+}
+
 type sessionInfo struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -105,18 +169,33 @@ type sessionInfo struct {
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+
+	// Check in-memory first (active sessions)
 	s.mu.RLock()
 	proxy, ok := s.sessions[id]
 	s.mu.RUnlock()
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+	if ok {
+		writeJSON(w, http.StatusOK, sessionInfo{
+			ID:   id,
+			Name: proxy.session.Name(),
+		})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, sessionInfo{
-		ID:   id,
-		Name: proxy.session.Name(),
-	})
+	// Fallback: check store (persisted sessions from previous runs)
+	sessions, err := s.agent.ListAllSessions()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	for _, s := range sessions {
+		if s.ID == id {
+			writeJSON(w, http.StatusOK, s)
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
 }
 
 type promptRequest struct {

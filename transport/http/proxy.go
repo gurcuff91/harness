@@ -46,6 +46,17 @@ func (p *SessionProxy) clientCount() int {
 	return len(p.clients)
 }
 
+// close disconnects all SSE clients and closes the underlying session.
+func (p *SessionProxy) close() {
+	p.mu.Lock()
+	for ch := range p.clients {
+		close(ch)
+	}
+	p.clients = nil
+	p.mu.Unlock()
+	p.session.Close()
+}
+
 // broadcast formats an agent event as JSON and sends it to all connected clients.
 // Non-blocking: slow clients are dropped (event is lost for them).
 func (p *SessionProxy) broadcast(e types.Event) {

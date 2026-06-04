@@ -289,6 +289,9 @@ func (s *Session) SwitchModel(ctx context.Context, fullModel string) error {
 
 // SwitchThinking changes the thinking level for this session.
 func (s *Session) SwitchThinking(level string) error {
+	if level == "" {
+		level = "off"
+	}
 	s.mu.Lock()
 	s.thinkingLvl = level
 	meta := s.store.Meta()
