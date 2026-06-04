@@ -112,11 +112,10 @@ func (s *Session) loadModelMeta(modelID string) {
 // ── Public methods ──────────────────────────────────────────────────────
 
 // Prompt runs one full turn: user message → ReAct loop → final response.
-// FollowUp adds a message to the queue. If no turn is active, it starts
-// processing immediately. If a turn is running, the message waits and is
+// Prompt sends a message to the session. If no turn is active, it starts
+// processing immediately. If a turn is running, the message is queued and
 // processed automatically when the current turn finishes.
-// Safe to call from any goroutine — SDK and TUI friendly.
-func (s *Session) FollowUp(ctx context.Context, text string) {
+func (s *Session) Prompt(ctx context.Context, text string) {
 	s.followMu.Lock()
 	s.followUps = append(s.followUps, text)
 	if !s.busy {
@@ -166,15 +165,15 @@ func (s *Session) drainFollowUps() {
 		}
 		first = false
 
-		if _, err := s.Prompt(ctx, text, nil); err != nil {
+		if _, err := s.promptSync(ctx, text, nil); err != nil {
 			if ctx.Err() == nil {
-				s.emit(types.Event{Type: types.EventError, Output: err.Error()})
+				s.emit(types.Event{Type: types.EventError, Message: err.Error()})
 			}
 		}
 	}
 }
 
-func (s *Session) Prompt(ctx context.Context, text string, images []types.ImageData) (string, error) {
+func (s *Session) promptSync(ctx context.Context, text string, images []types.ImageData) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -213,7 +212,7 @@ func (s *Session) Prompt(ctx context.Context, text string, images []types.ImageD
 
 		resp, toolResults, err := s.runStream(ctx, req)
 		if err != nil {
-			s.emit(types.Event{Type: types.EventError, Output: err.Error()})
+			s.emit(types.Event{Type: types.EventError, Message: err.Error()})
 			s.emit(types.Event{Type: types.EventLoopEnd})
 			s.emit(types.Event{Type: types.EventTurnEnd})
 			return "", err
@@ -246,7 +245,7 @@ func (s *Session) Prompt(ctx context.Context, text string, images []types.ImageD
 	// Ask the LLM to summarize progress and let the user decide what to do next.
 	s.emit(types.Event{Type: types.EventLoopEnd})
 	summary, _ := s.requestProgressUpdate(ctx)
-	s.emit(types.Event{Type: types.EventMaxTurnsReached})
+	s.emit(types.Event{Type: types.EventMaxTurnsReached, MaxTurns: s.maxTurns})
 	s.emit(types.Event{Type: types.EventTurnEnd})
 	return summary, nil
 }
@@ -326,13 +325,13 @@ func (s *Session) Compact(ctx context.Context) error {
 	// Generate compaction summary — store is untouched until this succeeds
 	summary, err := s.generateCompactionSummary(ctx)
 	if err != nil {
-		s.emit(types.Event{Type: types.EventError, Output: fmt.Sprintf("compact failed: %v", err)})
+		s.emit(types.Event{Type: types.EventError, Message: fmt.Sprintf("compact failed: %v", err)})
 		return fmt.Errorf("compact: %w", err)
 	}
 
 	// Commit checkpoint — append-only, no data lost
 	if err := s.store.AddCompactionSummary(summary); err != nil {
-		s.emit(types.Event{Type: types.EventError, Output: fmt.Sprintf("compact checkpoint failed: %v", err)})
+		s.emit(types.Event{Type: types.EventError, Message: fmt.Sprintf("compact checkpoint failed: %v", err)})
 		return fmt.Errorf("compact: checkpoint: %w", err)
 	}
 
@@ -343,7 +342,7 @@ func (s *Session) Compact(ctx context.Context) error {
 	meta.Stats = s.stats
 	s.store.UpdateMeta(meta)
 
-	s.emit(types.Event{Type: types.EventCompactEnd, Output: summary})
+	s.emit(types.Event{Type: types.EventCompactEnd, Summary: summary})
 	return nil
 }
 
@@ -373,6 +372,9 @@ func (s *Session) generateCompactionSummary(ctx context.Context) (string, error)
 	}
 	return summaryText, nil
 }
+
+// ID returns the session's unique identifier.
+func (s *Session) ID() string { return s.id }
 
 // Name returns the session's display name.
 func (s *Session) Name() string { return s.name }
@@ -471,7 +473,7 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 			}
 
 		case types.StreamError:
-			s.emit(types.Event{Type: types.EventError, Output: se.Delta})
+			s.emit(types.Event{Type: types.EventError, Message: se.Delta})
 		}
 	})
 

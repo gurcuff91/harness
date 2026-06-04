@@ -272,7 +272,7 @@ func parseOpenAIStream(body io.Reader, cb types.StreamCallback) (*types.Response
 				if fn, ok := tcMap["function"].(map[string]any); ok {
 					if args, ok := fn["arguments"].(string); ok {
 						ts.argsBuf += args
-						emit(types.StreamEvent{Type: types.StreamToolDelta, Delta: args})
+						emit(types.StreamEvent{Type: types.StreamToolDelta, ToolID: ts.id, ToolName: ts.name, Delta: args})
 					}
 				}
 			}

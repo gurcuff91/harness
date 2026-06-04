@@ -66,10 +66,13 @@ type TokenUsage struct {
 type Event struct {
 	Type     EventType
 	Loop     int
+	MaxTurns int    // configured max turns (populated on EventMaxTurnsReached)
 	ToolID   string // unique tool call ID (from LLM) — correlates Start/ArgsDelta/Call/Result
 	ToolName string
 	ToolArgs string
-	Output   string
+	Output   string // generic output (tool results, turn text)
+	Message  string // error messages (EventError)
+	Summary  string // compaction summary (EventCompactEnd)
 	Delta    string
 	Tokens   TokenUsage
 	Duration time.Duration

@@ -1,0 +1,68 @@
+package http
+
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/gurcuff91/harness/types"
+)
+
+// formatEvent converts an agent event to a JSON SSE data line.
+// Returns nil for event types not exposed via SSE.
+// SSE field names are snake_case of the Go Event struct fields.
+func formatEvent(e types.Event) []byte {
+	var payload any
+
+	switch e.Type {
+	case types.EventStreamThinkingDelta:
+		payload = map[string]any{"type": "thinking", "delta": e.Delta}
+	case types.EventStreamTextDelta:
+		payload = map[string]any{"type": "text", "delta": e.Delta}
+	case types.EventToolStart:
+		payload = map[string]any{"type": "tool_start", "tool_name": e.ToolName, "tool_id": e.ToolID}
+	case types.EventToolArgsDelta:
+		payload = map[string]any{"type": "tool_args", "tool_name": e.ToolName, "tool_id": e.ToolID, "delta": e.Delta}
+	case types.EventToolCall:
+		payload = map[string]any{"type": "tool_call", "tool_name": e.ToolName, "tool_id": e.ToolID, "tool_args": e.ToolArgs}
+	case types.EventToolResult:
+		payload = map[string]any{
+			"type":      "tool_result",
+			"tool_name": e.ToolName,
+			"tool_id":   e.ToolID,
+			"output":    e.Output,
+			"duration":  e.Duration.Milliseconds(),
+			"is_error":  e.IsError,
+		}
+	case types.EventTurnStart:
+		payload = map[string]any{"type": "turn_start"}
+	case types.EventTurnEnd:
+		payload = map[string]any{"type": "turn_end"}
+	case types.EventTokens:
+		payload = map[string]any{
+			"type":           "tokens",
+			"input":          e.Tokens.Input,
+			"total_output":   e.Tokens.TotalOutput,
+			"cache_read":     e.Tokens.CacheRead,
+			"cache_write":    e.Tokens.CacheWrite,
+			"cost_usd":       e.Tokens.CostUSD,
+			"context_usage":  e.Tokens.ContextUsage,
+			"context_window": e.Tokens.ContextWindow,
+		}
+	case types.EventError:
+		payload = map[string]any{"type": "error", "message": e.Message}
+	case types.EventMaxTurnsReached:
+		payload = map[string]any{"type": "max_turns_reached", "max_turns": e.MaxTurns}
+	case types.EventCompactStart:
+		payload = map[string]any{"type": "compact_start"}
+	case types.EventCompactEnd:
+		payload = map[string]any{"type": "compact_end", "summary": e.Summary}
+	default:
+		return nil // not exposed
+	}
+
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	return []byte(fmt.Sprintf("data: %s\n\n", string(b)))
+}

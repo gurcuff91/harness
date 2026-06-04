@@ -260,7 +260,7 @@ func ParseAnthropicStream(body io.Reader, cb types.StreamCallback, unmapTool fun
 			case "input_json_delta":
 				partial, _ := delta["partial_json"].(string)
 				bs.toolJSON += partial
-				emit(types.StreamEvent{Type: types.StreamToolDelta, Delta: partial})
+				emit(types.StreamEvent{Type: types.StreamToolDelta, ToolID: bs.toolID, ToolName: bs.toolName, Delta: partial})
 			}
 		case "content_block_stop":
 			idx := jsonInt(event, "index")

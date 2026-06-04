@@ -757,7 +757,7 @@ func (t *TUI) submit(text string) {
 		// Turn active — enqueue silently, will show when it's processed
 		ctx, cancel := context.WithCancel(context.Background())
 		t.cancelFn = cancel
-		t.session.FollowUp(ctx, text)
+		t.session.Prompt(ctx, text)
 		return
 	}
 	t.output.Add(" \033[32m→ \033[0m" + text)
@@ -767,7 +767,7 @@ func (t *TUI) submit(text string) {
 	t.startSpinner()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancelFn = cancel
-	t.session.FollowUp(ctx, text)
+	t.session.Prompt(ctx, text)
 }
 
 func (t *TUI) handleAgentEvent(e types.Event) {
@@ -878,7 +878,7 @@ func (t *TUI) handleAgentEvent(e types.Event) {
 		}
 	case types.EventError:
 		t.stopSpinner()
-		t.output.Add("  \033[31m✗ " + e.Output + "\033[0m")
+		t.output.Add("  \033[31m✗ " + e.Message + "\033[0m")
 		t.streaming = false
 	}
 }
