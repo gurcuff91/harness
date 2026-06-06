@@ -142,7 +142,8 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 	return newSession(storeInst,
 		provider, modelID, a.thinkingLevel,
 		sessionTools, systemPrompt,
-		a.maxTurns, maxTokens), nil
+		a.maxTurns, maxTokens,
+		res.Skills, loader.ReadSkill), nil
 }
 
 // ResumeSession reopens an existing session, fully restoring its state.
@@ -183,12 +184,19 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 		loader = resources.NewFileResourceLoader(cwd)
 	}
 	res, _ := loader.Load()
+	var skills []resources.SkillInfo
+	var readSkill func(string) (string, error)
+	if res != nil {
+		skills = res.Skills
+		readSkill = loader.ReadSkill
+	}
 
 	return newSession(storeInst,
 		provider, modelID, thinkingLvl,
 		a.buildSessionTools(res, loader),
 		a.buildSystemPrompt(cwd, res),
-		a.maxTurns, maxTokens), nil
+		a.maxTurns, maxTokens,
+		skills, readSkill), nil
 }
 
 // ── Session management ───────────────────────────────────────────────────

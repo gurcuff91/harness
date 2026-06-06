@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -64,8 +65,11 @@ func (s *Server) ListenAndServe(addr string) error {
 	r.Get("/api/sessions/{id}", s.handleGetSession)
 	r.Delete("/api/sessions/{id}", s.handleDeleteSession)
 	r.Post("/api/sessions/{id}/close", s.handleCloseSession)
+	r.Post("/api/sessions/{id}/resume", s.handleResumeSession)
 	r.Post("/api/sessions/{id}/prompt", s.handlePrompt)
 	r.Get("/api/sessions/{id}/events", s.handleEvents)
+	r.Get("/api/sessions/{id}/commands", s.handleListCommands)
+	r.Post("/api/sessions/{id}/commands", s.handleExecCommand)
 
 	if s.verbose {
 		log.Printf("⚔️  Harness HTTP transport listening on %s", addr)
@@ -279,9 +283,35 @@ func (s *Server) handleCloseSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "closed"})
 }
 
-type sessionInfo struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+// handleResumeSession reactivates a persisted session.
+func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	// Already active?
+	s.mu.RLock()
+	if _, ok := s.sessions[id]; ok {
+		s.mu.RUnlock()
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "session is already active"})
+		return
+	}
+	s.mu.RUnlock()
+
+	sess, err := s.agent.ResumeSession(id)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+
+	proxy := newSessionProxy(sess)
+	s.mu.Lock()
+	s.sessions[sess.ID()] = proxy
+	s.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, sess.Meta())
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
@@ -292,10 +322,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	proxy, ok := s.sessions[id]
 	s.mu.RUnlock()
 	if ok {
-		writeJSON(w, http.StatusOK, sessionInfo{
-			ID:   id,
-			Name: proxy.session.Name(),
-		})
+		writeJSON(w, http.StatusOK, proxy.session.Meta())
 		return
 	}
 
@@ -389,6 +416,168 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, string(line))
 			flusher.Flush()
 		}
+	}
+}
+
+// --- Commands ---
+
+type commandDef struct {
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	Params      []paramDef  `json:"params"`
+}
+
+type paramDef struct {
+	Name     string   `json:"name"`
+	Type     string   `json:"type"`
+	Required bool     `json:"required"`
+	Values   []string `json:"values,omitempty"`
+}
+
+var commands = []commandDef{
+	{
+		Name:        "rename",
+		Description: "Rename the session",
+		Params: []paramDef{
+			{Name: "name", Type: "string", Required: true},
+		},
+	},
+	{
+		Name:        "thinking",
+		Description: "Set the thinking level",
+		Params: []paramDef{
+			{Name: "level", Type: "string", Required: true, Values: []string{"off", "low", "medium", "high", "xhigh"}},
+		},
+	},
+	{
+		Name:        "model",
+		Description: "Switch to a different model",
+		Params: []paramDef{
+			{Name: "model", Type: "string", Required: true},
+		},
+	},
+	{
+		Name:        "compact",
+		Description: "Compact the conversation via LLM summary",
+		Params:      []paramDef{},
+	},
+}
+
+func (s *Server) handleListCommands(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	s.mu.RLock()
+	proxy, ok := s.sessions[id]
+	s.mu.RUnlock()
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session is not active"})
+		return
+	}
+
+	list := make([]commandDef, len(commands))
+	copy(list, commands)
+
+	for _, sk := range proxy.session.Skills() {
+		list = append(list, commandDef{
+			Name:        "skill:" + sk.Name,
+			Description: sk.Description,
+			Params: []paramDef{
+				{Name: "prompt", Type: "string", Required: false},
+			},
+		})
+	}
+
+	writeJSON(w, http.StatusOK, list)
+}
+
+type execCommandRequest struct {
+	Command string         `json:"command"`
+	Params  map[string]any `json:"params"`
+}
+
+func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	s.mu.RLock()
+	proxy, ok := s.sessions[id]
+	s.mu.RUnlock()
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session is not active"})
+		return
+	}
+
+	var req execCommandRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		return
+	}
+
+	switch req.Command {
+	case "rename":
+		name, _ := req.Params["name"].(string)
+		if name == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "param 'name' is required"})
+			return
+		}
+		if err := proxy.session.Rename(name); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+
+	case "thinking":
+		level, _ := req.Params["level"].(string)
+		if level == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "param 'level' is required"})
+			return
+		}
+		if err := proxy.session.SwitchThinking(level); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+
+	case "model":
+		model, _ := req.Params["model"].(string)
+		if model == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "param 'model' is required"})
+			return
+		}
+		if err := proxy.session.SwitchModel(context.Background(), model); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+
+	case "compact":
+		if err := proxy.session.Compact(context.Background()); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+
+	default:
+		// Check if it's a skill command: skill:<name>
+		if strings.HasPrefix(req.Command, "skill:") {
+			skillName := strings.TrimPrefix(req.Command, "skill:")
+			content, err := proxy.session.ReadSkill(skillName)
+			if err != nil {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "skill not found: " + skillName})
+				return
+			}
+			// Build prompt: skill content + optional user prompt
+			prompt := content
+			if userPrompt, _ := req.Params["prompt"].(string); userPrompt != "" {
+				prompt += "\n\n---\n\n" + userPrompt
+			}
+			busy := proxy.session.IsBusy()
+			proxy.session.Prompt(context.Background(), prompt)
+			status := "started"
+			if busy {
+				status = "queued"
+			}
+			writeJSON(w, http.StatusAccepted, map[string]string{"status": status})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown command: " + req.Command})
 	}
 }
 

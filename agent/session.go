@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/providers"
@@ -43,6 +44,10 @@ type Session struct {
 
 	handler Handler
 
+	// Skills
+	skills    []resources.SkillInfo
+	readSkill func(string) (string, error)
+
 	mu        sync.Mutex
 	maxTurns  int
 	maxTokens int
@@ -67,7 +72,8 @@ type modelPricing struct {
 func newSession(storeInst store.SessionStore,
 	provider providers.Provider, modelID, thinkingLvl string,
 	toolReg *tools.Registry, systemPrompt string,
-	maxTurns, maxTokens int) *Session {
+	maxTurns, maxTokens int,
+	skills []resources.SkillInfo, readSkill func(string) (string, error)) *Session {
 
 	meta := storeInst.Meta()
 	s := &Session{
@@ -83,6 +89,8 @@ func newSession(storeInst store.SessionStore,
 		maxTurns:     maxTurns,
 		maxTokens:    maxTokens,
 		stats:        meta.Stats, // restore accumulated stats
+		skills:       skills,
+		readSkill:    readSkill,
 	}
 	s.loadModelMeta(modelID)
 	return s
@@ -140,6 +148,17 @@ func (s *Session) IsBusy() bool {
 	s.followMu.Lock()
 	defer s.followMu.Unlock()
 	return s.busy
+}
+
+// Skills returns the discovered skills for this session.
+func (s *Session) Skills() []resources.SkillInfo { return s.skills }
+
+// ReadSkill returns the content of a skill by name.
+func (s *Session) ReadSkill(name string) (string, error) {
+	if s.readSkill == nil {
+		return "", fmt.Errorf("no skill reader")
+	}
+	return s.readSkill(name)
 }
 
 // PeekQueue calls fn with the next queued message without removing it.
