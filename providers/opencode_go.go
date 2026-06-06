@@ -159,6 +159,7 @@ func fetchOpenCodeGoModels(apiKey string) ([]types.ModelMeta, error) {
 	for _, m := range result.Data {
 		meta := types.ModelMeta{
 			ID:            m.ID,
+			DisplayName:   m.ID, // fallback — will be enriched if in registry
 			ContextWindow: llm.InferContextWindow(m.ID),
 			MaxTokens:     32000,
 			Vision:        llm.InferVision(m.ID),

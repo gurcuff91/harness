@@ -10,7 +10,8 @@ INSTALL_DIR=$(HOME)/go/bin
 GO=go
 
 # Build flags
-LDFLAGS=-ldflags "-s -w"
+VERSION=v0.6.0
+LDFLAGS=-ldflags "-s -w -X github.com/gurcuff91/harness/transport/http.version=$(VERSION)"
 
 # Default target
 help:

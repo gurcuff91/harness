@@ -89,6 +89,10 @@ func EnrichMeta(m types.ModelMeta) types.ModelMeta {
 		if m.DisplayName == "" {
 			m.DisplayName = r.DisplayName
 		}
+		// Last-resort fallback
+		if m.DisplayName == "" {
+			m.DisplayName = m.ID
+		}
 		// Pricing always from registry
 		m.InputPrice = r.InputPrice
 		m.OutputPrice = r.OutputPrice

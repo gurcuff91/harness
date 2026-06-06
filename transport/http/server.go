@@ -6,13 +6,21 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/store"
+	"github.com/gurcuff91/harness/config"
+	"github.com/gurcuff91/harness/providers"
+	"github.com/gurcuff91/harness/types"
 )
+
+// version is set via ldflags at build time.
+var version = "dev"
 
 // Server is the HTTP transport for the agent harness.
 type Server struct {
@@ -47,6 +55,10 @@ func (s *Server) ListenAndServe(addr string) error {
 	r.Use(corsMiddleware)
 
 	// Routes
+	r.Get("/api/server", s.handleServerInfo)
+	r.Get("/api/settings", s.handleSettings)
+	r.Get("/api/providers", s.handleProviders)
+	r.Get("/api/models", s.handleModels)
 	r.Get("/api/sessions", s.handleListSessions)
 	r.Post("/api/sessions", s.handleCreateSession)
 	r.Get("/api/sessions/{id}", s.handleGetSession)
@@ -68,9 +80,117 @@ type createSessionRequest struct {
 	CWD   string `json:"cwd"`
 }
 
-type createSessionResponse struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+// serverInfo is returned by GET /api/server
+var serverInfo = struct {
+	Name      string `json:"name"`
+	Version   string `json:"version"`
+	CWD       string `json:"cwd"`
+	PID       int    `json:"pid"`
+	StartedAt string `json:"started_at"`
+}{
+	Name:      "harness",
+	Version:   version,
+	StartedAt: time.Now().UTC().Format(time.RFC3339),
+}
+
+func init() {
+	var err error
+	serverInfo.CWD, err = os.Getwd()
+	if err != nil {
+		serverInfo.CWD = "."
+	}
+	serverInfo.PID = os.Getpid()
+}
+
+func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, serverInfo)
+}
+
+// handleSettings returns current settings with defaults.
+func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	sm := config.GetSettingsManager()
+	model := sm.ActiveModel()
+	thinking := sm.ThinkingLevel()
+	if thinking == "" {
+		thinking = "off"
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"active_model":  model,
+		"thinking_level": thinking,
+	})
+}
+
+// providerInfo is the API representation of a provider.
+type providerInfo struct {
+	Name         string `json:"name"`
+	Active       bool   `json:"active"`
+	Activation   string `json:"activation"`
+	IsSubscription bool `json:"is_subscription"`
+	ModelCount   int    `json:"model_count"`
+}
+
+// handleProviders returns all registered providers.
+func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
+	providers.EnsureRegistry()
+	var list []providerInfo
+	for _, p := range providers.All {
+		models := p.Models()
+		if p.IsActive() && len(models) == 0 {
+			// Lazy-fetch models for active providers
+			models, _ = p.FetchModels()
+		}
+		act := string(p.ActivationSource())
+		if act == "none" {
+			act = "inactive"
+		} else if act == "envvar" {
+			act = "env"
+		}
+		list = append(list, providerInfo{
+			Name:           p.Name(),
+			Active:         p.IsActive(),
+			Activation:     act,
+			IsSubscription: p.CredentialType() == types.CredTypeOAuth,
+			ModelCount:     len(models),
+		})
+	}
+	if list == nil {
+		list = []providerInfo{}
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// modelInfo groups a model with its provider.
+type modelInfo struct {
+	Provider       string `json:"provider"`
+	Model          string `json:"model"`
+	IsSubscription bool   `json:"is_subscription"`
+	types.ModelMeta
+}
+
+func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	providers.EnsureRegistry()
+	var list []modelInfo
+	for _, p := range providers.All {
+		if !p.IsActive() {
+			continue
+		}
+		models := p.Models()
+		if len(models) == 0 {
+			models, _ = p.FetchModels()
+		}
+		for _, m := range models {
+			list = append(list, modelInfo{
+				Provider:       p.Name(),
+				Model:          p.Name() + "/" + m.ID,
+				IsSubscription: p.CredentialType() == types.CredTypeOAuth,
+				ModelMeta:      m,
+			})
+		}
+	}
+	if list == nil {
+		list = []modelInfo{}
+	}
+	writeJSON(w, http.StatusOK, list)
 }
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
@@ -96,10 +216,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	s.sessions[sess.ID()] = proxy
 	s.mu.Unlock()
 
-	writeJSON(w, http.StatusCreated, createSessionResponse{
-		ID:   sess.ID(),
-		Name: sess.Name(),
-	})
+	writeJSON(w, http.StatusCreated, sess.Meta())
 }
 
 // handleListSessions returns all sessions, optionally filtered by ?cwd=
