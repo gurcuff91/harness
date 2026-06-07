@@ -54,9 +54,14 @@ type Session struct {
 
 	// Follow-up prompts — separate mutex to avoid deadlock with mu
 	followMu  sync.Mutex
-	followUps []string
-	busy     bool
+	followUps []followUp
+	busy      bool
 	followCtx context.Context
+}
+
+type followUp struct {
+	text   string
+	images []types.ImageData
 }
 
 // modelPricing holds per-million-token rates for cost calculation.
@@ -123,9 +128,9 @@ func (s *Session) loadModelMeta(modelID string) {
 // Prompt sends a message to the session. If no turn is active, it starts
 // processing immediately. If a turn is running, the message is queued and
 // processed automatically when the current turn finishes.
-func (s *Session) Prompt(ctx context.Context, text string) {
+func (s *Session) Prompt(ctx context.Context, text string, images ...types.ImageData) {
 	s.followMu.Lock()
-	s.followUps = append(s.followUps, text)
+	s.followUps = append(s.followUps, followUp{text: text, images: images})
 	if !s.busy {
 		s.busy = true
 		s.followCtx = ctx
@@ -161,13 +166,17 @@ func (s *Session) ReadSkill(name string) (string, error) {
 	return s.readSkill(name)
 }
 
+// ModelMeta returns the current model's metadata.
+func (s *Session) ModelMeta() *types.ModelMeta {
+	return s.provider.ModelMeta(s.modelID)
+}
+
 // PeekQueue calls fn with the next queued message without removing it.
-// Does nothing if the queue is empty.
 func (s *Session) PeekQueue(fn func(string)) {
 	s.followMu.Lock()
 	defer s.followMu.Unlock()
 	if len(s.followUps) > 0 {
-		fn(s.followUps[0])
+		fn(s.followUps[0].text)
 	}
 }
 
@@ -180,18 +189,17 @@ func (s *Session) drainFollowUps() {
 			s.followMu.Unlock()
 			return
 		}
-		text := s.followUps[0]
+		fu := s.followUps[0]
 		s.followUps = s.followUps[1:]
 		ctx := s.followCtx
 		s.followMu.Unlock()
 
-		// Emit dequeued event — skip first (TUI already displayed it in submit)
 		if !first {
-			s.emit(types.Event{Type: types.EventFollowUpStart, Output: text})
+			s.emit(types.Event{Type: types.EventFollowUpStart, Output: fu.text})
 		}
 		first = false
 
-		if _, err := s.promptSync(ctx, text, nil); err != nil {
+		if _, err := s.promptSync(ctx, fu.text, fu.images); err != nil {
 			if ctx.Err() == nil {
 				s.emit(types.Event{Type: types.EventError, Message: err.Error()})
 			}

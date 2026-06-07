@@ -53,13 +53,19 @@ func (a *Anthropic) SaveCredentials(creds types.Credentials) error {
 	if creds.Type != types.CredTypeAPIKey {
 		return fmt.Errorf("anthropic expects api_key credentials, got %s", creds.Type)
 	}
+	if creds.APIKey == "" {
+		return fmt.Errorf("api_key cannot be empty")
+	}
 	if err := saveAPIKey(&a.apiKey, anthropicAPIKeyCred, creds.APIKey); err != nil {
 		return err
 	}
 	a.mu.Lock()
 	a.cache = make(map[string]types.ModelMeta)
 	a.mu.Unlock()
-	_, _ = a.FetchModels()
+	if _, err := a.FetchModels(); err != nil {
+		_ = a.ClearCredentials() // rollback
+		return fmt.Errorf("invalid credentials: %w", err)
+	}
 	return nil
 }
 
@@ -69,6 +75,9 @@ func (a *Anthropic) ClearCredentials() error {
 	a.mu.Unlock()
 	return clearAPIKey(&a.apiKey, anthropicAPIKeyCred)
 }
+
+func (a *Anthropic) Connect(creds types.Credentials) error { return a.SaveCredentials(creds) }
+func (a *Anthropic) Disconnect() error                     { return a.ClearCredentials() }
 
 func (a *Anthropic) Models() []types.ModelMeta {
 	a.mu.RLock()

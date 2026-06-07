@@ -59,6 +59,8 @@ func (s *Server) ListenAndServe(addr string) error {
 	r.Get("/api/server", s.handleServerInfo)
 	r.Get("/api/settings", s.handleSettings)
 	r.Get("/api/providers", s.handleProviders)
+	r.Post("/api/providers/{name}/connect", s.handleConnectProvider)
+	r.Post("/api/providers/{name}/disconnect", s.handleDisconnectProvider)
 	r.Get("/api/models", s.handleModels)
 	r.Get("/api/sessions", s.handleListSessions)
 	r.Post("/api/sessions", s.handleCreateSession)
@@ -119,18 +121,18 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		thinking = "off"
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
-		"active_model":  model,
+		"active_model":   model,
 		"thinking_level": thinking,
 	})
 }
 
 // providerInfo is the API representation of a provider.
 type providerInfo struct {
-	Name         string `json:"name"`
-	Active       bool   `json:"active"`
-	Activation   string `json:"activation"`
-	IsSubscription bool `json:"is_subscription"`
-	ModelCount   int    `json:"model_count"`
+	Name           string `json:"name"`
+	Active         bool   `json:"active"`
+	Activation     string `json:"activation"`
+	IsSubscription bool   `json:"is_subscription"`
+	ModelCount     int    `json:"model_count"`
 }
 
 // handleProviders returns all registered providers.
@@ -169,6 +171,79 @@ type modelInfo struct {
 	Model          string `json:"model"`
 	IsSubscription bool   `json:"is_subscription"`
 	types.ModelMeta
+}
+
+// connect/disconnect request types
+type connectRequest struct {
+	APIKey       string `json:"api_key,omitempty"`
+	AccessToken  string `json:"access_token,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	ExpiresAt    int64  `json:"expires_at,omitempty"`
+}
+
+func (s *Server) handleConnectProvider(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	providers.EnsureRegistry()
+
+	var target providers.Provider
+	for _, p := range providers.All {
+		if p.Name() == name {
+			target = p
+			break
+		}
+	}
+	if target == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider not found: " + name})
+		return
+	}
+
+	var req connectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		return
+	}
+
+	creds := types.Credentials{
+		Type:         target.CredentialType(),
+		APIKey:       req.APIKey,
+		AccessToken:  req.AccessToken,
+		RefreshToken: req.RefreshToken,
+		ExpiresAt:    req.ExpiresAt,
+	}
+
+	if err := target.Connect(creds); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":      "connected",
+		"model_count": len(target.Models()),
+	})
+}
+
+func (s *Server) handleDisconnectProvider(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	providers.EnsureRegistry()
+
+	var target providers.Provider
+	for _, p := range providers.All {
+		if p.Name() == name {
+			target = p
+			break
+		}
+	}
+	if target == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider not found: " + name})
+		return
+	}
+
+	if err := target.Disconnect(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "disconnected"})
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
@@ -343,7 +418,8 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 }
 
 type promptRequest struct {
-	Text string `json:"text"`
+	Text   string            `json:"text"`
+	Images []types.ImageData `json:"images,omitempty"`
 }
 
 func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
@@ -361,13 +437,22 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
 		return
 	}
-	if req.Text == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "text is required"})
+	if req.Text == "" && len(req.Images) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "text or images is required"})
 		return
 	}
 
+	// Validate vision support if images are provided
+	if len(req.Images) > 0 {
+		meta := proxy.session.ModelMeta()
+		if meta == nil || !meta.Vision {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "current model does not support images"})
+			return
+		}
+	}
+
 	busy := proxy.session.IsBusy()
-	proxy.session.Prompt(context.Background(), req.Text)
+	proxy.session.Prompt(context.Background(), req.Text, req.Images...)
 
 	status := "started"
 	if busy {
@@ -422,9 +507,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 // --- Commands ---
 
 type commandDef struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	Params      []paramDef  `json:"params"`
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	Params      []paramDef `json:"params"`
 }
 
 type paramDef struct {

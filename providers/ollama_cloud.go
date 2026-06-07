@@ -80,7 +80,10 @@ func (o *OllamaCloud) SaveCredentials(creds types.Credentials) error {
 	o.mu.Lock()
 	o.cache = make(map[string]types.ModelMeta)
 	o.mu.Unlock()
-	_, _ = o.FetchModels()
+	if _, err := o.FetchModels(); err != nil {
+		_ = o.ClearCredentials()
+		return fmt.Errorf("invalid credentials: %w", err)
+	}
 	return nil
 }
 
@@ -90,6 +93,9 @@ func (o *OllamaCloud) ClearCredentials() error {
 	o.mu.Unlock()
 	return clearAPIKey(&o.apiKey, ollamaCloudAPIKeyCred)
 }
+
+func (o *OllamaCloud) Connect(creds types.Credentials) error { return o.SaveCredentials(creds) }
+func (o *OllamaCloud) Disconnect() error                     { return o.ClearCredentials() }
 
 func (o *OllamaCloud) Models() []types.ModelMeta {
 	o.mu.RLock()

@@ -68,6 +68,13 @@ func (o *Ollama) SaveCredentials(_ types.Credentials) error { return nil }
 
 func (o *Ollama) ClearCredentials() error { return nil }
 
+func (o *Ollama) Connect(_ types.Credentials) error {
+	return fmt.Errorf("ollama is auto-detected, cannot connect/disconnect manually")
+}
+func (o *Ollama) Disconnect() error {
+	return fmt.Errorf("ollama is auto-detected, cannot connect/disconnect manually")
+}
+
 func (o *Ollama) Models() []types.ModelMeta {
 	o.mu.RLock()
 	defer o.mu.RUnlock()

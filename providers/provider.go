@@ -54,6 +54,13 @@ type Provider interface {
 	// ActivationSource returns how this provider was activated.
 	// Used by the TUI to determine if a provider can be connected/disconnected.
 	ActivationSource() ActivationSource
+
+	// Connect saves credentials, validates them by fetching models,
+	// and activates the provider. On failure, credentials are rolled back.
+	Connect(creds types.Credentials) error
+
+	// Disconnect clears all credentials and deactivates the provider.
+	Disconnect() error
 }
 
 // ActivationSource describes how a provider got its credentials.

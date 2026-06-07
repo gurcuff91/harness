@@ -6,10 +6,10 @@ type SessionStats struct {
 	// Accumulated across all turns — for billing analysis
 	// Note: InputTokens grows exponentially (each turn includes full history)
 	// Use CostUSD for actual spend tracking.
-	InputTokens  int     `json:"input_tokens"`
-	OutputTokens int     `json:"output_tokens"`
-	CacheRead    int     `json:"cache_read"`
-	CacheWrite   int     `json:"cache_write"`
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	CacheRead    int `json:"cache_read"`
+	CacheWrite   int `json:"cache_write"`
 
 	// Derived — calculated by the session
 	CostUSD       float64 `json:"cost_usd"`

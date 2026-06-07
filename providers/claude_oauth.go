@@ -123,9 +123,15 @@ func (c *ClaudeOAuth) SaveCredentials(creds types.Credentials) error {
 	if creds.AccessToken == "" {
 		return fmt.Errorf("access_token cannot be empty")
 	}
+	if creds.RefreshToken == "" {
+		return fmt.Errorf("refresh_token cannot be empty")
+	}
 	c.tokens.creds = &creds
 	persistOAuthCreds(&creds)
-	_, _ = c.FetchModels()
+	if _, err := c.FetchModels(); err != nil {
+		_ = c.ClearCredentials()
+		return fmt.Errorf("invalid credentials: %w", err)
+	}
 	return nil
 }
 
@@ -136,6 +142,9 @@ func (c *ClaudeOAuth) ClearCredentials() error {
 	c.mu.Unlock()
 	return config.GetCredentialsManager().DeletePrefix(oauthCredPrefix)
 }
+
+func (c *ClaudeOAuth) Connect(creds types.Credentials) error { return c.SaveCredentials(creds) }
+func (c *ClaudeOAuth) Disconnect() error                     { return c.ClearCredentials() }
 
 // ── Model cache ──────────────────────────────────────────────────────────
 
@@ -501,14 +510,14 @@ func (tm *tokenManager) getValidToken() (string, error) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	if tm.creds == nil {
-		return "", fmt.Errorf("not connected — use /connect claude-oauth")
+		return "", fmt.Errorf("not connected")
 	}
 	if tm.creds.ExpiresAt > time.Now().UnixMilli()+expiryBufferMs {
 		return tm.creds.AccessToken, nil
 	}
 	refreshed, err := tm.refresh(tm.creds.RefreshToken)
 	if err != nil {
-		return "", fmt.Errorf("token expired — use /connect claude-oauth")
+		return "", fmt.Errorf("token expired and refresh failed")
 	}
 	tm.creds = refreshed
 	persistOAuthCreds(refreshed)

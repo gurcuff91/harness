@@ -4,8 +4,8 @@ package types
 
 // ImageData holds a base64-encoded image for vision requests.
 type ImageData struct {
-	MimeType string
-	Base64   string
+	MimeType string `json:"mime_type"`
+	Base64   string `json:"base64"`
 }
 
 // Request represents an LLM completion request.

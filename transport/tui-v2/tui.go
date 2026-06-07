@@ -57,7 +57,6 @@ type TUI struct {
 	spinnerStart  time.Time
 	spinnerLabel  string
 	spinnerStop   chan struct{}
-
 }
 
 // --- Palette ---
@@ -1485,7 +1484,9 @@ func (t *TUI) renderSpinner() string {
 }
 
 func pluralS(n int) string {
-	if n == 1 { return "" }
+	if n == 1 {
+		return ""
+	}
 	return "s"
 }
 

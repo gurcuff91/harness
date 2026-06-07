@@ -54,7 +54,10 @@ func (o *OpenAI) SaveCredentials(creds types.Credentials) error {
 	o.mu.Lock()
 	o.cache = make(map[string]types.ModelMeta)
 	o.mu.Unlock()
-	_, _ = o.FetchModels()
+	if _, err := o.FetchModels(); err != nil {
+		_ = o.ClearCredentials()
+		return fmt.Errorf("invalid credentials: %w", err)
+	}
 	return nil
 }
 
@@ -64,6 +67,9 @@ func (o *OpenAI) ClearCredentials() error {
 	o.mu.Unlock()
 	return clearAPIKey(&o.apiKey, openAIAPIKeyCred)
 }
+
+func (o *OpenAI) Connect(creds types.Credentials) error { return o.SaveCredentials(creds) }
+func (o *OpenAI) Disconnect() error                     { return o.ClearCredentials() }
 
 func NewOpenAIWithConfig(apiKey, baseURL string) *OpenAI {
 	return &OpenAI{
