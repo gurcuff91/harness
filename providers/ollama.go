@@ -63,11 +63,7 @@ func (o *Ollama) ResolveCredentials() (types.Credentials, error) {
 	return types.Credentials{Type: types.CredTypeNone}, nil
 }
 
-// SaveCredentials — no-op.
-func (o *Ollama) SaveCredentials(_ types.Credentials) error { return nil }
-
-func (o *Ollama) ClearCredentials() error { return nil }
-
+// Connect — not supported for auto-detected providers.
 func (o *Ollama) Connect(_ types.Credentials) error {
 	return fmt.Errorf("ollama is auto-detected, cannot connect/disconnect manually")
 }

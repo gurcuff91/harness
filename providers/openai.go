@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 
+	"github.com/gurcuff91/harness/config"
 	llm "github.com/gurcuff91/harness/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
@@ -38,38 +40,46 @@ func NewOpenAI() *OpenAI {
 func (o *OpenAI) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
 
 func (o *OpenAI) ResolveCredentials() (types.Credentials, error) {
-	return resolveAPIKey(&o.apiKey, openAIAPIKeyEnv, openAIAPIKeyCred)
+	if o.apiKey != "" {
+		return types.APIKeyCredentials(o.apiKey), nil
+	}
+	if v := os.Getenv(openAIAPIKeyEnv); v != "" {
+		o.apiKey = v
+		return types.APIKeyCredentials(v), nil
+	}
+	if v, ok := config.GetCredentialsManager().Load(openAIAPIKeyCred); ok && v != "" {
+		o.apiKey = v
+		return types.APIKeyCredentials(v), nil
+	}
+	return types.Credentials{}, fmt.Errorf("no credentials found")
 }
 
-func (o *OpenAI) SaveCredentials(creds types.Credentials) error {
+func (o *OpenAI) Connect(creds types.Credentials) error {
 	if creds.Type != types.CredTypeAPIKey {
 		return fmt.Errorf("openai expects api_key credentials, got %s", creds.Type)
 	}
 	if creds.APIKey == "" {
 		return fmt.Errorf("api_key cannot be empty")
 	}
-	if err := saveAPIKey(&o.apiKey, openAIAPIKeyCred, creds.APIKey); err != nil {
-		return err
-	}
+
+	o.apiKey = creds.APIKey
 	o.mu.Lock()
 	o.cache = make(map[string]types.ModelMeta)
 	o.mu.Unlock()
 	if _, err := o.FetchModels(); err != nil {
-		_ = o.ClearCredentials()
+		o.apiKey = ""
 		return fmt.Errorf("invalid credentials: %w", err)
 	}
-	return nil
+	return config.GetCredentialsManager().Store(openAIAPIKeyCred, creds.APIKey)
 }
 
-func (o *OpenAI) ClearCredentials() error {
+func (o *OpenAI) Disconnect() error {
 	o.mu.Lock()
 	o.cache = make(map[string]types.ModelMeta)
 	o.mu.Unlock()
-	return clearAPIKey(&o.apiKey, openAIAPIKeyCred)
+	o.apiKey = ""
+	return config.GetCredentialsManager().Delete(openAIAPIKeyCred)
 }
-
-func (o *OpenAI) Connect(creds types.Credentials) error { return o.SaveCredentials(creds) }
-func (o *OpenAI) Disconnect() error                     { return o.ClearCredentials() }
 
 func NewOpenAIWithConfig(apiKey, baseURL string) *OpenAI {
 	return &OpenAI{
@@ -82,7 +92,13 @@ func NewOpenAIWithConfig(apiKey, baseURL string) *OpenAI {
 
 func (o *OpenAI) Name() string { return "openai" }
 func (o *OpenAI) ActivationSource() ActivationSource {
-	return activationSourceAPIKey(openAIAPIKeyEnv, openAIAPIKeyCred)
+	if v := os.Getenv(openAIAPIKeyEnv); v != "" {
+		return ActivationEnvVar
+	}
+	if v, ok := config.GetCredentialsManager().Load(openAIAPIKeyCred); ok && v != "" {
+		return ActivationCredentials
+	}
+	return ActivationNone
 }
 func (o *OpenAI) IsActive() bool {
 	_, err := o.ResolveCredentials()

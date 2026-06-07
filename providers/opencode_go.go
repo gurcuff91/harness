@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/gurcuff91/harness/config"
 	llm "github.com/gurcuff91/harness/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
@@ -37,7 +39,13 @@ func NewOpenCodeGo() *OpenCodeGo {
 
 func (o *OpenCodeGo) Name() string { return "opencode-go" }
 func (o *OpenCodeGo) ActivationSource() ActivationSource {
-	return activationSourceAPIKey(openCodeGoAPIKeyEnv, openCodeGoAPIKeyCred)
+	if v := os.Getenv(openCodeGoAPIKeyEnv); v != "" {
+		return ActivationEnvVar
+	}
+	if v, ok := config.GetCredentialsManager().Load(openCodeGoAPIKeyCred); ok && v != "" {
+		return ActivationCredentials
+	}
+	return ActivationNone
 }
 func (o *OpenCodeGo) IsActive() bool {
 	_, err := o.ResolveCredentials()
@@ -47,38 +55,46 @@ func (o *OpenCodeGo) IsActive() bool {
 func (o *OpenCodeGo) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
 
 func (o *OpenCodeGo) ResolveCredentials() (types.Credentials, error) {
-	return resolveAPIKey(&o.apiKey, openCodeGoAPIKeyEnv, openCodeGoAPIKeyCred)
+	if o.apiKey != "" {
+		return types.APIKeyCredentials(o.apiKey), nil
+	}
+	if v := os.Getenv(openCodeGoAPIKeyEnv); v != "" {
+		o.apiKey = v
+		return types.APIKeyCredentials(v), nil
+	}
+	if v, ok := config.GetCredentialsManager().Load(openCodeGoAPIKeyCred); ok && v != "" {
+		o.apiKey = v
+		return types.APIKeyCredentials(v), nil
+	}
+	return types.Credentials{}, fmt.Errorf("no credentials found")
 }
 
-func (o *OpenCodeGo) SaveCredentials(creds types.Credentials) error {
+func (o *OpenCodeGo) Connect(creds types.Credentials) error {
 	if creds.Type != types.CredTypeAPIKey {
 		return fmt.Errorf("opencode-go expects api_key credentials, got %s", creds.Type)
 	}
 	if creds.APIKey == "" {
 		return fmt.Errorf("api_key cannot be empty")
 	}
-	if err := saveAPIKey(&o.apiKey, openCodeGoAPIKeyCred, creds.APIKey); err != nil {
-		return err
-	}
+
+	o.apiKey = creds.APIKey
 	o.mu.Lock()
 	o.cache = make(map[string]types.ModelMeta)
 	o.mu.Unlock()
 	if _, err := o.FetchModels(); err != nil {
-		_ = o.ClearCredentials()
+		o.apiKey = ""
 		return fmt.Errorf("invalid credentials: %w", err)
 	}
-	return nil
+	return config.GetCredentialsManager().Store(openCodeGoAPIKeyCred, creds.APIKey)
 }
 
-func (o *OpenCodeGo) ClearCredentials() error {
+func (o *OpenCodeGo) Disconnect() error {
 	o.mu.Lock()
 	o.cache = make(map[string]types.ModelMeta)
 	o.mu.Unlock()
-	return clearAPIKey(&o.apiKey, openCodeGoAPIKeyCred)
+	o.apiKey = ""
+	return config.GetCredentialsManager().Delete(openCodeGoAPIKeyCred)
 }
-
-func (o *OpenCodeGo) Connect(creds types.Credentials) error { return o.SaveCredentials(creds) }
-func (o *OpenCodeGo) Disconnect() error                     { return o.ClearCredentials() }
 
 func (o *OpenCodeGo) Models() []types.ModelMeta {
 	o.mu.RLock()

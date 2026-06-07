@@ -1183,13 +1183,13 @@ func (t *TUI) execConnect(providerName, apiKey string) {
 	}
 	// Save credentials and fetch models to validate the key
 	creds := types.Credentials{Type: types.CredTypeAPIKey, APIKey: apiKey}
-	if err := target.SaveCredentials(creds); err != nil {
+	if err := target.Connect(creds); err != nil {
 		t.output.Add("   \033[31mFailed to save credentials: " + err.Error() + "\033[0m")
 		return
 	}
 	models, err := target.FetchModels()
 	if err != nil {
-		_ = target.ClearCredentials()
+		_ = target.Disconnect()
 		t.output.Add("   \033[31m" + err.Error() + "\033[0m")
 		return
 	}
@@ -1237,7 +1237,7 @@ func (t *TUI) execDisconnect(providerName string) {
 	}
 
 	// Clear credentials
-	if err := target.ClearCredentials(); err != nil {
+	if err := target.Disconnect(); err != nil {
 		t.output.Add("   \033[31mFailed to disconnect: " + err.Error() + "\033[0m")
 		t.output.Add("")
 		return
@@ -1284,8 +1284,8 @@ func (t *TUI) execConnectOAuth(providerName string, target providers.Provider) {
 	}
 
 	// Try importing from keychain (Claude already authed)
-	if tokens := providers.ReadClaudeFromKeychain(); tokens != nil {
-		if err := target.SaveCredentials(*tokens); err == nil {
+	if tokens := readClaudeFromKeychain(); tokens != nil {
+		if err := target.Connect(*tokens); err == nil {
 			models, _ := target.FetchModels()
 			t.output.Add(fmt.Sprintf("   \033[32mProvider %s connected (%d models)\033[0m", providerName, len(models)))
 			t.autoSelectModel(providerName, models)
@@ -1321,13 +1321,13 @@ func (t *TUI) execConnectOAuth(providerName string, target providers.Provider) {
 	}
 
 	// Import tokens from keychain and save to credentials
-	tokens := providers.ReadClaudeFromKeychain()
+	tokens := readClaudeFromKeychain()
 	if tokens == nil {
 		t.output.Add("   \033[31mLogin completed but couldn't import tokens from keychain\033[0m")
 		t.output.Add("")
 		return
 	}
-	if err := target.SaveCredentials(*tokens); err != nil {
+	if err := target.Connect(*tokens); err != nil {
 		t.output.Add("   \033[31mFailed to save tokens: " + err.Error() + "\033[0m")
 		t.output.Add("")
 		return

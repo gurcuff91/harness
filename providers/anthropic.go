@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 
+	"github.com/gurcuff91/harness/config"
 	llm "github.com/gurcuff91/harness/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
@@ -36,7 +38,13 @@ func NewAnthropic() *Anthropic {
 
 func (a *Anthropic) Name() string { return "anthropic" }
 func (a *Anthropic) ActivationSource() ActivationSource {
-	return activationSourceAPIKey(anthropicAPIKeyEnv, anthropicAPIKeyCred)
+	if v := os.Getenv(anthropicAPIKeyEnv); v != "" {
+		return ActivationEnvVar
+	}
+	if v, ok := config.GetCredentialsManager().Load(anthropicAPIKeyCred); ok && v != "" {
+		return ActivationCredentials
+	}
+	return ActivationNone
 }
 func (a *Anthropic) IsActive() bool {
 	_, err := a.ResolveCredentials()
@@ -46,38 +54,49 @@ func (a *Anthropic) IsActive() bool {
 func (a *Anthropic) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
 
 func (a *Anthropic) ResolveCredentials() (types.Credentials, error) {
-	return resolveAPIKey(&a.apiKey, anthropicAPIKeyEnv, anthropicAPIKeyCred)
+	if a.apiKey != "" {
+		return types.APIKeyCredentials(a.apiKey), nil
+	}
+	if v := os.Getenv(anthropicAPIKeyEnv); v != "" {
+		a.apiKey = v
+		return types.APIKeyCredentials(v), nil
+	}
+	if v, ok := config.GetCredentialsManager().Load(anthropicAPIKeyCred); ok && v != "" {
+		a.apiKey = v
+		return types.APIKeyCredentials(v), nil
+	}
+	return types.Credentials{}, fmt.Errorf("no credentials found")
 }
 
-func (a *Anthropic) SaveCredentials(creds types.Credentials) error {
+func (a *Anthropic) Connect(creds types.Credentials) error {
 	if creds.Type != types.CredTypeAPIKey {
 		return fmt.Errorf("anthropic expects api_key credentials, got %s", creds.Type)
 	}
 	if creds.APIKey == "" {
 		return fmt.Errorf("api_key cannot be empty")
 	}
-	if err := saveAPIKey(&a.apiKey, anthropicAPIKeyCred, creds.APIKey); err != nil {
-		return err
-	}
+
+	// Validate first (in-memory only, no disk write)
+	a.apiKey = creds.APIKey
 	a.mu.Lock()
 	a.cache = make(map[string]types.ModelMeta)
 	a.mu.Unlock()
 	if _, err := a.FetchModels(); err != nil {
-		_ = a.ClearCredentials() // rollback
+		a.apiKey = "" // clear in-memory
 		return fmt.Errorf("invalid credentials: %w", err)
 	}
-	return nil
+
+	// Persist to disk only after validation succeeded
+	return config.GetCredentialsManager().Store(anthropicAPIKeyCred, creds.APIKey)
 }
 
-func (a *Anthropic) ClearCredentials() error {
+func (a *Anthropic) Disconnect() error {
 	a.mu.Lock()
 	a.cache = make(map[string]types.ModelMeta)
 	a.mu.Unlock()
-	return clearAPIKey(&a.apiKey, anthropicAPIKeyCred)
+	a.apiKey = ""
+	return config.GetCredentialsManager().Delete(anthropicAPIKeyCred)
 }
-
-func (a *Anthropic) Connect(creds types.Credentials) error { return a.SaveCredentials(creds) }
-func (a *Anthropic) Disconnect() error                     { return a.ClearCredentials() }
 
 func (a *Anthropic) Models() []types.ModelMeta {
 	a.mu.RLock()

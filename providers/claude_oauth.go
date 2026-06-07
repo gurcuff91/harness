@@ -10,8 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -78,7 +76,7 @@ func (c *ClaudeOAuth) CredentialType() types.CredentialType { return types.CredT
 // ── Credential management ────────────────────────────────────────────────
 
 // ResolveCredentials reads from the credential chain AND validates the token.
-// Chain: cache → credentials.json → keychain (bootstrap only).
+// Chain: cache → credentials.json.
 // Refreshes expired tokens automatically.
 // Returns error if no credentials found or refresh fails (revoked).
 func (c *ClaudeOAuth) ResolveCredentials() (types.Credentials, error) {
@@ -115,8 +113,8 @@ func (c *ClaudeOAuth) loadCredentialsFromSources() error {
 	return fmt.Errorf("claude-oauth: no credentials found")
 }
 
-// SaveCredentials persists OAuth tokens and activates the provider.
-func (c *ClaudeOAuth) SaveCredentials(creds types.Credentials) error {
+// Connect validates OAuth tokens, then persists them.
+func (c *ClaudeOAuth) Connect(creds types.Credentials) error {
 	if creds.Type != types.CredTypeOAuth {
 		return fmt.Errorf("claude-oauth expects oauth credentials, got %s", creds.Type)
 	}
@@ -126,25 +124,28 @@ func (c *ClaudeOAuth) SaveCredentials(creds types.Credentials) error {
 	if creds.RefreshToken == "" {
 		return fmt.Errorf("refresh_token cannot be empty")
 	}
+
+	// Validate first (in-memory only)
 	c.tokens.creds = &creds
-	persistOAuthCreds(&creds)
 	if _, err := c.FetchModels(); err != nil {
-		_ = c.ClearCredentials()
+		c.tokens.creds = nil
 		return fmt.Errorf("invalid credentials: %w", err)
 	}
+
+	// Persist only after validation
+	persistOAuthCreds(&creds)
 	return nil
 }
 
-func (c *ClaudeOAuth) ClearCredentials() error {
+func (c *ClaudeOAuth) Disconnect() error { return c.clearCreds() }
+
+func (c *ClaudeOAuth) clearCreds() error {
 	c.tokens.creds = nil
 	c.mu.Lock()
 	c.cache = make(map[string]types.ModelMeta)
 	c.mu.Unlock()
 	return config.GetCredentialsManager().DeletePrefix(oauthCredPrefix)
 }
-
-func (c *ClaudeOAuth) Connect(creds types.Credentials) error { return c.SaveCredentials(creds) }
-func (c *ClaudeOAuth) Disconnect() error                     { return c.ClearCredentials() }
 
 // ── Model cache ──────────────────────────────────────────────────────────
 
@@ -577,121 +578,6 @@ func persistOAuthCreds(creds *types.Credentials) {
 	cm.Store(oauthCredPrefix+"subscription_type", creds.SubscriptionType)
 }
 
-// ── OAuth login flow ─────────────────────────────────────────────────────
-
-// RunOAuthFlow executes the OAuth login flow and returns credentials.
-// Called by the CLI transport — UI interaction lives here, not in the provider.
-func RunOAuthFlow() *types.Credentials {
-	if err := login(); err != nil {
-		return nil
-	}
-	// Re-read from credentials.json (login() just wrote them)
-	cm := config.GetCredentialsManager()
-	at, ok := cm.Load(oauthCredPrefix + "access_token")
-	if !ok || at == "" {
-		return nil
-	}
-	rt, _ := cm.Load(oauthCredPrefix + "refresh_token")
-	var ea int64
-	if eas, ok := cm.Load(oauthCredPrefix + "expires_at"); ok {
-		fmt.Sscanf(eas, "%d", &ea)
-	}
-	st, _ := cm.Load(oauthCredPrefix + "subscription_type")
-	creds := types.OAuthCredentials(at, rt, ea, st)
-	return &creds
-}
-
-// login runs `claude auth login`, imports tokens, persists them.
-func login() error {
-	fmt.Println("\n  🔑 Starting authentication via Claude Code...")
-	cmd := exec.Command("claude", "auth", "login")
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		resetTerminal()
-		return fmt.Errorf("claude auth login failed: %w\n  Install: npm install -g @anthropic-ai/claude-code", err)
-	}
-	resetTerminal()
-
-	token := readClaudeFromKeychain()
-	if token == nil {
-		token = readClaudeCredentialsFile()
-	}
-	if token == nil {
-		return fmt.Errorf("login completed but couldn't import tokens — try again")
-	}
-	persistOAuthCreds(token)
-	return nil
-}
-
-func resetTerminal() {
-	exec.Command("stty", "sane").Run()
-	fmt.Print("\033[?25h\033[0m")
-}
-
-// ── Keychain readers (macOS) ─────────────────────────────────────────────
-
-// ReadClaudeFromKeychain reads OAuth tokens from macOS keychain.
-// Used by /connect to import tokens on demand.
-func ReadClaudeFromKeychain() *types.Credentials {
-	return readClaudeFromKeychain()
-}
-
-func readClaudeFromKeychain() *types.Credentials {
-	if t := readKeychainItem("Claude Code-credentials"); t != nil {
-		return t
-	}
-	return readKeychainItem("claude-code")
-}
-
-func readKeychainItem(service string) *types.Credentials {
-	out, err := exec.Command("security", "find-generic-password", "-s", service, "-w").Output()
-	if err != nil {
-		return nil
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
-		return nil
-	}
-	data := raw
-	if nested, ok := raw["claudeAiOauth"].(map[string]any); ok {
-		data = nested
-	}
-	at, _ := data["accessToken"].(string)
-	rt, _ := data["refreshToken"].(string)
-	ea, _ := data["expiresAt"].(float64)
-	st, _ := data["subscriptionType"].(string)
-	if at == "" || rt == "" {
-		return nil
-	}
-	return &types.Credentials{
-		Type: types.CredTypeOAuth, AccessToken: at, RefreshToken: rt,
-		ExpiresAt: int64(ea), SubscriptionType: st,
-	}
-}
-
-func readClaudeCredentialsFile() *types.Credentials {
-	home, _ := os.UserHomeDir()
-	data, err := os.ReadFile(filepath.Join(home, ".claude", ".credentials.json"))
-	if err != nil {
-		return nil
-	}
-	var creds struct {
-		OAuthTokens []struct {
-			AccessToken  string `json:"accessToken"`
-			RefreshToken string `json:"refreshToken"`
-			ExpiresAt    int64  `json:"expiresAt"`
-			SubType      string `json:"subscriptionType"`
-		} `json:"oauthTokens"`
-	}
-	if err := json.Unmarshal(data, &creds); err != nil || len(creds.OAuthTokens) == 0 {
-		return nil
-	}
-	t := creds.OAuthTokens[0]
-	return &types.Credentials{
-		Type: types.CredTypeOAuth, AccessToken: t.AccessToken,
-		RefreshToken: t.RefreshToken, ExpiresAt: t.ExpiresAt, SubscriptionType: t.SubType,
-	}
-}
 
 // ── Utilities ────────────────────────────────────────────────────────────
 

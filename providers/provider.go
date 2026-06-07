@@ -38,21 +38,10 @@ type Provider interface {
 	// CredentialType returns what kind of credentials this provider expects.
 	CredentialType() types.CredentialType
 
-	// ResolveCredentials reads from the credential chain:
-	// cache (in-memory) → env var → credentials.json → keychain (OAuth only)
-	// Returns error if no credentials found in any source.
-	// Ollama: always returns (CredTypeNone, nil) — no credentials needed.
+	// ResolveCredentials reads from the credential chain.
 	ResolveCredentials() (types.Credentials, error)
 
-	// SaveCredentials persists credentials to credentials.json and updates in-memory cache.
-	// Ollama: no-op, always returns nil.
-	SaveCredentials(creds types.Credentials) error
-
-	// ClearCredentials removes all stored credentials and deactivates the provider.
-	ClearCredentials() error
-
 	// ActivationSource returns how this provider was activated.
-	// Used by the TUI to determine if a provider can be connected/disconnected.
 	ActivationSource() ActivationSource
 
 	// Connect saves credentials, validates them by fetching models,
