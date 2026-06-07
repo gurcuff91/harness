@@ -561,6 +561,26 @@ func (s *Server) handleListCommands(w http.ResponseWriter, r *http.Request) {
 	list := make([]commandDef, len(commands))
 	copy(list, commands)
 
+	// Populate model values dynamically
+	for i, cmd := range list {
+		if cmd.Name == "model" {
+			for j, p := range list[i].Params {
+				if p.Name == "model" {
+					var vals []string
+					for _, prov := range providers.All {
+						if !prov.IsActive() {
+							continue
+						}
+						for _, m := range prov.Models() {
+							vals = append(vals, prov.Name()+"/"+m.ID)
+						}
+					}
+					list[i].Params[j].Values = vals
+				}
+			}
+		}
+	}
+
 	for _, sk := range proxy.session.Skills() {
 		list = append(list, commandDef{
 			Name:        "skill:" + sk.Name,
