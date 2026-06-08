@@ -157,8 +157,9 @@ type TUI struct {
 	pal      palette
 
 	// session state
-	thinking    string
-	sessionCmds []CommandDef
+	thinking      string
+	isSubscription bool
+	sessionCmds   []CommandDef
 
 	// state
 	spinning    bool
@@ -167,10 +168,11 @@ type TUI struct {
 }
 
 type tokensInfo struct {
-	input, output int
-	cost          float64
-	contextPct    float64
-	contextWin    int
+	input, output    int
+	cacheRead, cacheWrite int
+	cost             float64
+	contextPct       float64
+	contextWin       int
 }
 
 func New(a *agent.Agent) *TUI {
@@ -513,6 +515,14 @@ func (t *TUI) autoConnect() {
 		t.model, _ = models[0]["model"].(string)
 	}
 	t.thinking = settingsThinking
+
+	// Check if selected model is subscription-based
+	for _, m := range models {
+		if id, _ := m["model"].(string); id == t.model {
+			t.isSubscription, _ = m["is_subscription"].(bool)
+			break
+		}
+	}
 
 	// Create session
 	data, err = t.client.CreateSession(t.model)
@@ -858,6 +868,17 @@ func (t *TUI) handleCommand(text string) {
 	case "model":
 		if len(parts) > 1 {
 			t.model = parts[1]
+			// Refresh subscription flag
+			if data, err := t.client.ListModels(); err == nil {
+				var models []map[string]any
+				json.Unmarshal(data, &models)
+				for _, m := range models {
+					if id, _ := m["model"].(string); id == t.model {
+						t.isSubscription, _ = m["is_subscription"].(bool)
+						break
+					}
+				}
+			}
 		}
 	case "thinking":
 		if len(parts) > 1 {
@@ -985,6 +1006,8 @@ func (t *TUI) streamEvents(ctx context.Context) {
 			case "tokens":
 				t.stats.input, _ = intFromMap(evt, "input")
 				t.stats.output, _ = intFromMap(evt, "total_output")
+				t.stats.cacheRead, _ = intFromMap(evt, "cache_read")
+				t.stats.cacheWrite, _ = intFromMap(evt, "cache_write")
 				t.stats.cost, _ = floatFromMap(evt, "cost_usd")
 				t.stats.contextPct, _ = floatFromMap(evt, "context_usage")
 				t.stats.contextWin, _ = intFromMap(evt, "context_window")
@@ -1065,11 +1088,20 @@ func (t *TUI) updateInfo() {
 	if t.thinking != "" && t.thinking != "off" {
 		thinking = " • " + t.thinking
 	}
+	cache := ""
+	if t.stats.cacheRead > 0 || t.stats.cacheWrite > 0 {
+		cache = fmt.Sprintf(" R%s W%s", compactNum(t.stats.cacheRead), compactNum(t.stats.cacheWrite))
+	}
+	price := fmt.Sprintf("$%.3f", t.stats.cost)
+	if t.isSubscription {
+		price += " (sub)"
+	}
 	t.footer.SetText(fmt.Sprintf(
-		"[gray]↑%s ↓%s $%.4f %.1f%%/%s  %s%s[-]",
+		"[gray]↑%s ↓%s%s %s %.1f%%/%s %s%s[-]",
 		compactNum(t.stats.input),
 		compactNum(t.stats.output),
-		t.stats.cost,
+		cache,
+		price,
 		t.stats.contextPct*100,
 		compactNum(t.stats.contextWin),
 		t.model,
