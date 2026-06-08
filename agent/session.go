@@ -435,7 +435,12 @@ func (s *Session) Stats() types.SessionStats {
 // Meta returns the full session metadata from the store.
 // Includes: id, cwd, name, model, thinking, stats, timestamps.
 func (s *Session) Meta() store.SessionMeta {
-	return s.store.Meta()
+	m := s.store.Meta()
+	// Always inject current context window so it's available before the first turn
+	if s.contextWindow > 0 && m.Stats.ContextWindow == 0 {
+		m.Stats.ContextWindow = s.contextWindow
+	}
+	return m
 }
 
 // Close flushes and closes the store.

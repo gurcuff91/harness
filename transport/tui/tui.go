@@ -259,7 +259,7 @@ func (t *TUI) buildUI() {
 		return t.handleKey(event)
 	})
 
-	// Spinner line: 1 line above the separator
+	// Spinner: always 3 lines (blank + text + blank)
 	t.spinner = tview.NewTextView().SetDynamicColors(true)
 	t.spinner.SetBorder(false)
 	t.spinner.SetBackgroundColor(tcell.ColorDefault)
@@ -297,7 +297,7 @@ func (t *TUI) buildUI() {
 	//   footer   (1 line)
 	t.flex = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(t.output, 0, 1, false).
-		AddItem(t.spinner, 1, 0, false).
+		AddItem(t.spinner, 3, 0, false).
 		AddItem(sep1, 1, 0, false).
 		AddItem(t.inputTV, 1, 0, false).
 		AddItem(sep2, 1, 0, false).
@@ -553,8 +553,45 @@ func (t *TUI) autoConnect() {
 	if th, _ := sess["thinking"].(string); th != "" {
 		t.thinking = th
 	}
+	// Populate all footer stats from session stats
+	t.loadStatsFromSession(sess)
 	t.loadSessionCommands()
 	t.app.QueueUpdateDraw(func() { t.updateInfo() })
+}
+
+// loadStatsFromSession reads the stats block from a session API response
+// and populates the TUI footer state. Used for both new sessions and
+// resumed sessions (same response shape from both endpoints).
+//
+// TODO: when resume session is implemented, call loadStatsFromSession
+// with the resume response — stats will carry all accumulated values
+// from the previous session (input, output, cache, cost, context_usage).
+func (t *TUI) loadStatsFromSession(sess map[string]any) {
+	stats, ok := sess["stats"].(map[string]any)
+	if !ok {
+		return
+	}
+	if v, _ := stats["input_tokens"].(float64); v > 0 {
+		t.stats.input = int(v)
+	}
+	if v, _ := stats["output_tokens"].(float64); v > 0 {
+		t.stats.output = int(v)
+	}
+	if v, _ := stats["cache_read"].(float64); v > 0 {
+		t.stats.cacheRead = int(v)
+	}
+	if v, _ := stats["cache_write"].(float64); v > 0 {
+		t.stats.cacheWrite = int(v)
+	}
+	if v, _ := stats["cost_usd"].(float64); v > 0 {
+		t.stats.cost = v
+	}
+	if v, _ := stats["context_usage"].(float64); v > 0 {
+		t.stats.contextPct = v
+	}
+	if v, _ := stats["context_window"].(float64); v > 0 {
+		t.stats.contextWin = int(v)
+	}
 }
 
 func (t *TUI) showWarn(msg string) {
@@ -997,15 +1034,21 @@ func (t *TUI) streamEvents(ctx context.Context) {
 					inText = false
 				}
 				name, _ := evt["tool_name"].(string)
-				t.appendLine(fmt.Sprintf(clrToolName+"⚙ %s"+clrReset, name))
+				// Bold amber tool name + opening paren
+				t.appendLine(clrToolName+"[::b]⚙ " + tview.Escape(name) + "[-:-:-]" + clrToolName + "(" + clrReset)
 
 			case "tool_args":
 				delta, _ := evt["delta"].(string)
-				t.appendLine(clrToolArgs + strings.ReplaceAll(delta, "[", "[[") + clrReset)
+				// Strip outer braces, content in dim
+				delta = strings.TrimPrefix(strings.TrimSpace(delta), "{")
+				delta = strings.TrimSuffix(strings.TrimSpace(delta), "}")
+				if delta != "" {
+					t.appendLine("[::d]" + strings.ReplaceAll(delta, "[", "[[") + "[-:-:-]")
+				}
 
 			case "tool_call":
-				// args done — newline before result line
-				t.appendLine("\n")
+				// Close paren + newline before result
+				t.appendLine(clrToolName + ")" + clrReset + "\n")
 
 			case "tool_result":
 				output, _ := evt["output"].(string)
@@ -1014,9 +1057,9 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				safe := strings.ReplaceAll(summarize(output), "[", "[[")
 				// result + trailing blank line (next block starts clean)
 				if isErr {
-					t.appendLine(fmt.Sprintf(clrToolErr+"✗"+clrReset+" "+clrToolArgs+"%s (%.0fms)"+clrReset+"\n\n", safe, dur))
+					t.appendLine(fmt.Sprintf(clrToolErr+"✗"+clrReset+" [::d]%s (%.0fms)[-:-:-]\n\n", safe, dur))
 				} else {
-					t.appendLine(fmt.Sprintf(clrToolOK+"✓"+clrReset+" "+clrToolArgs+"%s (%.0fms)"+clrReset+"\n\n", safe, dur))
+					t.appendLine(fmt.Sprintf(clrToolOK+"✓"+clrReset+" [::d]%s (%.0fms)[-:-:-]\n\n", safe, dur))
 				}
 
 			case "tokens":
@@ -1063,8 +1106,7 @@ func (t *TUI) spinnerLoop() {
 		case <-ticker.C:
 			if !t.spinning {
 				t.app.QueueUpdateDraw(func() {
-					t.flex.ResizeItem(t.spinner, 1, 0)
-					t.spinner.SetText("")
+					t.spinner.SetText("\n\n")
 				})
 				continue
 			}
@@ -1072,7 +1114,6 @@ func (t *TUI) spinnerLoop() {
 			lbl := spinnerLabels[(frame/10)%len(spinnerLabels)]
 			frame++
 			t.app.QueueUpdateDraw(func() {
-				t.flex.ResizeItem(t.spinner, 3, 0)
 				t.spinner.SetText(fmt.Sprintf("\n"+clrFooter+"%s %s..."+clrReset+"\n", f, lbl))
 			})
 		}
