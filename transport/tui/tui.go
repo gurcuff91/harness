@@ -16,6 +16,22 @@ import (
 	"github.com/gurcuff91/harness/agent"
 )
 
+// ── Color palette ──────────────────────────────────────────────────────────
+const (
+	clrUser        = "[#5fafd7]" // user input (cyan medium)
+	clrThinking    = "[::d]" // thinking block (ANSI dim)
+	clrToolName    = "[#ffaf5f]" // tool name (amber/orange)
+	clrToolArgs    = "[#767676]" // tool args / metadata (neutral gray)
+	clrToolOK      = "[#5faf5f]" // tool result success (green)
+	clrToolErr     = "[#ff5f5f]" // tool result error (red)
+	clrWarn        = "[#ffff5f]" // warning (yellow)
+	clrError       = "[#ff5f5f]" // error message (red)
+	clrFooter      = "[::d]" // footer / info (ANSI dim)
+	clrConfirm     = "[::d]" // command confirmation
+	clrPlaceholder = "[::d]" // input placeholder
+	clrReset       = "[-:-:-]"   // reset color + attributes
+)
+
 // ── Palette types ─────────────────────────────────────────────────────────
 
 type paletteItem struct{ name, desc string }
@@ -298,7 +314,7 @@ func (t *TUI) newSeparator() *tview.Box {
 	return tview.NewBox().
 		SetBackgroundColor(tcell.ColorDefault).
 		SetDrawFunc(func(screen tcell.Screen, x, y, width, height int) (int, int, int, int) {
-			style := tcell.StyleDefault.Foreground(tcell.ColorGray).Background(tcell.ColorDefault)
+			style := tcell.StyleDefault.Foreground(tcell.NewHexColor(0x5fafd7)).Background(tcell.ColorDefault)
 			for i := x; i < x+width; i++ {
 				screen.SetContent(i, y, '─', nil, style)
 			}
@@ -404,7 +420,7 @@ func (t *TUI) renderPalette() {
 	var lines []string
 
 	if total == 0 {
-		lines = append(lines, "[gray]No matches[-]")
+		lines = append(lines, clrFooter+"No matches"+clrReset)
 	} else {
 		// Compute window
 		start := lv.sel - maxVisible/2
@@ -449,14 +465,14 @@ func (t *TUI) renderPalette() {
 				}
 			}
 			if i == lv.sel {
-				lines = append(lines, fmt.Sprintf("[#5fd7ff]→[-] [white]%s[-]%s[gray]%s[-]", it.name, pad, desc))
+				lines = append(lines, fmt.Sprintf(clrUser+"→"+clrReset+" %s%s"+clrFooter+"%s"+clrReset, it.name, pad, desc))
 			} else {
-				lines = append(lines, fmt.Sprintf("[gray]  %s%s%s[-]", it.name, pad, desc))
+				lines = append(lines, fmt.Sprintf(clrFooter+"  %s%s%s"+clrReset, it.name, pad, desc))
 			}
 		}
 		// Always show counter when total > maxVisible
 		if total > maxVisible {
-			lines = append(lines, fmt.Sprintf("[gray](%d/%d)[-]", lv.sel+1, total))
+			lines = append(lines, fmt.Sprintf(clrFooter+"(%d/%d)"+clrReset, lv.sel+1, total))
 		}
 	}
 
@@ -543,7 +559,7 @@ func (t *TUI) autoConnect() {
 
 func (t *TUI) showWarn(msg string) {
 	t.app.QueueUpdateDraw(func() {
-		fmt.Fprintf(t.output, "[yellow]⚠ %s[-]\n\n", msg)
+		fmt.Fprintf(t.output, clrWarn+"⚠ %s"+clrReset+"\n\n", msg)
 	})
 }
 
@@ -551,9 +567,9 @@ func (t *TUI) showWarn(msg string) {
 
 func (t *TUI) renderInput() {
 	if t.inputBuf == "" {
-		t.inputTV.SetText("[gray]Type a message or / for commands...[-]")
+		t.inputTV.SetText(clrPlaceholder + "Type a message or / for commands..." + clrReset)
 	} else {
-		t.inputTV.SetText(tview.Escape(t.inputBuf) + "[#5fd7ff]█[-]")
+		t.inputTV.SetText(tview.Escape(t.inputBuf) + clrUser + "█" + clrReset)
 	}
 }
 
@@ -803,11 +819,11 @@ func (t *TUI) handleInput(text string) {
 		return
 	}
 	if t.sessionID == "" {
-		t.appendLine("[red]No active session.[white]\n")
+		t.appendLine(clrError + "No active session." + clrReset + "\n")
 		return
 	}
 
-	t.appendLine(fmt.Sprintf("[#5fd7ff]❯ %s[-]\n\n", text))
+	t.appendLine(clrUser + "❯ " + tview.Escape(text) + clrReset + "\n\n")
 
 	t.spinning = true
 	t.client.SendPrompt(t.sessionID, text) //nolint
@@ -833,7 +849,7 @@ func (t *TUI) handleCommand(text string) {
 	}
 
 	if t.sessionID == "" {
-		t.appendLine("[red]no active session[-]\n\n")
+		t.appendLine(clrError + "no active session" + clrReset + "\n\n")
 		return
 	}
 
@@ -847,7 +863,7 @@ func (t *TUI) handleCommand(text string) {
 		}
 	}
 	if def == nil {
-		t.appendLine(fmt.Sprintf("[red]unknown command: %s[-]\n\n", cmd))
+		t.appendLine(fmt.Sprintf(clrError+"unknown command: %s"+clrReset+"\n\n", cmd))
 		return
 	}
 
@@ -859,7 +875,7 @@ func (t *TUI) handleCommand(text string) {
 	// Execute via API
 	_, err := t.client.ExecCommand(t.sessionID, cmd, params)
 	if err != nil {
-		t.appendLine(fmt.Sprintf("[red]%s[-]\n\n", err.Error()))
+		t.appendLine(fmt.Sprintf(clrError+"%s"+clrReset+"\n\n", err.Error()))
 		return
 	}
 
@@ -891,7 +907,7 @@ func (t *TUI) handleCommand(text string) {
 	}
 
 	// Confirmation + redraw info in one shot
-	confirm := fmt.Sprintf("[gray]%s[-]\n\n", strings.Join(parts, " "))
+	confirm := fmt.Sprintf(clrConfirm+"%s"+clrReset+"\n\n", strings.Join(parts, " "))
 	t.app.QueueUpdateDraw(func() {
 		fmt.Fprint(t.output, confirm)
 		t.output.ScrollToEnd()
@@ -915,10 +931,10 @@ func (t *TUI) listModels() {
 	data, _ := t.client.ListModels()
 	var models []map[string]any
 	json.Unmarshal(data, &models)
-	t.appendLine("[gray]models:[white]\n")
+	t.appendLine(clrConfirm + "models:" + clrReset + "\n")
 	for _, m := range models {
 		model, _ := m["model"].(string)
-		t.appendLine(fmt.Sprintf("[gray]  %s[white]\n", model))
+		t.appendLine(clrConfirm + "  " + model + clrReset + "\n")
 	}
 	t.appendLine("\n")
 }
@@ -936,7 +952,7 @@ func (t *TUI) appendLine(s string) {
 func (t *TUI) streamEvents(ctx context.Context) {
 	events, err := t.client.StreamEvents(ctx, t.sessionID)
 	if err != nil {
-		t.appendLine(fmt.Sprintf("[red]    ✗ %s[white]\n\n", err.Error()))
+		t.appendLine(fmt.Sprintf(clrError+"✗ %s"+clrReset+"\n\n", err.Error()))
 		t.spinning = false
 		return
 	}
@@ -961,7 +977,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 			case "thinking":
 				inThinking = true
 				delta, _ := evt["delta"].(string)
-				t.appendLine("[gray]" + strings.ReplaceAll(delta, "[", "[[") + "[-]")
+				t.appendLine(clrThinking + strings.ReplaceAll(delta, "[", "[[") + clrReset)
 
 			case "text":
 				// thinking block just ended
@@ -981,11 +997,11 @@ func (t *TUI) streamEvents(ctx context.Context) {
 					inText = false
 				}
 				name, _ := evt["tool_name"].(string)
-				t.appendLine(fmt.Sprintf("[yellow]⚙ %s[-]", name))
+				t.appendLine(fmt.Sprintf(clrToolName+"⚙ %s"+clrReset, name))
 
 			case "tool_args":
 				delta, _ := evt["delta"].(string)
-				t.appendLine("[gray]" + strings.ReplaceAll(delta, "[", "[[") + "[-]")
+				t.appendLine(clrToolArgs + strings.ReplaceAll(delta, "[", "[[") + clrReset)
 
 			case "tool_call":
 				// args done — newline before result line
@@ -998,9 +1014,9 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				safe := strings.ReplaceAll(summarize(output), "[", "[[")
 				// result + trailing blank line (next block starts clean)
 				if isErr {
-					t.appendLine(fmt.Sprintf("[red]✗[-] [gray]%s (%.0fms)[-]\n\n", safe, dur))
+					t.appendLine(fmt.Sprintf(clrToolErr+"✗"+clrReset+" "+clrToolArgs+"%s (%.0fms)"+clrReset+"\n\n", safe, dur))
 				} else {
-					t.appendLine(fmt.Sprintf("[green]✓[-] [gray]%s (%.0fms)[-]\n\n", safe, dur))
+					t.appendLine(fmt.Sprintf(clrToolOK+"✓"+clrReset+" "+clrToolArgs+"%s (%.0fms)"+clrReset+"\n\n", safe, dur))
 				}
 
 			case "tokens":
@@ -1023,7 +1039,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 
 			case "error":
 				msg, _ := evt["message"].(string)
-				t.appendLine(fmt.Sprintf("[red]✗ %s[-]\n\n", msg))
+				t.appendLine(fmt.Sprintf(clrError+"✗ %s"+clrReset+"\n\n", msg))
 				t.spinning = false
 				return
 			}
@@ -1057,7 +1073,7 @@ func (t *TUI) spinnerLoop() {
 			frame++
 			t.app.QueueUpdateDraw(func() {
 				t.flex.ResizeItem(t.spinner, 3, 0)
-				t.spinner.SetText(fmt.Sprintf("\n[gray]%s %s...[-]\n", f, lbl))
+				t.spinner.SetText(fmt.Sprintf("\n"+clrFooter+"%s %s..."+clrReset+"\n", f, lbl))
 			})
 		}
 	}
@@ -1077,7 +1093,7 @@ func (t *TUI) updateInfo() {
 	if name == "" {
 		name = "No session"
 	}
-	t.info.SetText(fmt.Sprintf("[gray]%s • %s[-]", loc, name))
+	t.info.SetText(fmt.Sprintf(clrFooter+"%s • %s"+clrReset, loc, name))
 
 	// footer: tokens + model
 	if t.model == "" {
@@ -1097,7 +1113,7 @@ func (t *TUI) updateInfo() {
 		price += " (sub)"
 	}
 	t.footer.SetText(fmt.Sprintf(
-		"[gray]↑%s ↓%s%s %s %.1f%%/%s %s%s[-]",
+		clrFooter+"↑%s ↓%s%s %s %.1f%%/%s %s%s"+clrReset,
 		compactNum(t.stats.input),
 		compactNum(t.stats.output),
 		cache,
