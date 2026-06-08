@@ -156,7 +156,8 @@ type TUI struct {
 	inputBuf string
 	pal      palette
 
-	// session commands loaded from API
+	// session state
+	thinking    string
 	sessionCmds []CommandDef
 
 	// state
@@ -190,7 +191,6 @@ func (t *TUI) Run(ctx context.Context) error {
 
 	t.app = tview.NewApplication()
 	t.buildUI()
-	t.autoConnect()
 
 	t.spinnerStop = make(chan struct{})
 	go t.spinnerLoop()
@@ -198,6 +198,12 @@ func (t *TUI) Run(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
 		t.app.Stop()
+	}()
+
+	// autoConnect after app is running
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		t.autoConnect()
 	}()
 
 	return t.app.EnableMouse(true).Run()
@@ -322,19 +328,32 @@ func (t *TUI) rootPaletteItems() []paletteItem {
 	return items
 }
 
-// hasSubPalette returns true if the command has a param with fixed values OR is "model".
-func (t *TUI) hasSubPalette(cmdName string) bool {
-	for _, cmd := range t.sessionCmds {
-		if cmd.Name == cmdName {
-			for _, p := range cmd.Params {
-				if len(p.Values) > 0 {
-					return true
-				}
-			}
-			return false
-		}
+// cmdType returns: "quit" | "none" | "list" | "free" | "optional"
+func (t *TUI) cmdType(cmdName string) string {
+	if cmdName == "quit" {
+		return "quit"
 	}
-	return false
+	for _, cmd := range t.sessionCmds {
+		if cmd.Name != cmdName {
+			continue
+		}
+		if len(cmd.Params) == 0 {
+			return "none" // compact
+		}
+		p := cmd.Params[0]
+		if !p.Required {
+			return "optional" // skill:*
+		}
+		if len(p.Values) > 0 {
+			return "list" // thinking, model
+		}
+		return "free" // rename
+	}
+	return "none"
+}
+
+func (t *TUI) hasSubPalette(cmdName string) bool {
+	return t.cmdType(cmdName) == "list"
 }
 
 // getSubItems returns level-2 palette items for a command.
@@ -383,7 +402,7 @@ func (t *TUI) renderPalette() {
 	var lines []string
 
 	if total == 0 {
-		lines = append(lines, "  [gray]No matches[-]")
+		lines = append(lines, "[gray]No matches[-]")
 	} else {
 		// Compute window
 		start := lv.sel - maxVisible/2
@@ -428,14 +447,14 @@ func (t *TUI) renderPalette() {
 				}
 			}
 			if i == lv.sel {
-				lines = append(lines, fmt.Sprintf(" [#5fd7ff]→[-] [white]%s[-]%s[gray]%s[-]", it.name, pad, desc))
+				lines = append(lines, fmt.Sprintf("[#5fd7ff]→[-] [white]%s[-]%s[gray]%s[-]", it.name, pad, desc))
 			} else {
-				lines = append(lines, fmt.Sprintf("   [gray]%s%s%s[-]", it.name, pad, desc))
+				lines = append(lines, fmt.Sprintf("[gray]  %s%s%s[-]", it.name, pad, desc))
 			}
 		}
 		// Always show counter when total > maxVisible
 		if total > maxVisible {
-			lines = append(lines, fmt.Sprintf("   [gray](%d/%d)[-]", lv.sel+1, total))
+			lines = append(lines, fmt.Sprintf("[gray](%d/%d)[-]", lv.sel+1, total))
 		}
 	}
 
@@ -454,35 +473,77 @@ func paletteCommands() []string {
 // ── Auto-connect ──────────────────────────────────────────────────────────
 
 func (t *TUI) autoConnect() {
+	// Load available models
 	data, err := t.client.ListModels()
 	if err != nil {
+		t.showWarn("Failed to reach server. Is harness running?")
 		return
 	}
 	var models []map[string]any
 	json.Unmarshal(data, &models)
 	if len(models) == 0 {
+		t.showWarn("No active providers. Use /connect to add one.")
 		return
 	}
-	t.model, _ = models[0]["model"].(string)
+
+	// Build set of available model IDs
+	available := map[string]bool{}
+	for _, m := range models {
+		if id, _ := m["model"].(string); id != "" {
+			available[id] = true
+		}
+	}
+
+	// Get settings
+	var settingsModel, settingsThinking string
+	if data, err = t.client.GetSettings(); err == nil {
+		var settings map[string]any
+		json.Unmarshal(data, &settings)
+		settingsModel, _ = settings["active_model"].(string)
+		settingsThinking, _ = settings["thinking_level"].(string)
+	}
+
+	// Resolve model: settings > first available
+	if settingsModel != "" && available[settingsModel] {
+		t.model = settingsModel
+	} else {
+		if settingsModel != "" {
+			t.showWarn(fmt.Sprintf("Model '%s' is not available. Falling back to first active model.", settingsModel))
+		}
+		t.model, _ = models[0]["model"].(string)
+	}
+	t.thinking = settingsThinking
+
+	// Create session
 	data, err = t.client.CreateSession(t.model)
 	if err != nil {
+		t.showWarn(fmt.Sprintf("Failed to create session: %s", err.Error()))
 		return
 	}
 	var sess map[string]any
 	json.Unmarshal(data, &sess)
 	t.sessionID, _ = sess["id"].(string)
 	t.sessionName, _ = sess["name"].(string)
+	if th, _ := sess["thinking"].(string); th != "" {
+		t.thinking = th
+	}
 	t.loadSessionCommands()
-	t.updateInfo()
+	t.app.QueueUpdateDraw(func() { t.updateInfo() })
+}
+
+func (t *TUI) showWarn(msg string) {
+	t.app.QueueUpdateDraw(func() {
+		fmt.Fprintf(t.output, "[yellow]⚠ %s[-]\n\n", msg)
+	})
 }
 
 // ── Custom input & palette ──────────────────────────────────────────────────
 
 func (t *TUI) renderInput() {
 	if t.inputBuf == "" {
-		t.inputTV.SetText("[gray]  Type a message or / for commands...[-]")
+		t.inputTV.SetText("[gray]Type a message or / for commands...[-]")
 	} else {
-		t.inputTV.SetText("  " + tview.Escape(t.inputBuf) + "[#5fd7ff]█[-]")
+		t.inputTV.SetText(tview.Escape(t.inputBuf) + "[#5fd7ff]█[-]")
 	}
 }
 
@@ -492,7 +553,7 @@ func (t *TUI) redraw() {
 }
 
 func (t *TUI) handleKey(event *tcell.EventKey) *tcell.EventKey {
-	// Always-on scroll
+	// Always-on
 	switch event.Key() {
 	case tcell.KeyPgUp:
 		t.output.InputHandler()(tcell.NewEventKey(tcell.KeyPgUp, 0, tcell.ModNone), nil)
@@ -505,139 +566,195 @@ func (t *TUI) handleKey(event *tcell.EventKey) *tcell.EventKey {
 		return nil
 	}
 
-	// ── Palette open ──
 	if t.pal.open {
-		switch event.Key() {
-		case tcell.KeyUp:
-			t.pal.moveUp()
-			t.redraw()
+		return t.handleKeyPalette(event)
+	}
+	return t.handleKeyNormal(event)
+}
+
+// ── Palette mode ────────────────────────────────────────────────────────────────
+
+func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
+	switch event.Key() {
+	case tcell.KeyUp:
+		t.pal.moveUp()
+		t.redraw()
+		return nil
+
+	case tcell.KeyDown:
+		t.pal.moveDown()
+		t.redraw()
+		return nil
+
+	case tcell.KeyEsc:
+		if t.pal.popLevel() {
+			t.inputBuf = "/"
+			t.pal.setFilter("")
+		} else {
+			t.inputBuf = ""
+			t.pal.close()
+		}
+		t.redraw()
+		return nil
+
+	case tcell.KeyTab:
+		// Tab always autocompletes into input and closes palette — never executes
+		sel, ok := t.pal.selected()
+		if !ok {
 			return nil
-		case tcell.KeyDown:
-			t.pal.moveDown()
-			t.redraw()
-			return nil
-		case tcell.KeyTab:
-			if sel, ok := t.pal.selected(); ok {
-				if t.pal.depth() == 1 && t.hasSubPalette(sel.name) {
-					// Has sub-items: drill in immediately
-					subs := t.getSubItems(sel.name)
-					t.pal.pushSub(sel.name, subs)
-					t.inputBuf = ""
-				} else if t.pal.depth() == 1 {
-					// No sub-items: put in input and close
-					t.inputBuf = "/" + sel.name
-					t.pal.close()
-				} else {
-					// Level 2: complete into input and close
-					t.inputBuf = "/" + t.pal.current().parentCmd + " " + sel.name
-					t.pal.close()
-				}
-			}
-			t.redraw()
-			return nil
-		case tcell.KeyEsc:
-			if t.pal.popLevel() {
-				// back to root
-				t.inputBuf = "/"
-				t.pal.setFilter("")
-			} else {
+		}
+		if t.pal.depth() == 1 {
+			typ := t.cmdType(sel.name)
+			switch typ {
+			case "list":
+				// Put /cmd in input with trailing space, open level 2
+				subs := t.getSubItems(sel.name)
+				t.pal.pushSub(sel.name, subs)
 				t.inputBuf = ""
+			case "free":
+				// Put /cmd (with space) in input, user types value
+				t.inputBuf = "/" + sel.name + " "
+				t.pal.close()
+			case "none", "optional", "quit":
+				// Put /cmd in input, close
+				t.inputBuf = "/" + sel.name
 				t.pal.close()
 			}
-			t.redraw()
+		} else {
+			// Level 2: put /cmd value in input, close
+			parentCmd := t.pal.current().parentCmd
+			t.inputBuf = "/" + parentCmd + " " + sel.name
+			t.pal.close()
+		}
+		t.redraw()
+		return nil
+
+	case tcell.KeyEnter:
+		sel, ok := t.pal.selected()
+		if !ok {
 			return nil
-		case tcell.KeyEnter:
-			sel, ok := t.pal.selected()
-			if !ok {
-				return nil
-			}
-			if t.pal.depth() == 1 {
-				if t.hasSubPalette(sel.name) {
-					// drill into sub-palette
-					subs := t.getSubItems(sel.name)
-					t.pal.pushSub(sel.name, subs)
-					t.inputBuf = ""
-				} else {
-					// execute directly
-					cmd := "/" + sel.name
-					t.inputBuf = ""
-					t.pal.close()
-					t.redraw()
-					go t.handleInput(cmd)
-					return nil
-				}
-			} else {
-				// level 2: execute /cmd param
-				parentCmd := t.pal.current().parentCmd
-				cmd := "/" + parentCmd + " " + sel.name
+		}
+		if t.pal.depth() == 1 {
+			typ := t.cmdType(sel.name)
+			switch typ {
+			case "list":
+				// Must choose from sub-palette first
+				subs := t.getSubItems(sel.name)
+				t.pal.pushSub(sel.name, subs)
+				t.inputBuf = ""
+				t.redraw()
+			case "free":
+				// Put /cmd in input with space, user types value
+				t.inputBuf = "/" + sel.name + " "
+				t.pal.close()
+				t.redraw()
+			case "none":
+				// Execute directly
+				cmd := "/" + sel.name
 				t.inputBuf = ""
 				t.pal.close()
 				t.redraw()
 				go t.handleInput(cmd)
-				return nil
+			case "optional":
+				// Execute directly (no param required)
+				cmd := "/" + sel.name
+				t.inputBuf = ""
+				t.pal.close()
+				t.redraw()
+				go t.handleInput(cmd)
+			case "quit":
+				t.app.Stop()
 			}
+		} else {
+			// Level 2: execute /cmd value
+			parentCmd := t.pal.current().parentCmd
+			cmd := "/" + parentCmd + " " + sel.name
+			t.inputBuf = ""
+			t.pal.close()
 			t.redraw()
-			return nil
-		case tcell.KeyBackspace, tcell.KeyBackspace2:
-			if len(t.inputBuf) > 0 {
-				runes := []rune(t.inputBuf)
-				t.inputBuf = string(runes[:len(runes)-1])
-			}
-			if t.inputBuf == "" {
-				if !t.pal.popLevel() {
-					t.pal.close()
-				} else {
-					t.inputBuf = "/"
-					t.pal.setFilter("")
-				}
-			} else if t.pal.depth() == 1 {
-				t.pal.setFilter(strings.TrimPrefix(t.inputBuf, "/"))
-			} else {
-				t.pal.setFilter(t.inputBuf)
-			}
-			t.redraw()
-			return nil
-		case tcell.KeyRune:
-			t.inputBuf += string(event.Rune())
-			if t.pal.depth() == 1 {
-				t.pal.setFilter(strings.TrimPrefix(t.inputBuf, "/"))
-			} else {
-				t.pal.setFilter(t.inputBuf) // level 2: filter by raw input
-			}
-			t.redraw()
-			return nil
+			go t.handleInput(cmd)
 		}
 		return nil
-	}
 
-	// ── Normal mode ──
-	switch event.Key() {
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		if len(t.inputBuf) > 0 {
 			runes := []rune(t.inputBuf)
 			t.inputBuf = string(runes[:len(runes)-1])
 		}
 		if t.inputBuf == "" {
-			t.pal.close()
+			if !t.pal.popLevel() {
+				t.pal.close()
+			} else {
+				t.inputBuf = "/"
+				t.pal.setFilter("")
+			}
+		} else if t.pal.depth() == 1 {
+			t.pal.setFilter(strings.TrimPrefix(t.inputBuf, "/"))
+		} else {
+			t.pal.setFilter(t.inputBuf)
 		}
 		t.redraw()
 		return nil
+
+	case tcell.KeyRune:
+		t.inputBuf += string(event.Rune())
+		if t.pal.depth() == 1 {
+			t.pal.setFilter(strings.TrimPrefix(t.inputBuf, "/"))
+		} else {
+			t.pal.setFilter(t.inputBuf)
+		}
+		t.redraw()
+		return nil
+	}
+	return nil
+}
+
+// ── Normal mode ────────────────────────────────────────────────────────────────
+
+func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
+	switch event.Key() {
+	case tcell.KeyEsc:
+		t.inputBuf = ""
+		t.redraw()
+		return nil
+
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		if len(t.inputBuf) > 0 {
+			runes := []rune(t.inputBuf)
+			t.inputBuf = string(runes[:len(runes)-1])
+		}
+		t.redraw()
+		return nil
+
 	case tcell.KeyEnter:
 		text := strings.TrimSpace(t.inputBuf)
 		if text == "" {
 			return nil
 		}
-		// If it's a slash command that needs a param, open sub-palette
 		if strings.HasPrefix(text, "/") {
 			parts := strings.Fields(text)
 			cmd := strings.TrimPrefix(parts[0], "/")
-			if t.hasSubPalette(cmd) && len(parts) < 2 {
-				// Incomplete: open sub-palette for this command
-				subs := t.getSubItems(cmd)
-				t.pal.openRoot(t.rootPaletteItems())
-				t.pal.pushSub(cmd, subs)
-				t.inputBuf = ""
-				t.redraw()
+			typ := t.cmdType(cmd)
+			switch typ {
+			case "list":
+				if len(parts) < 2 {
+					// Force sub-palette
+					subs := t.getSubItems(cmd)
+					t.pal.openRoot(t.rootPaletteItems())
+					t.pal.pushSub(cmd, subs)
+					t.inputBuf = ""
+					t.redraw()
+					return nil
+				}
+			case "free":
+				if len(parts) < 2 {
+					// Don't execute — keep in input, user must type value
+					t.inputBuf = "/" + cmd + " "
+					t.redraw()
+					return nil
+				}
+			case "quit":
+				t.app.Stop()
 				return nil
 			}
 		}
@@ -646,19 +763,21 @@ func (t *TUI) handleKey(event *tcell.EventKey) *tcell.EventKey {
 		t.redraw()
 		go t.handleInput(text)
 		return nil
-	case tcell.KeyEsc:
-		t.inputBuf = ""
-		t.pal.close()
-		t.redraw()
-		return nil
+
 	case tcell.KeyRune:
 		t.inputBuf += string(event.Rune())
-		// open palette on /
-		if t.inputBuf == "/" {
-			t.pal.openRoot(t.rootPaletteItems())
-		} else if strings.HasPrefix(t.inputBuf, "/") && !t.pal.open {
-			t.pal.openRoot(t.rootPaletteItems())
-			t.pal.setFilter(strings.TrimPrefix(t.inputBuf, "/"))
+		if strings.HasPrefix(t.inputBuf, "/") {
+			parts := strings.Fields(t.inputBuf)
+			// Only show palette if we're still on the command word (no space yet)
+			if len(parts) <= 1 && !strings.HasSuffix(t.inputBuf, " ") {
+				if !t.pal.open {
+					t.pal.openRoot(t.rootPaletteItems())
+				}
+				t.pal.setFilter(strings.TrimPrefix(t.inputBuf, "/"))
+			} else {
+				// Command already has param — close palette, let user type freely
+				t.pal.close()
+			}
 		}
 		t.redraw()
 		return nil
@@ -698,17 +817,18 @@ func (t *TUI) handleCommand(text string) {
 	}
 	cmd := strings.TrimPrefix(parts[0], "/")
 
-	switch cmd {
-	case "quit", "exit":
+	if cmd == "quit" || cmd == "exit" {
 		t.app.Stop()
 		return
 	}
 
 	if t.sessionID == "" {
+		t.appendLine("[red]no active session[-]\n\n")
 		return
 	}
 
-	// Find the command definition
+	// Build params map based on command definition
+	params := map[string]any{}
 	var def *CommandDef
 	for i := range t.sessionCmds {
 		if t.sessionCmds[i].Name == cmd {
@@ -721,24 +841,53 @@ func (t *TUI) handleCommand(text string) {
 		return
 	}
 
-	// Build params from parts[1:]
-	params := map[string]any{}
 	if len(def.Params) > 0 && len(parts) > 1 {
-		// First param gets the value
-		params[def.Params[0].Name] = strings.Join(parts[1:], " ")
+		paramName := def.Params[0].Name
+		params[paramName] = strings.Join(parts[1:], " ")
 	}
 
-	t.client.ExecCommand(t.sessionID, cmd, params) //nolint
-	t.appendLine(fmt.Sprintf("[gray]→ %s[-]\n\n", strings.Join(parts, " ")))
+	// Execute via API
+	_, err := t.client.ExecCommand(t.sessionID, cmd, params)
+	if err != nil {
+		t.appendLine(fmt.Sprintf("[red]%s[-]\n\n", err.Error()))
+		return
+	}
 
-	// Side effects
-	if cmd == "model" && len(parts) > 1 {
-		t.model = parts[1]
+	// Local side-effects (update state before rendering)
+	switch cmd {
+	case "model":
+		if len(parts) > 1 {
+			t.model = parts[1]
+		}
+	case "thinking":
+		if len(parts) > 1 {
+			t.thinking = parts[1]
+		}
+	case "rename":
+		if len(parts) > 1 {
+			t.sessionName = strings.Join(parts[1:], " ")
+		}
 	}
-	if cmd == "rename" && len(parts) > 1 {
-		t.sessionName = strings.Join(parts[1:], " ")
+
+	// Confirmation + redraw info in one shot
+	confirm := fmt.Sprintf("[gray]%s[-]\n\n", strings.Join(parts, " "))
+	t.app.QueueUpdateDraw(func() {
+		fmt.Fprint(t.output, confirm)
+		t.output.ScrollToEnd()
+		t.updateInfo()
+	})
+
+	switch cmd {
+	case "compact":
+		// compact triggers SSE events — start streaming
+		if t.sseCancel != nil {
+			t.sseCancel()
+		}
+		t.spinning = true
+		ctx, cancel := context.WithCancel(context.Background())
+		t.sseCancel = cancel
+		go t.streamEvents(ctx)
 	}
-	t.app.QueueUpdateDraw(func() { t.updateInfo() })
 }
 
 func (t *TUI) listModels() {
@@ -772,8 +921,8 @@ func (t *TUI) streamEvents(ctx context.Context) {
 	}
 
 	// track where we are in output so we can add blank lines between blocks
-	hadThinking := false
-	inTextBlock := false // true while streaming agent text
+	inThinking := false
+	inText := false
 
 	for {
 		select {
@@ -789,28 +938,26 @@ func (t *TUI) streamEvents(ctx context.Context) {
 			switch typ {
 
 			case "thinking":
-				if !hadThinking {
-					t.appendLine("\n")
-					hadThinking = true
-					inTextBlock = false
-				}
+				inThinking = true
 				delta, _ := evt["delta"].(string)
 				t.appendLine("[gray]" + strings.ReplaceAll(delta, "[", "[[") + "[-]")
 
 			case "text":
-				if hadThinking {
+				// thinking block just ended
+				if inThinking {
 					t.appendLine("\n\n")
-					hadThinking = false
+					inThinking = false
 				}
-				inTextBlock = true
+				inText = true
 				delta, _ := evt["delta"].(string)
 				t.appendLine(strings.ReplaceAll(delta, "[", "[["))
 
 			case "tool_start":
-				hadThinking = false
-				if inTextBlock {
-					t.appendLine("\n") // blank line after agent text block
-					inTextBlock = false
+				// close any open block
+				if inThinking || inText {
+					t.appendLine("\n\n")
+					inThinking = false
+					inText = false
 				}
 				name, _ := evt["tool_name"].(string)
 				t.appendLine(fmt.Sprintf("[yellow]⚙ %s[-]", name))
@@ -820,7 +967,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				t.appendLine("[gray]" + strings.ReplaceAll(delta, "[", "[[") + "[-]")
 
 			case "tool_call":
-				// args done — newline before result
+				// args done — newline before result line
 				t.appendLine("\n")
 
 			case "tool_result":
@@ -828,6 +975,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				dur, _ := floatFromMap(evt, "duration")
 				isErr, _ := evt["is_error"].(bool)
 				safe := strings.ReplaceAll(summarize(output), "[", "[[")
+				// result + trailing blank line (next block starts clean)
 				if isErr {
 					t.appendLine(fmt.Sprintf("[red]✗[-] [gray]%s (%.0fms)[-]\n\n", safe, dur))
 				} else {
@@ -843,13 +991,16 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				t.app.QueueUpdateDraw(func() { t.updateInfo() })
 
 			case "turn_end":
-				t.appendLine("\n\n")
+				// close last open block
+				if inThinking || inText {
+					t.appendLine("\n\n")
+				}
 				t.spinning = false
 				return
 
 			case "error":
 				msg, _ := evt["message"].(string)
-				t.appendLine(fmt.Sprintf("\n[red]✗ %s[-]\n\n", msg))
+				t.appendLine(fmt.Sprintf("[red]✗ %s[-]\n\n", msg))
 				t.spinning = false
 				return
 			}
@@ -873,6 +1024,7 @@ func (t *TUI) spinnerLoop() {
 		case <-ticker.C:
 			if !t.spinning {
 				t.app.QueueUpdateDraw(func() {
+					t.flex.ResizeItem(t.spinner, 1, 0)
 					t.spinner.SetText("")
 				})
 				continue
@@ -881,7 +1033,8 @@ func (t *TUI) spinnerLoop() {
 			lbl := spinnerLabels[(frame/10)%len(spinnerLabels)]
 			frame++
 			t.app.QueueUpdateDraw(func() {
-				t.spinner.SetText(fmt.Sprintf("[gray] %s %s...[-]", f, lbl))
+				t.flex.ResizeItem(t.spinner, 3, 0)
+				t.spinner.SetText(fmt.Sprintf("\n[gray]%s %s...[-]\n", f, lbl))
 			})
 		}
 	}
@@ -901,21 +1054,26 @@ func (t *TUI) updateInfo() {
 	if name == "" {
 		name = "No session"
 	}
-	t.info.SetText(fmt.Sprintf("[gray]  %s • %s[white]", loc, name))
+	t.info.SetText(fmt.Sprintf("[gray]%s • %s[-]", loc, name))
 
 	// footer: tokens + model
 	if t.model == "" {
 		t.footer.SetText("")
 		return
 	}
+	thinking := ""
+	if t.thinking != "" && t.thinking != "off" {
+		thinking = " • " + t.thinking
+	}
 	t.footer.SetText(fmt.Sprintf(
-		"[gray]  ↑%s ↓%s $%.4f %.1f%%/%s  %s[-]",
+		"[gray]↑%s ↓%s $%.4f %.1f%%/%s  %s%s[-]",
 		compactNum(t.stats.input),
 		compactNum(t.stats.output),
 		t.stats.cost,
 		t.stats.contextPct*100,
 		compactNum(t.stats.contextWin),
 		t.model,
+		thinking,
 	))
 }
 

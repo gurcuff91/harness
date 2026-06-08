@@ -289,6 +289,12 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Apply thinking level from settings
+	sm := config.GetSettingsManager()
+	if level := sm.ThinkingLevel(); level != "" && level != "off" {
+		_ = sess.SwitchThinking(level)
+	}
+
 	proxy := newSessionProxy(sess)
 
 	s.mu.Lock()
@@ -638,6 +644,8 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		// Persist to settings
+		_ = config.GetSettingsManager().SetThinkingLevel(level)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 
 	case "model":
@@ -650,6 +658,8 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		// Persist to settings
+		_ = config.GetSettingsManager().SetActiveModel(model)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 
 	case "compact":

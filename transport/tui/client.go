@@ -71,6 +71,10 @@ type ParamDef struct {
 
 // ── Methods ──────────────────────────────────────────────────────────────
 
+func (c *Client) GetSettings() ([]byte, error) {
+	return c.do("GET", "/api/settings", nil)
+}
+
 func (c *Client) ListModels() ([]byte, error) {
 	return c.do("GET", "/api/models", nil)
 }
