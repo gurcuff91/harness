@@ -1247,7 +1247,7 @@ func (t *TUI) handleCommand(text string) {
 	})
 
 	// Commands that trigger agent streaming
-	if cmd == "compact" || strings.HasPrefix(cmd, "skill:") {
+	if cmd == "compact" || cmd == "model" || strings.HasPrefix(cmd, "skill:") {
 		if t.sseCancel != nil {
 			t.sseCancel()
 		}
