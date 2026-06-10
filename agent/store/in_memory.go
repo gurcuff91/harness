@@ -112,6 +112,15 @@ func (s *InMemorySessionStore) Messages() []types.Message {
 	return out
 }
 
+// AllMessages returns the full message history from the beginning, ignoring compaction offset.
+func (s *InMemorySessionStore) AllMessages() []types.Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]types.Message, len(s.messages))
+	copy(out, s.messages)
+	return out
+}
+
 func (s *InMemorySessionStore) AddMessage(msg types.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -125,17 +134,10 @@ func (s *InMemorySessionStore) AddMessage(msg types.Message) error {
 func (s *InMemorySessionStore) AddCompactionSummary(summary string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	summaryMsg := compactionMessage(summary)
-	s.messages = append(s.messages, summaryMsg)
-	// CompactOffset points to the summary — it becomes the first message LLM sees
+	s.messages = append(s.messages, CompactionMessage(summary))
 	s.meta.CompactOffset = len(s.messages) - 1
 	s.meta.CompactCount++
 	return nil
 }
 
 func (s *InMemorySessionStore) Close() error { return nil }
-
-// compactionMessage builds the standard user message used as a compaction checkpoint.
-func compactionMessage(summary string) types.Message {
-	return types.NewUserTextMessage("Previous conversation summary:\n\n" + summary)
-}

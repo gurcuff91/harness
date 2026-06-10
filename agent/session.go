@@ -431,6 +431,12 @@ func (s *Session) Stats() types.SessionStats {
 	return s.stats
 }
 
+// AllMessages returns the complete conversation history including pre-compaction messages.
+// Use this for display purposes. The LLM only sees store.Messages() (from last compact offset).
+func (s *Session) AllMessages() []types.Message {
+	return s.store.AllMessages()
+}
+
 // Meta returns a snapshot of session metadata.
 // Meta returns the full session metadata from the store.
 // Includes: id, cwd, name, model, thinking, stats, timestamps.

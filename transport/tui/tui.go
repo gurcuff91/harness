@@ -22,6 +22,7 @@ const (
 	clrThinking    = "[::d]" // thinking block (ANSI dim)
 	clrToolName    = "[#ffaf5f]" // tool name (amber/orange)
 	clrToolArgs    = "[#767676]" // tool args / metadata (neutral gray)
+	clrCompact     = "[#af87ff]" // compact operation (purple)
 	clrToolOK      = "[#5faf5f]" // tool result success (green)
 	clrToolErr     = "[#ff5f5f]" // tool result error (red)
 	clrWarn        = "[#ffff5f]" // warning (yellow)
@@ -68,7 +69,8 @@ func (p *palette) filtered() []paletteItem {
 	f := strings.ToLower(lv.filter)
 	var out []paletteItem
 	for _, it := range lv.items {
-		if strings.Contains(strings.ToLower(it.name), f) {
+		if strings.Contains(strings.ToLower(it.name), f) ||
+			strings.Contains(strings.ToLower(it.desc), f) {
 			out = append(out, it)
 		}
 	}
@@ -178,9 +180,10 @@ type TUI struct {
 	sessionCmds   []CommandDef
 
 	// state
-	spinning    bool
-	spinnerStop chan struct{}
-	stats       tokensInfo
+	spinning     bool
+	spinnerStop  chan struct{}
+	compactStart time.Time
+	stats        tokensInfo
 }
 
 type tokensInfo struct {
@@ -218,9 +221,9 @@ func (t *TUI) Run(ctx context.Context) error {
 		t.app.Stop()
 	}()
 
-	// autoConnect after app is running
+	// autoConnect after app is running and server is ready
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(150 * time.Millisecond)
 		t.autoConnect()
 	}()
 
@@ -336,36 +339,51 @@ func (t *TUI) loadSessionCommands() {
 	t.sessionCmds = cmds
 }
 
-// rootPaletteItems builds level-1 items from cached session commands + quit.
+// rootPaletteItems builds level-1 items: globals first, then session-scoped, then quit.
 func (t *TUI) rootPaletteItems() []paletteItem {
 	var items []paletteItem
+	// Global commands
+	items = append(items,
+		paletteItem{"connect", "Connect a provider"},
+		paletteItem{"disconnect", "Disconnect a provider"},
+		paletteItem{"resume", "Resume a previous session"},
+		paletteItem{"delete", "Delete a session"},
+	)
+	// Session-scoped commands from API
 	for _, cmd := range t.sessionCmds {
 		items = append(items, paletteItem{cmd.Name, cmd.Description})
 	}
+	// Quit last
 	items = append(items, paletteItem{"quit", "Exit harness"})
 	return items
 }
 
-// cmdType returns: "quit" | "none" | "list" | "free" | "optional"
+// cmdType returns: "quit" | "none" | "list" | "list-free" | "free" | "optional"
+// "list-free" = pick from list then type a value (connect: provider → api key)
 func (t *TUI) cmdType(cmdName string) string {
-	if cmdName == "quit" {
+	switch cmdName {
+	case "quit":
 		return "quit"
+	case "connect":
+		return "list-free" // pick provider → type api key (or auto for oauth)
+	case "disconnect", "resume", "delete":
+		return "list" // pick from dynamic list
 	}
 	for _, cmd := range t.sessionCmds {
 		if cmd.Name != cmdName {
 			continue
 		}
 		if len(cmd.Params) == 0 {
-			return "none" // compact
+			return "none"
 		}
 		p := cmd.Params[0]
 		if !p.Required {
-			return "optional" // skill:*
+			return "optional"
 		}
 		if len(p.Values) > 0 {
-			return "list" // thinking, model
+			return "list"
 		}
-		return "free" // rename
+		return "free"
 	}
 	return "none"
 }
@@ -375,7 +393,82 @@ func (t *TUI) hasSubPalette(cmdName string) bool {
 }
 
 // getSubItems returns level-2 palette items for a command.
+func (t *TUI) providersInactive() []paletteItem {
+	data, err := t.client.GetProviders()
+	if err != nil {
+		return nil
+	}
+	var providers []map[string]any
+	json.Unmarshal(data, &providers)
+	var items []paletteItem
+	for _, p := range providers {
+		if active, _ := p["active"].(bool); active {
+			continue
+		}
+		name, _ := p["name"].(string)
+		items = append(items, paletteItem{name, "inactive"})
+	}
+	return items
+}
+
+func (t *TUI) providersActive() []paletteItem {
+	data, err := t.client.GetProviders()
+	if err != nil {
+		return nil
+	}
+	var providers []map[string]any
+	json.Unmarshal(data, &providers)
+	var items []paletteItem
+	for _, p := range providers {
+		if active, _ := p["active"].(bool); !active {
+			continue
+		}
+		name, _ := p["name"].(string)
+		isSub, _ := p["is_subscription"].(bool)
+		desc := ""
+		if isSub {
+			desc = "subscription"
+		}
+		items = append(items, paletteItem{name, desc})
+	}
+	return items
+}
+
+func (t *TUI) sessionsForCWD(excludeActive bool) []paletteItem {
+	cwd, _ := os.Getwd()
+	data, err := t.client.ListSessionsByCWD(cwd)
+	if err != nil {
+		return nil
+	}
+	var sessions []map[string]any
+	json.Unmarshal(data, &sessions)
+	var items []paletteItem
+	for _, s := range sessions {
+		id, _ := s["id"].(string)
+		if excludeActive && id == t.sessionID {
+			continue
+		}
+		name, _ := s["name"].(string)
+		if name == "" {
+			name = id[:8]
+		}
+		items = append(items, paletteItem{id, name})
+	}
+	return items
+}
+
 func (t *TUI) getSubItems(cmdName string) []paletteItem {
+	switch cmdName {
+	case "connect":
+		return t.providersInactive()
+	case "disconnect":
+		return t.providersActive()
+	case "resume":
+		return t.sessionsForCWD(true)
+	case "delete":
+		return t.sessionsForCWD(true) // exclude active session
+	}
+	// Session-scoped commands with fixed values
 	for _, cmd := range t.sessionCmds {
 		if cmd.Name != cmdName {
 			continue
@@ -541,7 +634,8 @@ func (t *TUI) autoConnect() {
 	}
 
 	// Create session
-	data, err = t.client.CreateSession(t.model)
+	cwd, _ := os.Getwd()
+	data, err = t.client.CreateSession(t.model, cwd)
 	if err != nil {
 		t.showWarn(fmt.Sprintf("Failed to create session: %s", err.Error()))
 		return
@@ -594,6 +688,95 @@ func (t *TUI) loadStatsFromSession(sess map[string]any) {
 	}
 }
 
+// renderHistory fetches and renders all messages from the active session.
+func (t *TUI) renderHistory() {
+	data, err := t.client.GetMessages(t.sessionID)
+	if err != nil {
+		return
+	}
+	var messages []map[string]any
+	if err := json.Unmarshal(data, &messages); err != nil {
+		return
+	}
+	for _, msg := range messages {
+		// Check compaction flag in meta
+		if meta, ok := msg["meta"].(map[string]any); ok {
+			if isCompaction, _ := meta["is_compaction"].(bool); isCompaction {
+				// Extract summary from text part
+				summary := ""
+				if parts, ok := msg["parts"].([]any); ok && len(parts) > 0 {
+					if p, ok := parts[0].(map[string]any); ok {
+						const prefix = "Previous conversation summary:\n\n"
+						full, _ := p["text"].(string)
+						summary = strings.TrimPrefix(full, prefix)
+					}
+				}
+				safe := tview.Escape(summarize(summary))
+				t.appendLine("\n" + clrCompact + "[::b]\u27f3 Compact()[-:-:-]" + clrCompact + "(\n" + clrReset)
+				t.appendLine(clrCompact + ")[-:-:-]\n")
+				t.appendLine(fmt.Sprintf(clrToolOK+"✓"+clrReset+" [::d]%s[-:-:-]\n\n", safe))
+				continue
+			}
+		}
+		role, _ := msg["role"].(string)
+		parts, _ := msg["parts"].([]any)
+		for _, p := range parts {
+			part, _ := p.(map[string]any)
+			switch {
+			case part["text"] != nil:
+				text, _ := part["text"].(string)
+				if text == "" {
+					continue
+				}
+				if role == "user" {
+					t.appendLine(clrUser + "❯ " + tview.Escape(text) + clrReset + "\n\n")
+				} else {
+					t.appendLine(tview.Escape(text) + "\n\n")
+				}
+			case part["tool_call"] != nil:
+				tc, _ := part["tool_call"].(map[string]any)
+				name, _ := tc["name"].(string)
+				input, _ := tc["input"].(map[string]any)
+				args := ""
+				if b, err := json.Marshal(input); err == nil {
+					args = strings.TrimPrefix(strings.TrimSuffix(string(b), "}"), "{")
+				}
+				t.appendLine(clrToolName + "[::b]⚙ " + tview.Escape(name) + "[-:-:-]" + clrToolName + "(" + clrReset)
+				if args != "" {
+					t.appendLine("[::d]" + tview.Escape(args) + "[-:-:-]")
+				}
+				t.appendLine(clrToolName + ")" + clrReset + "\n")
+			case part["tool_result"] != nil:
+				tr, _ := part["tool_result"].(map[string]any)
+				isErr, _ := tr["is_error"].(bool)
+				var output string
+				if content, _ := tr["content"].([]any); len(content) > 0 {
+					if c0, _ := content[0].(map[string]any); c0 != nil {
+						output, _ = c0["text"].(string)
+					}
+				}
+				safe := tview.Escape(summarize(output))
+				if isErr {
+					t.appendLine(fmt.Sprintf(clrToolErr+"✗"+clrReset+" [::d]%s[-:-:-]\n\n", safe))
+				} else {
+					t.appendLine(fmt.Sprintf(clrToolOK+"✓"+clrReset+" [::d]%s[-:-:-]\n\n", safe))
+				}
+			}
+		}
+	}
+}
+
+func (t *TUI) closeCurrentSession() {
+	if t.sessionID == "" {
+		return
+	}
+	if t.sseCancel != nil {
+		t.sseCancel()
+	}
+	t.client.CloseSession(t.sessionID) //nolint
+	t.sessionID = ""
+}
+
 func (t *TUI) showWarn(msg string) {
 	t.app.QueueUpdateDraw(func() {
 		fmt.Fprintf(t.output, clrWarn+"⚠ %s"+clrReset+"\n\n", msg)
@@ -625,6 +808,7 @@ func (t *TUI) handleKey(event *tcell.EventKey) *tcell.EventKey {
 		t.output.InputHandler()(tcell.NewEventKey(tcell.KeyPgDn, 0, tcell.ModNone), nil)
 		return nil
 	case tcell.KeyCtrlC, tcell.KeyCtrlD:
+		t.closeCurrentSession()
 		t.app.Stop()
 		return nil
 	}
@@ -669,17 +853,14 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 		if t.pal.depth() == 1 {
 			typ := t.cmdType(sel.name)
 			switch typ {
-			case "list":
-				// Put /cmd in input with trailing space, open level 2
+			case "list", "list-free":
 				subs := t.getSubItems(sel.name)
 				t.pal.pushSub(sel.name, subs)
 				t.inputBuf = ""
 			case "free":
-				// Put /cmd (with space) in input, user types value
 				t.inputBuf = "/" + sel.name + " "
 				t.pal.close()
 			case "none", "optional", "quit":
-				// Put /cmd in input, close
 				t.inputBuf = "/" + sel.name
 				t.pal.close()
 			}
@@ -700,42 +881,46 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 		if t.pal.depth() == 1 {
 			typ := t.cmdType(sel.name)
 			switch typ {
-			case "list":
-				// Must choose from sub-palette first
+			case "list", "list-free":
 				subs := t.getSubItems(sel.name)
 				t.pal.pushSub(sel.name, subs)
 				t.inputBuf = ""
 				t.redraw()
 			case "free":
-				// Put /cmd in input with space, user types value
 				t.inputBuf = "/" + sel.name + " "
 				t.pal.close()
 				t.redraw()
 			case "none":
-				// Execute directly
 				cmd := "/" + sel.name
 				t.inputBuf = ""
 				t.pal.close()
 				t.redraw()
 				go t.handleInput(cmd)
 			case "optional":
-				// Execute directly (no param required)
 				cmd := "/" + sel.name
 				t.inputBuf = ""
 				t.pal.close()
 				t.redraw()
 				go t.handleInput(cmd)
 			case "quit":
+				t.closeCurrentSession()
 				t.app.Stop()
 			}
 		} else {
-			// Level 2: execute /cmd value
+			// Level 2: execute or prompt for API key
 			parentCmd := t.pal.current().parentCmd
-			cmd := "/" + parentCmd + " " + sel.name
-			t.inputBuf = ""
-			t.pal.close()
-			t.redraw()
-			go t.handleInput(cmd)
+			if parentCmd == "connect" && sel.desc != "subscription" {
+				// Non-subscription: need API key — put in input for typing
+				t.inputBuf = "/connect " + sel.name + " "
+				t.pal.close()
+				t.redraw()
+			} else {
+				cmd := "/" + parentCmd + " " + sel.name
+				t.inputBuf = ""
+				t.pal.close()
+				t.redraw()
+				go t.handleInput(cmd)
+			}
 		}
 		return nil
 
@@ -786,6 +971,18 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 			runes := []rune(t.inputBuf)
 			t.inputBuf = string(runes[:len(runes)-1])
 		}
+		// Reopen palette if still in command mode (no space = still on cmd word)
+		if strings.HasPrefix(t.inputBuf, "/") {
+			parts := strings.Fields(t.inputBuf)
+			if len(parts) <= 1 && !strings.HasSuffix(t.inputBuf, " ") {
+				if !t.pal.open {
+					t.pal.openRoot(t.rootPaletteItems())
+				}
+				t.pal.setFilter(strings.TrimPrefix(t.inputBuf, "/"))
+			}
+		} else if t.inputBuf == "" {
+			t.pal.close()
+		}
 		t.redraw()
 		return nil
 
@@ -799,9 +996,8 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 			cmd := strings.TrimPrefix(parts[0], "/")
 			typ := t.cmdType(cmd)
 			switch typ {
-			case "list":
+			case "list", "list-free":
 				if len(parts) < 2 {
-					// Force sub-palette
 					subs := t.getSubItems(cmd)
 					t.pal.openRoot(t.rootPaletteItems())
 					t.pal.pushSub(cmd, subs)
@@ -881,7 +1077,81 @@ func (t *TUI) handleCommand(text string) {
 	cmd := strings.TrimPrefix(parts[0], "/")
 
 	if cmd == "quit" || cmd == "exit" {
+		t.closeCurrentSession()
 		t.app.Stop()
+		return
+	}
+
+	// Global commands (don't require active session)
+	switch cmd {
+	case "connect":
+		// /connect <provider> [api_key]
+		if len(parts) < 2 {
+			return
+		}
+		provName := parts[1]
+		apiKey := ""
+		if len(parts) > 2 {
+			apiKey = strings.Join(parts[2:], " ")
+		}
+		_, err := t.client.ConnectProvider(provName, apiKey)
+		if err != nil {
+			t.appendLine(fmt.Sprintf(clrError+"connect failed: %s"+clrReset+"\n\n", err.Error()))
+		} else {
+			t.appendLine(fmt.Sprintf(clrConfirm+"connected: %s"+clrReset+"\n\n", provName))
+			t.loadSessionCommands() // refresh model list
+		}
+		return
+	case "disconnect":
+		if len(parts) < 2 {
+			return
+		}
+		provName := parts[1]
+		_, err := t.client.DisconnectProvider(provName)
+		if err != nil {
+			t.appendLine(fmt.Sprintf(clrError+"disconnect failed: %s"+clrReset+"\n\n", err.Error()))
+		} else {
+			t.appendLine(fmt.Sprintf(clrConfirm+"disconnected: %s"+clrReset+"\n\n", provName))
+		}
+		return
+	case "resume":
+		if len(parts) < 2 {
+			return
+		}
+		sessID := parts[1]
+		t.closeCurrentSession()
+		data, err := t.client.ResumeSession(sessID)
+		if err != nil {
+			t.appendLine(fmt.Sprintf(clrError+"resume failed: %s"+clrReset+"\n\n", err.Error()))
+			return
+		}
+		var sess map[string]any
+		json.Unmarshal(data, &sess)
+		t.sessionID, _ = sess["id"].(string)
+		t.sessionName, _ = sess["name"].(string)
+		if th, _ := sess["thinking"].(string); th != "" {
+			t.thinking = th
+		}
+		t.loadStatsFromSession(sess)
+		t.loadSessionCommands()
+		t.app.QueueUpdateDraw(func() {
+			t.output.Clear()
+			t.updateInfo()
+		})
+		t.renderHistory()
+		t.appendLine(fmt.Sprintf(clrConfirm+"── resumed: %s ──"+clrReset+"\n\n", t.sessionName))
+		return
+	case "delete":
+		if len(parts) < 2 {
+			return
+		}
+		sessID := parts[1]
+		_, err := t.client.DeleteSession(sessID)
+		if err != nil {
+			t.appendLine(fmt.Sprintf(clrError+"delete failed: %s"+clrReset+"\n\n", err.Error()))
+		} else {
+			t.appendLine(clrConfirm + "session deleted" + clrReset + "\n\n")
+		}
 		return
 	}
 
@@ -897,6 +1167,16 @@ func (t *TUI) handleCommand(text string) {
 		if t.sessionCmds[i].Name == cmd {
 			def = &t.sessionCmds[i]
 			break
+		}
+	}
+	if def == nil {
+		// sessionCmds may not be loaded yet — retry loading then try again
+		t.loadSessionCommands()
+		for i := range t.sessionCmds {
+			if t.sessionCmds[i].Name == cmd {
+				def = &t.sessionCmds[i]
+				break
+			}
 		}
 	}
 	if def == nil {
@@ -951,9 +1231,8 @@ func (t *TUI) handleCommand(text string) {
 		t.updateInfo()
 	})
 
-	switch cmd {
-	case "compact":
-		// compact triggers SSE events — start streaming
+	// Commands that trigger agent streaming
+	if cmd == "compact" || strings.HasPrefix(cmd, "skill:") {
 		if t.sseCancel != nil {
 			t.sseCancel()
 		}
@@ -1061,6 +1340,17 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				} else {
 					t.appendLine(fmt.Sprintf(clrToolOK+"✓"+clrReset+" [::d]%s (%.0fms)[-:-:-]\n\n", safe, dur))
 				}
+
+			case "compact_start":
+				t.compactStart = time.Now()
+				t.appendLine(fmt.Sprintf("\n"+clrCompact+"[::b]⟳ Compact()[-:-:-]"+clrCompact+"("+clrReset+"\n"))
+
+			case "compact_end":
+				dur := time.Since(t.compactStart).Milliseconds()
+				summary, _ := evt["summary"].(string)
+				safe := tview.Escape(summarize(summary))
+				t.appendLine(fmt.Sprintf(clrCompact+")[-:-:-]\n"))
+				t.appendLine(fmt.Sprintf(clrToolOK+"✓"+clrReset+" [::d]%s (%dms)[-:-:-]\n\n", safe, dur))
 
 			case "tokens":
 				t.stats.input, _ = intFromMap(evt, "input")

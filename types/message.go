@@ -12,12 +12,18 @@ const (
 	RoleAssistant MessageRole = "assistant"
 )
 
+// MessageMeta holds optional metadata about a message — invisible to providers.
+type MessageMeta struct {
+	IsCompaction bool `json:"is_compaction,omitempty"`
+}
+
 // Message is a single turn in a conversation.
 // Stored in the session store in this neutral format — providers translate
 // to their own wire format internally before making API calls.
 type Message struct {
 	Role  MessageRole   `json:"role"`
 	Parts []ContentPart `json:"parts"`
+	Meta  *MessageMeta  `json:"meta,omitempty"`
 }
 
 // ContentPart is one element within a message.

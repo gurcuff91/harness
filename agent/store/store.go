@@ -50,6 +50,10 @@ type SessionStore interface {
 	// Full history (including pre-checkpoint messages) is preserved in the store.
 	Messages() []types.Message
 
+	// AllMessages returns the complete message history, including all pre-compaction messages.
+	// Reads from the underlying store without offset filtering.
+	AllMessages() []types.Message
+
 	// AddMessage appends a message to the log. Thread-safe.
 	AddMessage(msg types.Message) error
 
@@ -63,7 +67,17 @@ type SessionStore interface {
 	Close() error
 }
 
-// ── SessionStoreManager ──────────────────────────────────────────────────
+// ── Shared helpers ──────────────────────────────────────────────────────
+
+// CompactionMessage builds the standard user message used as a compaction checkpoint.
+// Exported so all store implementations use the same format.
+func CompactionMessage(summary string) types.Message {
+	msg := types.NewUserTextMessage("Previous conversation summary:\n\n" + summary)
+	msg.Meta = &types.MessageMeta{IsCompaction: true}
+	return msg
+}
+
+// ── SessionStoreManager ─────────────────────────────────────────────────────────────
 
 // SessionStoreManager creates, opens, and manages sessions.
 // Owned by the Agent.

@@ -63,13 +63,13 @@ func (m *FileSessionStoreManager) Create(meta SessionMeta) (SessionStore, error)
 	}
 	f.Close()
 
-	inner := &InMemorySessionStore{meta: meta}
 	return &FileSessionStore{
 		metaPath:       metaPath,
 		jsonlPath:      jsonlPath,
+		meta:           meta,
+		messages:       nil,
 		diskReadOffset: 0,
-		diskWriteCount: 0, // new session, nothing on disk yet
-		inner:          inner,
+		diskWriteCount: 0,
 	}, nil
 }
 
@@ -183,132 +183,143 @@ func cwdSlug(cwd string) string {
 	return slug
 }
 
+
 // ── FileSessionStore ─────────────────────────────────────────────────────
 
 // FileSessionStore is one open session backed by .meta.json + .jsonl.
-// It delegates in-memory state to InMemorySessionStore (offset always relative).
-// loadStart tracks how many JSONL lines were skipped at load time, so
-// CompactOffset can be translated between absolute (disk) and relative (memory).
+// Fully independent from InMemorySessionStore — owns its own in-memory cache.
+// diskReadOffset: JSONL lines skipped at Open() — translates memory→disk CompactOffset.
+// diskWriteCount: messages already on disk — only messages[diskWriteCount:] need appending.
 type FileSessionStore struct {
 	mu             sync.Mutex
 	metaPath       string
 	jsonlPath      string
-	diskReadOffset int // JSONL lines skipped at Open() — used to translate memory→disk CompactOffset
-	diskWriteCount int // messages already persisted to JSONL — only messages[diskWriteCount:] need appending
-	inner          *InMemorySessionStore
+	meta           SessionMeta
+	messages       []types.Message
+	diskReadOffset int
+	diskWriteCount int
 }
 
 func openFileSessionStore(metaPath, jsonlPath string) (*FileSessionStore, error) {
-	// Read meta from disk
 	meta, err := readMetaFile(metaPath)
 	if err != nil {
 		return nil, fmt.Errorf("read meta: %w", err)
 	}
 
-	absoluteOffset := meta.CompactOffset // line to start reading from
-
-	// Load messages from JSONL starting at absoluteOffset
+	absoluteOffset := meta.CompactOffset
 	messages, err := readJSONLFrom(jsonlPath, absoluteOffset)
 	if err != nil {
 		return nil, fmt.Errorf("read jsonl: %w", err)
 	}
 
-	// Reset meta CompactOffset to 0 — in memory, messages[0] IS the checkpoint
-	inMemoryMeta := meta
-	inMemoryMeta.CompactOffset = 0
-
-	inner := &InMemorySessionStore{
-		meta:     inMemoryMeta,
-		messages: messages,
-	}
+	// In-memory CompactOffset is always 0 after load — messages[0] IS the checkpoint
+	meta.CompactOffset = 0
 
 	return &FileSessionStore{
 		metaPath:       metaPath,
 		jsonlPath:      jsonlPath,
+		meta:           meta,
+		messages:       messages,
 		diskReadOffset: absoluteOffset,
-		diskWriteCount: len(messages), // all loaded messages are already on disk
-		inner:          inner,
+		diskWriteCount: len(messages),
 	}, nil
 }
 
 func (s *FileSessionStore) Meta() SessionMeta {
-	return s.inner.Meta()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.meta
 }
 
-// UpdateMeta updates only the in-memory state.
-// Disk is written on Close() or AddCompactionSummary() (critical writes only).
+// UpdateMeta updates in-memory state and immediately persists to disk.
 func (s *FileSessionStore) UpdateMeta(meta SessionMeta) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.inner.meta = meta
-	return nil
+	s.meta = meta
+	diskMeta := meta
+	diskMeta.CompactOffset = s.diskReadOffset + s.meta.CompactOffset
+	diskMeta.LastActiveAt = time.Now()
+	return writeMetaFile(s.metaPath, diskMeta)
 }
 
+// Messages returns messages since the last compaction checkpoint.
 func (s *FileSessionStore) Messages() []types.Message {
-	return s.inner.Messages()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	offset := s.meta.CompactOffset
+	slice := s.messages[offset:]
+	out := make([]types.Message, len(slice))
+	copy(out, slice)
+	return out
 }
 
-// AddMessage appends to in-memory only.
-// Flushed to JSONL on Close().
+// AllMessages reads the full JSONL from disk (offset 0), returning complete history.
+func (s *FileSessionStore) AllMessages() []types.Message {
+	s.mu.Lock()
+	jsonlPath := s.jsonlPath
+	s.mu.Unlock()
+	messages, err := readJSONLFrom(jsonlPath, 0)
+	if err != nil {
+		// Fallback: return in-memory slice
+		s.mu.Lock()
+		out := make([]types.Message, len(s.messages))
+		copy(out, s.messages)
+		s.mu.Unlock()
+		return out
+	}
+	return messages
+}
+
+// AddMessage appends to in-memory cache only. Flushed to JSONL on Close().
 func (s *FileSessionStore) AddMessage(msg types.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.inner.messages = append(s.inner.messages, msg)
+	s.messages = append(s.messages, msg)
 	return nil
 }
 
-// AddCompactionSummary is a critical write — flushes everything to disk synchronously.
-// This ensures the CompactOffset is durable before the session continues.
+// AddCompactionSummary is a critical write — flushes to disk synchronously.
+// Ensures CompactOffset is durable before the session continues.
 func (s *FileSessionStore) AddCompactionSummary(summary string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 1. Update in-memory state
-	summaryMsg := compactionMessage(summary)
-	s.inner.messages = append(s.inner.messages, summaryMsg)
-	s.inner.meta.CompactOffset = len(s.inner.messages) - 1
-	s.inner.meta.CompactCount++
+	s.messages = append(s.messages, CompactionMessage(summary))
+	s.meta.CompactOffset = len(s.messages) - 1
+	s.meta.CompactCount++
 
-	// 2. Flush everything to disk (critical — must persist before continuing)
 	if err := s.flushToDisk(); err != nil {
-		// Rollback in-memory state on failure
-		s.inner.messages = s.inner.messages[:len(s.inner.messages)-1]
-		s.inner.meta.CompactOffset = 0
-		s.inner.meta.CompactCount--
+		// Rollback
+		s.messages = s.messages[:len(s.messages)-1]
+		s.meta.CompactOffset = 0
+		s.meta.CompactCount--
 		return fmt.Errorf("flush after compaction: %w", err)
 	}
 	return nil
 }
 
-// Close flushes all in-memory state to disk:
-// - rewrites .jsonl with all messages (from loadStart onward)
-// - writes final meta.json
+// Close flushes all in-memory state to disk.
 func (s *FileSessionStore) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.flushToDisk()
 }
 
-// flushToDisk appends all new in-memory messages to JSONL and writes final meta.
-// Must be called with s.mu held.
+// flushToDisk appends new messages to JSONL and writes meta. Must hold s.mu.
 func (s *FileSessionStore) flushToDisk() error {
-	// Append only new messages (those added after Open/Create)
-	newMessages := s.inner.messages[s.diskWriteCount:]
-	for _, msg := range newMessages {
+	for _, msg := range s.messages[s.diskWriteCount:] {
 		if err := appendToJSONL(s.jsonlPath, msg); err != nil {
 			return fmt.Errorf("flush jsonl: %w", err)
 		}
 	}
-	s.diskWriteCount = len(s.inner.messages)
+	s.diskWriteCount = len(s.messages)
 
-	// Write final meta with absolute disk offset
-	diskMeta := s.inner.meta
-	diskMeta.CompactOffset = s.diskReadOffset + s.inner.meta.CompactOffset
+	diskMeta := s.meta
+	diskMeta.CompactOffset = s.diskReadOffset + s.meta.CompactOffset
 	diskMeta.LastActiveAt = time.Now()
 	return writeMetaFile(s.metaPath, diskMeta)
 }
 
-// ── File helpers ─────────────────────────────────────────────────────────
 
 func writeMetaFile(path string, meta SessionMeta) error {
 	data, err := json.MarshalIndent(meta, "", "  ")

@@ -72,6 +72,7 @@ func (s *Server) ListenAndServe(addr string) error {
 	r.Get("/api/sessions/{id}/events", s.handleEvents)
 	r.Get("/api/sessions/{id}/commands", s.handleListCommands)
 	r.Post("/api/sessions/{id}/commands", s.handleExecCommand)
+	r.Get("/api/sessions/{id}/messages", s.handleGetMessages)
 
 	if s.verbose {
 		log.Printf("⚔️  Harness HTTP transport listening on %s", addr)
@@ -365,6 +366,19 @@ func (s *Server) handleCloseSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleResumeSession reactivates a persisted session.
+func (s *Server) handleGetMessages(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	s.mu.RLock()
+	proxy, ok := s.sessions[id]
+	s.mu.RUnlock()
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session is not active"})
+		return
+	}
+	messages := proxy.session.AllMessages()
+	writeJSON(w, http.StatusOK, messages)
+}
+
 func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
@@ -663,11 +677,13 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 
 	case "compact":
-		if err := proxy.session.Compact(context.Background()); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
+		busy := proxy.session.IsBusy()
+		go proxy.session.Compact(context.Background()) //nolint
+		status := "started"
+		if busy {
+			status = "queued"
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": status})
 
 	default:
 		// Check if it's a skill command: skill:<name>

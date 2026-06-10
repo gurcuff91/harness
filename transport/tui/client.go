@@ -75,12 +75,48 @@ func (c *Client) GetSettings() ([]byte, error) {
 	return c.do("GET", "/api/settings", nil)
 }
 
+func (c *Client) GetProviders() ([]byte, error) {
+	return c.do("GET", "/api/providers", nil)
+}
+
+func (c *Client) ConnectProvider(name, apiKey string) ([]byte, error) {
+	body := map[string]any{}
+	if apiKey != "" {
+		body["api_key"] = apiKey
+	}
+	return c.do("POST", "/api/providers/"+name+"/connect", body)
+}
+
+func (c *Client) DisconnectProvider(name string) ([]byte, error) {
+	return c.do("POST", "/api/providers/"+name+"/disconnect", nil)
+}
+
+func (c *Client) ListSessionsByCWD(cwd string) ([]byte, error) {
+	return c.do("GET", "/api/sessions?cwd="+cwd, nil)
+}
+
+func (c *Client) ResumeSession(id string) ([]byte, error) {
+	return c.do("POST", "/api/sessions/"+id+"/resume", nil)
+}
+
+func (c *Client) DeleteSession(id string) ([]byte, error) {
+	return c.do("DELETE", "/api/sessions/"+id, nil)
+}
+
+func (c *Client) CloseSession(id string) ([]byte, error) {
+	return c.do("POST", "/api/sessions/"+id+"/close", nil)
+}
+
+func (c *Client) GetMessages(sessionID string) ([]byte, error) {
+	return c.do("GET", "/api/sessions/"+sessionID+"/messages", nil)
+}
+
 func (c *Client) ListModels() ([]byte, error) {
 	return c.do("GET", "/api/models", nil)
 }
 
-func (c *Client) CreateSession(model string) ([]byte, error) {
-	return c.do("POST", "/api/sessions", map[string]string{"model": model})
+func (c *Client) CreateSession(model, cwd string) ([]byte, error) {
+	return c.do("POST", "/api/sessions", map[string]string{"model": model, "cwd": cwd})
 }
 
 func (c *Client) SendPrompt(sessionID, text string) ([]byte, error) {
