@@ -35,7 +35,11 @@ const (
 
 // ── Palette types ─────────────────────────────────────────────────────────
 
-type paletteItem struct{ name, desc string }
+type paletteItem struct {
+	name string // displayed
+	desc string // displayed (right side)
+	id   string // internal key (e.g. session ID) — not displayed
+}
 
 type paletteLevel struct {
 	items     []paletteItem
@@ -344,17 +348,17 @@ func (t *TUI) rootPaletteItems() []paletteItem {
 	var items []paletteItem
 	// Global commands
 	items = append(items,
-		paletteItem{"connect", "Connect a provider"},
-		paletteItem{"disconnect", "Disconnect a provider"},
-		paletteItem{"resume", "Resume a previous session"},
-		paletteItem{"delete", "Delete a session"},
+		paletteItem{name: "connect", desc: "Connect a provider"},
+		paletteItem{name: "disconnect", desc: "Disconnect a provider"},
+		paletteItem{name: "resume", desc: "Resume a previous session"},
+		paletteItem{name: "delete", desc: "Delete a session"},
 	)
 	// Session-scoped commands from API
 	for _, cmd := range t.sessionCmds {
-		items = append(items, paletteItem{cmd.Name, cmd.Description})
+		items = append(items, paletteItem{name: cmd.Name, desc: cmd.Description})
 	}
 	// Quit last
-	items = append(items, paletteItem{"quit", "Exit harness"})
+	items = append(items, paletteItem{name: "quit", desc: "Exit harness"})
 	return items
 }
 
@@ -406,7 +410,7 @@ func (t *TUI) providersInactive() []paletteItem {
 			continue
 		}
 		name, _ := p["name"].(string)
-		items = append(items, paletteItem{name, "inactive"})
+		items = append(items, paletteItem{name: name, desc: "inactive"})
 	}
 	return items
 }
@@ -429,7 +433,7 @@ func (t *TUI) providersActive() []paletteItem {
 		if isSub {
 			desc = "subscription"
 		}
-		items = append(items, paletteItem{name, desc})
+		items = append(items, paletteItem{name: name, desc: desc})
 	}
 	return items
 }
@@ -452,7 +456,9 @@ func (t *TUI) sessionsForCWD(excludeActive bool) []paletteItem {
 		if name == "" {
 			name = id[:8]
 		}
-		items = append(items, paletteItem{id, name})
+		sessCWD, _ := s["cwd"].(string)
+		// name=session name (displayed left), desc=cwd (displayed right), id=internal
+		items = append(items, paletteItem{name: name, desc: sessCWD, id: id})
 	}
 	return items
 }
@@ -477,7 +483,7 @@ func (t *TUI) getSubItems(cmdName string) []paletteItem {
 			if len(p.Values) > 0 {
 				var items []paletteItem
 				for _, v := range p.Values {
-					items = append(items, paletteItem{v, ""})
+					items = append(items, paletteItem{name: v})
 				}
 				return items
 			}
@@ -867,7 +873,11 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 		} else {
 			// Level 2: put /cmd value in input, close
 			parentCmd := t.pal.current().parentCmd
-			t.inputBuf = "/" + parentCmd + " " + sel.name
+			token := sel.name
+			if sel.id != "" {
+				token = sel.id
+			}
+			t.inputBuf = "/" + parentCmd + " " + token
 			t.pal.close()
 		}
 		t.redraw()
@@ -909,13 +919,18 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 		} else {
 			// Level 2: execute or prompt for API key
 			parentCmd := t.pal.current().parentCmd
+			// Use id if available (sessions), otherwise name (providers, values)
+			token := sel.name
+			if sel.id != "" {
+				token = sel.id
+			}
 			if parentCmd == "connect" && sel.desc != "subscription" {
 				// Non-subscription: need API key — put in input for typing
-				t.inputBuf = "/connect " + sel.name + " "
+				t.inputBuf = "/connect " + token + " "
 				t.pal.close()
 				t.redraw()
 			} else {
-				cmd := "/" + parentCmd + " " + sel.name
+				cmd := "/" + parentCmd + " " + token
 				t.inputBuf = ""
 				t.pal.close()
 				t.redraw()
