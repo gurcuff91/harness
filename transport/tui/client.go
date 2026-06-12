@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/gurcuff91/harness/types"
 )
 
 // Client is an HTTP client for the Harness API.
@@ -83,6 +85,16 @@ func (c *Client) ConnectProvider(name, apiKey string) ([]byte, error) {
 	body := map[string]any{}
 	if apiKey != "" {
 		body["api_key"] = apiKey
+	}
+	return c.do("POST", "/api/providers/"+name+"/connect", body)
+}
+
+// ConnectProviderWithCreds sends full OAuth credentials to connect a subscription provider.
+func (c *Client) ConnectProviderWithCreds(name string, creds *types.Credentials) ([]byte, error) {
+	body := map[string]any{
+		"access_token":  creds.AccessToken,
+		"refresh_token": creds.RefreshToken,
+		"expires_at":    creds.ExpiresAt,
 	}
 	return c.do("POST", "/api/providers/"+name+"/connect", body)
 }

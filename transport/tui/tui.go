@@ -783,6 +783,72 @@ func (t *TUI) closeCurrentSession() {
 	t.sessionID = ""
 }
 
+// isSubscriptionProvider returns true if the provider is subscription/OAuth type.
+func (t *TUI) isSubscriptionProvider(name string) bool {
+	data, err := t.client.GetProviders()
+	if err != nil {
+		return false
+	}
+	var providers []map[string]any
+	json.Unmarshal(data, &providers)
+	for _, p := range providers {
+		if n, _ := p["name"].(string); n == name {
+			isSub, _ := p["is_subscription"].(bool)
+			return isSub
+		}
+	}
+	return false
+}
+
+// connectOAuthFlow runs the OAuth authentication flow for a provider.
+func (t *TUI) connectOAuthFlow(provName string) {
+	t.appendLine(clrConfirm + "Starting OAuth for " + provName + "..." + clrReset + "\n\n")
+	t.app.Suspend(func() {
+		creds, err := ObtainOAuthCredentials(provName)
+		if err != nil {
+			t.appendLine(fmt.Sprintf(clrError+"OAuth failed: %s"+clrReset+"\n\n", err.Error()))
+			return
+		}
+		_, connErr := t.client.ConnectProviderWithCreds(provName, creds)
+		if connErr != nil {
+			t.appendLine(fmt.Sprintf(clrError+"connect failed: %s"+clrReset+"\n\n", connErr.Error()))
+		} else {
+			t.appendLine(fmt.Sprintf(clrConfirm+"connected: %s"+clrReset+"\n\n", provName))
+			t.app.QueueUpdateDraw(func() { t.afterProviderChange() })
+		}
+	})
+}
+
+// afterProviderChange refreshes state after connect/disconnect:
+// session commands (which include the model list for the model command).
+// The palette sub-items re-fetch from API lazily, so they always show fresh data.
+func (t *TUI) afterProviderChange() {
+	t.loadSessionCommands()
+	// If current model's provider was disconnected, clear it
+	t.validateCurrentModel()
+}
+
+// validateCurrentModel checks if the current model's provider is still active.
+// If not, clears the model so the next prompt fails early with a clear error.
+func (t *TUI) validateCurrentModel() {
+	if t.model == "" || t.sessionID == "" {
+		return
+	}
+	data, err := t.client.ListModels()
+	if err != nil {
+		return
+	}
+	var models []map[string]any
+	json.Unmarshal(data, &models)
+	for _, m := range models {
+		if id, _ := m["model"].(string); id == t.model {
+			return // model still valid
+		}
+	}
+	// Model no longer available
+	t.appendLine(clrWarn + "⚠ Current model is no longer available. Select a new one with /model." + clrReset + "\n\n")
+}
+
 func (t *TUI) showWarn(msg string) {
 	t.app.QueueUpdateDraw(func() {
 		fmt.Fprintf(t.output, clrWarn+"⚠ %s"+clrReset+"\n\n", msg)
@@ -929,6 +995,13 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 				t.inputBuf = "/connect " + token + " "
 				t.pal.close()
 				t.redraw()
+			} else if parentCmd == "connect" {
+				// Subscription: execute OAuth flow directly
+				cmd := "/" + parentCmd + " " + token
+				t.inputBuf = ""
+				t.pal.close()
+				t.redraw()
+				go t.handleInput(cmd)
 			} else {
 				cmd := "/" + parentCmd + " " + token
 				t.inputBuf = ""
@@ -1105,6 +1178,14 @@ func (t *TUI) handleCommand(text string) {
 			return
 		}
 		provName := parts[1]
+
+		// Check if OAuth/subscription provider
+		if t.isSubscriptionProvider(provName) {
+			t.connectOAuthFlow(provName)
+			return
+		}
+
+		// API key provider
 		apiKey := ""
 		if len(parts) > 2 {
 			apiKey = strings.Join(parts[2:], " ")
@@ -1114,7 +1195,7 @@ func (t *TUI) handleCommand(text string) {
 			t.appendLine(fmt.Sprintf(clrError+"connect failed: %s"+clrReset+"\n\n", err.Error()))
 		} else {
 			t.appendLine(fmt.Sprintf(clrConfirm+"connected: %s"+clrReset+"\n\n", provName))
-			t.loadSessionCommands() // refresh model list
+			t.afterProviderChange()
 		}
 		return
 	case "disconnect":
@@ -1127,6 +1208,7 @@ func (t *TUI) handleCommand(text string) {
 			t.appendLine(fmt.Sprintf(clrError+"disconnect failed: %s"+clrReset+"\n\n", err.Error()))
 		} else {
 			t.appendLine(fmt.Sprintf(clrConfirm+"disconnected: %s"+clrReset+"\n\n", provName))
+			t.afterProviderChange()
 		}
 		return
 	case "resume":
