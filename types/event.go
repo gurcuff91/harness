@@ -81,3 +81,13 @@ type Event struct {
 
 // Handler receives events from the agent loop for rendering.
 type Handler func(Event)
+
+// ── Prompt status ────────────────────────────────────────────────────────
+
+// PromptStatus indicates whether a prompt started immediately or was queued.
+type PromptStatus int
+
+const (
+	PromptStarted PromptStatus = iota // prompt was dequeued and is now processing
+	PromptQueued                      // prompt was added to the queue (session was busy)
+)

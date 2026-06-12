@@ -128,7 +128,7 @@ func (s *Session) loadModelMeta(modelID string) {
 // Prompt sends a message to the session. If no turn is active, it starts
 // processing immediately. If a turn is running, the message is queued and
 // processed automatically when the current turn finishes.
-func (s *Session) Prompt(ctx context.Context, text string, images ...types.ImageData) {
+func (s *Session) Prompt(ctx context.Context, text string, images ...types.ImageData) types.PromptStatus {
 	s.followMu.Lock()
 	s.followUps = append(s.followUps, followUp{text: text, images: images})
 	if !s.busy {
@@ -136,9 +136,10 @@ func (s *Session) Prompt(ctx context.Context, text string, images ...types.Image
 		s.followCtx = ctx
 		s.followMu.Unlock()
 		go s.drainFollowUps()
-		return
+		return types.PromptStarted
 	}
 	s.followMu.Unlock()
+	return types.PromptQueued
 }
 
 // FollowUpCount returns the number of messages waiting in the queue.

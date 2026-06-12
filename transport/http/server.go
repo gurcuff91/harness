@@ -471,11 +471,10 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	busy := proxy.session.IsBusy()
-	proxy.session.Prompt(context.Background(), req.Text, req.Images...)
+	ps := proxy.session.Prompt(context.Background(), req.Text, req.Images...)
 
 	status := "started"
-	if busy {
+	if ps == types.PromptQueued {
 		status = "queued"
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": status})
@@ -699,10 +698,9 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 			if userPrompt, _ := req.Params["prompt"].(string); userPrompt != "" {
 				prompt += "\n\n---\n\n" + userPrompt
 			}
-			busy := proxy.session.IsBusy()
-			proxy.session.Prompt(context.Background(), prompt)
+			ps := proxy.session.Prompt(context.Background(), prompt)
 			status := "started"
-			if busy {
+			if ps == types.PromptQueued {
 				status = "queued"
 			}
 			writeJSON(w, http.StatusAccepted, map[string]string{"status": status})

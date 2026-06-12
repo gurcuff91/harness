@@ -766,7 +766,7 @@ func (t *TUI) submit(text string) {
 	t.startSpinner()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancelFn = cancel
-	t.session.Prompt(ctx, text)
+	_ = t.session.Prompt(ctx, text)
 }
 
 func (t *TUI) handleAgentEvent(e types.Event) {
