@@ -183,7 +183,6 @@ func cwdSlug(cwd string) string {
 	return slug
 }
 
-
 // ── FileSessionStore ─────────────────────────────────────────────────────
 
 // FileSessionStore is one open session backed by .meta.json + .jsonl.
@@ -319,7 +318,6 @@ func (s *FileSessionStore) flushToDisk() error {
 	diskMeta.LastActiveAt = time.Now()
 	return writeMetaFile(s.metaPath, diskMeta)
 }
-
 
 func writeMetaFile(path string, meta SessionMeta) error {
 	data, err := json.MarshalIndent(meta, "", "  ")

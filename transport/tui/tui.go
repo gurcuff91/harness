@@ -19,7 +19,7 @@ import (
 // ── Color palette ──────────────────────────────────────────────────────────
 const (
 	clrUser        = "[#5fafd7]" // user input (cyan medium)
-	clrThinking    = "[::d]" // thinking block (ANSI dim)
+	clrThinking    = "[::d]"     // thinking block (ANSI dim)
 	clrToolName    = "[#ffaf5f]" // tool name (amber/orange)
 	clrToolArgs    = "[#767676]" // tool args / metadata (neutral gray)
 	clrCompact     = "[#af87ff]" // compact operation (purple)
@@ -27,9 +27,9 @@ const (
 	clrToolErr     = "[#ff5f5f]" // tool result error (red)
 	clrWarn        = "[#ffff5f]" // warning (yellow)
 	clrError       = "[#ff5f5f]" // error message (red)
-	clrFooter      = "[::d]" // footer / info (ANSI dim)
-	clrConfirm     = "[::d]" // command confirmation
-	clrPlaceholder = "[::d]" // input placeholder
+	clrFooter      = "[::d]"     // footer / info (ANSI dim)
+	clrConfirm     = "[::d]"     // command confirmation
+	clrPlaceholder = "[::d]"     // input placeholder
 	clrReset       = "[-:-:-]"   // reset color + attributes
 )
 
@@ -179,23 +179,25 @@ type TUI struct {
 	pal      palette
 
 	// session state
-	thinking      string
+	thinking       string
 	isSubscription bool
-	sessionCmds   []CommandDef
+	sessionCmds    []CommandDef
 
 	// state
 	spinning     bool
 	spinnerStop  chan struct{}
 	compactStart time.Time
+	queueCount   int      // number of prompts waiting in the session queue
+	localQueue   []string // pending user messages (for display)
 	stats        tokensInfo
 }
 
 type tokensInfo struct {
-	input, output    int
+	input, output         int
 	cacheRead, cacheWrite int
-	cost             float64
-	contextPct       float64
-	contextWin       int
+	cost                  float64
+	contextPct            float64
+	contextWin            int
 }
 
 func New(a *agent.Agent) *TUI {
@@ -458,7 +460,7 @@ func (t *TUI) sessionsForCWD(excludeActive bool) []paletteItem {
 		}
 		sessCWD, _ := s["cwd"].(string)
 		// name=session name (displayed left), desc=cwd (displayed right), id=internal
-		items = append(items, paletteItem{name: name, desc: sessCWD, id: id})
+		items = append(items, paletteItem{name: name, desc: shortenPath(sessCWD), id: id})
 	}
 	return items
 }
@@ -1144,11 +1146,39 @@ func (t *TUI) handleInput(text string) {
 		return
 	}
 
+	data, err := t.client.SendPrompt(t.sessionID, text)
+	if err != nil {
+		t.appendLine(clrError + "Failed to send: " + err.Error() + clrReset + "\n\n")
+		return
+	}
+
+	var resp map[string]string
+	json.Unmarshal(data, &resp)
+	status := resp["status"]
+
+	if status == "queued" {
+		// Prompt was queued — don't cancel SSE, don't show user message yet
+		t.queueCount++
+		t.localQueue = append(t.localQueue, tview.Escape(text))
+		t.spinning = true
+		// If no active SSE, start one (first prompt ever queued somehow? shouldn't happen, but defensive)
+		if t.sseCancel == nil {
+			ctx, cancel := context.WithCancel(context.Background())
+			t.sseCancel = cancel
+			go t.streamEvents(ctx)
+		}
+		t.app.QueueUpdateDraw(func() { t.updateInfo() })
+		return
+	}
+
+	// Prompt started immediately — show user message and start streaming
 	t.appendLine(clrUser + "❯ " + tview.Escape(text) + clrReset + "\n\n")
 
-	t.spinning = true
-	t.client.SendPrompt(t.sessionID, text) //nolint
+	// Clear any stale queue state (previous queued prompts processed by now)
+	t.queueCount = 0
+	t.localQueue = nil
 
+	t.spinning = true
 	if t.sseCancel != nil {
 		t.sseCancel()
 	}
@@ -1411,7 +1441,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				}
 				name, _ := evt["tool_name"].(string)
 				// Bold amber tool name + opening paren
-				t.appendLine(clrToolName+"[::b]⚙ " + tview.Escape(name) + "[-:-:-]" + clrToolName + "(" + clrReset)
+				t.appendLine(clrToolName + "[::b]⚙ " + tview.Escape(name) + "[-:-:-]" + clrToolName + "(" + clrReset)
 
 			case "tool_args":
 				delta, _ := evt["delta"].(string)
@@ -1440,13 +1470,13 @@ func (t *TUI) streamEvents(ctx context.Context) {
 
 			case "compact_start":
 				t.compactStart = time.Now()
-				t.appendLine(fmt.Sprintf("\n"+clrCompact+"[::b]⟳ Compact()[-:-:-]"+clrCompact+"("+clrReset+"\n"))
+				t.appendLine(fmt.Sprintf("\n" + clrCompact + "[::b]⟳ Compact()[-:-:-]" + clrCompact + "(" + clrReset + "\n"))
 
 			case "compact_end":
 				dur := time.Since(t.compactStart).Milliseconds()
 				summary, _ := evt["summary"].(string)
 				safe := tview.Escape(summarize(summary))
-				t.appendLine(fmt.Sprintf(clrCompact+")[-:-:-]\n"))
+				t.appendLine(fmt.Sprintf(clrCompact + ")[-:-:-]\n"))
 				t.appendLine(fmt.Sprintf(clrToolOK+"✓"+clrReset+" [::d]%s (%dms)[-:-:-]\n\n", safe, dur))
 
 			case "tokens":
@@ -1463,6 +1493,18 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				// close last open block
 				if inThinking || inText {
 					t.appendLine("\n\n")
+				}
+				// Process queue: if there are pending prompts, show next one
+				if t.queueCount > 0 && len(t.localQueue) > 0 {
+					msg := t.localQueue[0]
+					t.localQueue = t.localQueue[1:]
+					t.queueCount--
+					t.appendLine(clrUser + "❯ " + msg + clrReset + "\n\n")
+					t.app.QueueUpdateDraw(func() { t.updateInfo() })
+					// Reset streaming flags, keep going for next turn
+					inThinking = false
+					inText = false
+					continue
 				}
 				t.spinning = false
 				return
@@ -1513,7 +1555,7 @@ func (t *TUI) updateInfo() {
 	// info line: cwd (branch) • session name
 	cwd, _ := os.Getwd()
 	branch := gitBranch(cwd)
-	loc := cwd
+	loc := shortenPath(cwd)
 	if branch != "" {
 		loc += " (" + branch + ")"
 	}
@@ -1521,7 +1563,11 @@ func (t *TUI) updateInfo() {
 	if name == "" {
 		name = "No session"
 	}
-	t.info.SetText(fmt.Sprintf(clrFooter+"%s • %s"+clrReset, loc, name))
+	queue := ""
+	if t.queueCount > 0 {
+		queue = fmt.Sprintf(" [%d queued]", t.queueCount)
+	}
+	t.info.SetText(fmt.Sprintf(clrFooter+"%s • %s%s"+clrReset, loc, name, queue))
 
 	// footer: tokens + model
 	if t.model == "" {
@@ -1585,6 +1631,15 @@ func gitBranch(cwd string) string {
 		return strings.TrimPrefix(ref, "ref: refs/heads/")
 	}
 	return ""
+}
+
+// shortenPath replaces the user's home directory with ~
+func shortenPath(path string) string {
+	home, _ := os.UserHomeDir()
+	if home != "" && strings.HasPrefix(path, home) {
+		return "~" + strings.TrimPrefix(path, home)
+	}
+	return path
 }
 
 func intFromMap(m map[string]any, key string) (int, bool) {

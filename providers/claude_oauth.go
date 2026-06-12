@@ -578,7 +578,6 @@ func persistOAuthCreds(creds *types.Credentials) {
 	cm.Store(oauthCredPrefix+"subscription_type", creds.SubscriptionType)
 }
 
-
 // ── Utilities ────────────────────────────────────────────────────────────
 
 func envOrDefault(key, fallback string) string {
