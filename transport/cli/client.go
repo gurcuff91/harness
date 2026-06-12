@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/gurcuff91/harness/types"
 )
 
 // httpClient is the CLI transport's HTTP client for the internal API.
@@ -78,6 +80,46 @@ func (c *httpClient) ExecCommand(sessionID string, command string, params map[st
 		"command": command,
 		"params":  params,
 	})
+}
+
+func (c *httpClient) GetProviders() ([]byte, error) {
+	return c.do("GET", "/api/providers", nil)
+}
+
+func (c *httpClient) ConnectProvider(name, apiKey string) ([]byte, error) {
+	body := map[string]any{}
+	if apiKey != "" {
+		body["api_key"] = apiKey
+	}
+	return c.do("POST", "/api/providers/"+name+"/connect", body)
+}
+
+func (c *httpClient) ConnectProviderWithCreds(name string, creds *types.Credentials) ([]byte, error) {
+	return c.do("POST", "/api/providers/"+name+"/connect", map[string]any{
+		"access_token":  creds.AccessToken,
+		"refresh_token": creds.RefreshToken,
+		"expires_at":    creds.ExpiresAt,
+	})
+}
+
+func (c *httpClient) DisconnectProvider(name string) ([]byte, error) {
+	return c.do("POST", "/api/providers/"+name+"/disconnect", nil)
+}
+
+func (c *httpClient) ListSessionsByCWD(cwd string) ([]byte, error) {
+	return c.do("GET", "/api/sessions?cwd="+cwd, nil)
+}
+
+func (c *httpClient) ResumeSession(id string) ([]byte, error) {
+	return c.do("POST", "/api/sessions/"+id+"/resume", nil)
+}
+
+func (c *httpClient) DeleteSession(id string) ([]byte, error) {
+	return c.do("DELETE", "/api/sessions/"+id, nil)
+}
+
+func (c *httpClient) GetMessages(sessionID string) ([]byte, error) {
+	return c.do("GET", "/api/sessions/"+sessionID+"/messages", nil)
 }
 
 func (c *httpClient) StreamEvents(ctx context.Context, sessionID string) (<-chan map[string]any, error) {

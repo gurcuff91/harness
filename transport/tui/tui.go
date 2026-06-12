@@ -160,6 +160,9 @@ type TUI struct {
 	sessionID   string
 	sessionName string
 	model       string
+	overrideModel    string // from --model flag (takes priority over settings)
+	overrideThinking string // from --thinking flag
+	resumeID         string // from --resume flag (resume instead of create)
 	sseCancel   context.CancelFunc
 
 	// tview
@@ -202,6 +205,13 @@ type tokensInfo struct {
 
 func New(a *agent.Agent) *TUI {
 	return &TUI{agent: a}
+}
+
+// SetFlags applies CLI flags (overrides settings).
+func (t *TUI) SetFlags(model, thinking, resumeID string) {
+	t.overrideModel = model
+	t.overrideThinking = thinking
+	t.resumeID = resumeID
 }
 
 func (t *TUI) Run(ctx context.Context) error {
@@ -622,8 +632,10 @@ func (t *TUI) autoConnect() {
 		settingsThinking, _ = settings["thinking_level"].(string)
 	}
 
-	// Resolve model: settings > first available
-	if settingsModel != "" && available[settingsModel] {
+	// Resolve model: CLI flag > settings > first available
+	if t.overrideModel != "" && available[t.overrideModel] {
+		t.model = t.overrideModel
+	} else if settingsModel != "" && available[settingsModel] {
 		t.model = settingsModel
 	} else {
 		if settingsModel != "" {
@@ -632,6 +644,10 @@ func (t *TUI) autoConnect() {
 		t.model, _ = models[0]["model"].(string)
 	}
 	t.thinking = settingsThinking
+	// CLI flag overrides settings for thinking
+	if t.overrideThinking != "" {
+		t.thinking = t.overrideThinking
+	}
 
 	// Check if selected model is subscription-based
 	for _, m := range models {
@@ -641,21 +657,58 @@ func (t *TUI) autoConnect() {
 		}
 	}
 
-	// Create session
+	// Create or resume session
 	cwd, _ := os.Getwd()
+	var sess map[string]any
+
+	if t.resumeID != "" {
+		// Resume existing session
+		t.appendLine(clrConfirm + "── resuming session ──" + clrReset + "\n\n")
+		data, err = t.client.ResumeSession(t.resumeID)
+		if err != nil {
+			t.showWarn(fmt.Sprintf("Failed to resume session: %s", err.Error()))
+			// Fall through to create new
+		} else {
+			json.Unmarshal(data, &sess)
+			t.sessionID, _ = sess["id"].(string)
+			t.sessionName, _ = sess["name"].(string)
+			t.model, _ = sess["model"].(string)
+			t.thinking = ""
+			if th, _ := sess["thinking"].(string); th != "" {
+				t.thinking = th
+			}
+			// Apply overrides to resumed session
+			if t.overrideModel != "" && t.overrideModel != t.model {
+				t.client.ExecCommand(t.sessionID, "model", map[string]any{"model": t.overrideModel}) //nolint
+				t.model = t.overrideModel
+			}
+			if t.overrideThinking != "" && t.overrideThinking != t.thinking {
+				t.client.ExecCommand(t.sessionID, "thinking", map[string]any{"level": t.overrideThinking}) //nolint
+				t.thinking = t.overrideThinking
+			}
+			t.loadStatsFromSession(sess)
+			t.loadSessionCommands()
+			t.app.QueueUpdateDraw(func() {
+				t.output.Clear()
+				t.updateInfo()
+			})
+			t.renderHistory()
+			return
+		}
+	}
+
+	// Create new session (default path when no --resume or resume failed)
 	data, err = t.client.CreateSession(t.model, cwd)
 	if err != nil {
 		t.showWarn(fmt.Sprintf("Failed to create session: %s", err.Error()))
 		return
 	}
-	var sess map[string]any
 	json.Unmarshal(data, &sess)
 	t.sessionID, _ = sess["id"].(string)
 	t.sessionName, _ = sess["name"].(string)
 	if th, _ := sess["thinking"].(string); th != "" {
 		t.thinking = th
 	}
-	// Populate all footer stats from session stats
 	t.loadStatsFromSession(sess)
 	t.loadSessionCommands()
 	t.app.QueueUpdateDraw(func() { t.updateInfo() })

@@ -162,3 +162,12 @@ finalize:
 
 	return nil
 }
+
+// shortenPath replaces home dir with ~
+func shortenPath(path string) string {
+	home, _ := os.UserHomeDir()
+	if home != "" && strings.HasPrefix(path, home) {
+		return "~" + strings.TrimPrefix(path, home)
+	}
+	return path
+}
