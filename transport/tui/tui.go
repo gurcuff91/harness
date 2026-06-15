@@ -21,6 +21,8 @@ const (
 	clrUser        = "[#5fafd7]" // user input (cyan medium)
 	clrThinking    = "[::d]"     // thinking block (ANSI dim)
 	clrToolName    = "[#ffaf5f]" // tool name (amber/orange)
+	clrToolSkill   = "[#87afd7]" // skill tool (steel blue)
+	clrToolSubagent = "[#af87d7]" // subagent tool (violet)
 	clrToolArgs    = "[#767676]" // tool args / metadata (neutral gray)
 	clrCompact     = "[#af87ff]" // compact operation (purple)
 	clrToolOK      = "[#5faf5f]" // tool result success (green)
@@ -811,11 +813,12 @@ func (t *TUI) renderHistory() {
 				if b, err := json.Marshal(input); err == nil {
 					args = strings.TrimPrefix(strings.TrimSuffix(string(b), "}"), "{")
 				}
-				t.appendLine(clrToolName + "[::b]⚙ " + tview.Escape(name) + "[-:-:-]" + clrToolName + "(" + clrReset)
+				tClr2, tIco2 := toolStyle(name)
+				t.appendLine(tClr2 + "[::b]" + tIco2 + " " + tview.Escape(name) + "[-:-:-]" + tClr2 + "(" + clrReset)
 				if args != "" {
 					t.appendLine("[::d]" + tview.Escape(args) + "[-:-:-]")
 				}
-				t.appendLine(clrToolName + ")" + clrReset + "\n")
+				t.appendLine(tClr2 + ")" + clrReset + "\n")
 			case part["tool_result"] != nil:
 				tr, _ := part["tool_result"].(map[string]any)
 				isErr, _ := tr["is_error"].(bool)
@@ -1460,6 +1463,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 	// track where we are in output so we can add blank lines between blocks
 	inThinking := false
 	inText := false
+	var curToolClr = clrToolName // color of current tool, used across tool_start/tool_call
 
 	for {
 		select {
@@ -1498,7 +1502,9 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				}
 				name, _ := evt["tool_name"].(string)
 				// Bold amber tool name + opening paren
-				t.appendLine(clrToolName + "[::b]⚙ " + tview.Escape(name) + "[-:-:-]" + clrToolName + "(" + clrReset)
+				tClr, tIco := toolStyle(name)
+				curToolClr = tClr
+				t.appendLine(tClr + "[::b]" + tIco + " " + tview.Escape(name) + "[-:-:-]" + tClr + "(" + clrReset)
 
 			case "tool_args":
 				delta, _ := evt["delta"].(string)
@@ -1511,7 +1517,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 
 			case "tool_call":
 				// Close paren + newline before result
-				t.appendLine(clrToolName + ")" + clrReset + "\n")
+				t.appendLine(curToolClr + ")" + clrReset + "\n")
 
 			case "tool_result":
 				output, _ := evt["output"].(string)
@@ -1658,6 +1664,18 @@ func (t *TUI) updateInfo() {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
+
+// toolStyle returns the color tag and icon for a given tool name.
+func toolStyle(name string) (clr, icon string) {
+	switch name {
+	case "Skill":
+		return clrToolSkill, "◈"
+	case "Subagent":
+		return clrToolSubagent, "⬡"
+	default:
+		return clrToolName, "⚙"
+	}
+}
 
 func summarize(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
