@@ -56,6 +56,8 @@ func formatEvent(e types.Event) []byte {
 		payload = map[string]any{"type": "compact_start"}
 	case types.EventCompactEnd:
 		payload = map[string]any{"type": "compact_end", "summary": e.Summary}
+	case types.EventStop:
+		payload = map[string]any{"type": "stop"}
 	default:
 		return nil // not exposed
 	}

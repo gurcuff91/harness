@@ -123,6 +123,10 @@ func (c *Client) GetMessages(sessionID string) ([]byte, error) {
 	return c.do("GET", "/api/sessions/"+sessionID+"/messages", nil)
 }
 
+func (c *Client) StopSession(sessionID string) ([]byte, error) {
+	return c.do("POST", "/api/sessions/"+sessionID+"/stop", nil)
+}
+
 func (c *Client) ListModels() ([]byte, error) {
 	return c.do("GET", "/api/models", nil)
 }

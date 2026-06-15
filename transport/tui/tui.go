@@ -164,6 +164,7 @@ type TUI struct {
 	overrideThinking string // from --thinking flag
 	resumeID         string // from --resume flag (resume instead of create)
 	sseCancelFn context.CancelFunc // persistent SSE, cancelled on quit
+	lastSessionID string // for resume hint on exit
 
 	// tview
 	app       *tview.Application
@@ -243,7 +244,13 @@ func (t *TUI) Run(ctx context.Context) error {
 		t.autoConnect()
 	}()
 
-	return t.app.EnableMouse(true).Run()
+	err = t.app.EnableMouse(true).Run()
+
+	if t.lastSessionID != "" {
+		fmt.Printf("\n  Resume: harness --resume %s\n\n", t.lastSessionID)
+	}
+
+	return err
 }
 
 // ── Layout ────────────────────────────────────────────────────────────────
@@ -833,9 +840,9 @@ func (t *TUI) closeCurrentSession() {
 	if t.sessionID == "" {
 		return
 	}
+	t.lastSessionID = t.sessionID
 	t.client.CloseSession(t.sessionID) //nolint
 	t.sessionID = ""
-	// Cancel persistent SSE
 	if t.sseCancelFn != nil {
 		t.sseCancelFn()
 		t.sseCancelFn = nil
@@ -1119,6 +1126,9 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 	switch event.Key() {
 	case tcell.KeyEsc:
+		if t.spinning && t.sessionID != "" {
+			go t.client.StopSession(t.sessionID) //nolint
+		}
 		t.inputBuf = ""
 		t.redraw()
 		return nil
@@ -1526,6 +1536,10 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				t.appendLine(fmt.Sprintf(clrCompact + ")[-:-:-]\n"))
 				t.appendLine(fmt.Sprintf(clrToolOK+"✓"+clrReset+" [::d]%s (%dms)[-:-:-]\n\n", safe, dur))
 
+			case "stop":
+				t.appendLine("\n\n" + clrWarn + "⏹ Stopped" + clrReset + "\n\n")
+				t.spinning = false
+
 			case "tokens":
 				t.stats.input, _ = intFromMap(evt, "input")
 				t.stats.output, _ = intFromMap(evt, "total_output")
@@ -1537,21 +1551,21 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				t.app.QueueUpdateDraw(func() { t.updateInfo() })
 
 			case "turn_end":
-			if inThinking || inText {
-				t.appendLine("\n\n")
-			}
-			if t.queueCount > 0 && len(t.localQueue) > 0 {
-				msg := t.localQueue[0]
-				t.localQueue = t.localQueue[1:]
-				t.queueCount--
-				t.appendLine(clrUser + "❯ " + msg + clrReset + "\n\n")
-				t.app.QueueUpdateDraw(func() { t.updateInfo() })
+				if inThinking || inText {
+					t.appendLine("\n\n")
+				}
 				inThinking = false
 				inText = false
-				continue // keep spinning for next turn
-			}
-			t.spinning = false
-			// Persistent SSE — keep streaming
+				if t.queueCount > 0 && len(t.localQueue) > 0 {
+					msg := t.localQueue[0]
+					t.localQueue = t.localQueue[1:]
+					t.queueCount--
+					t.appendLine(clrUser + "❯ " + msg + clrReset + "\n\n")
+					t.spinning = true // next turn starting — Esc can stop it
+					t.app.QueueUpdateDraw(func() { t.updateInfo() })
+				} else {
+					t.spinning = false
+				}
 
 		case "error":
 			msg, _ := evt["message"].(string)

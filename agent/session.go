@@ -57,6 +57,7 @@ type Session struct {
 	followUps []followUp
 	busy      bool
 	followCtx context.Context
+	currentCancel context.CancelFunc // cancel the currently executing turn
 }
 
 type followUp struct {
@@ -133,13 +134,23 @@ func (s *Session) Prompt(ctx context.Context, text string, images ...types.Image
 	s.followUps = append(s.followUps, followUp{text: text, images: images})
 	if !s.busy {
 		s.busy = true
-		s.followCtx = ctx
+		s.followCtx = ctx // parent context for all turns
 		s.followMu.Unlock()
 		go s.drainFollowUps()
 		return types.PromptStarted
 	}
 	s.followMu.Unlock()
 	return types.PromptQueued
+}
+
+// Stop cancels the currently executing turn. Queued prompts continue normally.
+func (s *Session) Stop() {
+	s.followMu.Lock()
+	if s.currentCancel != nil {
+		s.currentCancel()
+		s.currentCancel = nil
+	}
+	s.followMu.Unlock()
 }
 
 // FollowUpCount returns the number of messages waiting in the queue.
@@ -187,12 +198,16 @@ func (s *Session) drainFollowUps() {
 		s.followMu.Lock()
 		if len(s.followUps) == 0 {
 			s.busy = false
+			s.currentCancel = nil
 			s.followMu.Unlock()
 			return
 		}
 		fu := s.followUps[0]
 		s.followUps = s.followUps[1:]
-		ctx := s.followCtx
+		// Create a fresh cancellable context for each turn
+		parentCtx := s.followCtx
+		ctx, cancel := context.WithCancel(parentCtx)
+		s.currentCancel = cancel
 		s.followMu.Unlock()
 
 		if !first {
@@ -200,10 +215,10 @@ func (s *Session) drainFollowUps() {
 		}
 		first = false
 
-		if _, err := s.promptSync(ctx, fu.text, fu.images); err != nil {
-			if ctx.Err() == nil {
-				s.emit(types.Event{Type: types.EventError, Message: err.Error()})
-			}
+		_, err := s.promptSync(ctx, fu.text, fu.images)
+		cancel() // always release resources
+		if err != nil && ctx.Err() == nil {
+			s.emit(types.Event{Type: types.EventError, Message: err.Error()})
 		}
 	}
 }
@@ -229,7 +244,9 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 	// Reserve one turn for the summary call if max turns is reached mid-task.
 	for i := range s.maxTurns - 1 {
 		if ctx.Err() != nil {
-			return "Cancelled.", nil
+			s.emit(types.Event{Type: types.EventStop})
+			s.emit(types.Event{Type: types.EventTurnEnd})
+			return "", nil
 		}
 
 		history := s.store.Messages()
@@ -246,6 +263,12 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 		s.emit(types.Event{Type: types.EventLoopStart, Loop: i})
 
 		resp, toolResults, err := s.runStream(ctx, req)
+		if ctx.Err() != nil {
+			// Cancelled by user Stop() — emit stop event and exit cleanly
+			s.emit(types.Event{Type: types.EventStop})
+			s.emit(types.Event{Type: types.EventTurnEnd})
+			return "", nil
+		}
 		if err != nil {
 			s.emit(types.Event{Type: types.EventError, Message: err.Error()})
 			s.emit(types.Event{Type: types.EventLoopEnd})

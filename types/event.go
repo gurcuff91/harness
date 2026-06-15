@@ -43,6 +43,7 @@ const (
 	// ── Compaction ─────────────────────────────────────────────────────────
 	EventCompactStart // session compaction started
 	EventCompactEnd   // session compaction finished
+	EventStop         // turn was stopped by user
 )
 
 // TokenUsage carries token counts and derived metrics for an EventTokens event.

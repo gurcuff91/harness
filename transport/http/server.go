@@ -73,6 +73,7 @@ func (s *Server) ListenAndServe(addr string) error {
 	r.Get("/api/sessions/{id}/commands", s.handleListCommands)
 	r.Post("/api/sessions/{id}/commands", s.handleExecCommand)
 	r.Get("/api/sessions/{id}/messages", s.handleGetMessages)
+	r.Post("/api/sessions/{id}/stop", s.handleStopSession)
 
 	if s.verbose {
 		log.Printf("⚔️  Harness HTTP transport listening on %s", addr)
@@ -366,6 +367,19 @@ func (s *Server) handleCloseSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleResumeSession reactivates a persisted session.
+func (s *Server) handleStopSession(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	s.mu.RLock()
+	proxy, ok := s.sessions[id]
+	s.mu.RUnlock()
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session is not active"})
+		return
+	}
+	proxy.session.Stop()
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
 func (s *Server) handleGetMessages(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	s.mu.RLock()
