@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/providers"
+	"github.com/gurcuff91/harness/types"
 )
 
 // ── Agent ────────────────────────────────────────────────────────────────
@@ -19,6 +21,7 @@ import (
 // It has zero knowledge of providers, credentials, or which providers are active.
 // The caller is responsible for ensuring the provider is active before NewSession().
 type Agent struct {
+	opts           AgentOptions // original opts — used by Subagent tool to clone
 	toolReg        *tools.Registry
 	allowedTools   []string
 	store          store.SessionStoreManager
@@ -76,6 +79,7 @@ func New(opts AgentOptions) *Agent {
 	}
 
 	return &Agent{
+		opts:           opts,
 		toolReg:        reg,
 		allowedTools:   opts.AllowedTools,
 		store:          opts.Store,
@@ -85,6 +89,11 @@ func New(opts AgentOptions) *Agent {
 		maxTurns:       opts.MaxTurns,
 		maxTokens:      opts.MaxTokens,
 	}
+}
+
+// Options returns the original configuration — used by the Subagent tool to clone.
+func (a *Agent) Options() AgentOptions {
+	return a.opts
 }
 
 // NewSession creates a fresh session for the given working directory and model.
@@ -117,7 +126,7 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 		return nil, fmt.Errorf("load resources: %w", err)
 	}
 
-	sessionTools := a.buildSessionTools(res, loader)
+	sessionTools := a.buildSessionTools(cwd, model, res, loader)
 	systemPrompt := a.buildSystemPrompt(cwd, res)
 
 	now := time.Now()
@@ -193,7 +202,7 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 
 	return newSession(storeInst,
 		provider, modelID, thinkingLvl,
-		a.buildSessionTools(res, loader),
+		a.buildSessionTools(cwd, meta.Model, res, loader),
 		a.buildSystemPrompt(cwd, res),
 		a.maxTurns, maxTokens,
 		skills, readSkill), nil
@@ -219,7 +228,7 @@ func (a *Agent) RenameSession(sessionID, name string) error {
 
 // ── Internal helpers ─────────────────────────────────────────────────────
 
-func (a *Agent) buildSessionTools(res *resources.Resources, loader resources.ResourceLoader) *tools.Registry {
+func (a *Agent) buildSessionTools(cwd, model string, res *resources.Resources, loader resources.ResourceLoader) *tools.Registry {
 	reg := tools.NewRegistry()
 	for _, def := range a.toolReg.Definitions() {
 		if a.isToolAllowed(def.Name) {
@@ -227,8 +236,58 @@ func (a *Agent) buildSessionTools(res *resources.Resources, loader resources.Res
 		}
 	}
 	if len(res.Skills) > 0 && a.isToolAllowed(tools.ToolSkill) {
-		def, execFn := tools.Skill(loader.ReadSkill)
-		reg.Register(tools.Tool{Def: def, Execute: execFn})
+		reg.Register(tools.Skill(loader.ReadSkill))
+	}
+	// Subagent tool — only if allowed (excluded for sub-agents themselves)
+	if a.isToolAllowed(tools.ToolSubagent) {
+		// Capture current settings in a closure — Agent has zero knowledge of sub-agent mechanics
+		parentA := a
+		executor := func(ctx context.Context, prompt string) (string, error) {
+			// Build allowed tools list: everything except Subagent (no recursion)
+			var allowed []string
+			for _, t := range defaultAllTools() {
+				if t != tools.ToolSubagent {
+					allowed = append(allowed, t)
+				}
+			}
+			// Create ephemeral sub-agent inheriting parent settings
+			const subagentSystemPrompt = `You are a focused sub-agent. Execute the delegated task completely and autonomously.
+Make reasonable assumptions. Return full results — do not truncate. Never ask questions.`
+			subAgent := New(AgentOptions{
+				ThinkingLevel: parentA.thinkingLevel,
+				SystemPrompt:  subagentSystemPrompt,
+				MaxTurns:       parentA.maxTurns,
+				MaxTokens:      parentA.maxTokens,
+				Store:          store.NewInMemorySessionStoreManager(),
+				ResourceLoader: loader, // inherit skills from parent
+				AllowedTools:   allowed,
+			})
+			sess, err := subAgent.NewSession(cwd, model)
+			if err != nil {
+				return "", fmt.Errorf("sub-agent: %w", err)
+			}
+			defer sess.Close()
+			var textBuf strings.Builder
+			done := make(chan error, 1)
+			sess.Subscribe(func(e types.Event) {
+				switch e.Type {
+				case types.EventStreamTextDelta:
+					textBuf.WriteString(e.Delta)
+				case types.EventTurnEnd:
+					done <- nil
+				case types.EventError:
+					done <- fmt.Errorf("%s", e.Message)
+				}
+			})
+			sess.Prompt(ctx, prompt)
+			select {
+			case err := <-done:
+				return strings.TrimSpace(textBuf.String()), err
+			case <-ctx.Done():
+				return strings.TrimSpace(textBuf.String()), ctx.Err()
+			}
+		}
+		reg.Register(tools.Subagent(executor))
 	}
 	return reg
 }
@@ -288,3 +347,17 @@ func defaultTools() *tools.Registry {
 	r.Register(tools.Fetch())
 	return r
 }
+
+// defaultAllTools returns the names of all default tools (excluding Subagent).
+func defaultAllTools() []string {
+	return []string{
+		tools.ToolBash,
+		tools.ToolRead,
+		tools.ToolWrite,
+		tools.ToolEdit,
+		tools.ToolFetch,
+		tools.ToolSkill,
+		tools.ToolSubagent,
+	}
+}
+
