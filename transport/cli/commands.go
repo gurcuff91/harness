@@ -36,14 +36,18 @@ func RunProviders(ctx context.Context, a *agent.Agent, output string) error {
 			name, _ := p["name"].(string)
 			active, _ := p["active"].(bool)
 			isSub, _ := p["is_subscription"].(bool)
+			activation, _ := p["activation"].(string)
 			modelCount, _ := p["model_count"].(float64)
 			status := "inactive"
 			cred := ""
 			if active {
 				status = "active"
-				if isSub {
+				switch {
+				case isSub:
 					cred = " subscription"
-				} else {
+				case activation == "auto":
+					cred = " auto"
+				default:
 					cred = " api_key"
 				}
 			}
@@ -66,17 +70,22 @@ func RunConnect(ctx context.Context, a *agent.Agent, name, apiKey, output string
 	defer server.Close()
 	c := newClient(addr)
 
-	// Check if OAuth/subscription provider
+	// Validate provider exists
+	provExists := false
 	isSub := false
 	if data, err := c.GetProviders(); err == nil {
 		var providers []map[string]any
 		json.Unmarshal(data, &providers)
 		for _, p := range providers {
 			if n, _ := p["name"].(string); n == name {
+				provExists = true
 				isSub, _ = p["is_subscription"].(bool)
 				break
 			}
 		}
+	}
+	if !provExists {
+		return fmt.Errorf("unknown provider: %s\nRun 'harness providers' to see available providers.", name)
 	}
 
 	if isSub {
@@ -120,6 +129,22 @@ func RunDisconnect(ctx context.Context, a *agent.Agent, name, output string) err
 	}
 	defer server.Close()
 	c := newClient(addr)
+
+	// Validate provider exists
+	provExists := false
+	if data, err := c.GetProviders(); err == nil {
+		var providers []map[string]any
+		json.Unmarshal(data, &providers)
+		for _, p := range providers {
+			if n, _ := p["name"].(string); n == name {
+				provExists = true
+				break
+			}
+		}
+	}
+	if !provExists {
+		return fmt.Errorf("unknown provider: %s\nRun 'harness providers' to see available providers.", name)
+	}
 
 	_, err = c.DisconnectProvider(name)
 	if err != nil {
@@ -185,6 +210,22 @@ func RunDelete(ctx context.Context, a *agent.Agent, id, output string) error {
 	}
 	defer server.Close()
 	c := newClient(addr)
+
+	// Validate session exists by checking all CWDs
+	found := false
+	if data, err := c.do("GET", "/api/sessions", nil); err == nil {
+		var sessions []map[string]any
+		json.Unmarshal(data, &sessions)
+		for _, s := range sessions {
+			if sid, _ := s["id"].(string); sid == id {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		return fmt.Errorf("session not found: %s\nRun 'harness sessions --all' to see all sessions.", id)
+	}
 
 	_, err = c.DeleteSession(id)
 	if err != nil {

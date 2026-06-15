@@ -163,7 +163,7 @@ type TUI struct {
 	overrideModel    string // from --model flag (takes priority over settings)
 	overrideThinking string // from --thinking flag
 	resumeID         string // from --resume flag (resume instead of create)
-	sseCancel   context.CancelFunc
+	sseCancelFn context.CancelFunc // persistent SSE, cancelled on quit
 
 	// tview
 	app       *tview.Application
@@ -693,6 +693,7 @@ func (t *TUI) autoConnect() {
 				t.updateInfo()
 			})
 			t.renderHistory()
+			t.startSSE()
 			return
 		}
 	}
@@ -711,6 +712,7 @@ func (t *TUI) autoConnect() {
 	}
 	t.loadStatsFromSession(sess)
 	t.loadSessionCommands()
+	t.startSSE()
 	t.app.QueueUpdateDraw(func() { t.updateInfo() })
 }
 
@@ -831,11 +833,23 @@ func (t *TUI) closeCurrentSession() {
 	if t.sessionID == "" {
 		return
 	}
-	if t.sseCancel != nil {
-		t.sseCancel()
-	}
 	t.client.CloseSession(t.sessionID) //nolint
 	t.sessionID = ""
+	// Cancel persistent SSE
+	if t.sseCancelFn != nil {
+		t.sseCancelFn()
+		t.sseCancelFn = nil
+	}
+}
+
+// startSSE opens a persistent SSE connection that stays alive until quit.
+func (t *TUI) startSSE() {
+	if t.sessionID == "" {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.sseCancelFn = cancel
+	go t.streamEvents(ctx)
 }
 
 // isSubscriptionProvider returns true if the provider is subscription/OAuth type.
@@ -1210,34 +1224,20 @@ func (t *TUI) handleInput(text string) {
 	status := resp["status"]
 
 	if status == "queued" {
-		// Prompt was queued — don't cancel SSE, don't show user message yet
+		// Prompt queued — SSE is persistent, just track for display
 		t.queueCount++
 		t.localQueue = append(t.localQueue, tview.Escape(text))
 		t.spinning = true
-		// If no active SSE, start one (first prompt ever queued somehow? shouldn't happen, but defensive)
-		if t.sseCancel == nil {
-			ctx, cancel := context.WithCancel(context.Background())
-			t.sseCancel = cancel
-			go t.streamEvents(ctx)
-		}
 		t.app.QueueUpdateDraw(func() { t.updateInfo() })
 		return
 	}
 
-	// Prompt started immediately — show user message and start streaming
+	// Prompt started immediately — show user message
 	t.appendLine(clrUser + "❯ " + tview.Escape(text) + clrReset + "\n\n")
 
-	// Clear any stale queue state (previous queued prompts processed by now)
 	t.queueCount = 0
 	t.localQueue = nil
-
 	t.spinning = true
-	if t.sseCancel != nil {
-		t.sseCancel()
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.sseCancel = cancel
-	go t.streamEvents(ctx)
 }
 
 func (t *TUI) handleCommand(text string) {
@@ -1412,14 +1412,8 @@ func (t *TUI) handleCommand(text string) {
 	})
 
 	// Commands that trigger agent streaming
-	if cmd == "compact" || cmd == "model" || strings.HasPrefix(cmd, "skill:") {
-		if t.sseCancel != nil {
-			t.sseCancel()
-		}
+	if cmd == "compact" || strings.HasPrefix(cmd, "skill:") {
 		t.spinning = true
-		ctx, cancel := context.WithCancel(context.Background())
-		t.sseCancel = cancel
-		go t.streamEvents(ctx)
 	}
 }
 
@@ -1543,31 +1537,28 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				t.app.QueueUpdateDraw(func() { t.updateInfo() })
 
 			case "turn_end":
-				// close last open block
-				if inThinking || inText {
-					t.appendLine("\n\n")
-				}
-				// Process queue: if there are pending prompts, show next one
-				if t.queueCount > 0 && len(t.localQueue) > 0 {
-					msg := t.localQueue[0]
-					t.localQueue = t.localQueue[1:]
-					t.queueCount--
-					t.appendLine(clrUser + "❯ " + msg + clrReset + "\n\n")
-					t.app.QueueUpdateDraw(func() { t.updateInfo() })
-					// Reset streaming flags, keep going for next turn
-					inThinking = false
-					inText = false
-					continue
-				}
-				t.spinning = false
-				return
-
-			case "error":
-				msg, _ := evt["message"].(string)
-				t.appendLine(fmt.Sprintf(clrError+"✗ %s"+clrReset+"\n\n", msg))
-				t.spinning = false
-				return
+			if inThinking || inText {
+				t.appendLine("\n\n")
 			}
+			if t.queueCount > 0 && len(t.localQueue) > 0 {
+				msg := t.localQueue[0]
+				t.localQueue = t.localQueue[1:]
+				t.queueCount--
+				t.appendLine(clrUser + "❯ " + msg + clrReset + "\n\n")
+				t.app.QueueUpdateDraw(func() { t.updateInfo() })
+				inThinking = false
+				inText = false
+				continue // keep spinning for next turn
+			}
+			t.spinning = false
+			// Persistent SSE — keep streaming
+
+		case "error":
+			msg, _ := evt["message"].(string)
+			t.appendLine(fmt.Sprintf(clrError+"✗ %s"+clrReset+"\n\n", msg))
+			t.spinning = false
+			// Persistent SSE — keep streaming
+		}
 		}
 	}
 }
