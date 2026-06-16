@@ -360,19 +360,6 @@ func (s *Session) SwitchThinking(level string) error {
 	return nil
 }
 
-const compactSystemPrompt = `Your task is to produce a concise but complete summary of the conversation so far.
-This summary will REPLACE the full conversation history — it must contain everything
-needed to continue the work without losing context.
-
-Include:
-1. What was asked / the goal
-2. What has been done (decisions made, files changed, commands run, key findings)
-3. Current state — what is working, what is pending
-4. Any critical context (errors encountered, constraints, important details)
-
-Be specific and factual. Use bullet points. Do NOT ask questions or add commentary.
-Respond with ONLY the summary text.`
-
 // Compact summarizes the conversation via LLM and stores a checkpoint.
 //
 // Events emitted:
@@ -647,12 +634,8 @@ func (s *Session) updateStats(se types.StreamEvent) {
 // Asks the model to summarize progress and check with the user on next steps.
 // The response IS streamed to the transport via EventStreamTextDelta.
 func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
-	const summaryPrompt = "You've reached the maximum number of tool calls allowed for this turn. " +
-		"Please summarize: (1) what you have completed so far, (2) what still needs to be done, " +
-		"and (3) ask the user if they want you to continue or if they'd like to change direction."
-
 	// Inject summary request into history
-	if err := s.store.AddMessage(types.NewUserTextMessage(summaryPrompt)); err != nil {
+	if err := s.store.AddMessage(types.NewUserTextMessage(maxTurnsPrompt)); err != nil {
 		return "", err
 	}
 

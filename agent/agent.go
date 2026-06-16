@@ -52,9 +52,6 @@ type AgentOptions struct {
 	//                                         // pass NilLoader{} to disable discovery
 }
 
-// defaultSystemPrompt is used when AgentOptions.SystemPrompt is empty.
-const defaultSystemPrompt = `You are an expert coding agent working directly in the user's codebase. You have access to tools for reading, writing, and editing files, running shell commands, and fetching URLs.`
-
 // New creates a new Agent. Never fails — provider is resolved per session.
 func New(opts AgentOptions) *Agent {
 	if opts.MaxTurns <= 0 {
@@ -251,8 +248,6 @@ func (a *Agent) buildSessionTools(cwd, model string, res *resources.Resources, l
 				}
 			}
 			// Create ephemeral sub-agent inheriting parent settings
-			const subagentSystemPrompt = `You are a focused sub-agent. Execute the delegated task completely and autonomously.
-Make reasonable assumptions. Return full results — do not truncate. Never ask questions.`
 			subAgent := New(AgentOptions{
 				ThinkingLevel: parentA.thinkingLevel,
 				SystemPrompt:  subagentSystemPrompt,
