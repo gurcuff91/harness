@@ -1613,7 +1613,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				args = strings.TrimPrefix(args, "{")
 				args = strings.TrimSuffix(args, "}")
 				args = strings.TrimSpace(args)
-				if len(args) > 120 { args = args[:120] + "..." }
+// no truncation — show full args
 				argRegion := "arg-" + toolID
 				regStart := `["` + argRegion + `"]`
 				regEnd   := `[""]`
