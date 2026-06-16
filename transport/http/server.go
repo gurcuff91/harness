@@ -518,7 +518,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	ch := make(chan []byte, 64)
+	ch := make(chan []byte, 1024)
 	proxy.addClient(ch)
 	defer proxy.removeClient(ch)
 

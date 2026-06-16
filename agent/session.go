@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -480,12 +481,19 @@ func (s *Session) Close() error {
 
 // ── Internals ───────────────────────────────────────────────────────────
 
-// runStream is one ReAct iteration: stream LLM → execute tools during stream.
+// pendingToolCall holds a tool call collected during streaming, ready for parallel execution.
+type pendingToolCall struct {
+	toolID   string
+	toolName string
+	toolArgs json.RawMessage
+}
+
+// runStream is one ReAct iteration: stream LLM → collect tool calls → execute all in parallel.
 func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Response, []types.ToolResult, error) {
 	var (
-		hadThinking   bool
-		hadText       bool
-		streamResults []types.ToolResult
+		hadThinking  bool
+		hadText      bool
+		pendingCalls []pendingToolCall
 	)
 
 	resp, err := s.provider.CompleteStream(ctx, req, func(se types.StreamEvent) {
@@ -517,18 +525,14 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 			s.emit(types.Event{Type: types.EventToolArgsDelta, ToolID: se.ToolID, ToolName: se.ToolName, Delta: se.Delta})
 
 		case types.StreamToolEnd:
+			// Emit tool_call event (args finalized) then queue for parallel execution
 			if len(se.ToolArgs) > 0 {
 				s.emit(types.Event{Type: types.EventToolCall, ToolID: se.ToolID, ToolName: se.ToolName, ToolArgs: string(se.ToolArgs)})
-				start := time.Now()
-				output, execErr := s.tools.Run(se.ToolName, se.ToolArgs)
-				dur := time.Since(start)
-				const maxOut = 15000
-				if len(output) > maxOut {
-					output = output[:maxOut] + "\n...(truncated)"
-				}
-				isErr := execErr != nil
-				s.emit(types.Event{Type: types.EventToolResult, ToolID: se.ToolID, ToolName: se.ToolName, Output: output, Duration: dur, IsError: isErr})
-				streamResults = append(streamResults, types.ToolResult{ID: se.ToolID, Output: output, IsErr: isErr})
+				pendingCalls = append(pendingCalls, pendingToolCall{
+					toolID:   se.ToolID,
+					toolName: se.ToolName,
+					toolArgs: se.ToolArgs,
+				})
 			}
 
 		case types.StreamUsage:
@@ -548,8 +552,44 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 			s.emit(types.Event{Type: types.EventError, Message: se.Delta})
 		}
 	})
+	if err != nil {
+		return resp, nil, err
+	}
 
-	return resp, streamResults, err
+	// Execute all pending tool calls in parallel, emit results as they complete.
+	if len(pendingCalls) == 0 {
+		return resp, nil, nil
+	}
+
+	var (
+		wg           sync.WaitGroup
+		resultsMu    sync.Mutex
+		streamResults []types.ToolResult
+	)
+
+	for _, call := range pendingCalls {
+		call := call // capture
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			start := time.Now()
+			output, execErr := s.tools.Run(call.toolName, call.toolArgs)
+			dur := time.Since(start)
+			const maxOut = 15000
+			if len(output) > maxOut {
+				output = output[:maxOut] + "\n...(truncated)"
+			}
+			isErr := execErr != nil
+			// Emit result immediately as this tool finishes (not waiting for others)
+			s.emit(types.Event{Type: types.EventToolResult, ToolID: call.toolID, ToolName: call.toolName, Output: output, Duration: dur, IsError: isErr})
+			resultsMu.Lock()
+			streamResults = append(streamResults, types.ToolResult{ID: call.toolID, Output: output, IsErr: isErr})
+			resultsMu.Unlock()
+		}()
+	}
+	wg.Wait() // wait for ALL tools before next ReAct iteration
+
+	return resp, streamResults, nil
 }
 
 // updateStats accumulates token counts, calculates cost and context%, then emits EventTokens.

@@ -195,6 +195,8 @@ type TUI struct {
 	compactStart time.Time
 	queueCount   int      // number of prompts waiting in the session queue
 	localQueue   []string // pending user messages (for display)
+	outputBuf    strings.Builder    // tracks full output content for slot replacement
+	toolSlots    map[string]int     // toolID → 1 if slot reserved (region-based)
 	stats        tokensInfo
 }
 
@@ -261,6 +263,7 @@ func (t *TUI) buildUI() {
 	// Output: scrollable, dynamic colors, tracks end
 	t.output = tview.NewTextView().
 		SetDynamicColors(true).
+		SetRegions(true).
 		SetScrollable(true).
 		SetWordWrap(true).
 		SetWrap(true).
@@ -1442,10 +1445,47 @@ func (t *TUI) listModels() {
 	t.appendLine("\n")
 }
 
-// appendLine writes to the TextView safely from any goroutine (not the UI thread).
+// appendLine writes to the TextView and tracks content for slot replacement.
 func (t *TUI) appendLine(s string) {
 	t.app.QueueUpdateDraw(func() {
+		t.outputBuf.WriteString(s)
 		fmt.Fprint(t.output, s)
+		t.output.ScrollToEnd()
+	})
+}
+
+func (t *TUI) reserveSlot(toolID, toolName string) {
+	if t.toolSlots == nil {
+		t.toolSlots = make(map[string]int)
+	}
+	t.toolSlots[toolID] = 1
+	tClr, _ := toolStyle(toolName)
+	placeholder := `["` + toolID + `"]` + tClr + "\u29d6 Executing..." + `[""]`
+	t.appendLine(placeholder + "\n\n")
+}
+
+func (t *TUI) fillSlot(toolID, toolName, result string) {
+	if t.toolSlots == nil {
+		t.appendLine(result)
+		return
+	}
+	if _, ok := t.toolSlots[toolID]; !ok {
+		t.appendLine(result)
+		return
+	}
+	delete(t.toolSlots, toolID)
+	tClr2, _ := toolStyle(toolName)
+	placeholder := `["` + toolID + `"]` + tClr2 + "\u29d6 Executing..." + `[""]` + "\n\n"
+	t.app.QueueUpdateDraw(func() {
+		old := t.outputBuf.String()
+		newContent := strings.Replace(old, placeholder, result, 1)
+		if newContent == old {
+			// Placeholder not found (shouldn't happen) — just append
+			newContent = old + result
+		}
+		t.outputBuf.Reset()
+		t.outputBuf.WriteString(newContent)
+		t.output.SetText(newContent)
 		t.output.ScrollToEnd()
 	})
 }
@@ -1516,20 +1556,25 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				}
 
 			case "tool_call":
-				// Close paren + newline before result
+				toolID, _ := evt["tool_id"].(string)
+				toolNameCall, _ := evt["tool_name"].(string)
 				t.appendLine(curToolClr + ")" + clrReset + "\n")
+				t.reserveSlot(toolID, toolNameCall)
 
 			case "tool_result":
+				toolID, _ := evt["tool_id"].(string)
+				toolNameRes, _ := evt["tool_name"].(string)
 				output, _ := evt["output"].(string)
 				dur, _ := floatFromMap(evt, "duration")
 				isErr, _ := evt["is_error"].(bool)
 				safe := strings.ReplaceAll(summarize(output), "[", "[[")
-				// result + trailing blank line (next block starts clean)
+				var result string
 				if isErr {
-					t.appendLine(fmt.Sprintf(clrToolErr+"✗"+clrReset+" [::d]%s (%.0fms)[-:-:-]\n\n", safe, dur))
+					result = fmt.Sprintf(clrToolErr+"✗"+clrReset+" [::d]%s (%.0fms)[-:-:-]\n\n", safe, dur)
 				} else {
-					t.appendLine(fmt.Sprintf(clrToolOK+"✓"+clrReset+" [::d]%s (%.0fms)[-:-:-]\n\n", safe, dur))
+					result = fmt.Sprintf(clrToolOK+"✓"+clrReset+" [::d]%s (%.0fms)[-:-:-]\n\n", safe, dur)
 				}
+				t.fillSlot(toolID, toolNameRes, result)
 
 			case "compact_start":
 				t.compactStart = time.Now()
@@ -1562,6 +1607,8 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				}
 				inThinking = false
 				inText = false
+				// Clear slot tracking for next turn
+				t.app.QueueUpdateDraw(func() { t.toolSlots = nil })
 				if t.queueCount > 0 && len(t.localQueue) > 0 {
 					msg := t.localQueue[0]
 					t.localQueue = t.localQueue[1:]

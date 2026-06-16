@@ -256,11 +256,12 @@ Make reasonable assumptions. Return full results — do not truncate. Never ask 
 			subAgent := New(AgentOptions{
 				ThinkingLevel: parentA.thinkingLevel,
 				SystemPrompt:  subagentSystemPrompt,
-				MaxTurns:       parentA.maxTurns,
-				MaxTokens:      parentA.maxTokens,
-				Store:          store.NewInMemorySessionStoreManager(),
-				ResourceLoader: loader, // inherit skills from parent
-				AllowedTools:   allowed,
+				MaxTurns:      parentA.maxTurns,
+				MaxTokens:     parentA.maxTokens,
+				Store:         store.NewInMemorySessionStoreManager(),
+				// Each subagent gets its OWN loader instance — FileResourceLoader is not goroutine-safe
+				ResourceLoader: resources.NewFileResourceLoader(cwd),
+				AllowedTools:  allowed,
 			})
 			sess, err := subAgent.NewSession(cwd, model)
 			if err != nil {
