@@ -195,8 +195,9 @@ type TUI struct {
 	compactStart time.Time
 	queueCount   int      // number of prompts waiting in the session queue
 	localQueue   []string // pending user messages (for display)
-	outputBuf    strings.Builder    // tracks full output content for slot replacement
-	toolSlots    map[string]int     // toolID → 1 if slot reserved (region-based)
+	outputBuf    strings.Builder // full output content (only touched from uiOps goroutine)
+	toolSlots    map[string]int  // toolID → 1 if slot reserved
+	uiOps        chan func()     // serialized UI operations (written from stream goroutine, drained by uiOps goroutine)
 	stats        tokensInfo
 }
 
@@ -227,6 +228,11 @@ func (t *TUI) Run(ctx context.Context) error {
 	t.addr = addr
 	defer srv.Close()
 	t.client = NewClient(addr)
+
+	// uiOps: serialized channel for all outputBuf mutations.
+	// The drain goroutine executes each op, then does ONE QueueUpdateDraw.
+	t.uiOps = make(chan func(), 4096)
+	go t.drainUIops(ctx)
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -932,9 +938,7 @@ func (t *TUI) validateCurrentModel() {
 }
 
 func (t *TUI) showWarn(msg string) {
-	t.app.QueueUpdateDraw(func() {
-		fmt.Fprintf(t.output, clrWarn+"⚠ %s"+clrReset+"\n\n", msg)
-	})
+	t.appendLine(fmt.Sprintf(clrWarn+"⚠ %s"+clrReset+"\n\n", msg))
 }
 
 // ── Custom input & palette ──────────────────────────────────────────────────
@@ -1419,13 +1423,10 @@ func (t *TUI) handleCommand(text string) {
 		}
 	}
 
-	// Confirmation + redraw info in one shot
+	// Confirmation — route through uiOps for ordering, then update info
 	confirm := fmt.Sprintf(clrConfirm+"%s"+clrReset+"\n\n", strings.Join(parts, " "))
-	t.app.QueueUpdateDraw(func() {
-		fmt.Fprint(t.output, confirm)
-		t.output.ScrollToEnd()
-		t.updateInfo()
-	})
+	t.appendLine(confirm)
+	t.app.QueueUpdateDraw(func() { t.updateInfo() })
 
 	// Commands that trigger agent streaming
 	if cmd == "compact" || strings.HasPrefix(cmd, "skill:") {
@@ -1445,49 +1446,64 @@ func (t *TUI) listModels() {
 	t.appendLine("\n")
 }
 
-// appendLine writes to the TextView and tracks content for slot replacement.
-func (t *TUI) appendLine(s string) {
-	t.app.QueueUpdateDraw(func() {
-		t.outputBuf.WriteString(s)
-		fmt.Fprint(t.output, s)
-		t.output.ScrollToEnd()
-	})
+// drainUIops runs in its own goroutine and serializes all outputBuf mutations.
+// Each op mutates outputBuf (no lock needed — single goroutine), then one QueueUpdateDraw refreshes tview.
+func (t *TUI) drainUIops(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case op, ok := <-t.uiOps:
+			if !ok {
+				return
+			}
+			op()
+			snap := t.outputBuf.String()
+			t.app.QueueUpdateDraw(func() {
+				t.output.SetText(snap)
+				t.output.ScrollToEnd()
+			})
+		}
+	}
 }
 
+// appendLine enqueues a text append. Safe to call from any goroutine.
+func (t *TUI) appendLine(s string) {
+	t.uiOps <- func() { t.outputBuf.WriteString(s) }
+}
+
+// reserveSlot appends the ⧖ Executing... placeholder inside uiOps (serialized).
+// toolSlots tracking is also done inside the op so it's always consistent with outputBuf.
 func (t *TUI) reserveSlot(toolID, toolName string) {
-	if t.toolSlots == nil {
-		t.toolSlots = make(map[string]int)
-	}
-	t.toolSlots[toolID] = 1
 	tClr, _ := toolStyle(toolName)
 	placeholder := `["` + toolID + `"]` + tClr + "\u29d6 Executing..." + `[""]`
-	t.appendLine(placeholder + "\n\n")
+	t.uiOps <- func() {
+		if t.toolSlots == nil {
+			t.toolSlots = make(map[string]int)
+		}
+		t.toolSlots[toolID] = 1
+		t.outputBuf.WriteString(placeholder + "\n\n")
+	}
 }
 
+// fillSlot replaces the Executing... placeholder with result, serialized inside uiOps.
 func (t *TUI) fillSlot(toolID, toolName, result string) {
-	if t.toolSlots == nil {
-		t.appendLine(result)
-		return
-	}
-	if _, ok := t.toolSlots[toolID]; !ok {
-		t.appendLine(result)
-		return
-	}
-	delete(t.toolSlots, toolID)
-	tClr2, _ := toolStyle(toolName)
-	placeholder := `["` + toolID + `"]` + tClr2 + "\u29d6 Executing..." + `[""]` + "\n\n"
-	t.app.QueueUpdateDraw(func() {
+	tClr, _ := toolStyle(toolName)
+	placeholder := `["` + toolID + `"]` + tClr + "\u29d6 Executing..." + `[""]` + "\n\n"
+	t.uiOps <- func() {
+		if t.toolSlots == nil || t.toolSlots[toolID] == 0 {
+			t.outputBuf.WriteString(result)
+			return
+		}
+		delete(t.toolSlots, toolID)
 		old := t.outputBuf.String()
 		newContent := strings.Replace(old, placeholder, result, 1)
 		if newContent == old {
-			// Placeholder not found (shouldn't happen) — just append
 			newContent = old + result
 		}
 		t.outputBuf.Reset()
 		t.outputBuf.WriteString(newContent)
-		t.output.SetText(newContent)
-		t.output.ScrollToEnd()
-	})
+	}
 }
 
 // ── SSE streaming ─────────────────────────────────────────────────────────
@@ -1503,7 +1519,10 @@ func (t *TUI) streamEvents(ctx context.Context) {
 	// track where we are in output so we can add blank lines between blocks
 	inThinking := false
 	inText := false
-	var curToolClr = clrToolName // color of current tool, used across tool_start/tool_call
+	toolColors := make(map[string]string) // toolID → color
+	toolIcons  := make(map[string]string) // toolID → icon
+	toolNames  := make(map[string]string) // toolID → name
+	var curToolClr = clrToolName
 
 	for {
 		select {
@@ -1534,32 +1553,56 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				t.appendLine(strings.ReplaceAll(delta, "[", "[["))
 
 			case "tool_start":
-				// close any open block
 				if inThinking || inText {
-					t.appendLine("\n\n")
+					t.appendLine("\n")
 					inThinking = false
 					inText = false
 				}
 				name, _ := evt["tool_name"].(string)
-				// Bold amber tool name + opening paren
+				toolID, _ := evt["tool_id"].(string)
 				tClr, tIco := toolStyle(name)
 				curToolClr = tClr
-				t.appendLine(tClr + "[::b]" + tIco + " " + tview.Escape(name) + "[-:-:-]" + tClr + "(" + clrReset)
+				toolColors[toolID] = tClr
+				toolIcons[toolID] = tIco
+				toolNames[toolID] = name
+				// Nothing written yet — full block written atomically in tool_call
 
 			case "tool_args":
-				delta, _ := evt["delta"].(string)
-				// Strip outer braces, content in dim
-				delta = strings.TrimPrefix(strings.TrimSpace(delta), "{")
-				delta = strings.TrimSuffix(strings.TrimSpace(delta), "}")
-				if delta != "" {
-					t.appendLine("[::d]" + strings.ReplaceAll(delta, "[", "[[") + "[-:-:-]")
-				}
+				// Ignored — args rendered from tool_call event (complete JSON)
 
 			case "tool_call":
 				toolID, _ := evt["tool_id"].(string)
-				toolNameCall, _ := evt["tool_name"].(string)
-				t.appendLine(curToolClr + ")" + clrReset + "\n")
-				t.reserveSlot(toolID, toolNameCall)
+				toolArgs, _ := evt["tool_args"].(string)
+				tc := toolColors[toolID]
+				if tc == "" {
+					tc = curToolClr
+				}
+				tIco := toolIcons[toolID]
+				tName := toolNames[toolID]
+				if tName == "" {
+					tName, _ = evt["tool_name"].(string)
+				}
+				tClr2, _ := toolStyle(tName)
+				placeholder := `["` + toolID + `"]` + tClr2 + "\u29d6 Executing..." + `[""]`
+				// Compact args: strip outer braces, truncate to 120 chars
+				args := strings.TrimSpace(toolArgs)
+				args = strings.TrimPrefix(args, "{")
+				args = strings.TrimSuffix(args, "}")
+				args = strings.TrimSpace(args)
+				if len(args) > 120 {
+					args = args[:120] + "..."
+				}
+				safeArgs := strings.ReplaceAll(args, "[", "[[")
+				header := "\n" + tc + "[::b]" + tIco + " " + tview.Escape(tName) + "[-:-:-]" + tc + "(" + "[::d]" + safeArgs + "[-:-:-]" + tc + ")" + clrReset + "\n"
+				// One atomic op: header + placeholder
+				t.uiOps <- func() {
+					if t.toolSlots == nil {
+						t.toolSlots = make(map[string]int)
+					}
+					t.toolSlots[toolID] = 1
+					t.outputBuf.WriteString(header)
+					t.outputBuf.WriteString(placeholder + "\n\n")
+				}
 
 			case "tool_result":
 				toolID, _ := evt["tool_id"].(string)
