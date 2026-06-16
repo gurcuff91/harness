@@ -2,7 +2,85 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.6.0] - 2026-06-01
+## [0.7.0] - 2026-06-15
+
+### TUI — Complete rewrite with tview
+- Replaced raw terminal rendering with `github.com/rivo/tview` for robust layout
+- Custom input via `app.SetInputCapture` (no InputField background issues)
+- Persistent SSE connection — opened once at session creation, closed on quit
+- Command palette with 2-level navigation, filter, Tab autocomplete, Esc to close
+- All commands loaded dynamically from `/api/sessions/{id}/commands` endpoint
+- Session-scoped commands: `model`, `thinking`, `rename`, `compact`, `skill:*`
+- Global commands: `connect`, `disconnect`, `resume`, `delete`, `quit`
+- `connect` supports OAuth flow via `transport/tui/oauth.go` (macOS keychain + `claude auth login`)
+- Esc stops the current agent turn immediately (calls `POST /api/sessions/{id}/stop`)
+- Resume hint printed on exit: `harness --resume <id>`
+- Prompt queue display: `[N queued]` in session info line
+- Spinner with 3-line reserved space (no layout jumps)
+- `shortenPath` — home dir replaced with `~` everywhere
+
+### Tool rendering — slot-based parallel display
+- `reserveSlot(toolID)` — writes `⧖ Executing...` placeholder using tview region tags
+- `fillSlot(toolID, result)` — replaces placeholder in-place via `SetText` when result arrives
+- Results appear directly below their tool call regardless of arrival order
+- Placeholder color matches tool type (amber=tools, violet=Subagent, blue=Skill)
+- Tool icons: `⚙` Bash/Fetch/File, `◈` Skill, `⬡` Subagent
+
+### Parallel tool execution
+- All tool calls in a ReAct iteration run concurrently via goroutines + `sync.WaitGroup`
+- Results emitted as each tool completes (not waiting for others)
+- `WaitGroup.Wait()` before next ReAct iteration ensures correct ordering
+- Esc cancels all parallel tools simultaneously via shared `context.Context`
+- `FileResourceLoader` race condition fixed — each subagent gets its own loader instance
+
+### Subagent tool
+- New `Subagent` tool — delegates tasks to ephemeral sub-agents
+- Sub-agent inherits model, thinking, maxTurns, maxTokens from parent
+- Sub-agent uses `InMemorySessionStoreManager` (ephemeral, not persisted)
+- Sub-agent gets its own `FileResourceLoader` (goroutine-safe)
+- Sub-agent cannot spawn further sub-agents (`ToolSubagent` excluded from allowed tools)
+- Closure-based design — `Agent` has zero knowledge of sub-agent mechanics
+- All tools receive `context.Context` for cancellation (`Execute(ctx, input)`)
+
+### CLI transport (`transport/cli/`)
+- `harness -p "prompt"` — single-turn CLI mode
+- `--output text|json|json-stream` — three output modes
+- `json` mode: array of events, one per line (valid JSON + JSONL-friendly)
+- `json-stream` mode: JSONL, one event per line in real time
+- `turn_start` event included (SSE opened before `SendPrompt`)
+
+### Subcommands
+- `harness providers` — list all providers with status
+- `harness connect <name>` — connect provider (validates existence, OAuth or API key)
+- `harness disconnect <name>` — disconnect provider (validates existence)
+- `harness sessions [--all]` — list sessions for CWD or all
+- `harness delete <id>` — delete session (validates existence)
+- `harness http <addr>` — HTTP server mode
+- `harness --resume <id>` — resume session in TUI
+- `harness --help` — full usage
+- Unknown commands return error with suggestion to use `--help`
+
+### HTTP API
+- `POST /api/sessions/{id}/stop` — cancel current turn (Stop button)
+- `GET /api/sessions/{id}/messages` — full message history via `AllMessages()`
+- `POST /api/sessions/{id}/commands` — `compact` now async (returns `started/queued`)
+- `GET /api/sessions/{id}/commands` — `model` param now includes all active model IDs in `values[]`
+- `POST /api/providers/{name}/connect` — validates credentials in-memory before persisting
+- `POST /api/providers/{name}/disconnect` — persists to settings
+
+### Agent core
+- `Session.Stop()` — cancels current turn only (queued prompts continue)
+- `Session.AllMessages()` — returns full history including pre-compaction messages
+- `Session.Prompt()` now returns `types.PromptStatus` (`PromptStarted` | `PromptQueued`)
+- `Session.Messages()` removed from public API (use `AllMessages()` for display)
+- `types.EventStop` — emitted when turn is cancelled by user
+- `types.MessageMeta{IsCompaction: bool}` — marks compaction messages (no string matching)
+- `store.CompactionMessage()` — moved to `store.go` as shared helper
+- `FileSessionStore` fully decoupled from `InMemorySessionStore` (own fields, own lock)
+- `FileSessionStore.UpdateMeta()` — immediately persists to disk (fixes rename not saving)
+- `store.AllMessages()` — reads full JSONL from disk (offset 0) for history display
+- `drainFollowUps` — fresh cancellable context per turn (fixes cascading cancellation bug)
+
 
 ### Architecture — Major Redesign
 
