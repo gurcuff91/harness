@@ -573,14 +573,17 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 		go func() {
 			defer wg.Done()
 			start := time.Now()
-			output, execErr := s.tools.Run(call.toolName, call.toolArgs)
+			output, execErr := s.tools.Run(ctx, call.toolName, call.toolArgs)
 			dur := time.Since(start)
+			// If ctx was cancelled (Stop), skip emitting — EventStop handles it
+			if ctx.Err() != nil {
+				return
+			}
 			const maxOut = 15000
 			if len(output) > maxOut {
 				output = output[:maxOut] + "\n...(truncated)"
 			}
 			isErr := execErr != nil
-			// Emit result immediately as this tool finishes (not waiting for others)
 			s.emit(types.Event{Type: types.EventToolResult, ToolID: call.toolID, ToolName: call.toolName, Output: output, Duration: dur, IsError: isErr})
 			resultsMu.Lock()
 			streamResults = append(streamResults, types.ToolResult{ID: call.toolID, Output: output, IsErr: isErr})

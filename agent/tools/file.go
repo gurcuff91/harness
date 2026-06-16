@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -31,7 +32,7 @@ func ReadFile() Tool {
 				"required": ["path"]
 			}`),
 		},
-		Execute: func(input json.RawMessage) (string, error) {
+		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
 			var args readFileInput
 			if err := json.Unmarshal(input, &args); err != nil {
 				return fmt.Sprintf("Error parsing input: %v", err), err
@@ -83,7 +84,7 @@ func WriteFile() Tool {
 				"required": ["path", "content"]
 			}`),
 		},
-		Execute: func(input json.RawMessage) (string, error) {
+		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
 			var args writeFileInput
 			if err := json.Unmarshal(input, &args); err != nil {
 				return fmt.Sprintf("Error parsing input: %v", err), err

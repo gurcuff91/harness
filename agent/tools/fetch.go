@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,7 +39,7 @@ func Fetch() Tool {
 				"required": ["url"]
 			}`),
 		},
-		Execute: func(input json.RawMessage) (string, error) {
+		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
 			var args fetchInput
 			if err := json.Unmarshal(input, &args); err != nil {
 				return fmt.Sprintf("Error parsing input: %v", err), err
@@ -51,7 +52,7 @@ func Fetch() Tool {
 			if args.Body != "" {
 				bodyReader = strings.NewReader(args.Body)
 			}
-			req, err := http.NewRequest(method, args.URL, bodyReader)
+			req, err := http.NewRequestWithContext(ctx, method, args.URL, bodyReader)
 			if err != nil {
 				return fmt.Sprintf("Error building request: %v", err), err
 			}

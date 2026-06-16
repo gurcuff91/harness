@@ -29,7 +29,7 @@ func Subagent(executor SubagentExecutor) Tool {
 			Description: "Delegate a self-contained task to a sub-agent that runs autonomously.\nUse for parallel work (fetch multiple URLs, analyze multiple files) or isolated subtasks.\nThe sub-agent has the same tools. Invoke multiple times simultaneously for parallelism.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"prompt":{"type":"string","description":"The complete task or question for the sub-agent."}},"required":["prompt"]}`),
 		},
-		Execute: func(input json.RawMessage) (string, error) {
+		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
 			var req subagentInput
 			if err := json.Unmarshal(input, &req); err != nil {
 				return "", fmt.Errorf("subagent: invalid input: %w", err)
@@ -38,10 +38,11 @@ func Subagent(executor SubagentExecutor) Tool {
 				return "", fmt.Errorf("subagent: prompt is required")
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			// Combine caller ctx (Stop cancellation) + 5min timeout
+			ctx2, cancel := context.WithTimeout(ctx, 5*time.Minute)
 			defer cancel()
 
-			return executor(ctx, req.Prompt)
+			return executor(ctx2, req.Prompt)
 		},
 	}
 }

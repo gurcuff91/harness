@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -16,7 +17,7 @@ func Skill(readFn func(name string) (string, error)) Tool {
 			Description: "Read the full instructions for a skill by name. Use this to load a skill before executing it.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","description":"Name of the skill to load"}},"required":["name"]}`),
 		},
-		Execute: func(input json.RawMessage) (string, error) {
+		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
 			var params struct {
 				Name string `json:"name"`
 			}

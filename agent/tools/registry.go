@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -8,12 +9,10 @@ import (
 )
 
 // Tool defines a single tool that the agent can use.
-// Execute returns (string, error):
-//   - string: always sent to the LLM (even on error)
-//   - error: Go-level signal — used to set IsError on the event/result
+// Execute receives a context for cancellation — tools should respect ctx.Done().
 type Tool struct {
 	Def     types.ToolDef
-	Execute func(input json.RawMessage) (string, error)
+	Execute func(ctx context.Context, input json.RawMessage) (string, error)
 }
 
 // Registry manages available tools.
@@ -26,7 +25,6 @@ func NewRegistry() *Registry {
 	return &Registry{tools: make(map[string]Tool)}
 }
 
-// Register adds a tool to the registry.
 func (r *Registry) Register(t Tool) {
 	if _, exists := r.tools[t.Def.Name]; !exists {
 		r.order = append(r.order, t.Def.Name)
@@ -34,7 +32,6 @@ func (r *Registry) Register(t Tool) {
 	r.tools[t.Def.Name] = t
 }
 
-// Definitions returns tool schemas in registration order.
 func (r *Registry) Definitions() []types.ToolDef {
 	defs := make([]types.ToolDef, 0, len(r.order))
 	for _, name := range r.order {
@@ -43,7 +40,6 @@ func (r *Registry) Definitions() []types.ToolDef {
 	return defs
 }
 
-// Clone returns a shallow copy of the registry preserving order.
 func (r *Registry) Clone() *Registry {
 	c := NewRegistry()
 	for _, name := range r.order {
@@ -53,18 +49,16 @@ func (r *Registry) Clone() *Registry {
 	return c
 }
 
-// Get returns a tool by name. Returns zero value if not found.
 func (r *Registry) Get(name string) Tool {
 	return r.tools[name]
 }
 
-// Run executes a tool by name with the given input.
-// Returns (text, error) — text always goes to the LLM, error signals failure.
-func (r *Registry) Run(name string, input json.RawMessage) (string, error) {
+// Run executes a tool by name, passing ctx for cancellation.
+func (r *Registry) Run(ctx context.Context, name string, input json.RawMessage) (string, error) {
 	t, ok := r.tools[name]
 	if !ok {
 		err := fmt.Errorf("unknown tool: %s", name)
 		return err.Error(), err
 	}
-	return t.Execute(input)
+	return t.Execute(ctx, input)
 }
