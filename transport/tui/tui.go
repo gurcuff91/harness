@@ -1522,6 +1522,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 	toolColors := make(map[string]string) // toolID → color
 	toolIcons  := make(map[string]string) // toolID → icon
 	toolNames  := make(map[string]string) // toolID → name
+	argBufs    := make(map[string]string) // toolID → accumulated args so far
 	var curToolClr = clrToolName
 
 	for {
@@ -1565,43 +1566,90 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				toolColors[toolID] = tClr
 				toolIcons[toolID] = tIco
 				toolNames[toolID] = name
-				// Nothing written yet — full block written atomically in tool_call
+				argBufs[toolID] = ""
+				// Write header with empty arg region — args stream in via tool_args deltas
+				argRegion := "arg-" + toolID
+				headerLine := "\n" + tClr + "[::b]" + tIco + " " + tview.Escape(name) + "[-:-:-]" + tClr + `(["` + argRegion + `"][""]` + tClr + ")" + clrReset + "\n"
+				t.uiOps <- func() { t.outputBuf.WriteString(headerLine) }
 
 			case "tool_args":
-				// Ignored — args rendered from tool_call event (complete JSON)
+				delta, _ := evt["delta"].(string)
+				if delta == "" {
+					break
+				}
+				toolID, _ := evt["tool_id"].(string)
+				argBufs[toolID] += delta
+				current := argBufs[toolID]
+				argRegion := "arg-" + toolID
+				// Build old and new region tags — replace current content with accumulated
+				regStart := `["` + argRegion + `"]`
+				regEnd   := `[""]`
+				safe := strings.ReplaceAll(current, "[", "[[")
+				newReg := regStart + "[::d]" + safe + "[-:-:-]" + regEnd
+				t.uiOps <- func() {
+					old := t.outputBuf.String()
+					// Find the arg region and replace everything between regStart and regEnd
+					si := strings.Index(old, regStart)
+					if si < 0 { return }
+					ei := strings.Index(old[si+len(regStart):], regEnd)
+					if ei < 0 { return }
+					ei = si + len(regStart) + ei + len(regEnd)
+					newContent := old[:si] + newReg + old[ei:]
+					t.outputBuf.Reset()
+					t.outputBuf.WriteString(newContent)
+				}
 
 			case "tool_call":
 				toolID, _ := evt["tool_id"].(string)
 				toolArgs, _ := evt["tool_args"].(string)
 				tc := toolColors[toolID]
-				if tc == "" {
-					tc = curToolClr
-				}
-				tIco := toolIcons[toolID]
+				if tc == "" { tc = curToolClr }
 				tName := toolNames[toolID]
-				if tName == "" {
-					tName, _ = evt["tool_name"].(string)
-				}
+				if tName == "" { tName, _ = evt["tool_name"].(string) }
 				tClr2, _ := toolStyle(tName)
-				placeholder := `["` + toolID + `"]` + tClr2 + "\u29d6 Executing..." + `[""]`
-				// Compact args: strip outer braces, truncate to 120 chars
+				resPlaceholder := `["` + toolID + `"]` + tClr2 + "\u29d6 Executing..." + `[""]`
+				// Final args: compact (strip braces, truncate)
 				args := strings.TrimSpace(toolArgs)
 				args = strings.TrimPrefix(args, "{")
 				args = strings.TrimSuffix(args, "}")
 				args = strings.TrimSpace(args)
-				if len(args) > 120 {
-					args = args[:120] + "..."
-				}
-				safeArgs := strings.ReplaceAll(args, "[", "[[")
-				header := "\n" + tc + "[::b]" + tIco + " " + tview.Escape(tName) + "[-:-:-]" + tc + "(" + "[::d]" + safeArgs + "[-:-:-]" + tc + ")" + clrReset + "\n"
-				// One atomic op: header + placeholder
+				if len(args) > 120 { args = args[:120] + "..." }
+				argRegion := "arg-" + toolID
+				regStart := `["` + argRegion + `"]`
+				regEnd   := `[""]`
+				finalReg := regStart + "[::d]" + strings.ReplaceAll(args, "[", "[[") + "[-:-:-]" + regEnd
 				t.uiOps <- func() {
-					if t.toolSlots == nil {
-						t.toolSlots = make(map[string]int)
-					}
+					if t.toolSlots == nil { t.toolSlots = make(map[string]int) }
 					t.toolSlots[toolID] = 1
-					t.outputBuf.WriteString(header)
-					t.outputBuf.WriteString(placeholder + "\n\n")
+					old := t.outputBuf.String()
+					// 1. Replace arg region with final compact args
+					si := strings.Index(old, regStart)
+					if si >= 0 {
+						ei := strings.Index(old[si+len(regStart):], regEnd)
+						if ei >= 0 {
+							ei = si + len(regStart) + ei + len(regEnd)
+							old = old[:si] + finalReg + old[ei:]
+						}
+					}
+					// 2. Insert result placeholder RIGHT AFTER the "\n" that closes this tool line.
+					//    Find the finalReg in old, then find the next "\n" after it.
+					insertAfter := finalReg
+					pos := strings.Index(old, insertAfter)
+					if pos >= 0 {
+						// advance past finalReg, then find the closing "\n" (the ) clrReset \n)
+						after := pos + len(insertAfter)
+						nl := strings.Index(old[after:], "\n")
+						if nl >= 0 {
+							insertAt := after + nl + 1 // position right after the \n
+							old = old[:insertAt] + resPlaceholder + "\n\n" + old[insertAt:]
+						} else {
+							old = old + resPlaceholder + "\n\n"
+						}
+					} else {
+						old = old + resPlaceholder + "\n\n"
+					}
+					t.outputBuf.Reset()
+					t.outputBuf.WriteString(old)
 				}
 
 			case "tool_result":
