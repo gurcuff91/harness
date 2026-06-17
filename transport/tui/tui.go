@@ -783,19 +783,8 @@ func (t *TUI) renderHistory() {
 		// Check compaction flag in meta
 		if meta, ok := msg["meta"].(map[string]any); ok {
 			if isCompaction, _ := meta["is_compaction"].(bool); isCompaction {
-				// Extract summary from text part
-				summary := ""
-				if parts, ok := msg["parts"].([]any); ok && len(parts) > 0 {
-					if p, ok := parts[0].(map[string]any); ok {
-						const prefix = "Previous conversation summary:\n\n"
-						full, _ := p["text"].(string)
-						summary = strings.TrimPrefix(full, prefix)
-					}
-				}
-				safe := tview.Escape(summarize(summary))
-				t.appendLine("\n" + clrCompact + "[::b]\u27f3 Compact()[-:-:-]" + clrCompact + "(\n" + clrReset)
-				t.appendLine(clrCompact + ")[-:-:-]\n")
-				t.appendLine(fmt.Sprintf(clrToolOK+"✓"+clrReset+" [::d]%s[-:-:-]\n\n", safe))
+				t.appendLine("\n" + clrCompact + "[::b]◎ Compacting[-:-:-]" + clrReset + "\n")
+				t.appendLine(clrToolOK + "✔" + clrReset + " [::d](history)[-:-:-]\n\n")
 				continue
 			}
 		}
@@ -839,9 +828,9 @@ func (t *TUI) renderHistory() {
 				}
 				safe := tview.Escape(summarize(output))
 				if isErr {
-					t.appendLine(fmt.Sprintf(clrToolErr+"✗"+clrReset+" [::d]%s[-:-:-]\n\n", safe))
+					t.appendLine(fmt.Sprintf(clrToolErr+"✘"+clrReset+" [::d]%s[-:-:-]\n\n", safe))
 				} else {
-					t.appendLine(fmt.Sprintf(clrToolOK+"✓"+clrReset+" [::d]%s[-:-:-]\n\n", safe))
+					t.appendLine(fmt.Sprintf(clrToolOK+"✔"+clrReset+" [::d]%s[-:-:-]\n\n", safe))
 				}
 			}
 		}
@@ -1511,7 +1500,7 @@ func (t *TUI) fillSlot(toolID, toolName, result string) {
 func (t *TUI) streamEvents(ctx context.Context) {
 	events, err := t.client.StreamEvents(ctx, t.sessionID)
 	if err != nil {
-		t.appendLine(fmt.Sprintf(clrError+"✗ %s"+clrReset+"\n\n", err.Error()))
+		t.appendLine(fmt.Sprintf(clrError+"✘ %s"+clrReset+"\n\n", err.Error()))
 		t.spinning = false
 		return
 	}
@@ -1659,7 +1648,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 					// First line inline after icon
 					first := strings.ReplaceAll(strings.TrimSpace(lines[0]), "[", "[[")
 					var sb strings.Builder
-					sb.WriteString(fmt.Sprintf(clrToolErr+"✗"+clrReset+" [::d][%s] %s[-:-:-]\n", formatDur(dur), first))
+					sb.WriteString(fmt.Sprintf(clrToolErr+"✘"+clrReset+" [::d][%s] %s[-:-:-]\n", formatDur(dur), first))
 					// Up to 2 detail lines indented
 					detail := lines[1:]
 					shown := 0
@@ -1692,20 +1681,19 @@ func (t *TUI) streamEvents(ctx context.Context) {
 					if count == 1 && lines[0] == "" {
 						count = 0
 					}
-					result = fmt.Sprintf(clrToolOK+"✓"+clrReset+" [::d][%s] (%d lines)[-:-:-]\n\n", formatDur(dur), count)
+					result = fmt.Sprintf(clrToolOK+"✔"+clrReset+" [::d][%s] (%d lines)[-:-:-]\n\n", formatDur(dur), count)
 				}
 				t.fillSlot(toolID, toolNameRes, result)
 
 			case "compact_start":
 				t.compactStart = time.Now()
-				t.appendLine(fmt.Sprintf("\n" + clrCompact + "[::b]⟳ Compact()[-:-:-]" + clrCompact + "(" + clrReset + "\n"))
+				t.appendLine("\n" + clrCompact + "[::b]◎ Compacting[-:-:-]" + clrReset + "\n")
 
 			case "compact_end":
 				dur := time.Since(t.compactStart).Milliseconds()
-				summary, _ := evt["summary"].(string)
-				safe := tview.Escape(summarize(summary))
-				t.appendLine(fmt.Sprintf(clrCompact + ")[-:-:-]\n"))
-				t.appendLine(fmt.Sprintf(clrToolOK+"✓"+clrReset+" [::d]%s (%dms)[-:-:-]\n\n", safe, dur))
+				t.appendLine(fmt.Sprintf(clrToolOK+"✔"+clrReset+" [::d][%s][-:-:-]\n\n", formatDur(float64(dur))))
+				t.spinning = false
+				t.app.QueueUpdateDraw(func() { t.updateInfo() })
 
 			case "stop":
 				t.appendLine("\n\n" + clrWarn + "⏹ Stopped" + clrReset + "\n\n")
@@ -1742,7 +1730,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 
 		case "error":
 			msg, _ := evt["message"].(string)
-			t.appendLine(fmt.Sprintf(clrError+"✗ %s"+clrReset+"\n\n", msg))
+			t.appendLine(fmt.Sprintf(clrError+"✘ %s"+clrReset+"\n\n", msg))
 			t.spinning = false
 			// Persistent SSE — keep streaming
 		}
@@ -1836,9 +1824,9 @@ func (t *TUI) updateInfo() {
 func toolStyle(name string) (clr, icon string) {
 	switch name {
 	case "Skill":
-		return clrToolSkill, "◈"
+		return clrToolSkill, "✦"
 	case "Subagent":
-		return clrToolSubagent, "⬡"
+		return clrToolSubagent, "⬢"
 	default:
 		return clrToolName, "⚙"
 	}
