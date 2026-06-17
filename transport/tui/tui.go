@@ -18,22 +18,15 @@ import (
 
 // ── Color palette ──────────────────────────────────────────────────────────
 const (
-	clrUser        = "[#5fafd7]" // user input (cyan medium)
-	clrThinking    = "[::d]"     // thinking block (ANSI dim)
-	clrToolName    = "[#ffaf5f]" // tool name (amber/orange)
-	clrToolSkill   = "[#87afd7]" // skill tool (steel blue)
-	clrToolSubagent = "[#af87d7]" // subagent tool (violet)
-	clrToolArgs    = "[#767676]" // tool args / metadata (neutral gray)
-	clrCompact     = "[#af87ff]" // compact operation (purple)
-	clrSpinner     = "[#87d7af]" // spinner (mint/seafoam)
-	clrToolOK      = "[#5faf5f]" // tool result success (green)
-	clrToolErr     = "[#ff5f5f]" // tool result error (red)
-	clrWarn        = "[#ffff5f]" // warning (yellow)
-	clrError       = "[#ff5f5f]" // error message (red)
-	clrFooter      = "[::d]"     // footer / info (ANSI dim)
-	clrConfirm     = "[::d]"     // command confirmation
-	clrPlaceholder = "[::d]"     // input placeholder
-	clrReset       = "[-:-:-]"   // reset color + attributes
+	clrPrimary = "[#5fafd7]" // cyan   — user input, spinner
+	clrAccent  = "[#d787af]" // mauve  — tool names, skill, subagent, compact
+	clrOK      = "[#5faf5f]" // green  — success
+	clrErr     = "[#ff5f5f]" // red    — errors
+	clrWarn    = "[#ffaf5f]" // amber  — warnings, stopped
+	clrDim     = "[::d]"     // dim    — thinking, footer, args, placeholders
+	clrReset   = "[-:-:-]"   // reset
+
+
 )
 
 // ── Palette types ─────────────────────────────────────────────────────────
@@ -550,7 +543,7 @@ func (t *TUI) renderPalette() {
 	var lines []string
 
 	if total == 0 {
-		lines = append(lines, clrFooter+"No matches"+clrReset)
+		lines = append(lines, clrDim+"No matches"+clrReset)
 	} else {
 		// Compute window
 		start := lv.sel - maxVisible/2
@@ -595,14 +588,14 @@ func (t *TUI) renderPalette() {
 				}
 			}
 			if i == lv.sel {
-				lines = append(lines, fmt.Sprintf(clrUser+"→"+clrReset+" %s%s"+clrFooter+"%s"+clrReset, it.name, pad, desc))
+				lines = append(lines, fmt.Sprintf(clrPrimary+"→"+clrReset+" %s%s"+clrDim+"%s"+clrReset, it.name, pad, desc))
 			} else {
-				lines = append(lines, fmt.Sprintf(clrFooter+"  %s%s%s"+clrReset, it.name, pad, desc))
+				lines = append(lines, fmt.Sprintf(clrDim+"  %s%s%s"+clrReset, it.name, pad, desc))
 			}
 		}
 		// Always show counter when total > maxVisible
 		if total > maxVisible {
-			lines = append(lines, fmt.Sprintf(clrFooter+"(%d/%d)"+clrReset, lv.sel+1, total))
+			lines = append(lines, fmt.Sprintf(clrDim+"(%d/%d)"+clrReset, lv.sel+1, total))
 		}
 	}
 
@@ -682,7 +675,7 @@ func (t *TUI) autoConnect() {
 
 	if t.resumeID != "" {
 		// Resume existing session
-		t.appendLine(clrConfirm + "── resuming session ──" + clrReset + "\n\n")
+		t.appendLine(clrDim + "── resuming session ──" + clrReset + "\n\n")
 		data, err = t.client.ResumeSession(t.resumeID)
 		if err != nil {
 			t.showWarn(fmt.Sprintf("Failed to resume session: %s", err.Error()))
@@ -784,8 +777,8 @@ func (t *TUI) renderHistory() {
 		// Check compaction flag in meta
 		if meta, ok := msg["meta"].(map[string]any); ok {
 			if isCompaction, _ := meta["is_compaction"].(bool); isCompaction {
-				t.appendLine("\n" + clrCompact + "[::b]◎ Compacting[-:-:-]" + clrReset + "\n")
-				t.appendLine(clrToolOK + "✔" + clrReset + " [::d](history)[-:-:-]\n\n")
+				t.appendLine("\n" + clrAccent + "[::b]◎ Compacting[-:-:-]" + clrReset + "\n")
+				t.appendLine(clrOK + "✔" + clrReset + " " + clrDim + "(history)" + clrReset + "\n\n")
 				continue
 			}
 		}
@@ -800,7 +793,7 @@ func (t *TUI) renderHistory() {
 					continue
 				}
 				if role == "user" {
-					t.appendLine(clrUser + "❯ " + tview.Escape(text) + clrReset + "\n\n")
+					t.appendLine(clrPrimary + "❯ " + tview.Escape(text) + clrReset + "\n\n")
 				} else {
 					t.appendLine(tview.Escape(text) + "\n\n")
 				}
@@ -815,7 +808,7 @@ func (t *TUI) renderHistory() {
 				tClr2, tIco2 := toolStyle(name)
 				t.appendLine(tClr2 + "[::b]" + tIco2 + " " + tview.Escape(name) + "[-:-:-]" + tClr2 + "(" + clrReset)
 				if args != "" {
-					t.appendLine("[::d]" + tview.Escape(args) + "[-:-:-]")
+					t.appendLine(clrDim + tview.Escape(args) + "[-:-:-]")
 				}
 				t.appendLine(tClr2 + ")" + clrReset + "\n")
 			case part["tool_result"] != nil:
@@ -829,9 +822,9 @@ func (t *TUI) renderHistory() {
 				}
 				safe := tview.Escape(summarize(output))
 				if isErr {
-					t.appendLine(fmt.Sprintf(clrToolErr+"✘"+clrReset+" [::d]%s[-:-:-]\n\n", safe))
+					t.appendLine(fmt.Sprintf(clrErr+"✘"+clrReset+" "+clrDim+"%s"+clrReset+"\n\n", safe))
 				} else {
-					t.appendLine(fmt.Sprintf(clrToolOK+"✔"+clrReset+" [::d]%s[-:-:-]\n\n", safe))
+					t.appendLine(fmt.Sprintf(clrOK+"✔"+clrReset+" "+clrDim+"%s"+clrReset+"\n\n", safe))
 				}
 			}
 		}
@@ -880,18 +873,18 @@ func (t *TUI) isSubscriptionProvider(name string) bool {
 
 // connectOAuthFlow runs the OAuth authentication flow for a provider.
 func (t *TUI) connectOAuthFlow(provName string) {
-	t.appendLine(clrConfirm + "Starting OAuth for " + provName + "..." + clrReset + "\n\n")
+	t.appendLine(clrDim + "Starting OAuth for " + provName + "..." + clrReset + "\n\n")
 	t.app.Suspend(func() {
 		creds, err := ObtainOAuthCredentials(provName)
 		if err != nil {
-			t.appendLine(fmt.Sprintf(clrError+"OAuth failed: %s"+clrReset+"\n\n", err.Error()))
+			t.appendLine(fmt.Sprintf(clrErr+"OAuth failed: %s"+clrReset+"\n\n", err.Error()))
 			return
 		}
 		_, connErr := t.client.ConnectProviderWithCreds(provName, creds)
 		if connErr != nil {
-			t.appendLine(fmt.Sprintf(clrError+"connect failed: %s"+clrReset+"\n\n", connErr.Error()))
+			t.appendLine(fmt.Sprintf(clrErr+"connect failed: %s"+clrReset+"\n\n", connErr.Error()))
 		} else {
-			t.appendLine(fmt.Sprintf(clrConfirm+"connected: %s"+clrReset+"\n\n", provName))
+			t.appendLine(fmt.Sprintf(clrDim+"connected: %s"+clrReset+"\n\n", provName))
 			t.app.QueueUpdateDraw(func() { t.afterProviderChange() })
 		}
 	})
@@ -935,9 +928,9 @@ func (t *TUI) showWarn(msg string) {
 
 func (t *TUI) renderInput() {
 	if t.inputBuf == "" {
-		t.inputTV.SetText(clrPlaceholder + "Type a message or / for commands..." + clrReset)
+		t.inputTV.SetText(clrDim + "Type a message or / for commands..." + clrReset)
 	} else {
-		t.inputTV.SetText(tview.Escape(t.inputBuf) + clrUser + "█" + clrReset)
+		t.inputTV.SetText(tview.Escape(t.inputBuf) + clrPrimary + "█" + clrReset)
 	}
 }
 
@@ -1219,13 +1212,13 @@ func (t *TUI) handleInput(text string) {
 		return
 	}
 	if t.sessionID == "" {
-		t.appendLine(clrError + "No active session." + clrReset + "\n")
+		t.appendLine(clrErr + "No active session." + clrReset + "\n")
 		return
 	}
 
 	data, err := t.client.SendPrompt(t.sessionID, text)
 	if err != nil {
-		t.appendLine(clrError + "Failed to send: " + err.Error() + clrReset + "\n\n")
+		t.appendLine(clrErr + "Failed to send: " + err.Error() + clrReset + "\n\n")
 		return
 	}
 
@@ -1243,7 +1236,7 @@ func (t *TUI) handleInput(text string) {
 	}
 
 	// Prompt started immediately — show user message
-	t.appendLine(clrUser + "❯ " + tview.Escape(text) + clrReset + "\n\n")
+	t.appendLine(clrPrimary + "❯ " + tview.Escape(text) + clrReset + "\n\n")
 
 	t.queueCount = 0
 	t.localQueue = nil
@@ -1285,9 +1278,9 @@ func (t *TUI) handleCommand(text string) {
 		}
 		_, err := t.client.ConnectProvider(provName, apiKey)
 		if err != nil {
-			t.appendLine(fmt.Sprintf(clrError+"connect failed: %s"+clrReset+"\n\n", err.Error()))
+			t.appendLine(fmt.Sprintf(clrErr+"connect failed: %s"+clrReset+"\n\n", err.Error()))
 		} else {
-			t.appendLine(fmt.Sprintf(clrConfirm+"connected: %s"+clrReset+"\n\n", provName))
+			t.appendLine(fmt.Sprintf(clrDim+"connected: %s"+clrReset+"\n\n", provName))
 			t.afterProviderChange()
 		}
 		return
@@ -1298,9 +1291,9 @@ func (t *TUI) handleCommand(text string) {
 		provName := parts[1]
 		_, err := t.client.DisconnectProvider(provName)
 		if err != nil {
-			t.appendLine(fmt.Sprintf(clrError+"disconnect failed: %s"+clrReset+"\n\n", err.Error()))
+			t.appendLine(fmt.Sprintf(clrErr+"disconnect failed: %s"+clrReset+"\n\n", err.Error()))
 		} else {
-			t.appendLine(fmt.Sprintf(clrConfirm+"disconnected: %s"+clrReset+"\n\n", provName))
+			t.appendLine(fmt.Sprintf(clrDim+"disconnected: %s"+clrReset+"\n\n", provName))
 			t.afterProviderChange()
 		}
 		return
@@ -1312,7 +1305,7 @@ func (t *TUI) handleCommand(text string) {
 		t.closeCurrentSession()
 		data, err := t.client.ResumeSession(sessID)
 		if err != nil {
-			t.appendLine(fmt.Sprintf(clrError+"resume failed: %s"+clrReset+"\n\n", err.Error()))
+			t.appendLine(fmt.Sprintf(clrErr+"resume failed: %s"+clrReset+"\n\n", err.Error()))
 			return
 		}
 		var sess map[string]any
@@ -1329,7 +1322,7 @@ func (t *TUI) handleCommand(text string) {
 			t.updateInfo()
 		})
 		t.renderHistory()
-		t.appendLine(fmt.Sprintf(clrConfirm+"── resumed: %s ──"+clrReset+"\n\n", t.sessionName))
+		t.appendLine(fmt.Sprintf(clrDim+"── resumed: %s ──"+clrReset+"\n\n", t.sessionName))
 		return
 	case "delete":
 		if len(parts) < 2 {
@@ -1338,15 +1331,15 @@ func (t *TUI) handleCommand(text string) {
 		sessID := parts[1]
 		_, err := t.client.DeleteSession(sessID)
 		if err != nil {
-			t.appendLine(fmt.Sprintf(clrError+"delete failed: %s"+clrReset+"\n\n", err.Error()))
+			t.appendLine(fmt.Sprintf(clrErr+"delete failed: %s"+clrReset+"\n\n", err.Error()))
 		} else {
-			t.appendLine(clrConfirm + "session deleted" + clrReset + "\n\n")
+			t.appendLine(clrDim + "session deleted" + clrReset + "\n\n")
 		}
 		return
 	}
 
 	if t.sessionID == "" {
-		t.appendLine(clrError + "no active session" + clrReset + "\n\n")
+		t.appendLine(clrErr + "no active session" + clrReset + "\n\n")
 		return
 	}
 
@@ -1370,7 +1363,7 @@ func (t *TUI) handleCommand(text string) {
 		}
 	}
 	if def == nil {
-		t.appendLine(fmt.Sprintf(clrError+"unknown command: %s"+clrReset+"\n\n", cmd))
+		t.appendLine(fmt.Sprintf(clrErr+"unknown command: %s"+clrReset+"\n\n", cmd))
 		return
 	}
 
@@ -1382,7 +1375,7 @@ func (t *TUI) handleCommand(text string) {
 	// Execute via API
 	_, err := t.client.ExecCommand(t.sessionID, cmd, params)
 	if err != nil {
-		t.appendLine(fmt.Sprintf(clrError+"%s"+clrReset+"\n\n", err.Error()))
+		t.appendLine(fmt.Sprintf(clrErr+"%s"+clrReset+"\n\n", err.Error()))
 		return
 	}
 
@@ -1414,7 +1407,7 @@ func (t *TUI) handleCommand(text string) {
 	}
 
 	// Confirmation — route through uiOps for ordering, then update info
-	confirm := fmt.Sprintf(clrConfirm+"%s"+clrReset+"\n\n", strings.Join(parts, " "))
+	confirm := fmt.Sprintf(clrDim+"%s"+clrReset+"\n\n", strings.Join(parts, " "))
 	t.appendLine(confirm)
 	t.app.QueueUpdateDraw(func() { t.updateInfo() })
 
@@ -1428,10 +1421,10 @@ func (t *TUI) listModels() {
 	data, _ := t.client.ListModels()
 	var models []map[string]any
 	json.Unmarshal(data, &models)
-	t.appendLine(clrConfirm + "models:" + clrReset + "\n")
+	t.appendLine(clrDim + "models:" + clrReset + "\n")
 	for _, m := range models {
 		model, _ := m["model"].(string)
-		t.appendLine(clrConfirm + "  " + model + clrReset + "\n")
+		t.appendLine(clrDim + "  " + model + clrReset + "\n")
 	}
 	t.appendLine("\n")
 }
@@ -1501,7 +1494,7 @@ func (t *TUI) fillSlot(toolID, toolName, result string) {
 func (t *TUI) streamEvents(ctx context.Context) {
 	events, err := t.client.StreamEvents(ctx, t.sessionID)
 	if err != nil {
-		t.appendLine(fmt.Sprintf(clrError+"✘ %s"+clrReset+"\n\n", err.Error()))
+		t.appendLine(fmt.Sprintf(clrErr+"✘ %s"+clrReset+"\n\n", err.Error()))
 		t.spinning = false
 		return
 	}
@@ -1513,7 +1506,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 	toolIcons  := make(map[string]string) // toolID → icon
 	toolNames  := make(map[string]string) // toolID → name
 	argBufs    := make(map[string]string) // toolID → accumulated args so far
-	var curToolClr = clrToolName
+	var curToolClr = clrAccent
 
 	for {
 		select {
@@ -1531,7 +1524,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 			case "thinking":
 				inThinking = true
 				delta, _ := evt["delta"].(string)
-				t.appendLine(clrThinking + strings.ReplaceAll(delta, "[", "[[") + clrReset)
+				t.appendLine(clrDim + strings.ReplaceAll(delta, "[", "[[") + clrReset)
 
 			case "text":
 				if inThinking {
@@ -1583,7 +1576,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				regStart := `["` + argRegion + `"]`
 				regEnd   := `[""]`
 				safe := strings.ReplaceAll(current, "[", "[[")
-				newReg := regStart + "[::d]" + safe + "[-:-:-]" + regEnd
+				newReg := regStart + clrDim + safe + "[-:-:-]" + regEnd
 				t.uiOps <- func() {
 					old := t.outputBuf.String()
 					// Find the arg region and replace everything between regStart and regEnd
@@ -1614,7 +1607,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				argRegion := "arg-" + toolID
 				regStart := `["` + argRegion + `"]`
 				regEnd   := `[""]`
-				finalReg := regStart + "[::d]" + strings.ReplaceAll(args, "[", "[[") + "[-:-:-]" + regEnd
+				finalReg := regStart + clrDim + strings.ReplaceAll(args, "[", "[[") + "[-:-:-]" + regEnd
 				// Finalize arg region + fill result region with ⧖ Executing...
 				resRegion := `["` + toolID + `"]`
 				emptyRes := resRegion + `[""]`
@@ -1649,7 +1642,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 					// First line inline after icon
 					first := strings.ReplaceAll(strings.TrimSpace(lines[0]), "[", "[[")
 					var sb strings.Builder
-					sb.WriteString(fmt.Sprintf(clrToolErr+"✘"+clrReset+" [::d][%s] %s[-:-:-]\n", formatDur(dur), first))
+					sb.WriteString(fmt.Sprintf(clrErr+"✘"+clrReset+" "+clrDim+"[%s] %s"+clrReset+"\n", formatDur(dur), first))
 					// Up to 2 detail lines indented
 					detail := lines[1:]
 					shown := 0
@@ -1661,7 +1654,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 						if shown >= 2 {
 							break
 						}
-						sb.WriteString("  [::d]" + strings.ReplaceAll(l, "[", "[[") + "[-:-:-]\n")
+						sb.WriteString("  " + clrDim + strings.ReplaceAll(l, "[", "[[") + clrReset + "\n")
 						shown++
 					}
 					// Count remaining non-empty lines
@@ -1672,7 +1665,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 						}
 					}
 					if extra > 0 {
-						sb.WriteString(fmt.Sprintf("  [::d]... (+%d lines)[-:-:-]\n", extra))
+						sb.WriteString(fmt.Sprintf("  " + clrDim + fmt.Sprintf("... (+%d lines)", extra) + clrReset + "\n", extra))
 					}
 					sb.WriteString("\n")
 					result = sb.String()
@@ -1682,17 +1675,17 @@ func (t *TUI) streamEvents(ctx context.Context) {
 					if count == 1 && lines[0] == "" {
 						count = 0
 					}
-					result = fmt.Sprintf(clrToolOK+"✔"+clrReset+" [::d][%s] (%d lines)[-:-:-]\n\n", formatDur(dur), count)
+					result = fmt.Sprintf(clrOK+"✔"+clrReset+" "+clrDim+"[%s] (%d lines)"+clrReset+"\n\n", formatDur(dur), count)
 				}
 				t.fillSlot(toolID, toolNameRes, result)
 
 			case "compact_start":
 				t.compactStart = time.Now()
-				t.appendLine("\n" + clrCompact + "[::b]◎ Compacting[-:-:-]" + clrReset + "\n")
+				t.appendLine("\n" + clrAccent + "[::b]◎ Compacting[-:-:-]" + clrReset + "\n")
 
 			case "compact_end":
 				dur := time.Since(t.compactStart).Milliseconds()
-				t.appendLine(fmt.Sprintf(clrToolOK+"✔"+clrReset+" [::d][%s][-:-:-]\n\n", formatDur(float64(dur))))
+				t.appendLine(fmt.Sprintf(clrOK+"✔"+clrReset+" "+clrDim+"[%s]"+clrReset+"\n\n", formatDur(float64(dur))))
 				t.spinning = false
 				t.app.QueueUpdateDraw(func() { t.updateInfo() })
 
@@ -1722,7 +1715,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 					msg := t.localQueue[0]
 					t.localQueue = t.localQueue[1:]
 					t.queueCount--
-					t.appendLine(clrUser + "❯ " + msg + clrReset + "\n\n")
+					t.appendLine(clrPrimary + "❯ " + msg + clrReset + "\n\n")
 					t.spinning = true // next turn starting — Esc can stop it
 					t.app.QueueUpdateDraw(func() { t.updateInfo() })
 				} else {
@@ -1731,7 +1724,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 
 		case "error":
 			msg, _ := evt["message"].(string)
-			t.appendLine(fmt.Sprintf(clrError+"✘ %s"+clrReset+"\n\n", msg))
+			t.appendLine(fmt.Sprintf(clrErr+"✘ %s"+clrReset+"\n\n", msg))
 			t.spinning = false
 			// Persistent SSE — keep streaming
 		}
@@ -1776,7 +1769,7 @@ func (t *TUI) spinnerLoop() {
 			}
 			frame++
 			t.app.QueueUpdateDraw(func() {
-				t.spinner.SetText(fmt.Sprintf("\n"+clrSpinner+"%s[-:-:-] [::d]%s... [%s][-:-:-]\n", f, lbl, timeStr))
+				t.spinner.SetText(fmt.Sprintf("\n"+clrPrimary+"%s" + clrReset + " " + clrDim + "%s... [%s]" + clrReset + "\n", f, lbl, timeStr))
 			})
 		}
 	}
@@ -1800,7 +1793,7 @@ func (t *TUI) updateInfo() {
 	if t.queueCount > 0 {
 		queue = fmt.Sprintf(" [%d queued]", t.queueCount)
 	}
-	t.info.SetText(fmt.Sprintf(clrFooter+"%s • %s%s"+clrReset, loc, name, queue))
+	t.info.SetText(fmt.Sprintf(clrDim+"%s • %s%s"+clrReset, loc, name, queue))
 
 	// footer: tokens + model
 	if t.model == "" {
@@ -1820,7 +1813,7 @@ func (t *TUI) updateInfo() {
 		price += " (sub)"
 	}
 	t.footer.SetText(fmt.Sprintf(
-		clrFooter+"↑%s ↓%s%s %s %.1f%%/%s %s%s"+clrReset,
+		clrDim+"↑%s ↓%s%s %s %.1f%%/%s %s%s"+clrReset,
 		compactNum(t.stats.input),
 		compactNum(t.stats.output),
 		cache,
@@ -1838,11 +1831,11 @@ func (t *TUI) updateInfo() {
 func toolStyle(name string) (clr, icon string) {
 	switch name {
 	case "Skill":
-		return clrToolSkill, "✦"
+		return clrAccent, "✦"
 	case "Subagent":
-		return clrToolSubagent, "⬢"
+		return clrAccent, "⬢"
 	default:
-		return clrToolName, "⚙"
+		return clrAccent, "⚙"
 	}
 }
 
@@ -1888,9 +1881,9 @@ func formatToolOutput(output string) string {
 		return ""
 	}
 	if len(lines) == 1 {
-		return "  [::d]" + strings.ReplaceAll(lines[0], "[", "[[") + "[-:-:-]\n"
+		return "  " + clrDim + strings.ReplaceAll(lines[0], "[", "[[") + clrReset + "\n"
 	}
-	return fmt.Sprintf("  [::d](%d lines)[-:-:-]\n", len(lines))
+	return fmt.Sprintf("  " + clrDim + fmt.Sprintf("(%d lines)", len(lines)) + clrReset + "\n", len(lines))
 }
 
 func compactNum(n int) string {
