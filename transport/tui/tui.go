@@ -25,6 +25,7 @@ const (
 	clrToolSubagent = "[#af87d7]" // subagent tool (violet)
 	clrToolArgs    = "[#767676]" // tool args / metadata (neutral gray)
 	clrCompact     = "[#af87ff]" // compact operation (purple)
+	clrSpinner     = "[#87d7af]" // spinner (mint/seafoam)
 	clrToolOK      = "[#5faf5f]" // tool result success (green)
 	clrToolErr     = "[#ff5f5f]" // tool result error (red)
 	clrWarn        = "[#ffff5f]" // warning (yellow)
@@ -1747,22 +1748,35 @@ func (t *TUI) spinnerLoop() {
 	ticker := time.NewTicker(80 * time.Millisecond)
 	defer ticker.Stop()
 	frame := 0
+	var spinStart time.Time
 	for {
 		select {
 		case <-t.spinnerStop:
 			return
 		case <-ticker.C:
 			if !t.spinning {
+				spinStart = time.Time{}
 				t.app.QueueUpdateDraw(func() {
 					t.spinner.SetText("\n\n")
 				})
 				continue
 			}
+			if spinStart.IsZero() {
+				spinStart = time.Now()
+			}
 			f := spinnerFrames[frame%len(spinnerFrames)]
-			lbl := spinnerLabels[(frame/10)%len(spinnerLabels)]
+			// Label changes every ~5s (5000ms / 80ms = ~62 frames)
+			lbl := spinnerLabels[(frame/62)%len(spinnerLabels)]
+			elapsed := time.Since(spinStart).Seconds()
+			var timeStr string
+			if elapsed < 60 {
+				timeStr = fmt.Sprintf("%.0fs", elapsed)
+			} else {
+				timeStr = fmt.Sprintf("%dm%ds", int(elapsed)/60, int(elapsed)%60)
+			}
 			frame++
 			t.app.QueueUpdateDraw(func() {
-				t.spinner.SetText(fmt.Sprintf("\n"+clrFooter+"%s %s..."+clrReset+"\n", f, lbl))
+				t.spinner.SetText(fmt.Sprintf("\n"+clrSpinner+"%s[-:-:-] [::d]%s... [%s][-:-:-]\n", f, lbl, timeStr))
 			})
 		}
 	}
