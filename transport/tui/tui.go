@@ -1567,12 +1567,13 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				toolIcons[toolID] = tIco
 				toolNames[toolID] = name
 				argBufs[toolID] = ""
-				// Write full tool block atomically: header + arg region + result placeholder
+				// Write header + empty arg region + empty result region
+				// Result region starts empty (invisible); tool_call fills it with ⧖ Executing...
 				argRegion := "arg-" + toolID
 				resRegion := toolID
 				headerLine := tClr + "[::b]" + tIco + " " + tview.Escape(name) + "[-:-:-]" + tClr +
 					`(["` + argRegion + `"][""]` + tClr + ")" + clrReset + "\n" +
-					`["` + resRegion + `"]` + tClr + "\u29d6 Executing..." + `[""]` + "\n\n"
+					`["` + resRegion + `"][""]` + "\n\n"
 				t.uiOps <- func() {
 					if t.toolSlots == nil { t.toolSlots = make(map[string]int) }
 					t.toolSlots[resRegion] = 1
@@ -1614,6 +1615,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				tName := toolNames[toolID]
 				if tName == "" { tName, _ = evt["tool_name"].(string) }
 				// Final args: compact (strip braces, full length)
+				tClr2, _ := toolStyle(tName)
 				args := strings.TrimSpace(toolArgs)
 				args = strings.TrimPrefix(args, "{")
 				args = strings.TrimSuffix(args, "}")
@@ -1623,19 +1625,25 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				regStart := `["` + argRegion + `"]`
 				regEnd   := `[""]`
 				finalReg := regStart + "[::d]" + strings.ReplaceAll(args, "[", "[[") + "[-:-:-]" + regEnd
-				// Only finalize the arg region — result placeholder already written in tool_start
+				// Finalize arg region + fill result region with ⧖ Executing...
+				resRegion := `["` + toolID + `"]`
+				emptyRes := resRegion + `[""]`
+				execRes  := resRegion + tClr2 + "\u29d6 Executing..." + `[""]`
 				t.uiOps <- func() {
 					old := t.outputBuf.String()
+					// 1. Finalize arg region
 					si := strings.Index(old, regStart)
 					if si >= 0 {
 						ei := strings.Index(old[si+len(regStart):], regEnd)
 						if ei >= 0 {
 							ei = si + len(regStart) + ei + len(regEnd)
 							old = old[:si] + finalReg + old[ei:]
-							t.outputBuf.Reset()
-							t.outputBuf.WriteString(old)
 						}
 					}
+					// 2. Replace empty result region with ⧖ Executing...
+					old = strings.Replace(old, emptyRes, execRes, 1)
+					t.outputBuf.Reset()
+					t.outputBuf.WriteString(old)
 				}
 
 			case "tool_result":
@@ -1647,14 +1655,14 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				var result string
 				if isErr {
 					safeErr := strings.ReplaceAll(strings.TrimSpace(output), "[", "[[")
-					result = fmt.Sprintf(clrToolErr+"✗"+clrReset+" [::d][%.0fms] %s[-:-:-]\n\n", dur, safeErr)
+					result = fmt.Sprintf(clrToolErr+"✗"+clrReset+" [::d][%s] %s[-:-:-]\n\n", formatDur(dur), safeErr)
 				} else {
 					lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
 					count := len(lines)
 					if count == 1 && lines[0] == "" {
 						count = 0
 					}
-					result = fmt.Sprintf(clrToolOK+"✓"+clrReset+" [::d][%.0fms] (%d lines)[-:-:-]\n\n", dur, count)
+					result = fmt.Sprintf(clrToolOK+"✓"+clrReset+" [::d][%s] (%d lines)[-:-:-]\n\n", formatDur(dur), count)
 				}
 				t.fillSlot(toolID, toolNameRes, result)
 
@@ -1816,6 +1824,13 @@ func summarize(s string) string {
 }
 
 // formatToolOutput formats tool output for display: first 3 lines + (+N lines) count.
+func formatDur(ms float64) string {
+	if ms >= 1000 {
+		return fmt.Sprintf("%.1fs", ms/1000)
+	}
+	return fmt.Sprintf("%.0fms", ms)
+}
+
 func formatToolOutput(output string) string {
 	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
 	if len(lines) == 1 && lines[0] == "" {
