@@ -18,12 +18,12 @@ import (
 
 // ── Color palette ──────────────────────────────────────────────────────────
 const (
-	clrPrimary = "[#29B6F6]" // cyan   — user input, spinner  (Material Light Blue 400)
-	clrAccent  = "[#AB47BC]" // purple — tool names, compact  (Material Purple 400)
-	clrOK      = "[#66BB6A]" // green  — success             (Material Green 400)
-	clrErr     = "[#EF5350]" // red    — errors              (Material Red 400)
-	clrWarn    = "[#FFA726]" // orange — warnings, stopped   (Material Orange 400)
-	clrDim     = "[::d]"     // dim    — thinking, footer, args
+	clrPrimary = "[#26A69A]" // teal 400   — user input, separators  (Kaiban Teal dark-adapted)
+	clrAccent  = "[#C8D96A]" // chartreuse — tool names, compact    (Kaiban Energy)
+	clrOK      = "[#C8D96A]" // chartreuse — success                (Kaiban Energy)
+	clrErr     = "[#D94068]" // rose       — errors                 (Kaiban Rose)
+	clrWarn    = "[#B44CA0]" // violet     — warnings, stopped      (Kaiban Violet)
+	clrDim     = "[::d]"     // dim        — thinking, footer, args
 	clrReset   = "[-:-:-]"   // reset
 
 
@@ -1781,7 +1781,7 @@ func (t *TUI) spinnerLoop() {
 			}
 			frame++
 			t.app.QueueUpdateDraw(func() {
-				t.spinner.SetText(fmt.Sprintf("\n"+clrPrimary+"%s" + clrReset + " " + clrDim + "%s... [%s]" + clrReset + "\n", f, lbl, timeStr))
+				t.spinner.SetText(fmt.Sprintf("\n"+clrAccent+"%s"+clrReset+" "+clrDim+"%s... [%s]"+clrReset+"\n", f, lbl, timeStr))
 			})
 		}
 	}
