@@ -1544,9 +1544,8 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				t.appendLine(clrThinking + strings.ReplaceAll(delta, "[", "[[") + clrReset)
 
 			case "text":
-				// thinking block just ended
 				if inThinking {
-					t.appendLine("\n\n")
+					t.appendLine("\n\n") // close thinking block
 					inThinking = false
 				}
 				inText = true
@@ -1554,8 +1553,9 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				t.appendLine(strings.ReplaceAll(delta, "[", "[["))
 
 			case "tool_start":
+				// Close previous block with \n\n — each block owns its own trailing space
 				if inThinking || inText {
-					t.appendLine("\n")
+					t.appendLine("\n\n")
 					inThinking = false
 					inText = false
 				}
@@ -1569,7 +1569,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				argBufs[toolID] = ""
 				// Write header with empty arg region — args stream in via tool_args deltas
 				argRegion := "arg-" + toolID
-				headerLine := "\n" + tClr + "[::b]" + tIco + " " + tview.Escape(name) + "[-:-:-]" + tClr + `(["` + argRegion + `"][""]` + tClr + ")" + clrReset + "\n"
+				headerLine := tClr + "[::b]" + tIco + " " + tview.Escape(name) + "[-:-:-]" + tClr + `(["` + argRegion + `"][""]` + tClr + ")" + clrReset + "\n"
 				t.uiOps <- func() { t.outputBuf.WriteString(headerLine) }
 
 			case "tool_args":
@@ -1658,12 +1658,12 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				output, _ := evt["output"].(string)
 				dur, _ := floatFromMap(evt, "duration")
 				isErr, _ := evt["is_error"].(bool)
-				safe := strings.ReplaceAll(summarize(output), "[", "[[")
 				var result string
 				if isErr {
-					result = fmt.Sprintf(clrToolErr+"✗"+clrReset+" [::d]%s (%.0fms)[-:-:-]\n\n", safe, dur)
+					safeErr := strings.ReplaceAll(strings.TrimSpace(output), "[", "[[")
+					result = fmt.Sprintf(clrToolErr+"✗"+clrReset+" [::d][%.0fms][-:-:-]\n  [::d]%s[-:-:-]\n\n", dur, safeErr)
 				} else {
-					result = fmt.Sprintf(clrToolOK+"✓"+clrReset+" [::d]%s (%.0fms)[-:-:-]\n\n", safe, dur)
+					result = fmt.Sprintf(clrToolOK+"✓"+clrReset+" [::d][%.0fms][-:-:-]\n", dur) + formatToolOutput(output) + "\n"
 				}
 				t.fillSlot(toolID, toolNameRes, result)
 
@@ -1822,6 +1822,18 @@ func summarize(s string) string {
 		return s[:77] + "..."
 	}
 	return s
+}
+
+// formatToolOutput formats tool output for display: first 3 lines + (+N lines) count.
+func formatToolOutput(output string) string {
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		return ""
+	}
+	if len(lines) == 1 {
+		return "  [::d]" + strings.ReplaceAll(lines[0], "[", "[[") + "[-:-:-]\n"
+	}
+	return fmt.Sprintf("  [::d](%d lines)[-:-:-]\n", len(lines))
 }
 
 func compactNum(n int) string {
