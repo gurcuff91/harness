@@ -20,7 +20,7 @@ func Edit() Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        "Edit",
-			Description: "Edit a file by replacing exact text. The old_text must match exactly one location in the file. Use for surgical changes to existing files without rewriting the entire content.",
+			Description: "Edit a file by replacing exact text. old_text must match exactly one location. Supports multiple replacements in a single call — always batch related changes together. Use for surgical edits without rewriting the entire file.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {

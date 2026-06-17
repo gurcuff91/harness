@@ -14,7 +14,7 @@ func Skill(readFn func(name string) (string, error)) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolSkill,
-			Description: "Read the full instructions for a skill by name. Use this to load a skill before executing it.",
+			Description: "Load the full content of a skill by name.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","description":"Name of the skill to load"}},"required":["name"]}`),
 		},
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {

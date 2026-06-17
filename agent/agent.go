@@ -310,7 +310,7 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) string {
 	}
 
 	if len(res.Skills) > 0 {
-		b.WriteString("\n\n## Available Skills\n\n")
+		b.WriteString("\n\n## Available Skills\n\nSkills are specialized guides for specific tasks. When a task matches a skill, load it with the Skill tool before starting — it contains workflows and constraints you must follow.\n\n")
 		for _, s := range res.Skills {
 			b.WriteString(fmt.Sprintf("- %s: %s\n", s.Name, s.Description))
 		}

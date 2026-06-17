@@ -74,7 +74,7 @@ func WriteFile() Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        "Write",
-			Description: "Create or overwrite a file with the given content. Creates parent directories if needed. Use for new files or full rewrites. For partial changes, prefer the edit tool instead.",
+			Description: "Create or overwrite a file with the given content. WARNING: replaces the entire file — use edit for partial changes. Creates parent directories if needed.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
