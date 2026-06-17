@@ -1654,8 +1654,38 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				isErr, _ := evt["is_error"].(bool)
 				var result string
 				if isErr {
-					safeErr := strings.ReplaceAll(strings.TrimSpace(output), "[", "[[")
-					result = fmt.Sprintf(clrToolErr+"✗"+clrReset+" [::d][%s] %s[-:-:-]\n\n", formatDur(dur), safeErr)
+					clean := stripANSI(strings.TrimSpace(output))
+					lines := strings.Split(clean, "\n")
+					// First line inline after icon
+					first := strings.ReplaceAll(strings.TrimSpace(lines[0]), "[", "[[")
+					var sb strings.Builder
+					sb.WriteString(fmt.Sprintf(clrToolErr+"✗"+clrReset+" [::d][%s] %s[-:-:-]\n", formatDur(dur), first))
+					// Up to 2 detail lines indented
+					detail := lines[1:]
+					shown := 0
+					for _, l := range detail {
+						l = strings.TrimSpace(l)
+						if l == "" {
+							continue
+						}
+						if shown >= 2 {
+							break
+						}
+						sb.WriteString("  [::d]" + strings.ReplaceAll(l, "[", "[[") + "[-:-:-]\n")
+						shown++
+					}
+					// Count remaining non-empty lines
+					extra := 0
+					for _, l := range detail[shown:] {
+						if strings.TrimSpace(l) != "" {
+							extra++
+						}
+					}
+					if extra > 0 {
+						sb.WriteString(fmt.Sprintf("  [::d]... (+%d lines)[-:-:-]\n", extra))
+					}
+					sb.WriteString("\n")
+					result = sb.String()
 				} else {
 					lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
 					count := len(lines)
@@ -1824,6 +1854,25 @@ func summarize(s string) string {
 }
 
 // formatToolOutput formats tool output for display: first 3 lines + (+N lines) count.
+// stripANSI removes ANSI escape sequences from a string.
+func stripANSI(s string) string {
+	var b strings.Builder
+	i := 0
+	for i < len(s) {
+		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			i += 2
+			for i < len(s) && s[i] != 'm' {
+				i++
+			}
+			i++ // skip 'm'
+		} else {
+			b.WriteByte(s[i])
+			i++
+		}
+	}
+	return b.String()
+}
+
 func formatDur(ms float64) string {
 	if ms >= 1000 {
 		return fmt.Sprintf("%.1fs", ms/1000)
