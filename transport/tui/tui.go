@@ -18,12 +18,12 @@ import (
 
 // ── Color palette ──────────────────────────────────────────────────────────
 const (
-	clrPrimary = "[#5fafd7]" // cyan   — user input, spinner
-	clrAccent  = "[#d787af]" // mauve  — tool names, skill, subagent, compact
-	clrOK      = "[#5faf5f]" // green  — success
-	clrErr     = "[#ff5f5f]" // red    — errors
-	clrWarn    = "[#ffaf5f]" // amber  — warnings, stopped
-	clrDim     = "[::d]"     // dim    — thinking, footer, args, placeholders
+	clrPrimary = "[#29B6F6]" // cyan   — user input, spinner  (Material Light Blue 400)
+	clrAccent  = "[#AB47BC]" // purple — tool names, compact  (Material Purple 400)
+	clrOK      = "[#66BB6A]" // green  — success             (Material Green 400)
+	clrErr     = "[#EF5350]" // red    — errors              (Material Red 400)
+	clrWarn    = "[#FFA726]" // orange — warnings, stopped   (Material Orange 400)
+	clrDim     = "[::d]"     // dim    — thinking, footer, args
 	clrReset   = "[-:-:-]"   // reset
 
 
@@ -341,11 +341,23 @@ func (t *TUI) buildUI() {
 	t.app.SetRoot(t.flex, true).SetFocus(t.inputTV)
 }
 
+// primaryColor parses clrPrimary hex for use with tcell directly.
+func primaryColor() tcell.Color {
+	// clrPrimary = "[#RRGGBB]" — extract hex
+	s := clrPrimary // e.g. "[#29B6F6]"
+	if len(s) == 9 && s[0] == '[' && s[1] == '#' {
+		var r, g, b int32
+		fmt.Sscanf(s[2:8], "%02x%02x%02x", &r, &g, &b)
+		return tcell.NewRGBColor(r, g, b)
+	}
+	return tcell.ColorWhite
+}
+
 func (t *TUI) newSeparator() *tview.Box {
 	return tview.NewBox().
 		SetBackgroundColor(tcell.ColorDefault).
 		SetDrawFunc(func(screen tcell.Screen, x, y, width, height int) (int, int, int, int) {
-			style := tcell.StyleDefault.Foreground(tcell.NewHexColor(0x5fafd7)).Background(tcell.ColorDefault)
+			style := tcell.StyleDefault.Foreground(primaryColor()).Background(tcell.ColorDefault)
 			for i := x; i < x+width; i++ {
 				screen.SetContent(i, y, '─', nil, style)
 			}
