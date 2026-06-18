@@ -786,7 +786,7 @@ func (t *TUI) renderHistory() {
 		return
 	}
 	for _, msg := range messages {
-		// Check compaction flag in meta
+		// Compaction marker
 		if meta, ok := msg["meta"].(map[string]any); ok {
 			if isCompaction, _ := meta["is_compaction"].(bool); isCompaction {
 				t.appendLine("\n" + clrAccent + "[::b]◎ Compacting[-:-:-]" + clrReset + "\n")
@@ -813,30 +813,48 @@ func (t *TUI) renderHistory() {
 				tc, _ := part["tool_call"].(map[string]any)
 				name, _ := tc["name"].(string)
 				input, _ := tc["input"].(map[string]any)
+				// Fix 1: marshal input to JSON then unescape unicode (e.g. \u0026 -> &)
 				args := ""
 				if b, err := json.Marshal(input); err == nil {
-					args = strings.TrimPrefix(strings.TrimSuffix(string(b), "}"), "{")
+					raw := string(b)
+					// Unescape unicode escapes so & renders as & not \u0026
+					var unescaped string
+					if err2 := json.Unmarshal([]byte(`"` + strings.ReplaceAll(raw[1:len(raw)-1], `"`, `\"`) + `"`), &unescaped); err2 == nil {
+						args = strings.TrimPrefix(strings.TrimSuffix(unescaped, "}"), "{")
+					} else {
+						args = strings.TrimPrefix(strings.TrimSuffix(raw, "}"), "{")
+					}
 				}
 				tClr2, tIco2 := toolStyle(name)
-				t.appendLine(tClr2 + "[::b]" + tIco2 + " " + tview.Escape(name) + "[-:-:-]" + tClr2 + "(" + clrReset)
-				if args != "" {
-					t.appendLine(clrDim + tview.Escape(args) + "[-:-:-]")
-				}
-				t.appendLine(tClr2 + ")" + clrReset + "\n")
+				// Render as single atomic block matching live style
+				header := tClr2 + "[::b]" + tIco2 + " " + tview.Escape(name) + "[-:-:-]" + tClr2 + "(" + clrReset +
+					clrDim + tview.Escape(args) + clrReset +
+					tClr2 + ")" + clrReset + "\n"
+				t.appendLine(header)
 			case part["tool_result"] != nil:
 				tr, _ := part["tool_result"].(map[string]any)
 				isErr, _ := tr["is_error"].(bool)
-				var output string
-				if content, _ := tr["content"].([]any); len(content) > 0 {
-					if c0, _ := content[0].(map[string]any); c0 != nil {
-						output, _ = c0["text"].(string)
+				// Field is "output" (string), not content[]
+				output, _ := tr["output"].(string)
+				if output == "" {
+					// fallback: Anthropic-style content[0].text
+					if content, _ := tr["content"].([]any); len(content) > 0 {
+						if c0, _ := content[0].(map[string]any); c0 != nil {
+							output, _ = c0["text"].(string)
+						}
 					}
 				}
-				safe := tview.Escape(summarize(output))
 				if isErr {
-					t.appendLine(fmt.Sprintf(clrErr+"✘"+clrReset+" "+clrDim+"%s"+clrReset+"\n\n", safe))
+					clean := stripANSI(strings.TrimSpace(output))
+					lines := strings.Split(clean, "\n")
+					first := tview.Escape(strings.TrimSpace(lines[0]))
+					t.appendLine(clrErr + "✘" + clrReset + " " + clrDim + first + clrReset + "\n\n")
 				} else {
-					t.appendLine(fmt.Sprintf(clrOK+"✔"+clrReset+" "+clrDim+"%s"+clrReset+"\n\n", safe))
+					lineCount := len(strings.Split(strings.TrimRight(output, "\n"), "\n"))
+					if lineCount == 1 && strings.TrimSpace(output) == "" {
+						lineCount = 0
+					}
+					t.appendLine(fmt.Sprintf(clrOK+"✔"+clrReset+" "+clrDim+"(%d lines)"+clrReset+"\n\n", lineCount))
 				}
 			}
 		}
@@ -1003,7 +1021,7 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 
 	case tcell.KeyEsc:
 		if t.pal.popLevel() {
-			t.inputBuf = "/"
+			t.inputBuf = "/"; t.cursorPos = len([]rune(t.inputBuf))
 			t.pal.setFilter("")
 		} else {
 			t.inputBuf = ""; t.cursorPos = 0
@@ -1026,10 +1044,10 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 				t.pal.pushSub(sel.name, subs)
 				t.inputBuf = ""; t.cursorPos = 0
 			case "free":
-				t.inputBuf = "/" + sel.name + " "
+				t.inputBuf = "/" + sel.name + " "; t.cursorPos = len([]rune(t.inputBuf))
 				t.pal.close()
 			case "none", "optional", "quit":
-				t.inputBuf = "/" + sel.name
+				t.inputBuf = "/" + sel.name; t.cursorPos = len([]rune(t.inputBuf))
 				t.pal.close()
 			}
 		} else {
@@ -1039,7 +1057,7 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 			if sel.id != "" {
 				token = sel.id
 			}
-			t.inputBuf = "/" + parentCmd + " " + token
+			t.inputBuf = "/" + parentCmd + " " + token; t.cursorPos = len([]rune(t.inputBuf))
 			t.pal.close()
 		}
 		t.redraw()
@@ -1059,7 +1077,7 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 				t.inputBuf = ""; t.cursorPos = 0
 				t.redraw()
 			case "free":
-				t.inputBuf = "/" + sel.name + " "
+				t.inputBuf = "/" + sel.name + " "; t.cursorPos = len([]rune(t.inputBuf))
 				t.pal.close()
 				t.redraw()
 			case "none":
@@ -1088,7 +1106,7 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 			}
 			if parentCmd == "connect" && sel.desc != "subscription" {
 				// Non-subscription: need API key — put in input for typing
-				t.inputBuf = "/connect " + token + " "
+				t.inputBuf = "/connect " + token + " "; t.cursorPos = len([]rune(t.inputBuf))
 				t.pal.close()
 				t.redraw()
 			} else if parentCmd == "connect" {
@@ -1118,7 +1136,7 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 			if !t.pal.popLevel() {
 				t.pal.close()
 			} else {
-				t.inputBuf = "/"
+				t.inputBuf = "/"; t.cursorPos = len([]rune(t.inputBuf))
 				t.pal.setFilter("")
 			}
 		} else if t.pal.depth() == 1 {
@@ -1130,7 +1148,13 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 		return nil
 
 	case tcell.KeyRune:
-		t.inputBuf += string(event.Rune())
+		runes := []rune(t.inputBuf)
+		newRunes := make([]rune, len(runes)+1)
+		copy(newRunes, runes[:t.cursorPos])
+		newRunes[t.cursorPos] = event.Rune()
+		copy(newRunes[t.cursorPos+1:], runes[t.cursorPos:])
+		t.inputBuf = string(newRunes)
+		t.cursorPos++
 		if t.pal.depth() == 1 {
 			t.pal.setFilter(strings.TrimPrefix(t.inputBuf, "/"))
 		} else {
@@ -1279,7 +1303,7 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 			case "free":
 				if len(parts) < 2 {
 					// Don't execute — keep in input, user must type value
-					t.inputBuf = "/" + cmd + " "
+					t.inputBuf = "/" + cmd + " "; t.cursorPos = len([]rune(t.inputBuf))
 					t.redraw()
 					return nil
 				}
