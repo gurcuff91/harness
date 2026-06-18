@@ -1223,6 +1223,40 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 		t.redraw()
 		return nil
 
+	case tcell.KeyCtrlI: // Ctrl+I — paste image from clipboard
+		go func() {
+			path, err := PasteImageFromClipboard()
+			if err != nil {
+				t.app.QueueUpdateDraw(func() {
+					t.appendLine(clrWarn + "⚠ clipboard image: " + err.Error() + clrReset + "\n")
+				})
+				return
+			}
+			if path == "" {
+				t.app.QueueUpdateDraw(func() {
+					t.appendLine(clrWarn + "⚠ no image in clipboard" + clrReset + "\n")
+				})
+				return
+			}
+			// Insert path at cursor position
+			t.app.QueueUpdateDraw(func() {
+				runes := []rune(t.inputBuf)
+				paste := []rune(path)
+				if len(runes) > 0 && t.cursorPos > 0 {
+					paste = append([]rune(" "), paste...)
+				}
+				newRunes := make([]rune, len(runes)+len(paste))
+				copy(newRunes, runes[:t.cursorPos])
+				copy(newRunes[t.cursorPos:], paste)
+				copy(newRunes[t.cursorPos+len(paste):], runes[t.cursorPos:])
+				t.inputBuf = string(newRunes)
+				t.cursorPos += len(paste)
+				t.inputHeight = 0
+				t.renderInput()
+			})
+		}()
+		return nil
+
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		if len(t.inputBuf) > 0 && t.cursorPos > 0 {
 			runes := []rune(t.inputBuf)
