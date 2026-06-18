@@ -25,7 +25,7 @@ type subagentInput struct {
 func Subagent(executor SubagentExecutor) Tool {
 	return Tool{
 		Def: types.ToolDef{
-			Name: ToolSubagent,
+			Name:        ToolSubagent,
 			Description: `Spawn an autonomous sub-agent for a self-contained task. PREFER over doing it yourself when: exploring/reading large codebases (keeps your context clean), fetching multiple URLs, analyzing multiple files, or refactoring isolated modules. Invoke MULTIPLE simultaneously — they run in parallel. Each has full tool access. DO NOT use when tasks depend on each other's output.`,
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"prompt":{"type":"string","description":"The complete task or question for the sub-agent."}},"required":["prompt"]}`),
 		},

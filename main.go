@@ -203,9 +203,15 @@ func extractFlags(args []string) (model, thinking string) {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--model":
-			if i+1 < len(args) { model = args[i+1]; i++ }
+			if i+1 < len(args) {
+				model = args[i+1]
+				i++
+			}
 		case "--thinking":
-			if i+1 < len(args) { thinking = args[i+1]; i++ }
+			if i+1 < len(args) {
+				thinking = args[i+1]
+				i++
+			}
 		}
 	}
 	return
@@ -215,11 +221,20 @@ func extractAllFlags(args []string) (model, thinking, resumeID string) {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--model":
-			if i+1 < len(args) { model = args[i+1]; i++ }
+			if i+1 < len(args) {
+				model = args[i+1]
+				i++
+			}
 		case "--thinking":
-			if i+1 < len(args) { thinking = args[i+1]; i++ }
+			if i+1 < len(args) {
+				thinking = args[i+1]
+				i++
+			}
 		case "--resume":
-			if i+1 < len(args) { resumeID = args[i+1]; i++ }
+			if i+1 < len(args) {
+				resumeID = args[i+1]
+				i++
+			}
 		}
 	}
 	return
@@ -230,11 +245,20 @@ func extractPromptFlags(args []string) (model, thinking, output string) {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--model":
-			if i+1 < len(args) { model = args[i+1]; i++ }
+			if i+1 < len(args) {
+				model = args[i+1]
+				i++
+			}
 		case "--thinking":
-			if i+1 < len(args) { thinking = args[i+1]; i++ }
+			if i+1 < len(args) {
+				thinking = args[i+1]
+				i++
+			}
 		case "--output":
-			if i+1 < len(args) { output = args[i+1]; i++ }
+			if i+1 < len(args) {
+				output = args[i+1]
+				i++
+			}
 		}
 	}
 	return

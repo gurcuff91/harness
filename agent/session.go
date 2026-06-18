@@ -54,10 +54,10 @@ type Session struct {
 	maxTokens int
 
 	// Follow-up prompts — separate mutex to avoid deadlock with mu
-	followMu  sync.Mutex
-	followUps []followUp
-	busy      bool
-	followCtx context.Context
+	followMu      sync.Mutex
+	followUps     []followUp
+	busy          bool
+	followCtx     context.Context
 	currentCancel context.CancelFunc // cancel the currently executing turn
 }
 
@@ -549,8 +549,8 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 	}
 
 	var (
-		wg           sync.WaitGroup
-		resultsMu    sync.Mutex
+		wg            sync.WaitGroup
+		resultsMu     sync.Mutex
 		streamResults []types.ToolResult
 	)
 

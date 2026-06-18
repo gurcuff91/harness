@@ -26,7 +26,6 @@ const (
 	clrDim     = "[::d]"     // dim        — thinking, footer, args
 	clrReset   = "[-:-:-]"   // reset
 
-
 )
 
 // ── Palette types ─────────────────────────────────────────────────────────
@@ -150,17 +149,17 @@ func (p *palette) close() {
 // ── TUI ───────────────────────────────────────────────────────────────────
 
 type TUI struct {
-	agent       *agent.Agent
-	client      *Client
-	addr        string
-	sessionID   string
-	sessionName string
-	model       string
-	overrideModel    string // from --model flag (takes priority over settings)
-	overrideThinking string // from --thinking flag
-	resumeID         string // from --resume flag (resume instead of create)
-	sseCancelFn context.CancelFunc // persistent SSE, cancelled on quit
-	lastSessionID string // for resume hint on exit
+	agent            *agent.Agent
+	client           *Client
+	addr             string
+	sessionID        string
+	sessionName      string
+	model            string
+	overrideModel    string             // from --model flag (takes priority over settings)
+	overrideThinking string             // from --thinking flag
+	resumeID         string             // from --resume flag (resume instead of create)
+	sseCancelFn      context.CancelFunc // persistent SSE, cancelled on quit
+	lastSessionID    string             // for resume hint on exit
 
 	// tview
 	app       *tview.Application
@@ -187,8 +186,8 @@ type TUI struct {
 	spinning     bool
 	spinnerStop  chan struct{}
 	compactStart time.Time
-	queueCount   int      // number of prompts waiting in the session queue
-	localQueue   []string // pending user messages (for display)
+	queueCount   int             // number of prompts waiting in the session queue
+	localQueue   []string        // pending user messages (for display)
 	outputBuf    strings.Builder // full output content (only touched from uiOps goroutine)
 	toolSlots    map[string]int  // toolID → 1 if slot reserved
 	uiOps        chan func()     // serialized UI operations (written from stream goroutine, drained by uiOps goroutine)
@@ -1515,9 +1514,9 @@ func (t *TUI) streamEvents(ctx context.Context) {
 	inThinking := false
 	inText := false
 	toolColors := make(map[string]string) // toolID → color
-	toolIcons  := make(map[string]string) // toolID → icon
-	toolNames  := make(map[string]string) // toolID → name
-	argBufs    := make(map[string]string) // toolID → accumulated args so far
+	toolIcons := make(map[string]string)  // toolID → icon
+	toolNames := make(map[string]string)  // toolID → name
+	argBufs := make(map[string]string)    // toolID → accumulated args so far
 	var curToolClr = clrAccent
 
 	for {
@@ -1571,7 +1570,9 @@ func (t *TUI) streamEvents(ctx context.Context) {
 					`["` + argRegion + `"][""]` + tClr + ")" + clrReset + "\n" +
 					`["` + resRegion + `"][""]` + "\n\n"
 				t.uiOps <- func() {
-					if t.toolSlots == nil { t.toolSlots = make(map[string]int) }
+					if t.toolSlots == nil {
+						t.toolSlots = make(map[string]int)
+					}
 					t.toolSlots[resRegion] = 1
 					t.outputBuf.WriteString(headerLine)
 				}
@@ -1587,16 +1588,20 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				argRegion := "arg-" + toolID
 				// Build old and new region tags — replace current content with accumulated
 				regStart := `["` + argRegion + `"]`
-				regEnd   := `[""]`
+				regEnd := `[""]`
 				safe := strings.ReplaceAll(current, "[", "[[")
 				newReg := regStart + clrDim + safe + "[-:-:-]" + regEnd
 				t.uiOps <- func() {
 					old := t.outputBuf.String()
 					// Find the arg region and replace everything between regStart and regEnd
 					si := strings.Index(old, regStart)
-					if si < 0 { return }
+					if si < 0 {
+						return
+					}
 					ei := strings.Index(old[si+len(regStart):], regEnd)
-					if ei < 0 { return }
+					if ei < 0 {
+						return
+					}
 					ei = si + len(regStart) + ei + len(regEnd)
 					newContent := old[:si] + newReg + old[ei:]
 					t.outputBuf.Reset()
@@ -1607,24 +1612,28 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				toolID, _ := evt["tool_id"].(string)
 				toolArgs, _ := evt["tool_args"].(string)
 				tc := toolColors[toolID]
-				if tc == "" { tc = curToolClr }
+				if tc == "" {
+					tc = curToolClr
+				}
 				tName := toolNames[toolID]
-				if tName == "" { tName, _ = evt["tool_name"].(string) }
+				if tName == "" {
+					tName, _ = evt["tool_name"].(string)
+				}
 				// Final args: compact (strip braces, full length)
 				tClr2, _ := toolStyle(tName)
 				args := strings.TrimSpace(toolArgs)
 				args = strings.TrimPrefix(args, "{")
 				args = strings.TrimSuffix(args, "}")
 				args = strings.TrimSpace(args)
-// no truncation — show full args
+				// no truncation — show full args
 				argRegion := "arg-" + toolID
 				regStart := `["` + argRegion + `"]`
-				regEnd   := `[""]`
+				regEnd := `[""]`
 				finalReg := regStart + clrDim + strings.ReplaceAll(args, "[", "[[") + "[-:-:-]" + regEnd
 				// Finalize arg region + fill result region with ⧖ Executing...
 				resRegion := `["` + toolID + `"]`
 				emptyRes := resRegion + `[""]`
-				execRes  := resRegion + tClr2 + "\u29d6" + clrReset + clrDim + " Executing..." + clrReset + `[""]`
+				execRes := resRegion + tClr2 + "\u29d6" + clrReset + clrDim + " Executing..." + clrReset + `[""]`
 				t.uiOps <- func() {
 					old := t.outputBuf.String()
 					// 1. Finalize arg region
@@ -1678,7 +1687,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 						}
 					}
 					if extra > 0 {
-						sb.WriteString(fmt.Sprintf("  " + clrDim + fmt.Sprintf("... (+%d lines)", extra) + clrReset + "\n", extra))
+						sb.WriteString(fmt.Sprintf("  "+clrDim+fmt.Sprintf("... (+%d lines)", extra)+clrReset+"\n", extra))
 					}
 					sb.WriteString("\n")
 					result = sb.String()
@@ -1735,12 +1744,12 @@ func (t *TUI) streamEvents(ctx context.Context) {
 					t.spinning = false
 				}
 
-		case "error":
-			msg, _ := evt["message"].(string)
-			t.appendLine(fmt.Sprintf(clrErr+"✘ %s"+clrReset+"\n\n", msg))
-			t.spinning = false
-			// Persistent SSE — keep streaming
-		}
+			case "error":
+				msg, _ := evt["message"].(string)
+				t.appendLine(fmt.Sprintf(clrErr+"✘ %s"+clrReset+"\n\n", msg))
+				t.spinning = false
+				// Persistent SSE — keep streaming
+			}
 		}
 	}
 }
@@ -1896,7 +1905,7 @@ func formatToolOutput(output string) string {
 	if len(lines) == 1 {
 		return "  " + clrDim + strings.ReplaceAll(lines[0], "[", "[[") + clrReset + "\n"
 	}
-	return fmt.Sprintf("  " + clrDim + fmt.Sprintf("(%d lines)", len(lines)) + clrReset + "\n", len(lines))
+	return fmt.Sprintf("  "+clrDim+fmt.Sprintf("(%d lines)", len(lines))+clrReset+"\n", len(lines))
 }
 
 func compactNum(n int) string {

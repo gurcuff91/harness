@@ -256,7 +256,7 @@ func (a *Agent) buildSessionTools(cwd, model string, res *resources.Resources, l
 				Store:         store.NewInMemorySessionStoreManager(),
 				// Each subagent gets its OWN loader instance — FileResourceLoader is not goroutine-safe
 				ResourceLoader: resources.NewFileResourceLoader(cwd),
-				AllowedTools:  allowed,
+				AllowedTools:   allowed,
 			})
 			sess, err := subAgent.NewSession(cwd, model)
 			if err != nil {
@@ -356,4 +356,3 @@ func defaultAllTools() []string {
 		tools.ToolSubagent,
 	}
 }
-
