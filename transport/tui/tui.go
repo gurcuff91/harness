@@ -169,13 +169,14 @@ type TUI struct {
 	paletteTV *tview.TextView
 	spacerTop *tview.Box
 	spacerBot *tview.Box
-	flex      *tview.Flex
+	flex      *pasteableFlex
 	info      *tview.TextView
 	footer    *tview.TextView
 
 	// input state
-	inputBuf  string
-	cursorPos int // rune index into inputBuf
+	inputBuf    string
+	cursorPos   int // rune index into inputBuf
+	inputHeight int // current rendered height of input (1-5)
 	pal      palette
 
 	// session state
@@ -248,7 +249,7 @@ func (t *TUI) Run(ctx context.Context) error {
 		t.autoConnect()
 	}()
 
-	err = t.app.EnableMouse(true).Run()
+	err = t.app.EnableMouse(true).EnablePaste(true).Run()
 
 	if t.lastSessionID != "" {
 		fmt.Printf("\n  Resume: harness --resume %s\n\n", t.lastSessionID)
@@ -277,8 +278,8 @@ func (t *TUI) buildUI() {
 	t.output.SetBackgroundColor(tcell.ColorDefault)
 
 	// Input: plain TextView — no background color issues
-	t.inputTV = tview.NewTextView().
-		SetDynamicColors(true).
+	t.inputTV = tview.NewTextView()
+	t.inputTV.SetDynamicColors(true).
 		SetScrollable(true).
 		SetChangedFunc(func() { t.app.Draw() })
 	t.inputTV.SetBorder(false)
@@ -326,7 +327,23 @@ func (t *TUI) buildUI() {
 	//   ─────── sep2
 	//   info     (1 line)
 	//   footer   (1 line)
-	t.flex = tview.NewFlex().SetDirection(tview.FlexRow).
+	t.flex = newPasteableFlex(func(text string) {
+		// Normalize line endings from clipboard (\r\n -> \n, standalone \r -> \n)
+		text = strings.ReplaceAll(text, "\r\n", "\n")
+		text = strings.ReplaceAll(text, "\r", "\n")
+		runes := []rune(t.inputBuf)
+		paste := []rune(text)
+		newRunes := make([]rune, len(runes)+len(paste))
+		copy(newRunes, runes[:t.cursorPos])
+		copy(newRunes[t.cursorPos:], paste)
+		copy(newRunes[t.cursorPos+len(paste):], runes[t.cursorPos:])
+		t.inputBuf = string(newRunes)
+		t.cursorPos += len(paste)
+		// Called from within tview event loop — renderInput() runs before
+		// the natural draw that follows EventPaste handling.
+		t.renderInput()
+	})
+	t.flex.SetDirection(tview.FlexRow).
 		AddItem(t.output, 0, 1, false).
 		AddItem(t.spinner, 3, 0, false).
 		AddItem(sep1, 1, 0, false).
@@ -957,9 +974,9 @@ func (t *TUI) showWarn(msg string) {
 // ── Custom input & palette ──────────────────────────────────────────────────
 
 func (t *TUI) renderInput() {
+	newlines := 1
 	if t.inputBuf == "" {
 		t.inputTV.SetText(clrDim + "Type a message or / for commands..." + clrReset)
-		if t.flex != nil { t.flex.ResizeItem(t.inputTV, 1, 0) }
 	} else {
 		runes := []rune(t.inputBuf)
 		pos := t.cursorPos
@@ -968,14 +985,14 @@ func (t *TUI) renderInput() {
 		before := tview.Escape(string(runes[:pos]))
 		after  := tview.Escape(string(runes[pos:]))
 		t.inputTV.SetText(before + clrPrimary + "█" + clrReset + after)
-		// Resize to fit content (max 5 lines)
-		totalLines := strings.Count(t.inputBuf, "\n") + 1
-		visible := totalLines
-		if visible > 5 { visible = 5 }
-		if t.flex != nil { t.flex.ResizeItem(t.inputTV, visible, 0) }
-		// Scroll so cursor line is always visible
+		newlines = strings.Count(t.inputBuf, "\n") + 1
+		if newlines > 5 { newlines = 5 }
 		cursorLine := strings.Count(string(runes[:pos]), "\n")
 		t.inputTV.ScrollTo(cursorLine, 0)
+	}
+	if t.flex != nil && newlines != t.inputHeight {
+		t.inputHeight = newlines
+		t.flex.ResizeItem(t.inputTV, newlines, 0)
 	}
 }
 
@@ -1024,7 +1041,7 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 			t.inputBuf = "/"; t.cursorPos = len([]rune(t.inputBuf))
 			t.pal.setFilter("")
 		} else {
-			t.inputBuf = ""; t.cursorPos = 0
+			t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
 			t.pal.close()
 		}
 		t.redraw()
@@ -1042,7 +1059,7 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 			case "list", "list-free":
 				subs := t.getSubItems(sel.name)
 				t.pal.pushSub(sel.name, subs)
-				t.inputBuf = ""; t.cursorPos = 0
+				t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
 			case "free":
 				t.inputBuf = "/" + sel.name + " "; t.cursorPos = len([]rune(t.inputBuf))
 				t.pal.close()
@@ -1074,7 +1091,7 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 			case "list", "list-free":
 				subs := t.getSubItems(sel.name)
 				t.pal.pushSub(sel.name, subs)
-				t.inputBuf = ""; t.cursorPos = 0
+				t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
 				t.redraw()
 			case "free":
 				t.inputBuf = "/" + sel.name + " "; t.cursorPos = len([]rune(t.inputBuf))
@@ -1082,13 +1099,13 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 				t.redraw()
 			case "none":
 				cmd := "/" + sel.name
-				t.inputBuf = ""; t.cursorPos = 0
+				t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
 				t.pal.close()
 				t.redraw()
 				go t.handleInput(cmd)
 			case "optional":
 				cmd := "/" + sel.name
-				t.inputBuf = ""; t.cursorPos = 0
+				t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
 				t.pal.close()
 				t.redraw()
 				go t.handleInput(cmd)
@@ -1112,13 +1129,13 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 			} else if parentCmd == "connect" {
 				// Subscription: execute OAuth flow directly
 				cmd := "/" + parentCmd + " " + token
-				t.inputBuf = ""; t.cursorPos = 0
+				t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
 				t.pal.close()
 				t.redraw()
 				go t.handleInput(cmd)
 			} else {
 				cmd := "/" + parentCmd + " " + token
-				t.inputBuf = ""; t.cursorPos = 0
+				t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
 				t.pal.close()
 				t.redraw()
 				go t.handleInput(cmd)
@@ -1174,7 +1191,7 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 		if t.spinning && t.sessionID != "" {
 			go t.client.StopSession(t.sessionID) //nolint
 		}
-		t.inputBuf = ""; t.cursorPos = 0
+		t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
 		t.cursorPos = 0
 		t.redraw()
 		return nil
@@ -1296,7 +1313,7 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 					subs := t.getSubItems(cmd)
 					t.pal.openRoot(t.rootPaletteItems())
 					t.pal.pushSub(cmd, subs)
-					t.inputBuf = ""; t.cursorPos = 0
+					t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
 					t.redraw()
 					return nil
 				}
@@ -1312,7 +1329,7 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 				return nil
 			}
 		}
-		t.inputBuf = ""; t.cursorPos = 0
+		t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
 		t.pal.close()
 		t.redraw()
 		go t.handleInput(text)
