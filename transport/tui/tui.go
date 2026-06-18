@@ -1471,7 +1471,7 @@ func (t *TUI) appendLine(s string) {
 // toolSlots tracking is also done inside the op so it's always consistent with outputBuf.
 func (t *TUI) reserveSlot(toolID, toolName string) {
 	tClr, _ := toolStyle(toolName)
-	placeholder := `["` + toolID + `"]` + tClr + "\u29d6 Executing..." + `[""]`
+	placeholder := `["` + toolID + `"]` + tClr + "\u29d6" + clrReset + clrDim + " Executing..." + clrReset + `[""]`
 	t.uiOps <- func() {
 		if t.toolSlots == nil {
 			t.toolSlots = make(map[string]int)
@@ -1484,7 +1484,7 @@ func (t *TUI) reserveSlot(toolID, toolName string) {
 // fillSlot replaces the Executing... placeholder with result, serialized inside uiOps.
 func (t *TUI) fillSlot(toolID, toolName, result string) {
 	tClr, _ := toolStyle(toolName)
-	placeholder := `["` + toolID + `"]` + tClr + "\u29d6 Executing..." + `[""]` + "\n\n"
+	placeholder := `["` + toolID + `"]` + tClr + "\u29d6" + clrReset + clrDim + " Executing..." + clrReset + `[""]` + "\n\n"
 	t.uiOps <- func() {
 		if t.toolSlots == nil || t.toolSlots[toolID] == 0 {
 			t.outputBuf.WriteString(result)
@@ -1566,8 +1566,9 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				// Result region starts empty (invisible); tool_call fills it with ⧖ Executing...
 				argRegion := "arg-" + toolID
 				resRegion := toolID
-				headerLine := tClr + "[::b]" + tIco + " " + tview.Escape(name) + "[-:-:-]" + tClr +
-					`(["` + argRegion + `"][""]` + tClr + ")" + clrReset + "\n" +
+				// Reset color before arg region so args render in clrDim, not tClr
+				headerLine := tClr + "[::b]" + tIco + " " + tview.Escape(name) + "[-:-:-]" + tClr + "(" + clrReset +
+					`["` + argRegion + `"][""]` + tClr + ")" + clrReset + "\n" +
 					`["` + resRegion + `"][""]` + "\n\n"
 				t.uiOps <- func() {
 					if t.toolSlots == nil { t.toolSlots = make(map[string]int) }
@@ -1623,7 +1624,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				// Finalize arg region + fill result region with ⧖ Executing...
 				resRegion := `["` + toolID + `"]`
 				emptyRes := resRegion + `[""]`
-				execRes  := resRegion + tClr2 + "\u29d6 Executing..." + `[""]`
+				execRes  := resRegion + tClr2 + "\u29d6" + clrReset + clrDim + " Executing..." + clrReset + `[""]`
 				t.uiOps <- func() {
 					old := t.outputBuf.String()
 					// 1. Finalize arg region
