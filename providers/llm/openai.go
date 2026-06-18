@@ -91,9 +91,26 @@ func translateMessageToOpenAI(msg types.Message) []json.RawMessage {
 		var contentParts []map[string]any
 		for _, p := range msg.Parts {
 			if p.ToolResult != nil {
-				toolResults = append(toolResults, map[string]any{
-					"role": "tool", "tool_call_id": p.ToolResult.ID, "content": p.ToolResult.Output,
-				})
+				// OpenAI tool result with optional images
+				if len(p.ToolResult.Images) == 0 {
+					toolResults = append(toolResults, map[string]any{
+						"role": "tool", "tool_call_id": p.ToolResult.ID, "content": p.ToolResult.Output,
+					})
+				} else {
+					var parts []map[string]any
+					if p.ToolResult.Output != "" {
+						parts = append(parts, map[string]any{"type": "text", "text": p.ToolResult.Output})
+					}
+					for _, img := range p.ToolResult.Images {
+						parts = append(parts, map[string]any{
+							"type":      "image_url",
+							"image_url": map[string]string{"url": "data:" + img.MimeType + ";base64," + img.Base64},
+						})
+					}
+					toolResults = append(toolResults, map[string]any{
+						"role": "tool", "tool_call_id": p.ToolResult.ID, "content": parts,
+					})
+				}
 			} else if p.Image != nil {
 				contentParts = append(contentParts, map[string]any{
 					"type":      "image_url",

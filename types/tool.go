@@ -22,7 +22,8 @@ type ToolCall struct {
 
 // ToolResult represents the output of a tool execution.
 type ToolResult struct {
-	ID     string `json:"id"`
-	Output string `json:"output"`
-	IsErr  bool   `json:"is_error,omitempty"`
+	ID     string      `json:"id"`
+	Output string      `json:"output"`
+	Images []ImageData `json:"images,omitempty"` // optional image content blocks
+	IsErr  bool        `json:"is_error,omitempty"`
 }

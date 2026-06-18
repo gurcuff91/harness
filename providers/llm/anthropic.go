@@ -318,8 +318,19 @@ func TranslateMessageToAnthropic(msg types.Message) []json.RawMessage {
 		var content []map[string]any
 		for _, p := range msg.Parts {
 			if p.ToolResult != nil {
+				// Build content array: text + optional images
+				var resultContent []map[string]any
+				if p.ToolResult.Output != "" {
+					resultContent = append(resultContent, map[string]any{"type": "text", "text": p.ToolResult.Output})
+				}
+				for _, img := range p.ToolResult.Images {
+					resultContent = append(resultContent, map[string]any{
+						"type":   "image",
+						"source": map[string]string{"type": "base64", "media_type": img.MimeType, "data": img.Base64},
+					})
+				}
 				block := map[string]any{
-					"type": "tool_result", "tool_use_id": p.ToolResult.ID, "content": p.ToolResult.Output,
+					"type": "tool_result", "tool_use_id": p.ToolResult.ID, "content": resultContent,
 				}
 				if p.ToolResult.IsErr {
 					block["is_error"] = true

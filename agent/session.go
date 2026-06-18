@@ -560,7 +560,7 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 		go func() {
 			defer wg.Done()
 			start := time.Now()
-			output, execErr := s.tools.Run(ctx, call.toolName, call.toolArgs)
+			output, images, execErr := s.tools.Run(ctx, call.toolName, call.toolArgs)
 			dur := time.Since(start)
 			// If ctx was cancelled (Stop), skip emitting — EventStop handles it
 			if ctx.Err() != nil {
@@ -573,7 +573,7 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 			isErr := execErr != nil
 			s.emit(types.Event{Type: types.EventToolResult, ToolID: call.toolID, ToolName: call.toolName, Output: output, Duration: dur, IsError: isErr})
 			resultsMu.Lock()
-			streamResults = append(streamResults, types.ToolResult{ID: call.toolID, Output: output, IsErr: isErr})
+			streamResults = append(streamResults, types.ToolResult{ID: call.toolID, Output: output, Images: images, IsErr: isErr})
 			resultsMu.Unlock()
 		}()
 	}

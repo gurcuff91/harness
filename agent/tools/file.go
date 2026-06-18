@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,6 +11,21 @@ import (
 
 	"github.com/gurcuff91/harness/types"
 )
+
+// imageExtToMime maps supported image extensions to MIME types.
+var imageExtToMime = map[string]string{
+	".png":  "image/png",
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".gif":  "image/gif",
+	".webp": "image/webp",
+}
+
+func isImagePath(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	_, ok := imageExtToMime[ext]
+	return ok
+}
 
 type readFileInput struct {
 	Path   string `json:"path"`
@@ -21,31 +37,48 @@ func ReadFile() Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        "Read",
-			Description: "Read the contents of a file. Use offset and limit to read specific line ranges in large files. Always prefer this over bash cat/head/tail for reading file content.",
+			Description: "Read the contents of a file. Supports text files and images (jpg, png, gif, webp) — images are sent as attachments. For text files, use offset and limit to read specific line ranges. Always prefer this over bash cat/head/tail for reading file content.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"path": {"type": "string", "description": "Path to the file to read"},
+					"path":   {"type": "string",  "description": "Path to the file to read"},
 					"offset": {"type": "integer", "description": "Line offset to start reading from (0-based)"},
-					"limit": {"type": "integer", "description": "Maximum number of lines to read"}
+					"limit":  {"type": "integer", "description": "Maximum number of lines to read"}
 				},
 				"required": ["path"]
 			}`),
 		},
-		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
+		ExecuteRich: func(ctx context.Context, input json.RawMessage) (string, []types.ImageData, error) {
 			var args readFileInput
 			if err := json.Unmarshal(input, &args); err != nil {
-				return fmt.Sprintf("Error parsing input: %v", err), err
+				return fmt.Sprintf("Error parsing input: %v", err), nil, err
 			}
+
+			// Image file — return as ImageData
+			if isImagePath(args.Path) {
+				ext := strings.ToLower(filepath.Ext(args.Path))
+				mime := imageExtToMime[ext]
+				data, err := os.ReadFile(args.Path)
+				if err != nil {
+					return fmt.Sprintf("Error reading image: %v", err), nil, err
+				}
+				img := types.ImageData{
+					MimeType: mime,
+					Base64:   base64.StdEncoding.EncodeToString(data),
+				}
+				return fmt.Sprintf("Image loaded: %s (%s, %d bytes)", args.Path, mime, len(data)), []types.ImageData{img}, nil
+			}
+
+			// Text file
 			data, err := os.ReadFile(args.Path)
 			if err != nil {
-				return fmt.Sprintf("Error reading file: %v", err), err
+				return fmt.Sprintf("Error reading file: %v", err), nil, err
 			}
 			lines := strings.Split(string(data), "\n")
 			totalLines := len(lines)
 			if args.Offset > 0 {
 				if args.Offset >= totalLines {
-					return fmt.Sprintf("Offset %d beyond end of file (%d lines total)", args.Offset, totalLines), nil
+					return fmt.Sprintf("Offset %d beyond end of file (%d lines total)", args.Offset, totalLines), nil, nil
 				}
 				lines = lines[args.Offset:]
 			}
@@ -60,7 +93,7 @@ func ReadFile() Tool {
 			if args.Offset > 0 || args.Limit > 0 {
 				content = fmt.Sprintf("[lines %d-%d of %d]\n", args.Offset+1, args.Offset+len(lines), totalLines) + content
 			}
-			return content, nil
+			return content, nil, nil
 		},
 	}
 }

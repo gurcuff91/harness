@@ -10,9 +10,12 @@ import (
 
 // Tool defines a single tool that the agent can use.
 // Execute receives a context for cancellation — tools should respect ctx.Done().
+// ExecuteRich is an optional richer variant that can also return images.
+// If ExecuteRich is set it takes priority over Execute.
 type Tool struct {
-	Def     types.ToolDef
-	Execute func(ctx context.Context, input json.RawMessage) (string, error)
+	Def         types.ToolDef
+	Execute     func(ctx context.Context, input json.RawMessage) (string, error)
+	ExecuteRich func(ctx context.Context, input json.RawMessage) (string, []types.ImageData, error)
 }
 
 // Registry manages available tools.
@@ -54,11 +57,16 @@ func (r *Registry) Get(name string) Tool {
 }
 
 // Run executes a tool by name, passing ctx for cancellation.
-func (r *Registry) Run(ctx context.Context, name string, input json.RawMessage) (string, error) {
+// Returns (output, images, error). Images is non-nil only for vision-capable tools.
+func (r *Registry) Run(ctx context.Context, name string, input json.RawMessage) (string, []types.ImageData, error) {
 	t, ok := r.tools[name]
 	if !ok {
 		err := fmt.Errorf("unknown tool: %s", name)
-		return err.Error(), err
+		return err.Error(), nil, err
 	}
-	return t.Execute(ctx, input)
+	if t.ExecuteRich != nil {
+		return t.ExecuteRich(ctx, input)
+	}
+	out, err := t.Execute(ctx, input)
+	return out, nil, err
 }
