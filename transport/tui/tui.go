@@ -1439,6 +1439,7 @@ func (t *TUI) handleCommand(text string) {
 			t.updateInfo()
 		})
 		t.renderHistory()
+		t.startSSE()
 		t.appendLine(fmt.Sprintf(clrDim+"── resumed: %s ──"+clrReset+"\n\n", t.sessionName))
 		return
 	case "delete":
