@@ -339,9 +339,16 @@ func (t *TUI) buildUI() {
 		copy(newRunes[t.cursorPos+len(paste):], runes[t.cursorPos:])
 		t.inputBuf = string(newRunes)
 		t.cursorPos += len(paste)
-		// Called from within tview event loop — renderInput() runs before
-		// the natural draw that follows EventPaste handling.
+		// Force resize by resetting inputHeight so renderInput always calls ResizeItem
+		t.inputHeight = 0
 		t.renderInput()
+		// Schedule a second render from outside the event loop — some terminals
+		// (e.g. Zed) send EventResize after paste which redraws before our
+		// ResizeItem takes effect. The queued draw guarantees the correct size.
+		go t.app.QueueUpdateDraw(func() {
+			t.inputHeight = 0
+			t.renderInput()
+		})
 	})
 	t.flex.SetDirection(tview.FlexRow).
 		AddItem(t.output, 0, 1, false).
