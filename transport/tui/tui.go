@@ -343,7 +343,7 @@ func (t *TUI) buildUI() {
 		t.inputHeight = 0
 		t.renderInput()
 		// Schedule a second render from outside the event loop — some terminals
-		// (e.g. Zed) send EventResize after paste which redraws before our
+		// send EventResize after paste which redraws before our
 		// ResizeItem takes effect. The queued draw guarantees the correct size.
 		go t.app.QueueUpdateDraw(func() {
 			t.inputHeight = 0
