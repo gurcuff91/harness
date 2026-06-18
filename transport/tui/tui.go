@@ -174,7 +174,8 @@ type TUI struct {
 	footer    *tview.TextView
 
 	// input state
-	inputBuf string
+	inputBuf  string
+	cursorPos int // rune index into inputBuf
 	pal      palette
 
 	// session state
@@ -278,7 +279,7 @@ func (t *TUI) buildUI() {
 	// Input: plain TextView — no background color issues
 	t.inputTV = tview.NewTextView().
 		SetDynamicColors(true).
-		SetScrollable(false).
+		SetScrollable(true).
 		SetChangedFunc(func() { t.app.Draw() })
 	t.inputTV.SetBorder(false)
 	t.inputTV.SetBackgroundColor(tcell.ColorDefault)
@@ -940,8 +941,23 @@ func (t *TUI) showWarn(msg string) {
 func (t *TUI) renderInput() {
 	if t.inputBuf == "" {
 		t.inputTV.SetText(clrDim + "Type a message or / for commands..." + clrReset)
+		if t.flex != nil { t.flex.ResizeItem(t.inputTV, 1, 0) }
 	} else {
-		t.inputTV.SetText(tview.Escape(t.inputBuf) + clrPrimary + "█" + clrReset)
+		runes := []rune(t.inputBuf)
+		pos := t.cursorPos
+		if pos < 0 { pos = 0 }
+		if pos > len(runes) { pos = len(runes) }
+		before := tview.Escape(string(runes[:pos]))
+		after  := tview.Escape(string(runes[pos:]))
+		t.inputTV.SetText(before + clrPrimary + "█" + clrReset + after)
+		// Resize to fit content (max 5 lines)
+		totalLines := strings.Count(t.inputBuf, "\n") + 1
+		visible := totalLines
+		if visible > 5 { visible = 5 }
+		if t.flex != nil { t.flex.ResizeItem(t.inputTV, visible, 0) }
+		// Scroll so cursor line is always visible
+		cursorLine := strings.Count(string(runes[:pos]), "\n")
+		t.inputTV.ScrollTo(cursorLine, 0)
 	}
 }
 
@@ -990,7 +1006,7 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 			t.inputBuf = "/"
 			t.pal.setFilter("")
 		} else {
-			t.inputBuf = ""
+			t.inputBuf = ""; t.cursorPos = 0
 			t.pal.close()
 		}
 		t.redraw()
@@ -1008,7 +1024,7 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 			case "list", "list-free":
 				subs := t.getSubItems(sel.name)
 				t.pal.pushSub(sel.name, subs)
-				t.inputBuf = ""
+				t.inputBuf = ""; t.cursorPos = 0
 			case "free":
 				t.inputBuf = "/" + sel.name + " "
 				t.pal.close()
@@ -1040,7 +1056,7 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 			case "list", "list-free":
 				subs := t.getSubItems(sel.name)
 				t.pal.pushSub(sel.name, subs)
-				t.inputBuf = ""
+				t.inputBuf = ""; t.cursorPos = 0
 				t.redraw()
 			case "free":
 				t.inputBuf = "/" + sel.name + " "
@@ -1048,13 +1064,13 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 				t.redraw()
 			case "none":
 				cmd := "/" + sel.name
-				t.inputBuf = ""
+				t.inputBuf = ""; t.cursorPos = 0
 				t.pal.close()
 				t.redraw()
 				go t.handleInput(cmd)
 			case "optional":
 				cmd := "/" + sel.name
-				t.inputBuf = ""
+				t.inputBuf = ""; t.cursorPos = 0
 				t.pal.close()
 				t.redraw()
 				go t.handleInput(cmd)
@@ -1078,13 +1094,13 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 			} else if parentCmd == "connect" {
 				// Subscription: execute OAuth flow directly
 				cmd := "/" + parentCmd + " " + token
-				t.inputBuf = ""
+				t.inputBuf = ""; t.cursorPos = 0
 				t.pal.close()
 				t.redraw()
 				go t.handleInput(cmd)
 			} else {
 				cmd := "/" + parentCmd + " " + token
-				t.inputBuf = ""
+				t.inputBuf = ""; t.cursorPos = 0
 				t.pal.close()
 				t.redraw()
 				go t.handleInput(cmd)
@@ -1093,9 +1109,10 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 		return nil
 
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
-		if len(t.inputBuf) > 0 {
+		if len(t.inputBuf) > 0 && t.cursorPos > 0 {
 			runes := []rune(t.inputBuf)
-			t.inputBuf = string(runes[:len(runes)-1])
+			t.inputBuf = string(runes[:t.cursorPos-1]) + string(runes[t.cursorPos:])
+			t.cursorPos--
 		}
 		if t.inputBuf == "" {
 			if !t.pal.popLevel() {
@@ -1133,14 +1150,36 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 		if t.spinning && t.sessionID != "" {
 			go t.client.StopSession(t.sessionID) //nolint
 		}
-		t.inputBuf = ""
+		t.inputBuf = ""; t.cursorPos = 0
+		t.cursorPos = 0
+		t.redraw()
+		return nil
+
+	case tcell.KeyLeft:
+		if t.cursorPos > 0 { t.cursorPos-- }
+		t.redraw()
+		return nil
+
+	case tcell.KeyRight:
+		if t.cursorPos < len([]rune(t.inputBuf)) { t.cursorPos++ }
+		t.redraw()
+		return nil
+
+	case tcell.KeyHome, tcell.KeyCtrlA:
+		t.cursorPos = 0
+		t.redraw()
+		return nil
+
+	case tcell.KeyEnd, tcell.KeyCtrlE:
+		t.cursorPos = len([]rune(t.inputBuf))
 		t.redraw()
 		return nil
 
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
-		if len(t.inputBuf) > 0 {
+		if len(t.inputBuf) > 0 && t.cursorPos > 0 {
 			runes := []rune(t.inputBuf)
-			t.inputBuf = string(runes[:len(runes)-1])
+			t.inputBuf = string(runes[:t.cursorPos-1]) + string(runes[t.cursorPos:])
+			t.cursorPos--
 		}
 		// Reopen palette if still in command mode (no space = still on cmd word)
 		if strings.HasPrefix(t.inputBuf, "/") {
@@ -1157,7 +1196,68 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 		t.redraw()
 		return nil
 
+	case tcell.KeyUp:
+		// Move cursor to same position on previous logical line
+		runes := []rune(t.inputBuf)
+		// Find start of current line
+		lineStart := t.cursorPos
+		for lineStart > 0 && runes[lineStart-1] != '\n' { lineStart-- }
+		if lineStart == 0 { break } // already on first line
+		col := t.cursorPos - lineStart
+		// Find start of previous line
+		prevEnd := lineStart - 1 // the \n
+		prevStart := prevEnd
+		for prevStart > 0 && runes[prevStart-1] != '\n' { prevStart-- }
+		prevLen := prevEnd - prevStart
+		if col > prevLen { col = prevLen }
+		t.cursorPos = prevStart + col
+		t.redraw()
+		return nil
+
+	case tcell.KeyDown:
+		// Move cursor to same position on next logical line
+		runes := []rune(t.inputBuf)
+		// Find end of current line
+		lineStart := t.cursorPos
+		for lineStart > 0 && runes[lineStart-1] != '\n' { lineStart-- }
+		col := t.cursorPos - lineStart
+		// Find start of next line
+		nextStart := t.cursorPos
+		for nextStart < len(runes) && runes[nextStart] != '\n' { nextStart++ }
+		if nextStart >= len(runes) { break } // already on last line
+		nextStart++ // skip the \n
+		nextEnd := nextStart
+		for nextEnd < len(runes) && runes[nextEnd] != '\n' { nextEnd++ }
+		nextLen := nextEnd - nextStart
+		if col > nextLen { col = nextLen }
+		t.cursorPos = nextStart + col
+		t.redraw()
+		return nil
+
+	case tcell.KeyCtrlJ: // Ctrl+J = newline
+		runes := []rune(t.inputBuf)
+		newRunes := make([]rune, len(runes)+1)
+		copy(newRunes, runes[:t.cursorPos])
+		newRunes[t.cursorPos] = '\n'
+		copy(newRunes[t.cursorPos+1:], runes[t.cursorPos:])
+		t.inputBuf = string(newRunes)
+		t.cursorPos++
+		t.redraw()
+		return nil
+
 	case tcell.KeyEnter:
+		// Shift+Enter = newline (tcell reports Shift+Enter as ModShift)
+		if event.Modifiers()&tcell.ModShift != 0 {
+			runes := []rune(t.inputBuf)
+			newRunes := make([]rune, len(runes)+1)
+			copy(newRunes, runes[:t.cursorPos])
+			newRunes[t.cursorPos] = '\n'
+			copy(newRunes[t.cursorPos+1:], runes[t.cursorPos:])
+			t.inputBuf = string(newRunes)
+			t.cursorPos++
+			t.redraw()
+			return nil
+		}
 		text := strings.TrimSpace(t.inputBuf)
 		if text == "" {
 			return nil
@@ -1172,7 +1272,7 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 					subs := t.getSubItems(cmd)
 					t.pal.openRoot(t.rootPaletteItems())
 					t.pal.pushSub(cmd, subs)
-					t.inputBuf = ""
+					t.inputBuf = ""; t.cursorPos = 0
 					t.redraw()
 					return nil
 				}
@@ -1188,14 +1288,20 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 				return nil
 			}
 		}
-		t.inputBuf = ""
+		t.inputBuf = ""; t.cursorPos = 0
 		t.pal.close()
 		t.redraw()
 		go t.handleInput(text)
 		return nil
 
 	case tcell.KeyRune:
-		t.inputBuf += string(event.Rune())
+		runes := []rune(t.inputBuf)
+		newRunes := make([]rune, len(runes)+1)
+		copy(newRunes, runes[:t.cursorPos])
+		newRunes[t.cursorPos] = event.Rune()
+		copy(newRunes[t.cursorPos+1:], runes[t.cursorPos:])
+		t.inputBuf = string(newRunes)
+		t.cursorPos++
 		if strings.HasPrefix(t.inputBuf, "/") {
 			parts := strings.Fields(t.inputBuf)
 			// Only show palette if we're still on the command word (no space yet)
