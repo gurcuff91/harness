@@ -252,6 +252,11 @@ func (t *TUI) Run(ctx context.Context) error {
 		t.autoConnect()
 	}()
 
+	// Sync screen after every draw to prevent ghost chars from wide/emoji chars
+	t.app.SetAfterDrawFunc(func(screen tcell.Screen) {
+		screen.Sync()
+	})
+
 	err = t.app.EnableMouse(false).EnablePaste(true).Run()
 
 	if t.lastSessionID != "" {
