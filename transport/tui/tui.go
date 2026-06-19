@@ -14,6 +14,7 @@ import (
 	"github.com/rivo/tview"
 
 	"github.com/gurcuff91/harness/agent"
+	goclip "golang.design/x/clipboard"
 )
 
 // ── Color palette ──────────────────────────────────────────────────────────
@@ -183,6 +184,8 @@ type TUI struct {
 	thinking       string
 	isSubscription bool
 	sessionCmds    []CommandDef
+	readMode       bool   // reserved
+	lastTurnText   strings.Builder // accumulates agent text during a turn for Ctrl+Y copy
 
 	// state
 	spinning     bool
@@ -249,7 +252,7 @@ func (t *TUI) Run(ctx context.Context) error {
 		t.autoConnect()
 	}()
 
-	err = t.app.EnableMouse(true).EnablePaste(true).Run()
+	err = t.app.EnableMouse(false).EnablePaste(true).Run()
 
 	if t.lastSessionID != "" {
 		fmt.Printf("\n  Resume: harness --resume %s\n\n", t.lastSessionID)
@@ -1223,6 +1226,16 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 		t.redraw()
 		return nil
 
+	case tcell.KeyCtrlY: // copy last agent response to clipboard
+		text := strings.TrimSpace(t.lastTurnText.String())
+		if text == "" {
+			t.appendLine(clrWarn + "⚠ nothing to copy" + clrReset + "\n")
+			return nil
+		}
+		goclip.Write(goclip.FmtText, []byte(text))
+		t.appendLine(clrDim + "✔ copied to clipboard" + clrReset + "\n")
+		return nil
+
 	case tcell.KeyCtrlI: // Ctrl+I — paste image from clipboard
 		go func() {
 			path, err := PasteImageFromClipboard()
@@ -1279,7 +1292,13 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 		return nil
 
 	case tcell.KeyUp:
-		// Move cursor to same position on previous logical line
+		// If input has no newlines → scroll output up 3 lines
+		if !strings.Contains(t.inputBuf, "\n") {
+			row, col := t.output.GetScrollOffset()
+			t.output.ScrollTo(row-3, col)
+			return nil
+		}
+		// Otherwise move cursor to previous logical line
 		runes := []rune(t.inputBuf)
 		// Find start of current line
 		lineStart := t.cursorPos
@@ -1297,7 +1316,13 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 		return nil
 
 	case tcell.KeyDown:
-		// Move cursor to same position on next logical line
+		// If input has no newlines → scroll output down 3 lines
+		if !strings.Contains(t.inputBuf, "\n") {
+			row, col := t.output.GetScrollOffset()
+			t.output.ScrollTo(row+3, col)
+			return nil
+		}
+		// Otherwise move cursor to next logical line
 		runes := []rune(t.inputBuf)
 		// Find end of current line
 		lineStart := t.cursorPos
@@ -1721,6 +1746,9 @@ func (t *TUI) streamEvents(ctx context.Context) {
 			typ, _ := evt["type"].(string)
 			switch typ {
 
+			case "turn_start":
+				t.lastTurnText.Reset()
+
 			case "thinking":
 				inThinking = true
 				delta, _ := evt["delta"].(string)
@@ -1733,6 +1761,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				}
 				inText = true
 				delta, _ := evt["delta"].(string)
+				t.lastTurnText.WriteString(delta)
 				t.appendLine(strings.ReplaceAll(delta, "[", "[["))
 
 			case "tool_start":
