@@ -227,7 +227,7 @@ func (m *mdState) closeInline() string {
 func (m *mdState) tryLinePrefix(s string) (string, bool) {
 	switch {
 	case s == "# ":
-		return "[" + clrPrimaryHex + "][::b]", true
+		return "[" + hexPrimary + "][::b]", true
 	case s == "## ":
 		return "[::b]", true
 	case s == "### ":

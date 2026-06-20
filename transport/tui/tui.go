@@ -19,17 +19,20 @@ import (
 
 // ── Color palette ──────────────────────────────────────────────────────────
 const (
-	clrPrimary = "[#26A69A]" // teal 400   — user input, separators  (Kaiban Teal dark-adapted)
-	clrAccent  = "[#C8D96A]" // chartreuse — tool names, compact    (Kaiban Energy)
-	clrOK      = "[#C8D96A]" // chartreuse — success                (Kaiban Energy)
-	clrErr     = "[#D94068]" // rose       — errors                 (Kaiban Rose)
-	clrWarn    = "[#B44CA0]" // violet     — warnings, stopped      (Kaiban Violet)
-	clrDim     = "[::d]"     // dim        — thinking, footer, args
-	clrReset   = "[-:-:-]"   // reset
+	// ── Palette — pure hex, single source of truth ────────────────
+	hexPrimary = "#26A69A" // teal 400   (Kaiban Teal dark-adapted)
+	hexAccent  = "#C8D96A" // chartreuse (Kaiban Energy)
+	hexErr     = "#D94068" // rose       (Kaiban Rose)
+	hexWarn    = "#B44CA0" // violet     (Kaiban Violet)
 
-	// Hex-only variants for use inside tview compound tags e.g. [#hex::i]
-	clrPrimaryHex = "#26A69A"
-	clrAccentHex  = "#C8D96A"
+	// ── tview color tags — derived from palette ────────────────────
+	clrPrimary = "[" + hexPrimary + "]"
+	clrAccent  = "[" + hexAccent + "]"
+	clrOK      = "[" + hexAccent + "]"
+	clrErr     = "[" + hexErr + "]"
+	clrWarn    = "[" + hexWarn + "]"
+	clrDim     = "[::d]"
+	clrReset   = "[-:-:-]"
 
 )
 
@@ -378,15 +381,11 @@ func (t *TUI) buildUI() {
 	t.app.SetRoot(t.flex, true).SetFocus(t.inputTV)
 }
 
-// primaryColor parses clrPrimary hex for use with tcell directly.
+// primaryColor returns the primary palette color as a tcell.Color.
 func primaryColor() tcell.Color {
-	// clrPrimary = "[#RRGGBB]" — extract hex
-	s := clrPrimary // e.g. "[#29B6F6]"
-	if len(s) == 9 && s[0] == '[' && s[1] == '#' {
-		var r, g, b int32
-		fmt.Sscanf(s[2:8], "%02x%02x%02x", &r, &g, &b)
-		return tcell.NewRGBColor(r, g, b)
-	}
+	var r, g, b int32
+	fmt.Sscanf(hexPrimary[1:], "%02x%02x%02x", &r, &g, &b)
+	return tcell.NewRGBColor(r, g, b)
 	return tcell.ColorWhite
 }
 
