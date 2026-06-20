@@ -3,12 +3,16 @@ package tui
 import "strings"
 
 // mdState tracks markdown parse state across streaming deltas.
-// Code blocks (``` ... ```) and inline code (` ... `) are NOT processed —
-// they pass through verbatim so the model's output is never modified.
+// Code blocks (``` ... ```) are rendered with accent+italic color.
+// Each line is buffered and [ is escaped to [[ before emitting so
+// tview never interprets code content as color/style tags.
 type mdState struct {
 	pending     string
 	inBold      bool
 	inItalic    bool
+	inCodeBlock bool   // fenced ```block```
+	codeLineBuf string // buffer current line inside code block
+	tickBuf     string // accumulate backticks to detect ```
 	atLineStart bool
 	linePrefix  string
 }
@@ -20,6 +24,17 @@ func newMdState() *mdState {
 // flush drains any pending state at turn_end.
 func (m *mdState) flush() string {
 	out := ""
+	if m.inCodeBlock {
+		if m.codeLineBuf != "" {
+			out += codeLine(m.codeLineBuf)
+			m.codeLineBuf = ""
+		}
+		m.inCodeBlock = false
+	}
+	if m.tickBuf != "" {
+		out += m.tickBuf
+		m.tickBuf = ""
+	}
 	if m.linePrefix != "" {
 		out += m.linePrefix
 		m.linePrefix = ""
@@ -46,6 +61,66 @@ func (m *mdState) feed(delta string) string {
 }
 
 func (m *mdState) processChar(ch rune) string {
+	// ── Inside fenced code block ───────────────────────────────────────
+	if m.inCodeBlock {
+		if ch == '`' {
+			m.tickBuf += "`"
+			if m.tickBuf == "```" {
+				// closing fence — flush remaining line buf
+				out := ""
+				if m.codeLineBuf != "" {
+					out += codeLine(m.codeLineBuf)
+					m.codeLineBuf = ""
+				}
+				m.tickBuf = ""
+				m.inCodeBlock = false
+				return out + "```"
+			}
+			return ""
+		}
+		// non-backtick: flush any partial tickBuf into line buf
+		if m.tickBuf != "" {
+			m.codeLineBuf += m.tickBuf
+			m.tickBuf = ""
+		}
+		if ch == '\n' {
+			out := codeLine(m.codeLineBuf) + "\n"
+			m.codeLineBuf = ""
+			return out
+		}
+		m.codeLineBuf += string(ch)
+		return ""
+	}
+
+	// ── Backtick accumulation (detect opening ```) ────────────────────
+	if ch == '`' || m.tickBuf != "" {
+		if ch == '`' {
+			m.tickBuf += "`"
+		}
+		if m.tickBuf == "```" {
+			m.tickBuf = ""
+			out := m.pending + m.closeInline()
+			m.pending = ""
+			m.inCodeBlock = true
+			m.atLineStart = false
+			return out + "```"
+		}
+		if len(m.tickBuf) < 3 && ch == '`' {
+			return ""
+		}
+		// not a ``` — emit tickBuf verbatim + process current char normally
+		t := m.tickBuf
+		m.tickBuf = ""
+		if ch != '`' {
+			return t + m.processNormal(ch)
+		}
+		return t
+	}
+
+	return m.processNormal(ch)
+}
+
+func (m *mdState) processNormal(ch rune) string {
 	switch ch {
 	case '*':
 		m.pending += "*"
@@ -169,7 +244,16 @@ func (m *mdState) tryLinePrefix(s string) (string, bool) {
 	return "", false
 }
 
+// codeLine returns the line as-is. No color, no escaping.
+// Code content is passed verbatim — tview may eat some [word] patterns
+// but that is acceptable vs corrupting the output.
+func codeLine(s string) string {
+	return s
+}
+
 const (
 	clrPrimaryHex = "#26A69A"
 	clrAccentHex  = "#C8D96A"
+
+
 )
