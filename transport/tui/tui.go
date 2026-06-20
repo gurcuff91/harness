@@ -27,6 +27,10 @@ const (
 	clrDim     = "[::d]"     // dim        — thinking, footer, args
 	clrReset   = "[-:-:-]"   // reset
 
+	// Hex-only variants for use inside tview compound tags e.g. [#hex::i]
+	clrPrimaryHex = "#26A69A"
+	clrAccentHex  = "#C8D96A"
+
 )
 
 // ── Palette types ─────────────────────────────────────────────────────────

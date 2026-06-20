@@ -251,9 +251,4 @@ func codeLine(s string) string {
 	return s
 }
 
-const (
-	clrPrimaryHex = "#26A69A"
-	clrAccentHex  = "#C8D96A"
 
-
-)
