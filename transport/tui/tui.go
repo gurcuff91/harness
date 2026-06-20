@@ -186,6 +186,7 @@ type TUI struct {
 	sessionCmds    []CommandDef
 	readMode       bool   // reserved
 	lastTurnText   strings.Builder // accumulates agent text during a turn for Ctrl+Y copy
+	md             *mdState        // markdown streaming state (reset each turn)
 
 	// state
 	spinning     bool
@@ -1753,6 +1754,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 
 			case "turn_start":
 				t.lastTurnText.Reset()
+				t.md = newMdState()
 
 			case "thinking":
 				inThinking = true
@@ -1767,7 +1769,10 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				inText = true
 				delta, _ := evt["delta"].(string)
 				t.lastTurnText.WriteString(delta)
-				t.appendLine(strings.ReplaceAll(delta, "[", "[["))
+				if t.md == nil {
+					t.md = newMdState()
+				}
+				t.appendLine(t.md.feed(delta))
 
 			case "tool_start":
 				// Close previous block with \n\n — each block owns its own trailing space
@@ -1949,6 +1954,14 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				t.app.QueueUpdateDraw(func() { t.updateInfo() })
 
 			case "turn_end":
+				if t.md != nil {
+					if tail := t.md.flush(); tail != "" {
+						t.appendLine(tail)
+					}
+					t.md = nil
+				}
+				// Always reset tview style at turn end to prevent bleed into next block
+				t.appendLine(clrReset)
 				if inThinking || inText {
 					t.appendLine("\n\n")
 				}
