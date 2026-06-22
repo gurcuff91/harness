@@ -160,7 +160,12 @@ func (m *mdState) processChar(ch rune) string {
 	// ── Inline code ──────────────────────────────────────────────────────
 	if m.inInlineCode {
 		if ch == '`' {
-			out := codeInlineSpan(m.inlineCodeBuf) + clrReset
+			// restore heading color after inline code span if inside a heading
+			closer := clrReset
+			if m.inHeading {
+				closer = "[" + hexAccent + "::I]" // unset italic, keep accent color
+			}
+			out := codeInlineSpan(m.inlineCodeBuf) + closer
 			m.inlineCodeBuf = ""
 			m.inInlineCode = false
 			return out
