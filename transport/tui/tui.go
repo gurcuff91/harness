@@ -843,7 +843,10 @@ func (t *TUI) renderHistory() {
 				if role == "user" {
 					t.appendLine(clrPrimary + "❯ " + tview.Escape(text) + clrReset + "\n\n")
 				} else {
-					t.appendLine(tview.Escape(text) + "\n\n")
+					// Run through mdrender same as live streaming
+					md := newMdState()
+					rendered := md.feed(text) + md.flush() + clrReset + "\n\n"
+					t.appendLine(rendered)
 				}
 			case part["tool_call"] != nil:
 				tc, _ := part["tool_call"].(map[string]any)
@@ -1762,7 +1765,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 			case "thinking":
 				inThinking = true
 				delta, _ := evt["delta"].(string)
-				t.appendLine(clrDim + strings.ReplaceAll(delta, "[", "[[") + clrReset)
+				t.appendLine("[::di]" + strings.ReplaceAll(delta, "[", "[[") + clrReset)
 
 			case "text":
 				if inThinking {
