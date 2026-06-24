@@ -12,7 +12,9 @@ import (
 	"github.com/gurcuff91/harness/config"
 	"github.com/gurcuff91/harness/transport/cli"
 	httptransport "github.com/gurcuff91/harness/transport/http"
-	"github.com/gurcuff91/harness/transport/tui"
+	// tui-v1 (tview-based, reference — do not delete):
+	// "github.com/gurcuff91/harness/transport/tui"
+	tui "github.com/gurcuff91/harness/transport/tui-v3"
 )
 
 func main() {
