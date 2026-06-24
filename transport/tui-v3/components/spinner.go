@@ -117,14 +117,18 @@ func (s *Spinner) Elapsed() time.Duration {
 	return time.Since(s.start)
 }
 
-// Render returns three lines (blank, spinner, blank) so the status sits with
-// breathing room between the conversation and the editor, matching the v1 TUI.
-// When stopped it renders nothing.
+// Render keeps ONE blank line permanently between the conversation and the
+// editor so output never butts against the input separator. While running it
+// adds the spinner line below that blank; the editor's own separator provides
+// the lower margin. Stopped: just the single blank line.
+//
+//	running -> ["", "⠋ message", ""]   (blank + spinner + blank)
+//	stopped -> [""]                     (blank only)
 func (s *Spinner) Render(width int) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.running {
-		return nil
+		return []string{""}
 	}
 	frame := ansi.Primary(spinnerFrames[s.frame])
 	line := frame + " " + ansi.Dimmed(s.message)
