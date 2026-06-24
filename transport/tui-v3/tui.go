@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/transport/tui-v3/ansi"
 	"github.com/gurcuff91/harness/transport/tui-v3/components"
 	"github.com/gurcuff91/harness/transport/tui-v3/render"
 )
@@ -147,8 +148,16 @@ func (t *TUI) Run(ctx context.Context) error {
 	case <-ctx.Done():
 	}
 
+	// The render loop left the cursor at an arbitrary column; \r returns it to
+	// column 0 so the farewell isn't indented by leftover cursor position.
 	if t.lastSessionID != "" {
-		fmt.Printf("\n  Resume: harness --resume %s\n\n", t.lastSessionID)
+		fmt.Printf("\r\n\r\n%s %s\r\n  %s harness --resume %s",
+			ansi.Primary("👋"),
+			ansi.Bold+"Goodbye!"+ansi.Reset,
+			ansi.Dimmed("To resume this session:"),
+			t.lastSessionID)
+	} else {
+		fmt.Printf("\r\n\r\n%s %s", ansi.Primary("👋"), ansi.Bold+"Goodbye!"+ansi.Reset)
 	}
 	return nil
 }
