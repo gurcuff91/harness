@@ -52,7 +52,9 @@ func NewOllamaCloud() *OllamaCloud {
 	return o
 }
 
-func (o *OllamaCloud) Name() string { return "ollama-cloud" }
+func (o *OllamaCloud) Name() string        { return "ollama-cloud" }
+func (o *OllamaCloud) DisplayName() string { return "Ollama Cloud" }
+func (o *OllamaCloud) Description() string { return describeState(o) }
 func (o *OllamaCloud) ActivationSource() ActivationSource {
 	if v := os.Getenv(ollamaCloudAPIKeyEnv); v != "" {
 		return ActivationEnvVar

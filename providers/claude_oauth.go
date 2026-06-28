@@ -58,7 +58,9 @@ func NewClaudeOAuth() (*ClaudeOAuth, error) {
 	return c, nil
 }
 
-func (c *ClaudeOAuth) Name() string { return "claude-oauth" }
+func (c *ClaudeOAuth) Name() string        { return "claude-oauth" }
+func (c *ClaudeOAuth) DisplayName() string { return "Claude OAuth" }
+func (c *ClaudeOAuth) Description() string { return describeState(c) }
 
 func (c *ClaudeOAuth) ActivationSource() ActivationSource {
 	if _, err := c.ResolveCredentials(); err == nil {

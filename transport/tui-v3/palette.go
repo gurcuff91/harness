@@ -205,7 +205,7 @@ func (p *paletteController) enterSub(item components.SelectItem) {
 		token = item.ID
 	}
 	// connect to a non-subscription provider needs an API key typed by hand.
-	if parent == "connect" && item.Description != "subscription" {
+	if parent == "connect" && !item.Flag {
 		p.tui.editor.SetValue("/connect " + token + " ")
 		p.close()
 		return
@@ -329,15 +329,19 @@ func (t *TUI) providersByActive(active bool) []components.SelectItem {
 			continue
 		}
 		name, _ := p["name"].(string)
-		desc := ""
-		if active {
-			if isSub, _ := p["is_subscription"].(bool); isSub {
-				desc = "subscription"
-			}
-		} else {
-			desc = "inactive"
+		// Prefer the human-friendly display name for the label; fall back to the
+		// slug. The dynamic description ("API key · 12 models", ...) comes straight
+		// from the core, uniform across providers. Value stays the slug — that's
+		// what /connect needs. Flag marks subscriptions so connect can branch
+		// (OAuth = execute directly; API key = prompt for a key) without parsing
+		// the human-readable description.
+		label, _ := p["display_name"].(string)
+		if label == "" {
+			label = name
 		}
-		items = append(items, components.SelectItem{Value: name, Label: name, Description: desc})
+		desc, _ := p["description"].(string)
+		isSub, _ := p["is_subscription"].(bool)
+		items = append(items, components.SelectItem{Value: name, Label: label, Description: desc, Flag: isSub})
 	}
 	return items
 }
@@ -362,11 +366,23 @@ func (t *TUI) sessionsForCWD(excludeActive bool) []components.SelectItem {
 		if name == "" && len(id) >= 8 {
 			name = id[:8]
 		}
+		// Description: "<relative time> · <short model> · <cwd>" — the most
+		// distinguishing signals when picking a session to resume.
 		sessCWD, _ := s["cwd"].(string)
+		model, _ := s["model"].(string)
+		lastActive, _ := s["last_active_at"].(string)
+		var segs []string
+		if rel := relativeTime(lastActive); rel != "" {
+			segs = append(segs, rel)
+		}
+		if sm := shortModel(model); sm != "" {
+			segs = append(segs, sm)
+		}
+		segs = append(segs, shortenPath(sessCWD))
 		items = append(items, components.SelectItem{
 			Value:       name,
 			Label:       name,
-			Description: shortenPath(sessCWD),
+			Description: strings.Join(segs, " · "),
 			ID:          id,
 		})
 	}

@@ -17,15 +17,6 @@ type ProviderStatus struct {
 func GetProviderStatuses() []ProviderStatus {
 	EnsureRegistry()
 
-	labels := map[string]string{
-		"claude-oauth": "Claude OAuth",
-		"anthropic":    "Anthropic",
-		"openai":       "OpenAI",
-		"opencode-go":  "OpenCode Go",
-		"ollama-cloud": "Ollama Cloud",
-		"ollama":       "Ollama",
-	}
-
 	var statuses []ProviderStatus
 	for _, p := range All {
 		active := p.IsActive()
@@ -38,7 +29,7 @@ func GetProviderStatuses() []ProviderStatus {
 		}
 		statuses = append(statuses, ProviderStatus{
 			ID:          p.Name(),
-			DisplayName: labels[p.Name()],
+			DisplayName: p.DisplayName(),
 			Connected:   active,
 			Note:        note,
 		})
@@ -55,15 +46,6 @@ type ModelGroup struct {
 // GetModelGroups returns ordered groups of models for transport display.
 func GetModelGroups(currentModel string) []ModelGroup {
 	EnsureRegistry()
-
-	labels := map[string]string{
-		"claude-oauth": "Claude OAuth",
-		"anthropic":    "Anthropic API",
-		"openai":       "OpenAI API",
-		"opencode-go":  "OpenCode Go",
-		"ollama-cloud": "Ollama Cloud",
-		"ollama":       "Ollama (local)",
-	}
 
 	order := []string{"claude-oauth", "anthropic", "openai", "opencode-go", "ollama-cloud", "ollama"}
 
@@ -83,7 +65,7 @@ func GetModelGroups(currentModel string) []ModelGroup {
 				})
 			}
 			if len(list) > 0 {
-				groups = append(groups, ModelGroup{Label: labels[name], Models: list})
+				groups = append(groups, ModelGroup{Label: p.DisplayName(), Models: list})
 			}
 		}
 	}

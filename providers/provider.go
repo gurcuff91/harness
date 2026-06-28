@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/gurcuff91/harness/types"
 )
@@ -20,6 +21,13 @@ type Provider interface {
 	CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error)
 	// Name returns the provider slug (e.g. "anthropic", "openai", "ollama").
 	Name() string
+	// DisplayName returns the human-friendly provider name (e.g. "OpenAI",
+	// "Anthropic", "Claude OAuth"). Used for UI rendering in palettes/menus.
+	DisplayName() string
+	// Description returns a short, dynamic blurb about the provider's current
+	// state — e.g. "12 models" when connected, "subscription" for OAuth, or
+	// "not connected" when inactive. Computed live, not hardcoded.
+	Description() string
 	// IsActive returns true if this provider has valid credentials and is reachable.
 	IsActive() bool
 	// Models returns the cached model list for this provider.
@@ -65,3 +73,41 @@ const (
 	// ActivationAuto — auto-detected (e.g. ollama running locally, not manageable).
 	ActivationAuto ActivationSource = "auto"
 )
+
+// describeState builds the dynamic Description shared by all providers, in a
+// uniform two-segment format: "<auth type> · <state>".
+//
+//	auth type — stable nature of the provider: "subscription" (OAuth),
+//	            "API key", or "local" (auto-detected, e.g. Ollama).
+//	state     — dynamic: "N models" when connected, else "not connected".
+//
+// Examples:
+//
+//	subscription · 8 models
+//	API key · 12 models
+//	local · 2 models
+//	API key · not connected
+//
+// Every provider's Description() delegates here so the wording stays identical
+// across the registry.
+func describeState(p Provider) string {
+	var authType string
+	switch p.CredentialType() {
+	case types.CredTypeOAuth:
+		authType = "subscription"
+	case types.CredTypeAPIKey:
+		authType = "API key"
+	default: // CredTypeNone — auto-detected local providers
+		authType = "local"
+	}
+
+	state := "not connected"
+	if p.IsActive() {
+		if n := len(p.Models()); n > 0 {
+			state = fmt.Sprintf("%d models", n)
+		} else {
+			state = "connected"
+		}
+	}
+	return authType + " · " + state
+}

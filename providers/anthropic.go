@@ -36,7 +36,9 @@ func NewAnthropic() *Anthropic {
 	return a
 }
 
-func (a *Anthropic) Name() string { return "anthropic" }
+func (a *Anthropic) Name() string        { return "anthropic" }
+func (a *Anthropic) DisplayName() string { return "Anthropic" }
+func (a *Anthropic) Description() string { return describeState(a) }
 func (a *Anthropic) ActivationSource() ActivationSource {
 	if v := os.Getenv(anthropicAPIKeyEnv); v != "" {
 		return ActivationEnvVar

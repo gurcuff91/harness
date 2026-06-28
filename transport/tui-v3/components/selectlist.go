@@ -19,6 +19,7 @@ type SelectItem struct {
 	Label       string // displayed primary text (falls back to Value)
 	Description string // optional right-column hint
 	ID          string // hidden internal id (e.g. session id); not displayed
+	Flag        bool   // generic per-item flag (e.g. provider is a subscription)
 }
 
 // SelectList is an interactive, filterable selection list with keyboard

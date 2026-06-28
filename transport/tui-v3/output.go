@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gurcuff91/harness/transport/tui-v3/ansi"
 	"github.com/gurcuff91/harness/transport/tui-v3/components"
@@ -170,6 +171,49 @@ func shortenPath(path string) string {
 		return "~" + strings.TrimPrefix(path, home)
 	}
 	return path
+}
+
+// shortModel strips provider prefixes and the redundant "claude-" vendor tag so
+// "claude-oauth/claude-opus-4-6" → "opus-4-6" and "openai/gpt-4o" → "gpt-4o".
+func shortModel(model string) string {
+	if model == "" {
+		return ""
+	}
+	if i := strings.LastIndex(model, "/"); i >= 0 {
+		model = model[i+1:]
+	}
+	model = strings.TrimPrefix(model, "claude-")
+	return model
+}
+
+// relativeTime renders an RFC3339 timestamp as a compact "time ago" string:
+// "just now", "5m ago", "2h ago", "3d ago", or a short date ("Jun 20") beyond a
+// week. Returns "" if the timestamp can't be parsed.
+func relativeTime(ts string) string {
+	if ts == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		// Some encoders include sub-second precision / timezone offsets; try the
+		// nano variant before giving up.
+		if t, err = time.Parse(time.RFC3339Nano, ts); err != nil {
+			return ""
+		}
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 7*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	default:
+		return t.Format("Jan 2")
+	}
 }
 
 func intFromMap(m map[string]any, key string) (int, bool) {

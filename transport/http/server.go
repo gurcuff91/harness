@@ -131,6 +131,8 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 // providerInfo is the API representation of a provider.
 type providerInfo struct {
 	Name           string `json:"name"`
+	DisplayName    string `json:"display_name"`
+	Description    string `json:"description"`
 	Active         bool   `json:"active"`
 	Activation     string `json:"activation"`
 	IsSubscription bool   `json:"is_subscription"`
@@ -155,6 +157,8 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 		}
 		list = append(list, providerInfo{
 			Name:           p.Name(),
+			DisplayName:    p.DisplayName(),
+			Description:    p.Description(),
 			Active:         p.IsActive(),
 			Activation:     act,
 			IsSubscription: p.CredentialType() == types.CredTypeOAuth,

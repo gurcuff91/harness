@@ -47,7 +47,9 @@ func NewOllama() *Ollama {
 	return o
 }
 
-func (o *Ollama) Name() string { return "ollama" }
+func (o *Ollama) Name() string        { return "ollama" }
+func (o *Ollama) DisplayName() string { return "Ollama" }
+func (o *Ollama) Description() string { return describeState(o) }
 func (o *Ollama) ActivationSource() ActivationSource {
 	if OllamaAvailable() {
 		return ActivationAuto

@@ -37,7 +37,9 @@ func NewOpenCodeGo() *OpenCodeGo {
 	return o
 }
 
-func (o *OpenCodeGo) Name() string { return "opencode-go" }
+func (o *OpenCodeGo) Name() string        { return "opencode-go" }
+func (o *OpenCodeGo) DisplayName() string { return "OpenCode Go" }
+func (o *OpenCodeGo) Description() string { return describeState(o) }
 func (o *OpenCodeGo) ActivationSource() ActivationSource {
 	if v := os.Getenv(openCodeGoAPIKeyEnv); v != "" {
 		return ActivationEnvVar

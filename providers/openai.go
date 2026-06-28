@@ -90,7 +90,9 @@ func NewOpenAIWithConfig(apiKey, baseURL string) *OpenAI {
 	}
 }
 
-func (o *OpenAI) Name() string { return "openai" }
+func (o *OpenAI) Name() string        { return "openai" }
+func (o *OpenAI) DisplayName() string { return "OpenAI" }
+func (o *OpenAI) Description() string { return describeState(o) }
 func (o *OpenAI) ActivationSource() ActivationSource {
 	if v := os.Getenv(openAIAPIKeyEnv); v != "" {
 		return ActivationEnvVar
