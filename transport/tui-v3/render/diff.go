@@ -55,24 +55,24 @@ func (t *TUI) doRender() {
 
 	// ── Strategy 1: first render (assume clean screen) ──────────────────
 	if len(t.previousLines) == 0 && !widthChanged && !heightChanged {
-		t.fullRender(newLines, width, height, false)
+		t.fullRender(newLines, width, height, clearNone)
 		return
 	}
 
-	// ── Strategy 2: width change → full redraw (wrapping changes) ───────
-	if widthChanged {
-		t.fullRender(newLines, width, height, true)
-		return
-	}
-	// Height change → full redraw to keep the viewport aligned.
-	if heightChanged {
-		t.fullRender(newLines, width, height, true)
+	// ── Strategy 2: width/height change → full ABSOLUTE redraw ──────────
+	// On resize, line wrapping and viewport geometry both change, so relative
+	// cursor math (used for scrollback-safe shrink) is unreliable. Clear the
+	// whole screen + scrollback and repaint from the top, exactly like PI. This
+	// is what prevents the "resize leaves a growing scroll of stale frames".
+	if widthChanged || heightChanged {
+		t.fullRender(newLines, width, height, clearAbsolute)
 		return
 	}
 
-	// Content shrank below the working area → clear stale rows.
+	// Content shrank below the working area → clear stale rows. Here a relative
+	// clear is safe (geometry unchanged) and preserves the shell's scrollback.
 	if len(newLines) < t.maxLinesRendered {
-		t.fullRender(newLines, width, height, true)
+		t.fullRender(newLines, width, height, clearRelative)
 		return
 	}
 
@@ -105,7 +105,7 @@ func (t *TUI) doRender() {
 	// First changed line is above the previous viewport → full redraw
 	// (we cannot touch lines that scrolled into terminal scrollback).
 	if firstChanged < prevViewportTop {
-		t.fullRender(newLines, width, height, true)
+		t.fullRender(newLines, width, height, clearRelative)
 		return
 	}
 
@@ -184,23 +184,31 @@ func (t *TUI) doRender() {
 	t.previousHeight = height
 }
 
-// fullRender writes all lines, optionally clearing first.
+// clearMode selects how fullRender wipes the screen before repainting.
+type clearMode int
+
+const (
+	clearNone     clearMode = iota // first render — assume a clean screen
+	clearRelative                  // move up + \x1b[J — scrollback-safe, geometry unchanged
+	clearAbsolute                  // \x1b[2J\x1b[H\x1b[3J — resize: full reset like PI
+)
+
+// fullRender writes all lines, clearing per the given mode.
 //
 // Clearing strategy matters because this TUI is INLINE (no alternate screen):
-// the shell prompt and prior command output live in the scrollback ABOVE our
-// region and must be preserved. A naive "\x1b[2J\x1b[H\x1b[3J" homes to the
-// absolute top and wipes scrollback — eating the shell prompt. So when our
-// whole block is still on-screen (viewport never scrolled past the top), we do
-// a RELATIVE redraw: move up to the first row of our block, clear from there to
-// end-of-screen (\x1b[J, which never touches scrollback), and repaint. Only
-// when our content has genuinely scrolled off the top do we fall back to the
-// absolute clear.
-func (t *TUI) fullRender(newLines []string, width, height int, clear bool) {
+// the shell prompt and prior output live in the scrollback ABOVE our region.
+//
+//   - clearRelative: move up to our block's first row and clear to end-of-screen
+//     (\x1b[J never touches scrollback). Used for shrink when geometry is stable.
+//   - clearAbsolute: \x1b[2J\x1b[H\x1b[3J — full screen + scrollback reset, homing
+//     to (0,0). Used on RESIZE, where wrapping and viewport geometry change and
+//     relative cursor math would desync (leaving stale, scrolling frames).
+//     This matches PI's resize behavior.
+func (t *TUI) fullRender(newLines []string, width, height int, mode clearMode) {
 	var buf strings.Builder
 	buf.WriteString(ansi.SyncBegin)
-	if clear {
-		// Relative redraw is possible when the block top is at viewport row 0
-		// (nothing of ours scrolled into scrollback).
+	switch mode {
+	case clearRelative:
 		if t.previousViewportTop == 0 && t.hardwareCursorRow >= 0 {
 			if t.hardwareCursorRow > 0 {
 				buf.WriteString(ansi.MoveUp(t.hardwareCursorRow))
@@ -210,6 +218,8 @@ func (t *TUI) fullRender(newLines []string, width, height int, clear bool) {
 		} else {
 			buf.WriteString(ansi.FullClear)
 		}
+	case clearAbsolute:
+		buf.WriteString(ansi.FullClear) // \x1b[2J\x1b[H\x1b[3J
 	}
 	for i, line := range newLines {
 		if i > 0 {
@@ -222,7 +232,7 @@ func (t *TUI) fullRender(newLines []string, width, height int, clear bool) {
 
 	t.cursorRow = max(0, len(newLines)-1)
 	t.hardwareCursorRow = t.cursorRow
-	if clear {
+	if mode != clearNone {
 		t.maxLinesRendered = len(newLines)
 	} else {
 		t.maxLinesRendered = max(t.maxLinesRendered, len(newLines))

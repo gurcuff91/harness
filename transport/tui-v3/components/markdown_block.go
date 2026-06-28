@@ -1,8 +1,6 @@
 package components
 
 import (
-	"strings"
-
 	"github.com/gurcuff91/harness/transport/tui-v3/ansi"
 )
 
@@ -59,16 +57,11 @@ func (b *Markdown) Render(width int) []string {
 	md.SetWidth(width)
 	rendered := md.Feed(b.source) + md.Flush()
 
-	// Split into physical lines. The differential renderer requires each line
-	// to fit the width; long unwrapped lines are wrapped here as a safety net.
-	var lines []string
-	for _, line := range strings.Split(rendered, "\n") {
-		if ansi.VisibleWidth(line) <= width {
-			lines = append(lines, line)
-		} else {
-			lines = append(lines, ansi.WrapTextWithAnsi(line, width)...)
-		}
-	}
+	// WrapTextWithAnsi splits on newlines, wraps over-wide lines, AND re-applies
+	// the active SGR state at the start of each produced line — so multi-line
+	// styled content (dim thinking, colored blocks) keeps its styling on every
+	// line instead of reverting to default after the first newline.
+	lines := ansi.WrapTextWithAnsi(rendered, width)
 
 	b.cacheWidth, b.cacheLines, b.cacheValid = width, lines, true
 	return lines

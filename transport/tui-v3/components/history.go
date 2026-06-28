@@ -1,8 +1,6 @@
 package components
 
 import (
-	"strings"
-
 	"github.com/gurcuff91/harness/transport/tui-v3/ansi"
 )
 
@@ -37,6 +35,12 @@ func (b *RawBlock) Invalidate() { b.cacheValid = false }
 
 // Render wraps the pre-styled text to width, preserving ANSI across breaks.
 // An empty block renders zero lines (no phantom blank line for unfilled slots).
+//
+// WrapTextWithAnsi handles BOTH newline splitting and width wrapping, and
+// crucially re-applies the active SGR state (dim, italic, color) at the start
+// of every produced line. A naive strings.Split would drop styling on the 2nd+
+// line of a multi-line block (e.g. a dim/italic thinking block would render its
+// later lines in default white — the bug this fixes).
 func (b *RawBlock) Render(width int) []string {
 	if b.cacheValid && b.cacheWidth == width {
 		return b.cacheLines
@@ -45,14 +49,7 @@ func (b *RawBlock) Render(width int) []string {
 		b.cacheWidth, b.cacheLines, b.cacheValid = width, nil, true
 		return nil
 	}
-	var lines []string
-	for _, line := range strings.Split(b.text, "\n") {
-		if ansi.VisibleWidth(line) <= width {
-			lines = append(lines, line)
-		} else {
-			lines = append(lines, ansi.WrapTextWithAnsi(line, width)...)
-		}
-	}
+	lines := ansi.WrapTextWithAnsi(b.text, width)
 	b.cacheWidth, b.cacheLines, b.cacheValid = width, lines, true
 	return lines
 }
