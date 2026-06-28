@@ -8,8 +8,19 @@ import (
 	"github.com/gurcuff91/harness/transport/tui-v3/ansi"
 )
 
-// handleSubmit processes editor submission: a slash command or a prompt.
+// defaultPlaceholder is the editor's idle hint, restored after a value capture.
+const defaultPlaceholder = "Type a message or / for commands..."
+
+// handleSubmit processes editor submission: a captured required value, a slash
+// command, or a prompt.
 func (t *TUI) handleSubmit(text string) {
+	// Capturing a required value (e.g. an API key for /connect). The whole line
+	// is the value — don't trim or parse it as a command.
+	if t.pending != nil {
+		t.captureValue(text)
+		return
+	}
+
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return
@@ -25,6 +36,33 @@ func (t *TUI) handleSubmit(text string) {
 	}
 
 	t.submitPrompt(text)
+}
+
+// beginValueCapture clears the editor and shows a guiding placeholder so the
+// user types a required value (e.g. an API key) into a clean input. The next
+// submission is captured by handleSubmit instead of being run as a command.
+func (t *TUI) beginValueCapture(cmd string, args []string, placeholder string) {
+	t.pending = &pendingValue{cmd: cmd, args: args}
+	t.editor.Clear()
+	t.editor.SetPlaceholder(placeholder)
+	t.tui.RequestRender(false)
+}
+
+// captureValue completes a pending command with the typed value, restores the
+// default placeholder, and runs the command. Empty input cancels the capture.
+func (t *TUI) captureValue(value string) {
+	p := t.pending
+	t.pending = nil
+	t.editor.Clear()
+	t.editor.SetPlaceholder(defaultPlaceholder)
+
+	value = strings.TrimSpace(value)
+	if value == "" {
+		t.showWarn("Cancelled: " + p.cmd)
+		t.tui.RequestRender(false)
+		return
+	}
+	t.runCommand(p.cmd, append(p.args, value))
 }
 
 // submitPrompt sends a prompt to the session, queueing it locally if a turn is
@@ -52,9 +90,25 @@ func (t *TUI) submitPrompt(text string) {
 	}()
 }
 
-// runCommand executes a palette/slash command. Simple commands (quit, value
-// commands) are handled directly; the rest delegate to the API exec endpoint.
+// runCommand executes a palette/slash command. It is the SINGLE funnel for
+// every entry path (palette Enter, Tab+Enter, hand-typed) and the one place
+// that enforces required-parameter completeness: if a command needs a value
+// that wasn't supplied, it switches the editor into value-capture mode instead
+// of running incomplete. Optional params (e.g. a skill's prompt) never block.
 func (t *TUI) runCommand(cmd string, args []string) {
+	// Completeness gate for session commands with a REQUIRED first param.
+	// connect/resume/delete have their own handling below; quit takes none.
+	if t.needsRequiredValue(cmd, args) {
+		def := t.sessionCommand(cmd)
+		paramName := "value"
+		if def != nil && len(def.Params) > 0 {
+			paramName = def.Params[0].Name
+		}
+		t.beginValueCapture(cmd, nil,
+			fmt.Sprintf("Enter %s for /%s and press Enter (Esc to cancel)", paramName, cmd))
+		return
+	}
+
 	switch cmd {
 	case "quit", "exit":
 		t.quit() // closes the session (flush to disk) + exits
@@ -78,6 +132,8 @@ func (t *TUI) runCommand(cmd string, args []string) {
 				t.showWarn(err.Error())
 				return
 			}
+			// Refresh so /model drops the now-unavailable provider's models.
+			t.loadSessionCommands()
 			t.addRaw(ansi.Accent("✔") + " " + ansi.Dimmed("disconnected "+args[0]))
 		}()
 		return
@@ -109,26 +165,52 @@ func (t *TUI) runCommand(cmd string, args []string) {
 	t.execSessionCommand(cmd, args)
 }
 
-// cmdConnect connects a provider (OAuth or API key).
+// cmdConnect connects a provider. OAuth/subscription providers connect directly
+// (no key). API-key providers need a key: if none was supplied, drop into
+// value-capture mode (clean editor + guiding placeholder) so the key can be
+// typed. This is the single funnel — it works whether the command arrived from
+// the palette (Enter), from Tab autocomplete + Enter, or typed by hand.
 func (t *TUI) cmdConnect(args []string) {
 	provider := args[0]
 	apiKey := ""
 	if len(args) > 1 {
-		apiKey = args[1]
+		apiKey = strings.Join(args[1:], " ")
 	}
+
+	// No key yet and the provider isn't OAuth → capture the key.
+	if apiKey == "" && !t.providerIsSubscription(provider) {
+		t.beginValueCapture("connect", []string{provider},
+			"Paste the API key for "+provider+" and press Enter (Esc to cancel)")
+		return
+	}
+
 	go func() {
-		var err error
-		if apiKey != "" {
-			_, err = t.client.ConnectProvider(provider, apiKey)
-		} else {
-			_, err = t.client.ConnectProvider(provider, "")
-		}
-		if err != nil {
+		if _, err := t.client.ConnectProvider(provider, apiKey); err != nil {
 			t.showWarn(fmt.Sprintf("connect %s: %s", provider, err.Error()))
 			return
 		}
+		// Refresh the command list so /model picks up the newly available models.
+		t.loadSessionCommands()
 		t.addRaw(ansi.Accent("✔") + " " + ansi.Dimmed("connected "+provider))
 	}()
+}
+
+// providerIsSubscription reports whether a provider authenticates via OAuth /
+// subscription (and so connects without a typed API key).
+func (t *TUI) providerIsSubscription(name string) bool {
+	data, err := t.client.GetProviders()
+	if err != nil {
+		return false
+	}
+	var providers []map[string]any
+	json.Unmarshal(data, &providers)
+	for _, p := range providers {
+		if n, _ := p["name"].(string); n == name {
+			sub, _ := p["is_subscription"].(bool)
+			return sub
+		}
+	}
+	return false
 }
 
 // refreshSubscriptionFlag updates t.isSubscription for the current model so the

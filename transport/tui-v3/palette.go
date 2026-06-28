@@ -89,6 +89,11 @@ func (p *paletteController) HandleInputConsumed(data string) bool {
 
 // onEditorChange opens/filters/closes the palette based on editor content.
 func (p *paletteController) onEditorChange(text string) {
+	// While capturing a required value (e.g. an API key), the editor content is
+	// the value — never interpret a leading "/" as a command palette trigger.
+	if p.tui.pending != nil {
+		return
+	}
 	// Root level: open + filter while typing "/word" (no space yet).
 	if strings.HasPrefix(text, "/") && !strings.Contains(text, " ") {
 		if !p.open {
@@ -187,10 +192,9 @@ func (p *paletteController) enterRoot(item components.SelectItem) {
 	case "list", "list-free":
 		subs := p.tui.getSubItems(cmd)
 		p.pushSub(cmd, subs)
-	case "free":
-		p.tui.editor.SetValue("/" + cmd + " ")
-		p.close()
-	default: // "none", "optional"
+	default: // "none", "optional", "free"
+		// Delegate to runCommand — the single funnel. For "free" (required value)
+		// it switches to value-capture; for none/optional it runs immediately.
 		p.tui.editor.Clear()
 		p.close()
 		p.tui.runCommand(cmd, nil)
@@ -204,14 +208,12 @@ func (p *paletteController) enterSub(item components.SelectItem) {
 	if item.ID != "" {
 		token = item.ID
 	}
-	// connect to a non-subscription provider needs an API key typed by hand.
-	if parent == "connect" && !item.Flag {
-		p.tui.editor.SetValue("/connect " + token + " ")
-		p.close()
-		return
-	}
-	p.tui.editor.Clear()
+	// Delegate to runCommand — it is the single funnel that decides whether the
+	// command runs now or needs to capture a required value (e.g. an API key for
+	// a non-subscription /connect). This keeps Enter-on-list and Tab+Enter
+	// behaving identically.
 	p.close()
+	p.tui.editor.Clear()
 	p.tui.runCommand(parent, []string{token})
 }
 
@@ -283,6 +285,33 @@ func (t *TUI) cmdType(cmd string) string {
 		return "free"
 	}
 	return "none"
+}
+
+// sessionCommand returns the CommandDef for a session-scoped command, or nil.
+func (t *TUI) sessionCommand(cmd string) *CommandDef {
+	for i := range t.sessionCmds {
+		if t.sessionCmds[i].Name == cmd {
+			return &t.sessionCmds[i]
+		}
+	}
+	return nil
+}
+
+// needsRequiredValue reports whether a session command has a REQUIRED first
+// param with a free-form value (not a fixed list) that the caller didn't
+// supply. Such commands must capture the value before running. Commands whose
+// required param is a fixed list are satisfied via the level-2 sub-palette, and
+// optional params (e.g. a skill's prompt) never block execution.
+func (t *TUI) needsRequiredValue(cmd string, args []string) bool {
+	if len(args) > 0 {
+		return false // value already provided
+	}
+	def := t.sessionCommand(cmd)
+	if def == nil || len(def.Params) == 0 {
+		return false
+	}
+	p := def.Params[0]
+	return p.Required && len(p.Values) == 0
 }
 
 // getSubItems returns the level-2 options for a command.

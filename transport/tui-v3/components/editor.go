@@ -55,6 +55,12 @@ func (e *Editor) Clear() {
 	e.changed()
 }
 
+// SetPlaceholder changes the dim hint shown when the editor is empty.
+func (e *Editor) SetPlaceholder(s string) { e.placeholder = s }
+
+// Placeholder returns the current placeholder text.
+func (e *Editor) Placeholder() string { return e.placeholder }
+
 // CursorPos returns the rune index of the cursor.
 func (e *Editor) CursorPos() int { return e.cursor }
 

@@ -13,10 +13,12 @@ import (
 
 // OpenAIRequest wraps types.Request for OpenAI-compatible providers.
 // Embed and extend when provider-specific overrides are needed.
-// Today it's a thin wrapper — future providers can add fields without
-// changing the DoOpenAIStream signature.
 type OpenAIRequest struct {
 	*types.Request
+	// ReasoningSplit, when true, adds "reasoning_split": true to the request.
+	// MiniMax uses this to emit thinking via the separate reasoning_content
+	// field (which we already parse) instead of inline <think> tags.
+	ReasoningSplit bool
 }
 
 // openAIWireRequest is the internal wire format sent to the API.
@@ -30,6 +32,7 @@ type openAIRequest struct {
 	Think           *bool             `json:"think,omitempty"`
 	ReasoningEffort string            `json:"reasoning_effort,omitempty"`
 	Thinking        map[string]any    `json:"thinking,omitempty"`
+	ReasoningSplit  bool              `json:"reasoning_split,omitempty"`
 }
 
 type streamOpts struct {
@@ -51,6 +54,9 @@ func DoOpenAIStream(ctx context.Context, client *http.Client, apiURL, apiKey str
 	body, err := buildOpenAIBody(req.Request)
 	if err != nil {
 		return nil, err
+	}
+	if req.ReasoningSplit {
+		body.ReasoningSplit = true
 	}
 	data, err := json.Marshal(body)
 	if err != nil {

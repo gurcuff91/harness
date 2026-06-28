@@ -20,6 +20,7 @@ func initRegistry() {
 		NewAnthropic(),
 		NewOpenAI(),
 		NewOpenCodeGo(),
+		NewMiniMax(),
 		NewOllamaCloud(),
 		NewOllama(),
 	)

@@ -24,7 +24,7 @@ func (t *TUI) buildUI() {
 
 	t.history = components.NewHistory()
 	t.spinner = components.NewSpinner(t.tui, "")
-	t.editor = components.NewEditor(t.tui, "Type a message or / for commands...")
+	t.editor = components.NewEditor(t.tui, defaultPlaceholder)
 	t.info = components.NewTruncatedText("", 0)
 	t.footer = components.NewTruncatedText("", 0)
 	t.palette = newPaletteController(t)
@@ -89,6 +89,16 @@ func (t *TUI) globalInput(data string) bool {
 
 // onEscape stops an in-flight turn and clears the editor.
 func (t *TUI) onEscape() {
+	// Cancel an in-progress value capture (e.g. API key entry) first.
+	if t.pending != nil {
+		cmd := t.pending.cmd
+		t.pending = nil
+		t.editor.Clear()
+		t.editor.SetPlaceholder(defaultPlaceholder)
+		t.showWarn("Cancelled: " + cmd)
+		t.tui.RequestRender(false)
+		return
+	}
 	if t.spinning && t.sessionID != "" {
 		go t.client.StopSession(t.sessionID) //nolint:errcheck
 	}

@@ -86,6 +86,18 @@ type TUI struct {
 	localQueue   []string
 	compactStart time.Time
 	lastTurnText strings.Builder
+
+	// pending is set when a command needs a required value typed into a clean
+	// editor (e.g. /connect <provider> waiting for the API key). While active,
+	// the next editor submission is captured as that value instead of being
+	// treated as a prompt or command.
+	pending *pendingValue
+}
+
+// pendingValue tracks a command awaiting a typed required value.
+type pendingValue struct {
+	cmd  string   // command to run once the value is captured
+	args []string // args already collected (the value is appended)
 }
 
 // New creates a TUI for the given agent.

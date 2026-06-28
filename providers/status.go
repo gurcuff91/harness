@@ -47,7 +47,7 @@ type ModelGroup struct {
 func GetModelGroups(currentModel string) []ModelGroup {
 	EnsureRegistry()
 
-	order := []string{"claude-oauth", "anthropic", "openai", "opencode-go", "ollama-cloud", "ollama"}
+	order := []string{"claude-oauth", "anthropic", "openai", "opencode-go", "minimax", "ollama-cloud", "ollama"}
 
 	var groups []ModelGroup
 	for _, name := range order {
