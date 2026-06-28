@@ -184,12 +184,32 @@ func (t *TUI) doRender() {
 	t.previousHeight = height
 }
 
-// fullRender writes all lines, optionally clearing screen + scrollback first.
+// fullRender writes all lines, optionally clearing first.
+//
+// Clearing strategy matters because this TUI is INLINE (no alternate screen):
+// the shell prompt and prior command output live in the scrollback ABOVE our
+// region and must be preserved. A naive "\x1b[2J\x1b[H\x1b[3J" homes to the
+// absolute top and wipes scrollback — eating the shell prompt. So when our
+// whole block is still on-screen (viewport never scrolled past the top), we do
+// a RELATIVE redraw: move up to the first row of our block, clear from there to
+// end-of-screen (\x1b[J, which never touches scrollback), and repaint. Only
+// when our content has genuinely scrolled off the top do we fall back to the
+// absolute clear.
 func (t *TUI) fullRender(newLines []string, width, height int, clear bool) {
 	var buf strings.Builder
 	buf.WriteString(ansi.SyncBegin)
 	if clear {
-		buf.WriteString(ansi.FullClear)
+		// Relative redraw is possible when the block top is at viewport row 0
+		// (nothing of ours scrolled into scrollback).
+		if t.previousViewportTop == 0 && t.hardwareCursorRow >= 0 {
+			if t.hardwareCursorRow > 0 {
+				buf.WriteString(ansi.MoveUp(t.hardwareCursorRow))
+			}
+			buf.WriteString(ansi.CR)
+			buf.WriteString(ansi.ClearFromCursor) // \x1b[J — preserves scrollback
+		} else {
+			buf.WriteString(ansi.FullClear)
+		}
 	}
 	for i, line := range newLines {
 		if i > 0 {

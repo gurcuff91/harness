@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/gurcuff91/harness/transport/tui-v3/ansi"
 	"github.com/gurcuff91/harness/transport/tui-v3/components"
@@ -166,7 +167,10 @@ func (t *TUI) loadStatsFromSession(sess map[string]any) {
 	}
 }
 
-// renderHistory fetches and renders prior messages on resume.
+// renderHistory fetches and replays prior messages on resume. Messages carry a
+// parts[] array of typed blocks (text, tool_call, tool_result) — the same
+// shape the live stream produces — so we render each into the block history.
+// Thinking is intentionally skipped (not persisted). Mirrors v1's renderHistory.
 func (t *TUI) renderHistory() {
 	data, err := t.client.GetMessages(t.sessionID)
 	if err != nil {
@@ -177,18 +181,73 @@ func (t *TUI) renderHistory() {
 		return
 	}
 	for _, msg := range messages {
-		role, _ := msg["role"].(string)
-		content, _ := msg["content"].(string)
-		if content == "" {
-			continue
+		// Compaction marker.
+		if meta, ok := msg["meta"].(map[string]any); ok {
+			if isCompaction, _ := meta["is_compaction"].(bool); isCompaction {
+				t.addSection("notice", ansi.Accent(ansi.Bold+"◎ Compacting"))
+				t.addRaw(ansi.Accent("✔") + " " + ansi.Dimmed("(history)"))
+				continue
+			}
 		}
-		switch role {
-		case "user":
-			t.addRaw(ansi.Primary("❯ " + content))
-		case "assistant":
-			t.addMarkdown(content)
+		role, _ := msg["role"].(string)
+		parts, _ := msg["parts"].([]any)
+		for _, p := range parts {
+			part, _ := p.(map[string]any)
+			if part == nil {
+				continue
+			}
+			switch {
+			case part["text"] != nil:
+				text, _ := part["text"].(string)
+				if text == "" {
+					continue
+				}
+				if role == "user" {
+					t.addSection("user", ansi.Primary("❯ "+text))
+				} else {
+					t.mu.Lock()
+					t.beginSection("text")
+					t.history.Add(components.NewMarkdown(text))
+					t.mu.Unlock()
+				}
+			case part["tool_call"] != nil:
+				tc, _ := part["tool_call"].(map[string]any)
+				name, _ := tc["name"].(string)
+				args := ""
+				if input, ok := tc["input"].(map[string]any); ok {
+					if b, err := json.Marshal(input); err == nil {
+						s := strings.TrimSpace(string(b))
+						s = strings.TrimPrefix(s, "{")
+						s = strings.TrimSuffix(s, "}")
+						args = strings.TrimSpace(s)
+					}
+				}
+				t.mu.Lock()
+				if t.lastKind == "tool" && t.history.Len() > 0 {
+					t.history.Add(components.NewSpacer(1))
+				}
+				t.beginSection("tool")
+				t.history.Add(components.NewRawBlock(t.toolHeader(name, args)))
+				t.mu.Unlock()
+			case part["tool_result"] != nil:
+				tr, _ := part["tool_result"].(map[string]any)
+				isErr, _ := tr["is_error"].(bool)
+				output, _ := tr["output"].(string)
+				if output == "" {
+					if content, _ := tr["content"].([]any); len(content) > 0 {
+						if c0, _ := content[0].(map[string]any); c0 != nil {
+							output, _ = c0["text"].(string)
+						}
+					}
+				}
+				result := t.formatToolResult(output, 0, isErr)
+				t.mu.Lock()
+				t.history.Add(components.NewRawBlock(result))
+				t.mu.Unlock()
+			}
 		}
 	}
+	t.tui.RequestRender(false)
 }
 
 // rootCommandItems builds the palette's top-level command list.

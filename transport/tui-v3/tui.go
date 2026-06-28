@@ -97,9 +97,22 @@ func New(a *agent.Agent) *TUI {
 	}
 }
 
-// quit signals the run loop to exit (idempotent).
+// quit closes the active session (flushing its messages to disk) and signals
+// the run loop to exit. Idempotent. Closing the session is critical: the file
+// store only persists messages on Close(), so skipping it loses the whole
+// conversation — which is exactly why resumed sessions came back empty.
 func (t *TUI) quit() {
-	t.quitOnce.Do(func() { close(t.quitCh) })
+	t.quitOnce.Do(func() {
+		if t.sessionID != "" {
+			t.lastSessionID = t.sessionID
+			t.client.CloseSession(t.sessionID) //nolint:errcheck
+		}
+		if t.sseCancel != nil {
+			t.sseCancel()
+			t.sseCancel = nil
+		}
+		close(t.quitCh)
+	})
 }
 
 // SetFlags applies CLI overrides.
@@ -128,7 +141,6 @@ func (t *TUI) Run(ctx context.Context) error {
 	if err := t.tui.Start(); err != nil {
 		return fmt.Errorf("start tui: %w", err)
 	}
-	defer t.tui.Stop()
 
 	// Quit on context cancel.
 	go func() {
@@ -148,16 +160,23 @@ func (t *TUI) Run(ctx context.Context) error {
 	case <-ctx.Done():
 	}
 
-	// The render loop left the cursor at an arbitrary column; \r returns it to
-	// column 0 so the farewell isn't indented by leftover cursor position.
+	// Stop the render loop FIRST so it parks the cursor below the TUI content
+	// and restores the terminal. Printing the farewell after this means our
+	// lines land cleanly with no extra blank rows injected by Stop().
+	t.tui.Stop()
+
+	// Stop() already emitted one CRLF below the TUI content, so a single \r\n
+	// here yields exactly one blank line above the farewell. The trailing \r\n
+	// terminates the output cleanly so zsh doesn't print its "no final newline"
+	// marker (%) and the shell prompt lands on its own line.
 	if t.lastSessionID != "" {
-		fmt.Printf("\r\n\r\n%s %s\r\n  %s harness --resume %s",
+		fmt.Printf("\r\n%s %s\r\n  %s harness --resume %s\r\n\r\n",
 			ansi.Primary("👋"),
 			ansi.Bold+"Goodbye!"+ansi.Reset,
 			ansi.Dimmed("To resume this session:"),
 			t.lastSessionID)
 	} else {
-		fmt.Printf("\r\n\r\n%s %s", ansi.Primary("👋"), ansi.Bold+"Goodbye!"+ansi.Reset)
+		fmt.Printf("\r\n%s %s\r\n\r\n", ansi.Primary("👋"), ansi.Bold+"Goodbye!"+ansi.Reset)
 	}
 	return nil
 }

@@ -77,11 +77,7 @@ func (s *separator) Render(width int) []string {
 func (t *TUI) globalInput(data string) bool {
 	// Ctrl+C / Ctrl+D at empty editor → quit.
 	if data == "\x03" || (data == "\x04" && t.editor.Value() == "") {
-		if t.spinning && t.sessionID != "" {
-			go t.client.StopSession(t.sessionID) //nolint:errcheck
-		}
-		t.lastSessionID = t.sessionID
-		t.quit()
+		t.quit() // stops SSE + closes the session (flush to disk) + exits
 		return true
 	}
 	// Palette gets first crack at input when open.

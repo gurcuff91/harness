@@ -91,6 +91,10 @@ func (t *TUI) Start() error {
 // Stop moves the cursor below the content, restores it, and exits raw mode.
 func (t *TUI) Stop() {
 	t.mu.Lock()
+	if t.stopped {
+		t.mu.Unlock()
+		return // idempotent: safe against double Stop (explicit + ctx goroutine)
+	}
 	t.stopped = true
 	if t.renderTimer != nil {
 		t.renderTimer.Stop()

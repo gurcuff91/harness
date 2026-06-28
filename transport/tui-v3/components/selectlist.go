@@ -15,9 +15,10 @@ const (
 
 // SelectItem is one entry in a SelectList.
 type SelectItem struct {
-	Value       string // internal key (e.g. command name or session id)
+	Value       string // internal key (e.g. command name or value token)
 	Label       string // displayed primary text (falls back to Value)
 	Description string // optional right-column hint
+	ID          string // hidden internal id (e.g. session id); not displayed
 }
 
 // SelectList is an interactive, filterable selection list with keyboard

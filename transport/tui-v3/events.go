@@ -204,14 +204,20 @@ func (t *TUI) toolHeader(name, args string) string {
 	return h + colorFn(")")
 }
 
-// formatToolResult renders the one-line result summary (✔/✘ + duration).
+// formatToolResult renders the one-line result summary (✔/✘ + duration). When
+// dur is 0 (e.g. replaying history, where timing isn't persisted) the [time]
+// prefix is omitted.
 func (t *TUI) formatToolResult(output string, dur float64, isErr bool) string {
+	durTag := ""
+	if dur > 0 {
+		durTag = "[" + formatDur(dur) + "] "
+	}
 	if isErr {
 		clean := stripANSI(strings.TrimSpace(output))
 		lines := strings.Split(clean, "\n")
 		first := strings.TrimSpace(lines[0])
 		var sb strings.Builder
-		sb.WriteString(ansi.Err("✘") + " " + ansi.Dimmed(fmt.Sprintf("[%s] %s", formatDur(dur), first)))
+		sb.WriteString(ansi.Err("✘") + " " + ansi.Dimmed(durTag+first))
 		shown := 0
 		for _, l := range lines[1:] {
 			l = strings.TrimSpace(l)
@@ -231,7 +237,7 @@ func (t *TUI) formatToolResult(output string, dur float64, isErr bool) string {
 	if count == 1 && lines[0] == "" {
 		count = 0
 	}
-	return ansi.Accent("✔") + " " + ansi.Dimmed(fmt.Sprintf("[%s] (%d lines)", formatDur(dur), count))
+	return ansi.Accent("✔") + " " + ansi.Dimmed(fmt.Sprintf("%s(%d lines)", durTag, count))
 }
 
 // setSpinning toggles the spinner animation.

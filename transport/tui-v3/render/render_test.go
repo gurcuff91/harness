@@ -114,8 +114,11 @@ func TestWidthChangeFullRedraw(t *testing.T) {
 	tui.doRender()
 
 	out := term.lastWrite()
-	if !strings.Contains(out, "\x1b[2J") {
-		t.Errorf("width change should full-clear: %q", out)
+	// Width change forces a full redraw. Inline TUI prefers a relative clear
+	// (\x1b[J, scrollback-safe) when the block is on-screen; an absolute clear
+	// (\x1b[2J) is acceptable when content scrolled off the top.
+	if !strings.Contains(out, "\x1b[2J") && !strings.Contains(out, "\x1b[J") {
+		t.Errorf("width change should redraw with a clear: %q", out)
 	}
 }
 
@@ -149,8 +152,9 @@ func TestRemovedLinesClear(t *testing.T) {
 	tui.doRender()
 
 	out := term.lastWrite()
-	// Either a full clear, or trailing-line clears must be emitted.
-	if !strings.Contains(out, "\x1b[2J") && !strings.Contains(out, "\x1b[2K") {
+	// Acceptable: absolute clear (\x1b[2J), per-line clear (\x1b[2K), or the
+	// scrollback-safe relative clear-to-end (\x1b[J).
+	if !strings.Contains(out, "\x1b[2J") && !strings.Contains(out, "\x1b[2K") && !strings.Contains(out, "\x1b[J") {
 		t.Errorf("removed lines not cleared: %q", out)
 	}
 }

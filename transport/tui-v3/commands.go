@@ -57,8 +57,7 @@ func (t *TUI) submitPrompt(text string) {
 func (t *TUI) runCommand(cmd string, args []string) {
 	switch cmd {
 	case "quit", "exit":
-		t.lastSessionID = t.sessionID
-		t.quit()
+		t.quit() // closes the session (flush to disk) + exits
 		return
 
 	case "connect":
@@ -79,7 +78,7 @@ func (t *TUI) runCommand(cmd string, args []string) {
 				t.showWarn(err.Error())
 				return
 			}
-			t.addRaw(ansi.Accent("✔") + " disconnected " + args[0])
+			t.addRaw(ansi.Accent("✔") + " " + ansi.Dimmed("disconnected "+args[0]))
 		}()
 		return
 
@@ -101,7 +100,7 @@ func (t *TUI) runCommand(cmd string, args []string) {
 				t.showWarn(err.Error())
 				return
 			}
-			t.addRaw(ansi.Accent("✔") + " deleted session")
+			t.addRaw(ansi.Accent("✔") + " " + ansi.Dimmed("deleted session"))
 		}()
 		return
 	}
@@ -128,8 +127,25 @@ func (t *TUI) cmdConnect(args []string) {
 			t.showWarn(fmt.Sprintf("connect %s: %s", provider, err.Error()))
 			return
 		}
-		t.addRaw(ansi.Accent("✔") + " connected " + provider)
+		t.addRaw(ansi.Accent("✔") + " " + ansi.Dimmed("connected "+provider))
 	}()
+}
+
+// refreshSubscriptionFlag updates t.isSubscription for the current model so the
+// footer's "(sub)" tag stays accurate after a /model change.
+func (t *TUI) refreshSubscriptionFlag() {
+	data, err := t.client.ListModels()
+	if err != nil {
+		return
+	}
+	var models []map[string]any
+	json.Unmarshal(data, &models)
+	for _, m := range models {
+		if id, _ := m["model"].(string); id == t.model {
+			t.isSubscription, _ = m["is_subscription"].(bool)
+			return
+		}
+	}
 }
 
 // execSessionCommand maps a session command to its API exec call.
@@ -162,28 +178,69 @@ func (t *TUI) execSessionCommand(cmd string, args []string) {
 			t.showWarn(err.Error())
 			return
 		}
-		t.applyCommandResult(cmd, data)
+		t.applyCommandResult(cmd, args, data)
 	}()
 }
 
-// applyCommandResult refreshes local state after a command (e.g. model change).
-func (t *TUI) applyCommandResult(cmd string, data []byte) {
+// applyCommandResult refreshes local state after a command (e.g. model change)
+// and prints a confirmation line so the user sees the command took effect.
+func (t *TUI) applyCommandResult(cmd string, args []string, data []byte) {
 	var resp map[string]any
 	json.Unmarshal(data, &resp)
 
+	// Prefer the value echoed back by the API; fall back to the typed arg so
+	// the footer always reflects the change even if the response omits it.
+	argVal := strings.Join(args, " ")
+	confirm := ""
 	switch cmd {
 	case "model":
-		if m, _ := resp["model"].(string); m != "" {
+		m, _ := resp["model"].(string)
+		if m == "" {
+			m = argVal
+		}
+		if m != "" {
 			t.model = m
+			t.refreshSubscriptionFlag()
+			confirm = "model → " + m
 		}
 	case "thinking":
-		if l, _ := resp["level"].(string); l != "" {
+		l, _ := resp["level"].(string)
+		if l == "" {
+			l = argVal
+		}
+		if l != "" {
 			t.thinking = l
+			confirm = "thinking → " + l
 		}
 	case "rename":
-		if n, _ := resp["name"].(string); n != "" {
+		n, _ := resp["name"].(string)
+		if n == "" {
+			n = argVal
+		}
+		if n != "" {
 			t.sessionName = n
+			confirm = "renamed → " + n
 		}
 	}
+	// Commands that trigger agent streaming show the spinner instead of a
+	// static confirmation (the stream itself is the feedback).
+	if cmd == "compact" || strings.HasPrefix(cmd, "skill:") {
+		t.setSpinning(true)
+		t.updateInfo()
+		return
+	}
+	// Fallback: echo the command + args when the response carries no field we
+	// recognize (e.g. a custom session command), so there's always feedback.
+	if confirm == "" {
+		if msg, _ := resp["message"].(string); msg != "" {
+			confirm = msg
+		} else {
+			confirm = "/" + cmd
+			if len(args) > 0 {
+				confirm += " " + strings.Join(args, " ")
+			}
+		}
+	}
+	t.addRaw(ansi.Accent("✔") + " " + ansi.Dimmed(confirm))
 	t.updateInfo()
 }
