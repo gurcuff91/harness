@@ -227,6 +227,28 @@ func (t *TUI) renderHistory() {
 	if err := json.Unmarshal(data, &messages); err != nil {
 		return
 	}
+
+	// Tool calls live in an assistant message; their results arrive in the NEXT
+	// (user/tool) message. Rendering linearly would group every call together,
+	// then every result — visually orphaning each result from its call. Instead
+	// we pre-index all results by tool-call id so each call can render its own
+	// result immediately below it (matching the live stream's pairing).
+	resultByID := map[string]map[string]any{}
+	for _, msg := range messages {
+		parts, _ := msg["parts"].([]any)
+		for _, p := range parts {
+			part, _ := p.(map[string]any)
+			if part == nil {
+				continue
+			}
+			if tr, ok := part["tool_result"].(map[string]any); ok && tr != nil {
+				if id, _ := tr["id"].(string); id != "" {
+					resultByID[id] = tr
+				}
+			}
+		}
+	}
+
 	for _, msg := range messages {
 		// Compaction marker.
 		if meta, ok := msg["meta"].(map[string]any); ok {
@@ -269,32 +291,39 @@ func (t *TUI) renderHistory() {
 						args = strings.TrimSpace(s)
 					}
 				}
+				callID, _ := tc["id"].(string)
 				t.mu.Lock()
 				if t.lastKind == "tool" && t.history.Len() > 0 {
 					t.history.Add(components.NewSpacer(1))
 				}
 				t.beginSection("tool")
 				t.history.Add(components.NewRawBlock(t.toolHeader(name, args)))
-				t.mu.Unlock()
-			case part["tool_result"] != nil:
-				tr, _ := part["tool_result"].(map[string]any)
-				isErr, _ := tr["is_error"].(bool)
-				output, _ := tr["output"].(string)
-				if output == "" {
-					if content, _ := tr["content"].([]any); len(content) > 0 {
-						if c0, _ := content[0].(map[string]any); c0 != nil {
-							output, _ = c0["text"].(string)
-						}
-					}
+				// Pair this call with its result (looked up by id) and render the
+				// result immediately below, so calls and results never drift apart.
+				if tr := resultByID[callID]; tr != nil {
+					t.history.Add(components.NewRawBlock(toolResultText(t, tr)))
 				}
-				result := t.formatToolResult(output, 0, isErr)
-				t.mu.Lock()
-				t.history.Add(components.NewRawBlock(result))
 				t.mu.Unlock()
 			}
 		}
 	}
 	t.tui.RequestRender(false)
+}
+
+// toolResultText extracts a tool_result's output (handling both the flat
+// "output" field and the structured content[].text fallback) and formats it
+// the same way the live stream does. Duration is 0 on replay (not persisted).
+func toolResultText(t *TUI, tr map[string]any) string {
+	isErr, _ := tr["is_error"].(bool)
+	output, _ := tr["output"].(string)
+	if output == "" {
+		if content, _ := tr["content"].([]any); len(content) > 0 {
+			if c0, _ := content[0].(map[string]any); c0 != nil {
+				output, _ = c0["text"].(string)
+			}
+		}
+	}
+	return t.formatToolResult(output, 0, isErr)
 }
 
 // rootCommandItems builds the palette's top-level command list.
