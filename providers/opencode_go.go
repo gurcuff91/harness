@@ -181,14 +181,10 @@ func fetchOpenCodeGoModels(apiKey string) ([]types.ModelMeta, error) {
 
 	metas := make([]types.ModelMeta, 0, len(result.Data))
 	for _, m := range result.Data {
-		meta := types.ModelMeta{
-			ID:            m.ID,
-			DisplayName:   m.ID, // fallback — will be enriched if in registry
-			ContextWindow: llm.InferContextWindow(m.ID),
-			MaxTokens:     32000,
-			Vision:        llm.InferVision(m.ID),
-		}
-		metas = append(metas, llm.EnrichMeta(meta))
+		// Pass a bare meta (no pre-inferred ctx/vision) so EnrichMeta's remote
+		// source (OpenRouter) is authoritative; name inference is its internal
+		// last-resort, not a pre-filled value that would block the remote data.
+		metas = append(metas, llm.EnrichMeta(types.ModelMeta{ID: m.ID}))
 	}
 	return metas, nil
 }

@@ -146,7 +146,10 @@ func fetchOllamaModels(baseURL string) []types.ModelMeta {
 			ID:          m.Name,
 			DisplayName: fmt.Sprintf("%s (%s)", m.Name, m.Details.ParameterSize),
 		}
-		llm.ApplyRegistryPricing(&meta)
+		// Ollama's /api/tags gives no context/caps — run the enrichment cascade
+		// (OpenRouter → hardcode → inference) to fill the gaps. The ":cloud"/tag
+		// suffix is handled by normalizeModelID so cloud-hosted models match.
+		meta = llm.EnrichMeta(meta)
 		metas = append(metas, meta)
 	}
 	return metas

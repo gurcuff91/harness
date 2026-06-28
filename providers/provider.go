@@ -35,7 +35,7 @@ type Provider interface {
 	Models() []types.ModelMeta
 	// FetchModels refreshes the internal model cache from the provider API.
 	// Each model is fully enriched: capabilities from the provider API
-	// and pricing from llm-registry.
+	// and pricing from the OpenRouter catalog.
 	// Returns error if credentials are invalid or provider is unreachable.
 	FetchModels() ([]types.ModelMeta, error)
 	// ModelMeta returns capability and pricing metadata for a specific model ID.
