@@ -73,6 +73,7 @@ type TUI struct {
 
 	// SSE.
 	sseCancel context.CancelFunc
+	baseCtx   context.Context // root context for (re)starting SSE on in-place resume
 
 	// quitCh is closed when the user requests exit.
 	quitCh   chan struct{}
@@ -135,6 +136,7 @@ func (t *TUI) Run(ctx context.Context) error {
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	t.baseCtx = ctx
 
 	t.buildUI()
 

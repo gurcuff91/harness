@@ -116,6 +116,53 @@ func (t *TUI) autoConnect(ctx context.Context) {
 	t.startSSE(ctx)
 }
 
+// resumeInPlace switches the running TUI to a different session without a
+// restart: it closes the current session (flushing it to disk), stops the SSE
+// stream, clears the scrollback, loads the target session + its history, and
+// reopens the stream. Mirrors v1's /resume behavior.
+func (t *TUI) resumeInPlace(sessID string) {
+	// Stop the current stream and close the active session (flush to disk).
+	if t.sseCancel != nil {
+		t.sseCancel()
+		t.sseCancel = nil
+	}
+	if t.sessionID != "" && t.sessionID != sessID {
+		t.client.CloseSession(t.sessionID) //nolint:errcheck
+	}
+
+	d, err := t.client.ResumeSession(sessID)
+	if err != nil {
+		t.showWarn(fmt.Sprintf("Failed to resume: %s", err.Error()))
+		return
+	}
+	var sess map[string]any
+	json.Unmarshal(d, &sess)
+
+	// Reset state + scrollback for the incoming session.
+	t.mu.Lock()
+	t.history.Clear()
+	t.liveMD = nil
+	t.lastKind = ""
+	t.stats = tokensInfo{}
+	t.mu.Unlock()
+
+	t.sessionID, _ = sess["id"].(string)
+	t.sessionName, _ = sess["name"].(string)
+	t.model, _ = sess["model"].(string)
+	t.thinking = ""
+	if th, _ := sess["thinking"].(string); th != "" {
+		t.thinking = th
+	}
+	t.refreshSubscriptionFlag()
+	t.loadStatsFromSession(sess)
+	t.loadSessionCommands()
+
+	t.addRaw(ansi.Dimmed(fmt.Sprintf("── resumed: %s ──", t.sessionName)))
+	t.renderHistory()
+	t.updateInfo()
+	t.startSSE(t.baseCtx)
+}
+
 // startSSE opens a persistent SSE stream for the active session.
 func (t *TUI) startSSE(ctx context.Context) {
 	if t.sessionID == "" {

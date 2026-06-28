@@ -87,7 +87,7 @@ func (t *TUI) runCommand(cmd string, args []string) {
 			t.showWarn("Usage: /resume <session_id>")
 			return
 		}
-		t.showWarn("Resume requires restart: harness --resume " + args[0])
+		t.resumeInPlace(args[0])
 		return
 
 	case "delete":
