@@ -96,6 +96,17 @@ func (t *TUI) doRender() {
 		return
 	}
 
+	// Mixed change: content grew AND a line strictly before the old end changed
+	// (not a clean append). This happens when a streaming markdown block flushes
+	// a buffered table — a previously-blank separator line becomes the table's
+	// top border while new rows are appended below. The incremental cursor math
+	// can't reposition cleanly here, so repaint from the first change with a
+	// relative (scrollback-safe) clear, which is always correct.
+	if appended && firstChanged < len(t.previousLines) {
+		t.fullRender(newLines, width, height, clearRelative)
+		return
+	}
+
 	// All changes are in deleted lines (new content is shorter).
 	if firstChanged >= len(newLines) {
 		t.renderDeletedTail(newLines, height, firstChanged, prevViewportTop, hardwareCursorRow, viewportTop)

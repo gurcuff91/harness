@@ -301,6 +301,15 @@ func (m *MarkdownStream) processChar(ch rune) string {
 		return ""
 	}
 
+	// A buffered table ends if a new line opens with a backtick (inline code or
+	// fenced block). Flush it first so the table renders above the code instead
+	// of the code leaking before it. Mirrors the guard in processNormal.
+	if ch == '`' && m.tickBuf == "" {
+		if out := m.flushTableOnLineStart(ch); out != "" {
+			return out + m.Feed(string(ch))
+		}
+	}
+
 	// Backtick accumulation.
 	if ch == '`' || m.tickBuf != "" {
 		if ch == '`' {
@@ -340,6 +349,17 @@ func (m *MarkdownStream) processChar(ch rune) string {
 }
 
 func (m *MarkdownStream) processNormal(ch rune) string {
+	// A buffered table ends as soon as a new line opens with anything other than
+	// another table row ("|"), a blank line, or leading space. Emphasis ("*"),
+	// inline code ("`"), links ("["), headings, plain text — all signal the table
+	// block is over. Flush it FIRST so the table renders above the following
+	// content instead of that content leaking before it (and the table border
+	// pasting onto the previous line). The default/prefix branch below also
+	// flushes for plain text, but routes like '*', '~', '`' and links return
+	// early, so we centralize the guard here to cover every entry path.
+	if out := m.flushTableOnLineStart(ch); out != "" {
+		return out + m.processNormal(ch)
+	}
 	// Inline link state machine: "[text](url)". Handled before the main switch
 	// so brackets/parens are captured while a link is being parsed.
 	if out, handled := m.processLink(ch); handled {
@@ -786,6 +806,27 @@ func renderInlineMD(s string) string {
 	sub := NewMarkdownStream()
 	sub.atLineStart = false
 	return sub.Feed(s) + sub.Flush()
+}
+
+// flushTableOnLineStart flushes a buffered table when a new line begins with a
+// character that cannot be part of the table block. Returns the flushed table
+// output (caller then re-processes ch as the first char of the next block), or
+// "" when no flush is needed. Characters that DO continue/relate to the table
+// and must NOT trigger a flush here: '|' (next row), '\n' (trailing blank —
+// counted elsewhere), and ' ' (potential indentation). Everything else —
+// emphasis, code, links, plain text — ends the table.
+func (m *MarkdownStream) flushTableOnLineStart(ch rune) string {
+	if !m.atLineStart || len(m.tableRows) == 0 {
+		return ""
+	}
+	if m.linePrefix != "" || m.pending != "" {
+		return ""
+	}
+	switch ch {
+	case '|', '\n', ' ', '\t':
+		return ""
+	}
+	return m.flushTable()
 }
 
 // renderedTableRow is a table row with pre-rendered cells and their widths.

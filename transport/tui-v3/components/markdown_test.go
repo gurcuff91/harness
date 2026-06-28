@@ -351,6 +351,68 @@ func TestMarkdownBlockReRendersOnResize(t *testing.T) {
 	}
 }
 
+// TestTableFlushesBeforeFollowingBlock guards against a regression where a
+// buffered table was emitted AFTER the text that followed it (and its top
+// border pasted onto the previous line). Every block type that can open a new
+// line right after a table must flush the table first.
+func TestTableFlushesBeforeFollowingBlock(t *testing.T) {
+	cases := map[string]string{
+		"bold":     "| A | B |\n|---|---|\n| x | y |\n\n**Despliegue** texto\n",
+		"text":     "| A | B |\n|---|---|\n| x | y |\n\nTexto plano\n",
+		"link":     "| A | B |\n|---|---|\n| x | y |\n\n[link](http://e.com)\n",
+		"backtick": "| A | B |\n|---|---|\n| x | y |\n\n`code` texto\n",
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			lines := stripLines(NewMarkdown(src).Render(100))
+			topBorder, follow := -1, -1
+			for i, l := range lines {
+				if strings.HasPrefix(l, "\u250c") { // ┌ top-left corner
+					topBorder = i
+				}
+				if follow == -1 && (strings.Contains(l, "Despliegue") ||
+					strings.Contains(l, "Texto") || strings.Contains(l, "link") ||
+					strings.Contains(l, "code")) {
+					follow = i
+				}
+			}
+			if topBorder == -1 {
+				t.Fatalf("no table top border rendered: %q", lines)
+			}
+			// Border must start at column 0 (its own line), not pasted onto text.
+			if ansi.VisibleWidth(lines[topBorder]) == 0 || !strings.HasPrefix(lines[topBorder], "\u250c") {
+				t.Errorf("table border not on its own line: %q", lines[topBorder])
+			}
+			// The following block's text must appear AFTER the table.
+			if follow != -1 && follow < topBorder {
+				t.Errorf("following text (line %d) rendered before table (line %d): %q", follow, topBorder, lines)
+			}
+		})
+	}
+}
+
+// stripLines removes SGR escape sequences from each line for assertion.
+func stripLines(lines []string) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		var b strings.Builder
+		j := 0
+		for j < len(l) {
+			if l[j] == 0x1b {
+				for j < len(l) && l[j] != 'm' {
+					j++
+				}
+				j++
+				continue
+			}
+			b.WriteByte(l[j])
+			j++
+		}
+		out[i] = b.String()
+	}
+	return out
+}
+
 func TestRawBlockReWrapsOnResize(t *testing.T) {
 	b := NewRawBlock("a line of plain text that is long enough to wrap when narrow")
 	wide := b.Render(80)
