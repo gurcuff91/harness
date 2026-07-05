@@ -2,26 +2,77 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 )
 
+// ErrInvalidMCPServer is returned by SetMCPServer when the server config fails
+// validation. Callers (e.g. the HTTP API) can detect it with errors.Is to map
+// it to a 422 Unprocessable Entity.
+var ErrInvalidMCPServer = errors.New("invalid mcp server")
+
+// ErrInvalidThinkingLevel is returned by SetThinkingLevel for an unknown level.
+// Detectable with errors.Is for a 422 mapping.
+var ErrInvalidThinkingLevel = errors.New("invalid thinking level")
+
+// thinkingLevels is the canonical set of accepted thinking levels. Internal to
+// config — the source of truth for what SetThinkingLevel will store.
+var thinkingLevels = map[string]bool{
+	"off":    true,
+	"low":    true,
+	"medium": true,
+	"high":   true,
+	"xhigh":  true,
+}
+
 // SettingsManager is a thread-safe store for harness settings.
 // Backed by ~/.harness/settings.json.
 //
-// Domain methods: ActiveModel, ThinkingLevel (harness core concerns).
-// Generic KV: Get/Set/Delete for provider-specific settings (e.g. "ollama.url").
+// Design: the manager is an AGNOSTIC typed store. It exposes methods only for
+// GENERAL, known settings — core singletons (ActiveModel, ThinkingLevel) and
+// keyed collections (Providers, MCP servers). It never contains logic specific
+// to a concrete provider (e.g. "ollama"). Interpreting a ProviderConfig —
+// applying env-var cascades, defaults, etc. — is the responsibility of the
+// provider itself. The manager just stores and returns typed values by name.
 type SettingsManager struct {
 	mu   sync.RWMutex
 	path string
 	data settingsData
 }
 
+// settingsData is the on-disk representation. Field names, struct tags, and the
+// REST API (see transport/http SettingsDTO) all share ONE vocabulary.
 type settingsData struct {
-	Model    string            `json:"model,omitempty"`
-	Thinking string            `json:"thinking,omitempty"`
-	Extra    map[string]string `json:"extra,omitempty"` // provider-specific KV
+	// Core singletons.
+	ActiveModel   string `json:"active_model,omitempty"`
+	ThinkingLevel string `json:"thinking_level,omitempty"`
+
+	// Keyed collections (dynamic entries by name).
+	Providers map[string]ProviderConfig `json:"providers,omitempty"` // key = provider name
+	MCP       map[string]MCPServer      `json:"mcp,omitempty"`       // key = server name
+}
+
+// ProviderConfig is the generic, per-provider configuration the manager stores
+// verbatim. Fields are optional; a zero value means "not configured" and the
+// owning provider should fall back to its own default. Grows on demand — only
+// add a field when a provider actually consumes it.
+type ProviderConfig struct {
+	URL string `json:"url,omitempty"`
+}
+
+// MCPServer is the configuration of one MCP (Model Context Protocol) server.
+// Mirrors the shape used by other agents (e.g. OpenCode): a "local" server runs
+// a command with an Env map; a "remote" server dials a URL with custom Headers.
+type MCPServer struct {
+	Type    string            `json:"type"`              // "local" | "remote"
+	Command []string          `json:"command,omitempty"` // local: command + args
+	URL     string            `json:"url,omitempty"`     // remote: server URL
+	Env     map[string]string `json:"env,omitempty"`     // local: process env vars
+	Headers map[string]string `json:"headers,omitempty"` // remote: custom HTTP headers
+	Enabled bool              `json:"enabled"`
 }
 
 func newSettingsManager() *SettingsManager {
@@ -30,7 +81,6 @@ func newSettingsManager() *SettingsManager {
 	_ = os.MkdirAll(dir, 0700)
 	m := &SettingsManager{
 		path: filepath.Join(dir, "settings.json"),
-		data: settingsData{Extra: make(map[string]string)},
 	}
 	m.load()
 	return m
@@ -42,65 +92,141 @@ func newSettingsManager() *SettingsManager {
 func (m *SettingsManager) ActiveModel() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.data.Model
+	return m.data.ActiveModel
 }
 
 // SetActiveModel persists the active model.
 func (m *SettingsManager) SetActiveModel(model string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.data.Model = model
+	m.data.ActiveModel = model
 	return m.save()
 }
 
-// ThinkingLevel returns the persisted thinking level.
-// Falls back to env var HARNESS_THINKING, then empty string.
+// ThinkingLevel returns the persisted thinking level. The settings file is the
+// single source of truth; per-invocation overrides use the CLI/TUI --thinking
+// flag (which also validates), not an environment variable.
 func (m *SettingsManager) ThinkingLevel() string {
-	if v := os.Getenv("HARNESS_THINKING"); v != "" {
-		return v
-	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.data.Thinking
+	return m.data.ThinkingLevel
 }
 
-// SetThinkingLevel persists the thinking level.
+// SetThinkingLevel validates and persists the thinking level. Accepted values:
+// off | low | medium | high | xhigh. Validating here means every caller (HTTP
+// PATCH, session command, ...) gets the same guarantee.
 func (m *SettingsManager) SetThinkingLevel(level string) error {
+	if !thinkingLevels[level] {
+		return fmt.Errorf("%w: %q (want off|low|medium|high|xhigh)", ErrInvalidThinkingLevel, level)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.data.Thinking = level
+	m.data.ThinkingLevel = level
 	return m.save()
 }
 
-// ── Generic KV — for provider-specific settings ──────────────────────────
+// ── Providers collection ─────────────────────────────────────────────────
+// The manager stores ProviderConfig verbatim by name. It applies NO cascade,
+// env logic, or defaults — that is the owning provider's job.
 
-// Get retrieves a setting by key.
-func (m *SettingsManager) Get(key string) (string, bool) {
+// Provider returns the stored config for a provider by name.
+func (m *SettingsManager) Provider(name string) (ProviderConfig, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if m.data.Extra == nil {
-		return "", false
-	}
-	v, ok := m.data.Extra[key]
-	return v, ok
+	cfg, ok := m.data.Providers[name]
+	return cfg, ok
 }
 
-// Set persists a setting by key.
-func (m *SettingsManager) Set(key, value string) error {
+// Providers returns a defensive copy of the whole providers collection.
+func (m *SettingsManager) Providers() map[string]ProviderConfig {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string]ProviderConfig, len(m.data.Providers))
+	for k, v := range m.data.Providers {
+		out[k] = v
+	}
+	return out
+}
+
+// SetProvider stores (or replaces) a provider's config.
+func (m *SettingsManager) SetProvider(name string, cfg ProviderConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.data.Extra == nil {
-		m.data.Extra = make(map[string]string)
+	if m.data.Providers == nil {
+		m.data.Providers = make(map[string]ProviderConfig)
 	}
-	m.data.Extra[key] = value
+	m.data.Providers[name] = cfg
 	return m.save()
 }
 
-// Delete removes a setting by key.
-func (m *SettingsManager) Delete(key string) error {
+// DeleteProvider removes a provider's config.
+func (m *SettingsManager) DeleteProvider(name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.data.Extra, key)
+	delete(m.data.Providers, name)
+	return m.save()
+}
+
+// ── MCP servers collection ───────────────────────────────────────────────
+// Same agnostic pattern as Providers: keyed by server name, stored verbatim.
+
+// MCPServer returns the stored config for an MCP server by name.
+func (m *SettingsManager) MCPServer(name string) (MCPServer, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	srv, ok := m.data.MCP[name]
+	return srv, ok
+}
+
+// MCPServers returns a defensive copy of the whole MCP collection.
+func (m *SettingsManager) MCPServers() map[string]MCPServer {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string]MCPServer, len(m.data.MCP))
+	for k, v := range m.data.MCP {
+		out[k] = v
+	}
+	return out
+}
+
+// validateMCPServer enforces the minimal shape of an MCP server: type must be
+// "local" or "remote"; a local server needs a command; a remote server needs a
+// URL. Living here (not in the API) means EVERY caller gets the same guarantee.
+func validateMCPServer(srv MCPServer) error {
+	switch srv.Type {
+	case "local":
+		if len(srv.Command) == 0 {
+			return fmt.Errorf("%w: local server requires a command", ErrInvalidMCPServer)
+		}
+	case "remote":
+		if srv.URL == "" {
+			return fmt.Errorf("%w: remote server requires a url", ErrInvalidMCPServer)
+		}
+	default:
+		return fmt.Errorf("%w: type must be \"local\" or \"remote\", got %q", ErrInvalidMCPServer, srv.Type)
+	}
+	return nil
+}
+
+// SetMCPServer validates and stores (or replaces) an MCP server's config.
+func (m *SettingsManager) SetMCPServer(name string, srv MCPServer) error {
+	if err := validateMCPServer(srv); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.data.MCP == nil {
+		m.data.MCP = make(map[string]MCPServer)
+	}
+	m.data.MCP[name] = srv
+	return m.save()
+}
+
+// DeleteMCPServer removes an MCP server's config.
+func (m *SettingsManager) DeleteMCPServer(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.data.MCP, name)
 	return m.save()
 }
 
@@ -112,9 +238,6 @@ func (m *SettingsManager) load() {
 		return
 	}
 	json.Unmarshal(data, &m.data)
-	if m.data.Extra == nil {
-		m.data.Extra = make(map[string]string)
-	}
 }
 
 func (m *SettingsManager) save() error {

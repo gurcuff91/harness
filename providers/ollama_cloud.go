@@ -17,19 +17,20 @@ import (
 )
 
 const (
-	ollamaCloudAPIKeyCred    = "ollama-cloud.api_key"
-	ollamaCloudAPIKeyEnv     = "OLLAMA_CLOUD_API_KEY"
-	ollamaCloudURLSettingKey = "ollama-cloud.url"
-	ollamaCloudURLEnv        = "OLLAMA_CLOUD_URL"
-	ollamaCloudURLDefault    = "https://ollama.com/v1"
+	ollamaCloudAPIKeyCred = "ollama-cloud.api_key"
+	ollamaCloudAPIKeyEnv  = "OLLAMA_CLOUD_API_KEY"
+	ollamaCloudURLEnv     = "OLLAMA_CLOUD_URL"
+	ollamaCloudURLDefault = "https://ollama.com/v1"
 )
 
+// getOllamaCloudURL resolves the Ollama Cloud base URL. As with local Ollama,
+// the env → stored config → default cascade is the provider's responsibility.
 func getOllamaCloudURL() string {
 	if v := os.Getenv(ollamaCloudURLEnv); v != "" {
 		return v
 	}
-	if v, ok := config.GetSettingsManager().Get(ollamaCloudURLSettingKey); ok && v != "" {
-		return v
+	if cfg, ok := config.GetSettingsManager().Provider("ollama-cloud"); ok && cfg.URL != "" {
+		return cfg.URL
 	}
 	return ollamaCloudURLDefault
 }

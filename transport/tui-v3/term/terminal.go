@@ -170,16 +170,9 @@ func (t *ProcessTerminal) Stop() {
 	}
 }
 
-// Write emits raw bytes to stdout. When PI_TUI_WRITE_LOG is set, the raw ANSI
-// stream is also appended to that file for debugging.
+// Write emits raw bytes to stdout.
 func (t *ProcessTerminal) Write(data string) {
 	_, _ = t.out.WriteString(data)
-	if p := os.Getenv("TUIV3_WRITE_LOG"); p != "" {
-		if f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
-			f.WriteString(data)
-			f.Close()
-		}
-	}
 }
 
 // Columns returns the terminal width, falling back to $COLUMNS or 80.

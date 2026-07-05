@@ -15,17 +15,19 @@ import (
 )
 
 const (
-	ollamaURLSettingKey = "ollama.url"
-	ollamaURLEnv        = "OLLAMA_URL"
-	ollamaURLDefault    = "http://localhost:11434"
+	ollamaURLEnv     = "OLLAMA_URL"
+	ollamaURLDefault = "http://localhost:11434"
 )
 
+// getOllamaURL resolves the Ollama base URL. The cascade lives HERE, in the
+// provider (env → stored config → default) — the SettingsManager only stores the
+// raw ProviderConfig; it knows nothing about Ollama.
 func getOllamaURL() string {
 	if v := os.Getenv(ollamaURLEnv); v != "" {
 		return v
 	}
-	if v, ok := config.GetSettingsManager().Get(ollamaURLSettingKey); ok && v != "" {
-		return v
+	if cfg, ok := config.GetSettingsManager().Provider("ollama"); ok && cfg.URL != "" {
+		return cfg.URL
 	}
 	return ollamaURLDefault
 }

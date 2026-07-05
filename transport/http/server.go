@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -58,6 +59,13 @@ func (s *Server) ListenAndServe(addr string) error {
 	// Routes
 	r.Get("/api/server", s.handleServerInfo)
 	r.Get("/api/settings", s.handleSettings)
+	r.Patch("/api/settings", s.handlePatchSettings)
+	r.Get("/api/settings/providers", s.handleListProviderConfigs)
+	r.Put("/api/settings/providers/{name}", s.handlePutProviderConfig)
+	r.Delete("/api/settings/providers/{name}", s.handleDeleteProviderConfig)
+	r.Get("/api/settings/mcp", s.handleListMCPServers)
+	r.Put("/api/settings/mcp/{name}", s.handlePutMCPServer)
+	r.Delete("/api/settings/mcp/{name}", s.handleDeleteMCPServer)
 	r.Get("/api/providers", s.handleProviders)
 	r.Post("/api/providers/{name}/connect", s.handleConnectProvider)
 	r.Post("/api/providers/{name}/disconnect", s.handleDisconnectProvider)
@@ -114,18 +122,142 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, serverInfo)
 }
 
+// SettingsDTO is the API representation of harness settings. Its JSON tags are
+// the single source of truth for the settings contract and match the on-disk
+// field names (see config.settingsData) — one vocabulary end to end.
+type SettingsDTO struct {
+	ActiveModel   string `json:"active_model"`
+	ThinkingLevel string `json:"thinking_level"`
+}
+
 // handleSettings returns current settings with defaults.
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	sm := config.GetSettingsManager()
-	model := sm.ActiveModel()
 	thinking := sm.ThinkingLevel()
 	if thinking == "" {
 		thinking = "off"
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
-		"active_model":   model,
-		"thinking_level": thinking,
+	writeJSON(w, http.StatusOK, SettingsDTO{
+		ActiveModel:   sm.ActiveModel(),
+		ThinkingLevel: thinking,
 	})
+}
+
+// handlePatchSettings partially updates core settings. Only the fields present
+// in the body are changed — this persists the global DEFAULT and does NOT touch
+// any live session (use the session's model/thinking command for that).
+func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ActiveModel   *string `json:"active_model"`
+		ThinkingLevel *string `json:"thinking_level"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		return
+	}
+	sm := config.GetSettingsManager()
+	if body.ActiveModel != nil {
+		if err := sm.SetActiveModel(*body.ActiveModel); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	if body.ThinkingLevel != nil {
+		if err := sm.SetThinkingLevel(*body.ThinkingLevel); err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, config.ErrInvalidThinkingLevel) {
+				status = http.StatusUnprocessableEntity
+			}
+			writeJSON(w, status, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	thinking := sm.ThinkingLevel()
+	if thinking == "" {
+		thinking = "off"
+	}
+	writeJSON(w, http.StatusOK, SettingsDTO{ActiveModel: sm.ActiveModel(), ThinkingLevel: thinking})
+}
+
+// ── Provider configs (settings collection) ────────────────────────────────
+
+// handleListProviderConfigs returns the whole provider-config collection.
+func (s *Server) handleListProviderConfigs(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, config.GetSettingsManager().Providers())
+}
+
+// handlePutProviderConfig stores (or replaces) one provider's config. The name
+// is in the URL; the ProviderConfig is the body. Pass-through: any validation
+// lives in the SettingsManager's setter, not here.
+func (s *Server) handlePutProviderConfig(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	var cfg config.ProviderConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		return
+	}
+	if err := config.GetSettingsManager().SetProvider(name, cfg); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, cfg)
+}
+
+// handleDeleteProviderConfig removes one provider's config, 404 if absent.
+func (s *Server) handleDeleteProviderConfig(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	sm := config.GetSettingsManager()
+	if _, ok := sm.Provider(name); !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider config not found: " + name})
+		return
+	}
+	if err := sm.DeleteProvider(name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// ── MCP servers (settings collection) ───────────────────────────────────
+
+// handleListMCPServers returns the whole MCP-server collection.
+func (s *Server) handleListMCPServers(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, config.GetSettingsManager().MCPServers())
+}
+
+// handlePutMCPServer stores (or replaces) one MCP server. Name in URL, MCPServer
+// in the body. Pass-through, same as provider configs.
+func (s *Server) handlePutMCPServer(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	var srv config.MCPServer
+	if err := json.NewDecoder(r.Body).Decode(&srv); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		return
+	}
+	if err := config.GetSettingsManager().SetMCPServer(name, srv); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, config.ErrInvalidMCPServer) {
+			status = http.StatusUnprocessableEntity // 422: well-formed JSON, invalid content
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, srv)
+}
+
+// handleDeleteMCPServer removes one MCP server, 404 if absent.
+func (s *Server) handleDeleteMCPServer(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	sm := config.GetSettingsManager()
+	if _, ok := sm.MCPServer(name); !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "mcp server not found: " + name})
+		return
+	}
+	if err := sm.DeleteMCPServer(name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 // providerInfo is the API representation of a provider.
@@ -671,12 +803,20 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "param 'level' is required"})
 			return
 		}
+		// Validate + persist FIRST. Only if the level is accepted do we apply it
+		// to the live session, so an invalid value never mutates session state.
+		if err := config.GetSettingsManager().SetThinkingLevel(level); err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, config.ErrInvalidThinkingLevel) {
+				status = http.StatusUnprocessableEntity
+			}
+			writeJSON(w, status, map[string]string{"error": err.Error()})
+			return
+		}
 		if err := proxy.session.SwitchThinking(level); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		// Persist to settings
-		_ = config.GetSettingsManager().SetThinkingLevel(level)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 
 	case "model":

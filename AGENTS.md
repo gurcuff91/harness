@@ -8,7 +8,7 @@
 - **Language:** Go 1.24+
 - **Module:** `github.com/gurcuff91/harness`
 - **Binary:** Single binary, ~9MB
-- **Dependencies:** Only `github.com/charmbracelet/x/term` (raw terminal input). Keep it that way.
+- **Dependencies (direct):** `golang.org/x/term` (raw mode), `github.com/rivo/uniseg` (grapheme/width) and `github.com/go-chi/chi/v5` (HTTP router) for the current stack; `github.com/rivo/tview` + `github.com/gdamore/tcell/v2`, `github.com/google/uuid`, and `golang.design/x/clipboard` remain from the legacy TUI. Keep the set minimal — no new deps without approval.
 
 ## Golden Rules
 
@@ -177,15 +177,18 @@ Universal levels mapped per-provider:
 
 | Level | Anthropic | OpenAI (o-series) | DeepSeek | Ollama |
 |-------|-----------|-------------------|----------|--------|
-| `disable` | thinking off | — | — | `think: false` |
+| `off` | thinking off | — | — | `think: false` |
 | `low` | `effort: low` | `low` | `low` | `think: true` |
 | `medium` | `effort: medium` | `medium` | `medium` | `think: true` |
 | `high` | `effort: high` | `high` | `high` | `think: true` |
 | `xhigh` | `effort: high` | `high` | `high` | `think: true` |
 
+- Accepted levels are `off | low | medium | high | xhigh`, validated in
+  `config.SetThinkingLevel` (single source of truth). Per-invocation override:
+  the `--thinking` CLI/TUI flag (there is no `HARNESS_THINKING` env var).
 - Anthropic 4.6+: uses `effort` param (adaptive). Older: `budget_tokens` (legacy).
 - DeepSeek: `reasoning_content` must be replayed in assistant messages when tool calls follow.
-- Mapping lives in `llm/providers/openai.go` `translateThinkingLevel()`.
+- Mapping lives in `providers/llm/openai.go` `translateThinkingLevel()`.
 
 ## Model Capabilities Resolution
 

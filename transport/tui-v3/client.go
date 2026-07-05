@@ -78,6 +78,34 @@ func (c *Client) GetSettings() ([]byte, error)  { return c.do("GET", "/api/setti
 func (c *Client) GetProviders() ([]byte, error) { return c.do("GET", "/api/providers", nil) }
 func (c *Client) ListModels() ([]byte, error)   { return c.do("GET", "/api/models", nil) }
 
+// PatchSettings partially updates core settings (persists the global default;
+// does not touch live sessions). Pass a map with the fields to change.
+func (c *Client) PatchSettings(fields map[string]any) ([]byte, error) {
+	return c.do("PATCH", "/api/settings", fields)
+}
+
+// Provider-config collection.
+func (c *Client) GetProviderConfigs() ([]byte, error) {
+	return c.do("GET", "/api/settings/providers", nil)
+}
+func (c *Client) PutProviderConfig(name string, cfg any) ([]byte, error) {
+	return c.do("PUT", "/api/settings/providers/"+name, cfg)
+}
+func (c *Client) DeleteProviderConfig(name string) ([]byte, error) {
+	return c.do("DELETE", "/api/settings/providers/"+name, nil)
+}
+
+// MCP-server collection.
+func (c *Client) GetMCPServers() ([]byte, error) {
+	return c.do("GET", "/api/settings/mcp", nil)
+}
+func (c *Client) PutMCPServer(name string, srv any) ([]byte, error) {
+	return c.do("PUT", "/api/settings/mcp/"+name, srv)
+}
+func (c *Client) DeleteMCPServer(name string) ([]byte, error) {
+	return c.do("DELETE", "/api/settings/mcp/"+name, nil)
+}
+
 func (c *Client) ConnectProvider(name, apiKey string) ([]byte, error) {
 	body := map[string]any{}
 	if apiKey != "" {
