@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/gurcuff91/harness/agent"
 )
@@ -70,16 +69,16 @@ func RunConnect(ctx context.Context, a *agent.Agent, name, apiKey, output string
 	defer server.Close()
 	c := newClient(addr)
 
-	// Validate provider exists
+	// Validate provider exists and read its authoritative credential type.
 	provExists := false
-	isSub := false
+	credType := ""
 	if data, err := c.GetProviders(); err == nil {
 		var providers []map[string]any
 		json.Unmarshal(data, &providers)
 		for _, p := range providers {
 			if n, _ := p["name"].(string); n == name {
 				provExists = true
-				isSub, _ = p["is_subscription"].(bool)
+				credType, _ = p["credential_type"].(string)
 				break
 			}
 		}
@@ -88,27 +87,33 @@ func RunConnect(ctx context.Context, a *agent.Agent, name, apiKey, output string
 		return fmt.Errorf("unknown provider: %s\nRun 'harness providers' to see available providers.", name)
 	}
 
-	if isSub {
+	// Branch on the credential type the provider actually needs.
+	switch credType {
+	case "oauth":
 		fmt.Println("Starting OAuth authentication...")
 		creds, err := ObtainOAuthCredentials(name)
 		if err != nil {
 			return fmt.Errorf("OAuth: %w", err)
 		}
-		_, err = c.ConnectProviderWithCreds(name, creds)
-		if err != nil {
+		if _, err = c.ConnectProviderWithCreds(name, creds); err != nil {
 			return fmt.Errorf("connect: %w", err)
 		}
-	} else {
+	case "api_key":
 		if apiKey == "" {
-			fmt.Print("Enter API key: ")
-			fmt.Scanln(&apiKey)
-			apiKey = strings.TrimSpace(apiKey)
-			if apiKey == "" {
-				return fmt.Errorf("api key required")
+			secret, err := PromptSecret("Enter API key: ")
+			if err != nil {
+				return fmt.Errorf("api key required: pass it as an argument (harness connect %s <api_key>) or run in a terminal", name)
 			}
+			apiKey = secret
 		}
-		_, err = c.ConnectProvider(name, apiKey)
-		if err != nil {
+		if apiKey == "" {
+			return fmt.Errorf("api key required")
+		}
+		if _, err = c.ConnectProvider(name, apiKey); err != nil {
+			return fmt.Errorf("connect: %w", err)
+		}
+	default: // "none" — auto-detected (e.g. ollama via ping); no credential needed.
+		if _, err = c.ConnectProvider(name, ""); err != nil {
 			return fmt.Errorf("connect: %w", err)
 		}
 	}

@@ -268,6 +268,10 @@ type providerInfo struct {
 	Active         bool   `json:"active"`
 	Activation     string `json:"activation"`
 	IsSubscription bool   `json:"is_subscription"`
+	// CredentialType is the authoritative kind of credential the provider needs:
+	// "none" (auto-detected, e.g. ollama), "api_key" (secret), or "oauth". The
+	// CLI uses this to decide whether to prompt for a secret at connect time.
+	CredentialType string `json:"credential_type"`
 	ModelCount     int    `json:"model_count"`
 }
 
@@ -294,6 +298,7 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 			Active:         p.IsActive(),
 			Activation:     act,
 			IsSubscription: p.CredentialType() == types.CredTypeOAuth,
+			CredentialType: string(p.CredentialType()),
 			ModelCount:     len(models),
 		})
 	}

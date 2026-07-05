@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/gurcuff91/harness/agent"
@@ -79,6 +80,12 @@ func main() {
 			os.Exit(1)
 		}
 		runDelete(args[1])
+
+	case "settings":
+		runSettings(args[1:])
+
+	case "mcp":
+		runMCP(args[1:])
 
 	case "-p", "--prompt":
 		// CLI prompt mode (explicit)
@@ -199,6 +206,132 @@ func runDelete(id string) {
 	}
 }
 
+// ── settings / mcp commands ──────────────────────────────────────────────
+
+func newHeadlessAgent() *agent.Agent {
+	return agent.New(agent.AgentOptions{ThinkingLevel: config.GetSettingsManager().ThinkingLevel()})
+}
+
+func runSettings(args []string) {
+	a := newHeadlessAgent()
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	var err error
+	switch {
+	case len(args) == 0:
+		err = cli.RunSettings(ctx, a, "text")
+	case args[0] == "set":
+		if len(args) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: harness settings set <model|thinking> <value>")
+			os.Exit(1)
+		}
+		err = cli.RunSettingsSet(ctx, a, args[1], args[2], "text")
+	default:
+		fmt.Fprintf(os.Stderr, "unknown settings subcommand: %s\nusage: harness settings [set <key> <value>]\n", args[0])
+		os.Exit(1)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runMCP(args []string) {
+	a := newHeadlessAgent()
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	var err error
+	switch {
+	case len(args) == 0, args[0] == "list":
+		err = cli.RunMCPList(ctx, a, "text")
+	case args[0] == "add":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: harness mcp add <name> [--local|--remote] [flags]")
+			os.Exit(1)
+		}
+		name, opts := parseMCPAddFlags(args[1:])
+		err = cli.RunMCPAdd(ctx, a, name, opts, "text")
+	case args[0] == "rm", args[0] == "remove":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: harness mcp rm <name>")
+			os.Exit(1)
+		}
+		err = cli.RunMCPRemove(ctx, a, args[1], "text")
+	default:
+		fmt.Fprintf(os.Stderr, "unknown mcp subcommand: %s\nusage: harness mcp [list | add <name> ... | rm <name>]\n", args[0])
+		os.Exit(1)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// parseMCPAddFlags parses `mcp add` flags. The first non-flag arg is the server
+// name. Supports --local/--remote, --command, --url, --disabled, and repeatable
+// --env KEY=VAL / --header KEY:VAL.
+func parseMCPAddFlags(args []string) (name string, opts cli.MCPAddOpts) {
+	opts.Env = map[string]string{}
+	opts.Headers = map[string]string{}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--local":
+			opts.Local = true
+		case "--remote":
+			opts.Remote = true
+		case "--disabled":
+			opts.Disabled = true
+		case "--command":
+			if i+1 < len(args) {
+				opts.Command = args[i+1]
+				i++
+			}
+		case "--url":
+			if i+1 < len(args) {
+				opts.URL = args[i+1]
+				i++
+			}
+		case "--env":
+			if i+1 < len(args) {
+				if k, v, ok := splitKV(args[i+1], "="); ok {
+					opts.Env[k] = v
+				}
+				i++
+			}
+		case "--header":
+			if i+1 < len(args) {
+				if k, v, ok := splitKV(args[i+1], ":"); ok {
+					opts.Headers[k] = v
+				}
+				i++
+			}
+		default:
+			if name == "" && len(args[i]) > 0 && args[i][0] != '-' {
+				name = args[i]
+			}
+		}
+	}
+	if len(opts.Env) == 0 {
+		opts.Env = nil
+	}
+	if len(opts.Headers) == 0 {
+		opts.Headers = nil
+	}
+	return name, opts
+}
+
+// splitKV splits "key<sep>value" on the first separator. Value may itself
+// contain the separator (e.g. a header value with a colon).
+func splitKV(s, sep string) (key, value string, ok bool) {
+	idx := strings.Index(s, sep)
+	if idx < 0 {
+		return "", "", false
+	}
+	return strings.TrimSpace(s[:idx]), strings.TrimSpace(s[idx+len(sep):]), true
+}
+
 // ── Flag parsers ─────────────────────────────────────────────────────────
 
 func extractFlags(args []string) (model, thinking string) {
@@ -277,13 +410,19 @@ Usage:
 
 Management:
   harness providers                  List providers
-  harness connect <name>             Connect provider
+  harness connect <name> [api_key]   Connect provider (api_key optional)
   harness disconnect <name>          Disconnect provider
-  harness sessions                   List sessions (CWD)
-  harness sessions --all             List all sessions
+  harness sessions [--all]           List sessions (CWD, or all)
   harness delete <id>                Delete session
 
-Flags:
+Settings:
+  harness settings                   Show core settings
+  harness settings set <key> <val>   Set: key ∈ {model, thinking}
+  harness mcp [list]                 List MCP servers
+  harness mcp add <name> [flags]     Add MCP server (see 'mcp add' flags)
+  harness mcp rm <name>              Remove MCP server
+
+Flags (CLI / TUI):
   -p, --prompt <text>  Prompt for single-turn CLI mode
   --model <m>          Model (provider/model)
   --thinking <lvl>     Thinking: off|low|medium|high|xhigh
@@ -292,6 +431,15 @@ Flags:
   --all                With sessions: list all
   --help, -h           Show this help
 
+Flags ('mcp add'):
+  --local              Local server (spawns a command)
+  --remote             Remote server (dials a URL)
+  --command <cmd>      Local: command + args, e.g. "npx -y @mcp/fs"
+  --url <url>          Remote: server URL
+  --env KEY=VAL        Local: env var (repeatable)
+  --header KEY:VAL     Remote: HTTP header (repeatable)
+  --disabled           Add the server disabled (default: enabled)
+
 Examples:
   harness -p "what is 2+2?"
   harness -p "list files" --output json
@@ -299,5 +447,8 @@ Examples:
   harness --resume abc123 --thinking high
   harness providers
   harness connect anthropic
+  harness settings set thinking high
+  harness mcp add fs --local --command "npx -y @mcp/fs"
+  harness mcp add api --remote --url https://mcp.x --header "Authorization: Bearer t"
   harness http :8080`)
 }

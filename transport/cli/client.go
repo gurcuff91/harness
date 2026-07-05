@@ -59,6 +59,22 @@ func (c *httpClient) GetSettings() ([]byte, error) {
 	return c.do("GET", "/api/settings", nil)
 }
 
+func (c *httpClient) PatchSettings(fields map[string]any) ([]byte, error) {
+	return c.do("PATCH", "/api/settings", fields)
+}
+
+func (c *httpClient) GetMCPServers() ([]byte, error) {
+	return c.do("GET", "/api/settings/mcp", nil)
+}
+
+func (c *httpClient) PutMCPServer(name string, srv any) ([]byte, error) {
+	return c.do("PUT", "/api/settings/mcp/"+name, srv)
+}
+
+func (c *httpClient) DeleteMCPServer(name string) ([]byte, error) {
+	return c.do("DELETE", "/api/settings/mcp/"+name, nil)
+}
+
 func (c *httpClient) ListModels() ([]byte, error) {
 	return c.do("GET", "/api/models", nil)
 }
