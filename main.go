@@ -124,13 +124,15 @@ func main() {
 // ── Dispatchers ──────────────────────────────────────────────────────────
 
 func runHTTP(addr string) {
-	a := agent.New(agent.AgentOptions{ThinkingLevel: config.GetSettingsManager().ThinkingLevel()})
+	a := newRootAgent()
+	defer a.Close()
 	srv := httptransport.NewServer(a, httptransport.ServerOptions{Verbose: true})
 	log.Fatal(srv.ListenAndServe(addr))
 }
 
 func runTUI(model, thinking, resumeID string) {
-	a := agent.New(agent.AgentOptions{ThinkingLevel: config.GetSettingsManager().ThinkingLevel()})
+	a := newRootAgent()
+	defer a.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	t := tui.New(a)
@@ -145,7 +147,8 @@ func runCLI(prompt, model, thinking, output string) {
 	if output == "" {
 		output = "text"
 	}
-	a := agent.New(agent.AgentOptions{ThinkingLevel: config.GetSettingsManager().ThinkingLevel()})
+	a := newRootAgent()
+	defer a.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -157,7 +160,8 @@ func runCLI(prompt, model, thinking, output string) {
 }
 
 func runProviders(args []string) {
-	a := agent.New(agent.AgentOptions{ThinkingLevel: config.GetSettingsManager().ThinkingLevel()})
+	a := newRootAgent()
+	defer a.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	if err := cli.RunProviders(ctx, a, "text"); err != nil {
@@ -167,7 +171,8 @@ func runProviders(args []string) {
 }
 
 func runConnect(name, apiKey string) {
-	a := agent.New(agent.AgentOptions{ThinkingLevel: config.GetSettingsManager().ThinkingLevel()})
+	a := newRootAgent()
+	defer a.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	if err := cli.RunConnect(ctx, a, name, apiKey, "text"); err != nil {
@@ -177,7 +182,8 @@ func runConnect(name, apiKey string) {
 }
 
 func runDisconnect(name string) {
-	a := agent.New(agent.AgentOptions{ThinkingLevel: config.GetSettingsManager().ThinkingLevel()})
+	a := newRootAgent()
+	defer a.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	if err := cli.RunDisconnect(ctx, a, name, "text"); err != nil {
@@ -187,7 +193,8 @@ func runDisconnect(name string) {
 }
 
 func runSessions(all bool) {
-	a := agent.New(agent.AgentOptions{ThinkingLevel: config.GetSettingsManager().ThinkingLevel()})
+	a := newRootAgent()
+	defer a.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	if err := cli.RunSessions(ctx, a, all, "text"); err != nil {
@@ -197,7 +204,8 @@ func runSessions(all bool) {
 }
 
 func runDelete(id string) {
-	a := agent.New(agent.AgentOptions{ThinkingLevel: config.GetSettingsManager().ThinkingLevel()})
+	a := newRootAgent()
+	defer a.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	if err := cli.RunDelete(ctx, a, id, "text"); err != nil {
@@ -208,12 +216,19 @@ func runDelete(id string) {
 
 // ── settings / mcp commands ──────────────────────────────────────────────
 
-func newHeadlessAgent() *agent.Agent {
-	return agent.New(agent.AgentOptions{ThinkingLevel: config.GetSettingsManager().ThinkingLevel()})
+// newRootAgent builds the process's root agent. EnableMCPs spawns the configured
+// MCP servers (once) and registers their tools; the caller must Close() it to
+// terminate those subprocesses.
+func newRootAgent() *agent.Agent {
+	return agent.New(agent.AgentOptions{
+		ThinkingLevel: config.GetSettingsManager().ThinkingLevel(),
+		EnableMCPs:    true,
+	})
 }
 
 func runSettings(args []string) {
-	a := newHeadlessAgent()
+	// Settings commands only read/write config — no need to spawn MCP servers.
+	a := agent.New(agent.AgentOptions{ThinkingLevel: config.GetSettingsManager().ThinkingLevel()})
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -238,7 +253,9 @@ func runSettings(args []string) {
 }
 
 func runMCP(args []string) {
-	a := newHeadlessAgent()
+	// mcp list reports real connection status, so spawn the servers (root agent).
+	a := newRootAgent()
+	defer a.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 

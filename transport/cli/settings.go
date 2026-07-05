@@ -96,6 +96,22 @@ func RunMCPList(ctx context.Context, a *agent.Agent, output string) error {
 	var servers map[string]map[string]any
 	json.Unmarshal(data, &servers)
 
+	// Cross-reference live connection status (connected? tool count? error?).
+	type mcpStatus struct {
+		Name      string `json:"name"`
+		Connected bool   `json:"connected"`
+		ToolCount int    `json:"tool_count"`
+		Error     string `json:"error"`
+	}
+	statusByName := map[string]mcpStatus{}
+	if sd, err := c.GetMCPStatus(); err == nil {
+		var sts []mcpStatus
+		json.Unmarshal(sd, &sts)
+		for _, st := range sts {
+			statusByName[st.Name] = st
+		}
+	}
+
 	switch output {
 	case "json":
 		b, _ := json.MarshalIndent(servers, "", "  ")
@@ -114,10 +130,6 @@ func RunMCPList(ctx context.Context, a *agent.Agent, output string) error {
 			srv := servers[n]
 			typ, _ := srv["type"].(string)
 			enabled, _ := srv["enabled"].(bool)
-			state := "disabled"
-			if enabled {
-				state = "enabled"
-			}
 			detail := ""
 			switch typ {
 			case "local":
@@ -131,7 +143,22 @@ func RunMCPList(ctx context.Context, a *agent.Agent, output string) error {
 			case "remote":
 				detail, _ = srv["url"].(string)
 			}
-			fmt.Printf("%-16s %-8s %-9s %s\n", n, typ, state, detail)
+			// State column reflects real connection when enabled.
+			state := "disabled"
+			if enabled {
+				if st, ok := statusByName[n]; ok {
+					if st.Connected {
+						state = fmt.Sprintf("\u2713 connected (%d tools)", st.ToolCount)
+					} else if st.Error != "" {
+						state = "\u2717 failed: " + st.Error
+					} else {
+						state = "\u2717 not connected"
+					}
+				} else {
+					state = "enabled"
+				}
+			}
+			fmt.Printf("%-16s %-8s %s  %s\n", n, typ, detail, state)
 		}
 	}
 	return nil

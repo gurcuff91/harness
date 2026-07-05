@@ -11,6 +11,7 @@ import (
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/agent/tools"
+	"github.com/gurcuff91/harness/mcp"
 	"github.com/gurcuff91/harness/providers"
 	"github.com/gurcuff91/harness/types"
 )
@@ -21,15 +22,16 @@ import (
 // It has zero knowledge of providers, credentials, or which providers are active.
 // The caller is responsible for ensuring the provider is active before NewSession().
 type Agent struct {
-	opts           AgentOptions // original opts — used by Subagent tool to clone
-	toolReg        *tools.Registry
-	allowedTools   []string
-	store          store.SessionStoreManager
-	resourceLoader resources.ResourceLoader // nil = FileResourceLoader(cwd) per session
-	thinkingLevel  string
-	systemPrompt   string
-	maxTurns       int
-	maxTokens      int // 0 = resolved from ModelMeta in NewSession
+	opts            AgentOptions // original opts — used by Subagent tool to clone
+	toolReg         *tools.Registry
+	disallowedTools []string
+	store           store.SessionStoreManager
+	resourceLoader  resources.ResourceLoader // nil = FileResourceLoader(cwd) per session
+	thinkingLevel   string
+	systemPrompt    string
+	maxTurns        int
+	maxTokens       int          // 0 = resolved from ModelMeta in NewSession
+	mcpManager      *mcp.Manager // non-nil only when EnableMCPs; owns MCP subprocesses
 }
 
 // AgentOptions configures a new Agent.
@@ -43,8 +45,9 @@ type AgentOptions struct {
 	MaxTokens    int    // max output tokens — default: model's MaxTokens from ModelMeta
 
 	// ── Tools ────────────────────────────────────────────────────────────
-	ExtraTools   []tools.Tool // additional tools (defaults always included)
-	AllowedTools []string     // tool names allowed — empty = all
+	Tools           []tools.Tool // additional tools (defaults always included)
+	DisallowedTools []string     // tool names to exclude — empty = all allowed
+	EnableMCPs      bool         // spawn & connect configured MCP servers (root agent only)
 
 	// ── Infrastructure (optional) ────────────────────────────────────────
 	Store          store.SessionStoreManager // default: InMemorySessionStoreManager
@@ -71,26 +74,71 @@ func New(opts AgentOptions) *Agent {
 	}
 
 	reg := defaultTools()
-	for _, t := range opts.ExtraTools {
+
+	// Connect configured MCP servers eagerly (root agent only). Their tools are
+	// registered alongside the built-ins and shared by every session. Failures
+	// degrade silently — recorded in the manager's Statuses(), never logged to
+	// stdout (which would corrupt the TUI).
+	var mcpMgr *mcp.Manager
+	if opts.EnableMCPs {
+		mcpMgr = mcp.NewManager()
+		for _, t := range mcpMgr.Start(context.Background()) {
+			reg.Register(t)
+		}
+	}
+
+	// Additional tools (built-ins always included). Subagents receive the
+	// parent's MCP tools here without spawning their own processes.
+	for _, t := range opts.Tools {
 		reg.Register(t)
 	}
 
 	return &Agent{
-		opts:           opts,
-		toolReg:        reg,
-		allowedTools:   opts.AllowedTools,
-		store:          opts.Store,
-		resourceLoader: opts.ResourceLoader,
-		thinkingLevel:  opts.ThinkingLevel,
-		systemPrompt:   opts.SystemPrompt,
-		maxTurns:       opts.MaxTurns,
-		maxTokens:      opts.MaxTokens,
+		opts:            opts,
+		toolReg:         reg,
+		disallowedTools: opts.DisallowedTools,
+		store:           opts.Store,
+		resourceLoader:  opts.ResourceLoader,
+		thinkingLevel:   opts.ThinkingLevel,
+		systemPrompt:    opts.SystemPrompt,
+		maxTurns:        opts.MaxTurns,
+		maxTokens:       opts.MaxTokens,
+		mcpManager:      mcpMgr,
 	}
 }
 
 // Options returns the original configuration — used by the Subagent tool to clone.
 func (a *Agent) Options() AgentOptions {
 	return a.opts
+}
+
+// MCPTools returns the agent's MCP tools, for sharing with subagents (which set
+// EnableMCPs=false and receive these via AgentOptions.Tools, reusing the
+// parent's live MCP processes). Nil when MCP is disabled.
+func (a *Agent) MCPTools() []tools.Tool {
+	if a.mcpManager == nil {
+		return nil
+	}
+	return a.mcpManager.Tools()
+}
+
+// MCPStatuses reports the connection state of each configured MCP server. Nil
+// when MCP is disabled. Exposed (e.g. via the HTTP API) so clients can render
+// status without the manager writing to stdout.
+func (a *Agent) MCPStatuses() []mcp.Status {
+	if a.mcpManager == nil {
+		return nil
+	}
+	return a.mcpManager.Statuses()
+}
+
+// Close releases agent-owned resources. It terminates MCP subprocesses (root
+// agent only; subagents have no manager). Idempotent and nil-safe.
+func (a *Agent) Close() error {
+	if a.mcpManager != nil {
+		return a.mcpManager.Close()
+	}
+	return nil
 }
 
 // NewSession creates a fresh session for the given working directory and model.
@@ -240,14 +288,10 @@ func (a *Agent) buildSessionTools(cwd, model string, res *resources.Resources, l
 		// Capture current settings in a closure — Agent has zero knowledge of sub-agent mechanics
 		parentA := a
 		executor := func(ctx context.Context, prompt string) (string, error) {
-			// Build allowed tools list: everything except Subagent (no recursion)
-			var allowed []string
-			for _, t := range defaultAllTools() {
-				if t != tools.ToolSubagent {
-					allowed = append(allowed, t)
-				}
-			}
-			// Create ephemeral sub-agent inheriting parent settings
+			// Create ephemeral sub-agent inheriting parent settings. It reuses the
+			// parent's MCP tools (via Tools) WITHOUT spawning its own MCP processes
+			// (EnableMCPs stays false). It is forbidden from launching further
+			// subagents (DisallowedTools) to prevent recursion.
 			subAgent := New(AgentOptions{
 				ThinkingLevel: parentA.thinkingLevel,
 				SystemPrompt:  subagentSystemPrompt,
@@ -255,8 +299,9 @@ func (a *Agent) buildSessionTools(cwd, model string, res *resources.Resources, l
 				MaxTokens:     parentA.maxTokens,
 				Store:         store.NewInMemorySessionStoreManager(),
 				// Each subagent gets its OWN loader instance — FileResourceLoader is not goroutine-safe
-				ResourceLoader: resources.NewFileResourceLoader(cwd),
-				AllowedTools:   allowed,
+				ResourceLoader:  resources.NewFileResourceLoader(cwd),
+				DisallowedTools: []string{tools.ToolSubagent},
+				Tools:           parentA.MCPTools(),
 			})
 			sess, err := subAgent.NewSession(cwd, model)
 			if err != nil {
@@ -288,16 +333,16 @@ func (a *Agent) buildSessionTools(cwd, model string, res *resources.Resources, l
 	return reg
 }
 
+// isToolAllowed reports whether a tool may be used. A tool is allowed unless it
+// appears in the DisallowedTools blocklist (empty blocklist = everything
+// allowed). Using a blocklist means MCP tools (mcp__*) pass through by default.
 func (a *Agent) isToolAllowed(name string) bool {
-	if len(a.allowedTools) == 0 {
-		return true
-	}
-	for _, n := range a.allowedTools {
+	for _, n := range a.disallowedTools {
 		if n == name {
-			return true
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) string {
@@ -342,17 +387,4 @@ func defaultTools() *tools.Registry {
 	r.Register(tools.Edit())
 	r.Register(tools.Fetch())
 	return r
-}
-
-// defaultAllTools returns the names of all default tools (excluding Subagent).
-func defaultAllTools() []string {
-	return []string{
-		tools.ToolBash,
-		tools.ToolRead,
-		tools.ToolWrite,
-		tools.ToolEdit,
-		tools.ToolFetch,
-		tools.ToolSkill,
-		tools.ToolSubagent,
-	}
 }

@@ -106,6 +106,11 @@ func (c *Client) DeleteMCPServer(name string) ([]byte, error) {
 	return c.do("DELETE", "/api/settings/mcp/"+name, nil)
 }
 
+// GetMCPStatus returns the live connection status of configured MCP servers.
+func (c *Client) GetMCPStatus() ([]byte, error) {
+	return c.do("GET", "/api/mcp/status", nil)
+}
+
 func (c *Client) ConnectProvider(name, apiKey string) ([]byte, error) {
 	body := map[string]any{}
 	if apiKey != "" {

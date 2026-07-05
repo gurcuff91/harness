@@ -72,6 +72,8 @@ type MCPServer struct {
 	URL     string            `json:"url,omitempty"`     // remote: server URL
 	Env     map[string]string `json:"env,omitempty"`     // local: process env vars
 	Headers map[string]string `json:"headers,omitempty"` // remote: custom HTTP headers
+	Cwd     string            `json:"cwd,omitempty"`     // local: working directory (optional)
+	Timeout int               `json:"timeout,omitempty"` // ms for connect (initialize+tools/list); 0 = default 5000
 	Enabled bool              `json:"enabled"`
 }
 

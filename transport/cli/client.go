@@ -75,6 +75,10 @@ func (c *httpClient) DeleteMCPServer(name string) ([]byte, error) {
 	return c.do("DELETE", "/api/settings/mcp/"+name, nil)
 }
 
+func (c *httpClient) GetMCPStatus() ([]byte, error) {
+	return c.do("GET", "/api/mcp/status", nil)
+}
+
 func (c *httpClient) ListModels() ([]byte, error) {
 	return c.do("GET", "/api/models", nil)
 }

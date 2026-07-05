@@ -17,6 +17,7 @@ import (
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/config"
+	"github.com/gurcuff91/harness/mcp"
 	"github.com/gurcuff91/harness/providers"
 	"github.com/gurcuff91/harness/types"
 )
@@ -66,6 +67,7 @@ func (s *Server) ListenAndServe(addr string) error {
 	r.Get("/api/settings/mcp", s.handleListMCPServers)
 	r.Put("/api/settings/mcp/{name}", s.handlePutMCPServer)
 	r.Delete("/api/settings/mcp/{name}", s.handleDeleteMCPServer)
+	r.Get("/api/mcp/status", s.handleMCPStatus)
 	r.Get("/api/providers", s.handleProviders)
 	r.Post("/api/providers/{name}/connect", s.handleConnectProvider)
 	r.Post("/api/providers/{name}/disconnect", s.handleDisconnectProvider)
@@ -243,6 +245,17 @@ func (s *Server) handlePutMCPServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, srv)
+}
+
+// handleMCPStatus reports the live connection status of each configured MCP
+// server (connected? tool count? error?). This is how clients surface MCP
+// health without the agent ever writing to stdout. Returns [] when MCP is off.
+func (s *Server) handleMCPStatus(w http.ResponseWriter, r *http.Request) {
+	statuses := s.agent.MCPStatuses()
+	if statuses == nil {
+		statuses = []mcp.Status{}
+	}
+	writeJSON(w, http.StatusOK, statuses)
 }
 
 // handleDeleteMCPServer removes one MCP server, 404 if absent.
