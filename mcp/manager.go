@@ -64,15 +64,6 @@ func (m *Manager) Start(ctx context.Context) []tools.Tool {
 		if !cfg.Enabled {
 			continue
 		}
-		// Phase 1: stdio (local) only. Remote servers are recorded as not-yet
-		// supported so their absence is visible rather than silent.
-		if cfg.Type != "local" {
-			m.statuses = append(m.statuses, Status{
-				Name: name, Connected: false,
-				Error: fmt.Sprintf("transport %q not supported yet (phase 1: local only)", cfg.Type),
-			})
-			continue
-		}
 
 		client, toolDefs, err := connectServer(ctx, cfg)
 		if err != nil {
@@ -88,8 +79,9 @@ func (m *Manager) Start(ctx context.Context) []tools.Tool {
 	return m.toolList
 }
 
-// connectServer spawns, initializes, and lists tools for one local server,
-// bounded by the server's timeout (or the default).
+// connectServer builds the right transport for the server's type (local=stdio,
+// remote=HTTP), initializes it, and lists its tools — bounded by the server's
+// timeout (or the default).
 func connectServer(ctx context.Context, cfg config.MCPServer) (*Client, []Tool, error) {
 	timeout := defaultConnectTimeout
 	if cfg.Timeout > 0 {
@@ -98,7 +90,14 @@ func connectServer(ctx context.Context, cfg config.MCPServer) (*Client, []Tool, 
 	connectCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	tr, err := NewStdioTransport(StdioConfig{Command: cfg.Command, Env: cfg.Env, Cwd: cfg.Cwd})
+	var tr Transport
+	var err error
+	switch cfg.Type {
+	case "remote":
+		tr, err = NewHTTPTransport(HTTPConfig{URL: cfg.URL, Headers: cfg.Headers, Timeout: timeout})
+	default: // "local"
+		tr, err = NewStdioTransport(StdioConfig{Command: cfg.Command, Env: cfg.Env, Cwd: cfg.Cwd})
+	}
 	if err != nil {
 		return nil, nil, err
 	}

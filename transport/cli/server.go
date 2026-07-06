@@ -8,7 +8,10 @@ import (
 	transporthttp "github.com/gurcuff91/harness/transport/http"
 )
 
-// startInternalServer starts the HTTP transport on a random port.
+// startInternalServer starts the HTTP transport on a random port. Because we
+// open the listener ourselves and hand it straight to Serve, the port is already
+// accepting connections the instant net.Listen returns — no close-then-reopen
+// race, so no readiness polling is needed.
 func startInternalServer(a *agent.Agent) (*internalServer, string, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -17,11 +20,7 @@ func startInternalServer(a *agent.Agent) (*internalServer, string, error) {
 	addr := listener.Addr().String()
 
 	srv := transporthttp.NewServer(a, transporthttp.ServerOptions{Verbose: false})
-
-	go func() {
-		listener.Close()
-		srv.ListenAndServe(addr) //nolint:errcheck
-	}()
+	go srv.Serve(listener) //nolint:errcheck
 
 	return &internalServer{srv: srv}, addr, nil
 }

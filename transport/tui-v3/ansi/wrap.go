@@ -46,21 +46,18 @@ func wrapSingleLine(line string, width int) []string {
 		tw := VisibleWidth(token)
 		isWS := strings.TrimSpace(token) == ""
 
-		// Token alone exceeds width — break it grapheme by grapheme.
+		// Token alone exceeds width — break it grapheme by grapheme. Rather than
+		// flushing the current line first (which would orphan a short prefix like
+		// an icon on its own line), let the long word continue filling the space
+		// left on the current line. breakLongWordFrom returns lines where the FIRST
+		// one is meant to append to the existing current line.
 		if tw > width && !isWS {
-			if current != "" {
-				if r := tracker.lineEndReset(); r != "" {
-					current += r
-				}
+			broken := breakLongWordFrom(token, width, currentWidth, tracker)
+			current += broken[0]
+			for i := 1; i < len(broken); i++ {
 				wrapped = append(wrapped, current)
-				current = ""
-				currentWidth = 0
+				current = broken[i]
 			}
-			broken := breakLongWord(token, width, tracker)
-			for i := 0; i < len(broken)-1; i++ {
-				wrapped = append(wrapped, broken[i])
-			}
-			current = broken[len(broken)-1]
 			currentWidth = VisibleWidth(current)
 			continue
 		}
@@ -99,10 +96,20 @@ func wrapSingleLine(line string, width int) []string {
 
 // breakLongWord splits a single token wider than width into multiple lines,
 // re-applying active codes at each line start.
+// breakLongWord breaks a word wider than width into multiple lines, each
+// starting fresh. Kept for callers that don't track a running width.
 func breakLongWord(word string, width int, tracker *codeTracker) []string {
+	return breakLongWordFrom(word, width, 0, tracker)
+}
+
+// breakLongWordFrom breaks a long word where the FIRST returned line only fills
+// (width - startWidth) columns — continuing an existing line that already holds
+// startWidth visible columns. The first element is appended to the caller's
+// current line; the rest are complete new lines.
+func breakLongWordFrom(word string, width, startWidth int, tracker *codeTracker) []string {
 	var lines []string
-	current := tracker.activeCodes()
-	currentWidth := 0
+	current := ""
+	currentWidth := startWidth
 
 	type seg struct {
 		ansi bool

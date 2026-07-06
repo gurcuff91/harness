@@ -329,6 +329,15 @@ func TranslateMessageToAnthropic(msg types.Message) []json.RawMessage {
 						"source": map[string]string{"type": "base64", "media_type": img.MimeType, "data": img.Base64},
 					})
 				}
+				// Anthropic rejects a tool_result with empty content (especially when
+				// is_error is true). Guarantee at least one text block.
+				if len(resultContent) == 0 {
+					text := "(no output)"
+					if p.ToolResult.IsErr {
+						text = "(tool failed with no output)"
+					}
+					resultContent = append(resultContent, map[string]any{"type": "text", "text": text})
+				}
 				block := map[string]any{
 					"type": "tool_result", "tool_use_id": p.ToolResult.ID, "content": resultContent,
 				}

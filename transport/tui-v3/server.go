@@ -19,11 +19,7 @@ func startInternalServer(a *agent.Agent) (*internalServer, string, error) {
 	addr := listener.Addr().String()
 
 	srv := transporthttp.NewServer(a, transporthttp.ServerOptions{Verbose: false})
-
-	go func() {
-		listener.Close()
-		srv.ListenAndServe(addr) //nolint:errcheck
-	}()
+	go srv.Serve(listener) //nolint:errcheck
 
 	return &internalServer{srv: srv}, addr, nil
 }

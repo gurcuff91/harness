@@ -90,6 +90,32 @@ func TestWrapTextWithAnsi(t *testing.T) {
 	}
 }
 
+// TestWrapLongWordDoesNotOrphanPrefix guards the fix where a short prefix (e.g.
+// a tool icon) followed by a very long space-free word was orphaned on its own
+// line. The long word must continue filling the first line instead.
+func TestWrapLongWordDoesNotOrphanPrefix(t *testing.T) {
+	// "AB " (3 cols) + a 40-col word, wrapped at 20.
+	long := strings.Repeat("x", 40)
+	lines := WrapTextWithAnsi("AB "+long, 20)
+	if len(lines) == 0 {
+		t.Fatal("no lines")
+	}
+	// The first line must contain more than just the prefix — the long word
+	// starts filling it.
+	if VisibleWidth(lines[0]) <= 3 {
+		t.Errorf("prefix orphaned: first line %q width %d", lines[0], VisibleWidth(lines[0]))
+	}
+	if !strings.HasPrefix(lines[0], "AB x") {
+		t.Errorf("first line should be prefix+word start, got %q", lines[0])
+	}
+	// No line may exceed the width.
+	for i, l := range lines {
+		if VisibleWidth(l) > 20 {
+			t.Errorf("line %d %q exceeds 20", i, l)
+		}
+	}
+}
+
 func TestWrapPreservesNewlines(t *testing.T) {
 	lines := WrapTextWithAnsi("line one\nline two", 80)
 	if len(lines) != 2 {

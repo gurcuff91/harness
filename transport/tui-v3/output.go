@@ -135,6 +135,13 @@ func stripANSI(s string) string {
 	return b.String()
 }
 
+// collapseWhitespace flattens a multi-line string into a single line: runs of
+// whitespace (including newlines and tabs) become a single space, trimmed. Used
+// to render a tool error as a one-line summary.
+func collapseWhitespace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
 func formatDur(ms float64) string {
 	if ms >= 1000 {
 		return fmt.Sprintf("%.1fs", ms/1000)

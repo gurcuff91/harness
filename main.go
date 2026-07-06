@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -127,7 +128,11 @@ func runHTTP(addr string) {
 	a := newRootAgent()
 	defer a.Close()
 	srv := httptransport.NewServer(a, httptransport.ServerOptions{Verbose: true})
-	log.Fatal(srv.ListenAndServe(addr))
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("listen %s: %v", addr, err)
+	}
+	log.Fatal(srv.Serve(listener))
 }
 
 func runTUI(model, thinking, resumeID string) {
@@ -287,8 +292,8 @@ func runMCP(args []string) {
 }
 
 // parseMCPAddFlags parses `mcp add` flags. The first non-flag arg is the server
-// name. Supports --local/--remote, --command, --url, --disabled, and repeatable
-// --env KEY=VAL / --header KEY:VAL.
+// name. Supports --local/--remote, --command, --url, --bearer, --disabled, and
+// repeatable --env KEY=VAL / --header KEY:VAL.
 func parseMCPAddFlags(args []string) (name string, opts cli.MCPAddOpts) {
 	opts.Env = map[string]string{}
 	opts.Headers = map[string]string{}
@@ -308,6 +313,11 @@ func parseMCPAddFlags(args []string) (name string, opts cli.MCPAddOpts) {
 		case "--url":
 			if i+1 < len(args) {
 				opts.URL = args[i+1]
+				i++
+			}
+		case "--bearer":
+			if i+1 < len(args) {
+				opts.Bearer = args[i+1]
 				i++
 			}
 		case "--env":
@@ -453,6 +463,7 @@ Flags ('mcp add'):
   --remote             Remote server (dials a URL)
   --command <cmd>      Local: command + args, e.g. "npx -y @mcp/fs"
   --url <url>          Remote: server URL
+  --bearer <token>     Remote: sugar for --header "Authorization: Bearer <token>"
   --env KEY=VAL        Local: env var (repeatable)
   --header KEY:VAL     Remote: HTTP header (repeatable)
   --disabled           Add the server disabled (default: enabled)

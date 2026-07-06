@@ -191,6 +191,20 @@ func (m *SettingsManager) MCPServers() map[string]MCPServer {
 	return out
 }
 
+// canonicalMCPType maps friendly transport aliases to the canonical values the
+// rest of the code expects: "http"/"sse" → "remote", "stdio" → "local". This
+// lets users write the more intuitive "http" in settings.json.
+func canonicalMCPType(t string) string {
+	switch t {
+	case "http", "sse", "streamable-http":
+		return "remote"
+	case "stdio":
+		return "local"
+	default:
+		return t
+	}
+}
+
 // validateMCPServer enforces the minimal shape of an MCP server: type must be
 // "local" or "remote"; a local server needs a command; a remote server needs a
 // URL. Living here (not in the API) means EVERY caller gets the same guarantee.
@@ -210,8 +224,10 @@ func validateMCPServer(srv MCPServer) error {
 	return nil
 }
 
-// SetMCPServer validates and stores (or replaces) an MCP server's config.
+// SetMCPServer validates and stores (or replaces) an MCP server's config. The
+// transport type is canonicalized (http→remote, stdio→local) before validation.
 func (m *SettingsManager) SetMCPServer(name string, srv MCPServer) error {
+	srv.Type = canonicalMCPType(srv.Type)
 	if err := validateMCPServer(srv); err != nil {
 		return err
 	}
@@ -240,6 +256,14 @@ func (m *SettingsManager) load() {
 		return
 	}
 	json.Unmarshal(data, &m.data)
+	// Canonicalize MCP transport aliases from hand-edited files (http→remote,
+	// stdio→local) so the manager always sees canonical types.
+	for name, srv := range m.data.MCP {
+		if c := canonicalMCPType(srv.Type); c != srv.Type {
+			srv.Type = c
+			m.data.MCP[name] = srv
+		}
+	}
 }
 
 func (m *SettingsManager) save() error {

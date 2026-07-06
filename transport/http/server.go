@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -47,8 +48,9 @@ func NewServer(a *agent.Agent, opts ServerOptions) *Server {
 	}
 }
 
-// ListenAndServe starts the HTTP server on the given address.
-func (s *Server) ListenAndServe(addr string) error {
+// handler builds the router with all routes and middleware. Both the standalone
+// and internal servers share it so the route table lives in exactly one place.
+func (s *Server) handler() http.Handler {
 	r := chi.NewRouter()
 
 	// Middleware
@@ -85,10 +87,19 @@ func (s *Server) ListenAndServe(addr string) error {
 	r.Get("/api/sessions/{id}/messages", s.handleGetMessages)
 	r.Post("/api/sessions/{id}/stop", s.handleStopSession)
 
+	return r
+}
+
+// Serve runs the HTTP transport on an already-open listener. This is the single
+// serving entry point. Callers open the listener themselves (net.Listen), which
+// guarantees the port is accepting connections the moment Listen returns — no
+// close-then-reopen race, no readiness polling. For a fixed address, do
+// net.Listen("tcp", addr) then Serve(l).
+func (s *Server) Serve(l net.Listener) error {
 	if s.verbose {
-		log.Printf("⚔️  Harness HTTP transport listening on %s", addr)
+		log.Printf("⚔️  Harness HTTP transport listening on %s", l.Addr().String())
 	}
-	return http.ListenAndServe(addr, r)
+	return http.Serve(l, s.handler())
 }
 
 // --- Handlers ---

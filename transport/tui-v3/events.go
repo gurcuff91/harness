@@ -195,11 +195,13 @@ func (t *TUI) streamEvents(ctx context.Context) {
 }
 
 // toolHeader formats a tool-call header line: "icon Name(args)" with dim args.
+// Args are collapsed to a single logical line; the RawBlock wraps them to the
+// terminal width (and the wrapper keeps the icon+name together).
 func (t *TUI) toolHeader(name, args string) string {
 	colorFn, icon := toolStyle(name)
 	h := colorFn(ansi.Bold+icon+" "+name) + colorFn("(")
 	if args != "" {
-		h += ansi.Dimmed(args)
+		h += ansi.Dimmed(collapseWhitespace(args))
 	}
 	return h + colorFn(")")
 }
@@ -213,24 +215,15 @@ func (t *TUI) formatToolResult(output string, dur float64, isErr bool) string {
 		durTag = "[" + formatDur(dur) + "] "
 	}
 	if isErr {
-		clean := stripANSI(strings.TrimSpace(output))
-		lines := strings.Split(clean, "\n")
-		first := strings.TrimSpace(lines[0])
-		var sb strings.Builder
-		sb.WriteString(ansi.Err("✘") + " " + ansi.Dimmed(durTag+first))
-		shown := 0
-		for _, l := range lines[1:] {
-			l = strings.TrimSpace(l)
-			if l == "" {
-				continue
-			}
-			if shown >= 2 {
-				break
-			}
-			sb.WriteString("\n  " + ansi.Dimmed(l))
-			shown++
+		// Presentation only: collapse any multi-line error (JSON body, stack
+		// trace, plain text — format-agnostic) into a single summary line. The
+		// FULL error text still flows unchanged to the LLM and to persisted
+		// history; this only affects what the TUI shows.
+		summary := collapseWhitespace(stripANSI(output))
+		if summary == "" {
+			summary = "tool failed"
 		}
-		return sb.String()
+		return ansi.Err("✘") + " " + ansi.Dimmed(durTag+summary)
 	}
 	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
 	count := len(lines)

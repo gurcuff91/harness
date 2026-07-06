@@ -150,7 +150,7 @@ func RunMCPList(ctx context.Context, a *agent.Agent, output string) error {
 					if st.Connected {
 						state = fmt.Sprintf("\u2713 connected (%d tools)", st.ToolCount)
 					} else if st.Error != "" {
-						state = "\u2717 failed: " + st.Error
+						state = "\u2717 failed: " + truncateError(st.Error)
 					} else {
 						state = "\u2717 not connected"
 					}
@@ -164,6 +164,17 @@ func RunMCPList(ctx context.Context, a *agent.Agent, output string) error {
 	return nil
 }
 
+// truncateError shortens a connection error to one readable line (server error
+// bodies can be full HTML pages).
+func truncateError(s string) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	const max = 100
+	if len(s) > max {
+		return s[:max] + "…"
+	}
+	return s
+}
+
 // MCPAddOpts carries the parsed flags for `harness mcp add`.
 type MCPAddOpts struct {
 	Local    bool
@@ -172,6 +183,7 @@ type MCPAddOpts struct {
 	URL      string            // remote
 	Env      map[string]string // local
 	Headers  map[string]string // remote
+	Bearer   string            // remote: sugar — expands to Authorization: Bearer <token>
 	Disabled bool              // default enabled; --disabled turns it off
 }
 
@@ -200,8 +212,18 @@ func RunMCPAdd(ctx context.Context, a *agent.Agent, name string, opts MCPAddOpts
 		if opts.URL != "" {
 			srv["url"] = opts.URL
 		}
-		if len(opts.Headers) > 0 {
-			srv["headers"] = opts.Headers
+		headers := opts.Headers
+		// --bearer sugar: set Authorization unless the user already provided one.
+		if opts.Bearer != "" {
+			if headers == nil {
+				headers = map[string]string{}
+			}
+			if _, exists := headers["Authorization"]; !exists {
+				headers["Authorization"] = "Bearer " + opts.Bearer
+			}
+		}
+		if len(headers) > 0 {
+			srv["headers"] = headers
 		}
 	}
 

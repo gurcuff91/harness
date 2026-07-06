@@ -566,11 +566,18 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 			if ctx.Err() != nil {
 				return
 			}
+			isErr := execErr != nil
+			// A failing tool may return an empty output with the message carried in
+			// execErr (e.g. MCP tools do `return "", err`). Providers reject a
+			// tool_result that is is_error=true with empty content (Anthropic 400),
+			// so surface the error text as the output.
+			if isErr && output == "" {
+				output = execErr.Error()
+			}
 			const maxOut = 15000
 			if len(output) > maxOut {
 				output = output[:maxOut] + "\n...(truncated)"
 			}
-			isErr := execErr != nil
 			s.emit(types.Event{Type: types.EventToolResult, ToolID: call.toolID, ToolName: call.toolName, Output: output, Duration: dur, IsError: isErr})
 			resultsMu.Lock()
 			streamResults = append(streamResults, types.ToolResult{ID: call.toolID, Output: output, Images: images, IsErr: isErr})

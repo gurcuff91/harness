@@ -118,6 +118,30 @@ func TestThinkingLevelValidation(t *testing.T) {
 
 // TestMCPValidation verifies SetMCPServer rejects malformed configs and accepts
 // valid local/remote shapes.
+// TestMCPTypeAliases verifies friendly transport aliases are canonicalized.
+func TestMCPTypeAliases(t *testing.T) {
+	m := newTestSettings(t, "")
+	// "http" alias for a remote server should be accepted and stored as "remote".
+	if err := m.SetMCPServer("api", MCPServer{Type: "http", URL: "https://x"}); err != nil {
+		t.Fatalf("http alias rejected: %v", err)
+	}
+	if srv, _ := m.MCPServer("api"); srv.Type != "remote" {
+		t.Errorf("http not canonicalized: got %q", srv.Type)
+	}
+	// "stdio" alias for a local server → "local".
+	if err := m.SetMCPServer("fs", MCPServer{Type: "stdio", Command: []string{"x"}}); err != nil {
+		t.Fatalf("stdio alias rejected: %v", err)
+	}
+	if srv, _ := m.MCPServer("fs"); srv.Type != "local" {
+		t.Errorf("stdio not canonicalized: got %q", srv.Type)
+	}
+	// load() must canonicalize hand-edited files too.
+	m2 := newTestSettings(t, `{"mcp":{"k":{"type":"http","url":"https://y","enabled":true}}}`)
+	if srv, _ := m2.MCPServer("k"); srv.Type != "remote" {
+		t.Errorf("load did not canonicalize: got %q", srv.Type)
+	}
+}
+
 func TestMCPValidation(t *testing.T) {
 	m := newTestSettings(t, "")
 	bad := map[string]MCPServer{
