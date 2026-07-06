@@ -19,7 +19,7 @@ type vgrid struct {
 	cols, rows int
 	grid       []string // visible rows (len == rows)
 	scrollback []string // lines that scrolled off the top
-	row, col   int       // cursor position (0-indexed, within visible grid)
+	row, col   int      // cursor position (0-indexed, within visible grid)
 }
 
 func newVGrid(cols, rows int) *vgrid {

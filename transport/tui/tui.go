@@ -33,7 +33,6 @@ const (
 	clrWarn    = "[" + hexWarn + "]"
 	clrDim     = "[::d]"
 	clrReset   = "[-:-:-]"
-
 )
 
 // ── Palette types ─────────────────────────────────────────────────────────
@@ -185,13 +184,13 @@ type TUI struct {
 	inputBuf    string
 	cursorPos   int // rune index into inputBuf
 	inputHeight int // current rendered height of input (1-5)
-	pal      palette
+	pal         palette
 
 	// session state
 	thinking       string
 	isSubscription bool
 	sessionCmds    []CommandDef
-	readMode       bool   // reserved
+	readMode       bool            // reserved
 	lastTurnText   strings.Builder // accumulates agent text during a turn for Ctrl+Y copy
 	md             *mdState        // markdown streaming state (reset each turn)
 
@@ -858,7 +857,7 @@ func (t *TUI) renderHistory() {
 					raw := string(b)
 					// Unescape unicode escapes so & renders as & not \u0026
 					var unescaped string
-					if err2 := json.Unmarshal([]byte(`"` + strings.ReplaceAll(raw[1:len(raw)-1], `"`, `\"`) + `"`), &unescaped); err2 == nil {
+					if err2 := json.Unmarshal([]byte(`"`+strings.ReplaceAll(raw[1:len(raw)-1], `"`, `\"`)+`"`), &unescaped); err2 == nil {
 						args = strings.TrimPrefix(strings.TrimSuffix(unescaped, "}"), "{")
 					} else {
 						args = strings.TrimPrefix(strings.TrimSuffix(raw, "}"), "{")
@@ -1002,13 +1001,19 @@ func (t *TUI) renderInput() {
 	} else {
 		runes := []rune(t.inputBuf)
 		pos := t.cursorPos
-		if pos < 0 { pos = 0 }
-		if pos > len(runes) { pos = len(runes) }
+		if pos < 0 {
+			pos = 0
+		}
+		if pos > len(runes) {
+			pos = len(runes)
+		}
 		before := tview.Escape(string(runes[:pos]))
-		after  := tview.Escape(string(runes[pos:]))
+		after := tview.Escape(string(runes[pos:]))
 		t.inputTV.SetText(before + clrPrimary + "█" + clrReset + after)
 		newlines = strings.Count(t.inputBuf, "\n") + 1
-		if newlines > 5 { newlines = 5 }
+		if newlines > 5 {
+			newlines = 5
+		}
 		cursorLine := strings.Count(string(runes[:pos]), "\n")
 		t.inputTV.ScrollTo(cursorLine, 0)
 	}
@@ -1060,10 +1065,13 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 
 	case tcell.KeyEsc:
 		if t.pal.popLevel() {
-			t.inputBuf = "/"; t.cursorPos = len([]rune(t.inputBuf))
+			t.inputBuf = "/"
+			t.cursorPos = len([]rune(t.inputBuf))
 			t.pal.setFilter("")
 		} else {
-			t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
+			t.inputBuf = ""
+			t.cursorPos = 0
+			t.inputHeight = 0
 			t.pal.close()
 		}
 		t.redraw()
@@ -1081,12 +1089,16 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 			case "list", "list-free":
 				subs := t.getSubItems(sel.name)
 				t.pal.pushSub(sel.name, subs)
-				t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
+				t.inputBuf = ""
+				t.cursorPos = 0
+				t.inputHeight = 0
 			case "free":
-				t.inputBuf = "/" + sel.name + " "; t.cursorPos = len([]rune(t.inputBuf))
+				t.inputBuf = "/" + sel.name + " "
+				t.cursorPos = len([]rune(t.inputBuf))
 				t.pal.close()
 			case "none", "optional", "quit":
-				t.inputBuf = "/" + sel.name; t.cursorPos = len([]rune(t.inputBuf))
+				t.inputBuf = "/" + sel.name
+				t.cursorPos = len([]rune(t.inputBuf))
 				t.pal.close()
 			}
 		} else {
@@ -1096,7 +1108,8 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 			if sel.id != "" {
 				token = sel.id
 			}
-			t.inputBuf = "/" + parentCmd + " " + token; t.cursorPos = len([]rune(t.inputBuf))
+			t.inputBuf = "/" + parentCmd + " " + token
+			t.cursorPos = len([]rune(t.inputBuf))
 			t.pal.close()
 		}
 		t.redraw()
@@ -1113,21 +1126,28 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 			case "list", "list-free":
 				subs := t.getSubItems(sel.name)
 				t.pal.pushSub(sel.name, subs)
-				t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
+				t.inputBuf = ""
+				t.cursorPos = 0
+				t.inputHeight = 0
 				t.redraw()
 			case "free":
-				t.inputBuf = "/" + sel.name + " "; t.cursorPos = len([]rune(t.inputBuf))
+				t.inputBuf = "/" + sel.name + " "
+				t.cursorPos = len([]rune(t.inputBuf))
 				t.pal.close()
 				t.redraw()
 			case "none":
 				cmd := "/" + sel.name
-				t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
+				t.inputBuf = ""
+				t.cursorPos = 0
+				t.inputHeight = 0
 				t.pal.close()
 				t.redraw()
 				go t.handleInput(cmd)
 			case "optional":
 				cmd := "/" + sel.name
-				t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
+				t.inputBuf = ""
+				t.cursorPos = 0
+				t.inputHeight = 0
 				t.pal.close()
 				t.redraw()
 				go t.handleInput(cmd)
@@ -1145,19 +1165,24 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 			}
 			if parentCmd == "connect" && sel.desc != "subscription" {
 				// Non-subscription: need API key — put in input for typing
-				t.inputBuf = "/connect " + token + " "; t.cursorPos = len([]rune(t.inputBuf))
+				t.inputBuf = "/connect " + token + " "
+				t.cursorPos = len([]rune(t.inputBuf))
 				t.pal.close()
 				t.redraw()
 			} else if parentCmd == "connect" {
 				// Subscription: execute OAuth flow directly
 				cmd := "/" + parentCmd + " " + token
-				t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
+				t.inputBuf = ""
+				t.cursorPos = 0
+				t.inputHeight = 0
 				t.pal.close()
 				t.redraw()
 				go t.handleInput(cmd)
 			} else {
 				cmd := "/" + parentCmd + " " + token
-				t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
+				t.inputBuf = ""
+				t.cursorPos = 0
+				t.inputHeight = 0
 				t.pal.close()
 				t.redraw()
 				go t.handleInput(cmd)
@@ -1175,7 +1200,8 @@ func (t *TUI) handleKeyPalette(event *tcell.EventKey) *tcell.EventKey {
 			if !t.pal.popLevel() {
 				t.pal.close()
 			} else {
-				t.inputBuf = "/"; t.cursorPos = len([]rune(t.inputBuf))
+				t.inputBuf = "/"
+				t.cursorPos = len([]rune(t.inputBuf))
 				t.pal.setFilter("")
 			}
 		} else if t.pal.depth() == 1 {
@@ -1213,18 +1239,24 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 		if t.spinning && t.sessionID != "" {
 			go t.client.StopSession(t.sessionID) //nolint
 		}
-		t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
+		t.inputBuf = ""
+		t.cursorPos = 0
+		t.inputHeight = 0
 		t.cursorPos = 0
 		t.redraw()
 		return nil
 
 	case tcell.KeyLeft:
-		if t.cursorPos > 0 { t.cursorPos-- }
+		if t.cursorPos > 0 {
+			t.cursorPos--
+		}
 		t.redraw()
 		return nil
 
 	case tcell.KeyRight:
-		if t.cursorPos < len([]rune(t.inputBuf)) { t.cursorPos++ }
+		if t.cursorPos < len([]rune(t.inputBuf)) {
+			t.cursorPos++
+		}
 		t.redraw()
 		return nil
 
@@ -1314,15 +1346,23 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 		runes := []rune(t.inputBuf)
 		// Find start of current line
 		lineStart := t.cursorPos
-		for lineStart > 0 && runes[lineStart-1] != '\n' { lineStart-- }
-		if lineStart == 0 { break } // already on first line
+		for lineStart > 0 && runes[lineStart-1] != '\n' {
+			lineStart--
+		}
+		if lineStart == 0 {
+			break
+		} // already on first line
 		col := t.cursorPos - lineStart
 		// Find start of previous line
 		prevEnd := lineStart - 1 // the \n
 		prevStart := prevEnd
-		for prevStart > 0 && runes[prevStart-1] != '\n' { prevStart-- }
+		for prevStart > 0 && runes[prevStart-1] != '\n' {
+			prevStart--
+		}
 		prevLen := prevEnd - prevStart
-		if col > prevLen { col = prevLen }
+		if col > prevLen {
+			col = prevLen
+		}
 		t.cursorPos = prevStart + col
 		t.redraw()
 		return nil
@@ -1338,17 +1378,27 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 		runes := []rune(t.inputBuf)
 		// Find end of current line
 		lineStart := t.cursorPos
-		for lineStart > 0 && runes[lineStart-1] != '\n' { lineStart-- }
+		for lineStart > 0 && runes[lineStart-1] != '\n' {
+			lineStart--
+		}
 		col := t.cursorPos - lineStart
 		// Find start of next line
 		nextStart := t.cursorPos
-		for nextStart < len(runes) && runes[nextStart] != '\n' { nextStart++ }
-		if nextStart >= len(runes) { break } // already on last line
+		for nextStart < len(runes) && runes[nextStart] != '\n' {
+			nextStart++
+		}
+		if nextStart >= len(runes) {
+			break
+		} // already on last line
 		nextStart++ // skip the \n
 		nextEnd := nextStart
-		for nextEnd < len(runes) && runes[nextEnd] != '\n' { nextEnd++ }
+		for nextEnd < len(runes) && runes[nextEnd] != '\n' {
+			nextEnd++
+		}
 		nextLen := nextEnd - nextStart
-		if col > nextLen { col = nextLen }
+		if col > nextLen {
+			col = nextLen
+		}
 		t.cursorPos = nextStart + col
 		t.redraw()
 		return nil
@@ -1391,14 +1441,17 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 					subs := t.getSubItems(cmd)
 					t.pal.openRoot(t.rootPaletteItems())
 					t.pal.pushSub(cmd, subs)
-					t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
+					t.inputBuf = ""
+					t.cursorPos = 0
+					t.inputHeight = 0
 					t.redraw()
 					return nil
 				}
 			case "free":
 				if len(parts) < 2 {
 					// Don't execute — keep in input, user must type value
-					t.inputBuf = "/" + cmd + " "; t.cursorPos = len([]rune(t.inputBuf))
+					t.inputBuf = "/" + cmd + " "
+					t.cursorPos = len([]rune(t.inputBuf))
 					t.redraw()
 					return nil
 				}
@@ -1407,7 +1460,9 @@ func (t *TUI) handleKeyNormal(event *tcell.EventKey) *tcell.EventKey {
 				return nil
 			}
 		}
-		t.inputBuf = ""; t.cursorPos = 0; t.inputHeight = 0
+		t.inputBuf = ""
+		t.cursorPos = 0
+		t.inputHeight = 0
 		t.pal.close()
 		t.redraw()
 		go t.handleInput(text)

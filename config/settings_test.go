@@ -145,10 +145,10 @@ func TestMCPTypeAliases(t *testing.T) {
 func TestMCPValidation(t *testing.T) {
 	m := newTestSettings(t, "")
 	bad := map[string]MCPServer{
-		"unknown-type":   {Type: "bogus"},
-		"empty-type":     {Type: ""},
-		"local-no-cmd":   {Type: "local"},
-		"remote-no-url":  {Type: "remote"},
+		"unknown-type":  {Type: "bogus"},
+		"empty-type":    {Type: ""},
+		"local-no-cmd":  {Type: "local"},
+		"remote-no-url": {Type: "remote"},
 	}
 	for name, srv := range bad {
 		if err := m.SetMCPServer(name, srv); err == nil {

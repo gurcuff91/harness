@@ -10,7 +10,9 @@ import (
 //
 // Processed:  bold (**), italic (*), headings (#), lists (-/*), hr (---), blockquote (>)
 // Code blocks (``` ... ```) and inline code (` ... `): accent+italic color,
-//   content escaped with tview.Escape on full lines/spans.
+//
+//	content escaped with tview.Escape on full lines/spans.
+//
 // Tables (| ... |): lines buffered and escaped verbatim — no style applied.
 type mdState struct {
 	pending     string
@@ -21,12 +23,12 @@ type mdState struct {
 
 	// fenced code block
 	inCodeBlock  bool
-	codeLangDone bool   // true after first line (lang label) consumed
+	codeLangDone bool // true after first line (lang label) consumed
 	codeLineBuf  string
 	tickBuf      string
 
 	// inline code
-	inInlineCode bool
+	inInlineCode  bool
 	inlineCodeBuf string
 
 	// heading — track if current line is a heading (needs clrReset at \n)
@@ -35,7 +37,6 @@ type mdState struct {
 	inBlockquote bool
 	// suppressNextNewline — eat the \n after --- / ___ rules
 	suppressNextNewline bool
-
 
 	// table — all rows buffered so we can align columns
 	inTableLine  bool

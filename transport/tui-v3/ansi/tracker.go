@@ -10,9 +10,9 @@ import (
 // AnsiCodeTracker. Hyperlink (OSC 8) tracking is intentionally omitted — the
 // harness output does not emit OSC 8 links.
 type codeTracker struct {
-	bold, dim, italic, underline       bool
-	blink, inverse, hidden, strike     bool
-	fgColor, bgColor                   string // full code, e.g. "31" or "38;5;240"
+	bold, dim, italic, underline   bool
+	blink, inverse, hidden, strike bool
+	fgColor, bgColor               string // full code, e.g. "31" or "38;5;240"
 }
 
 func (t *codeTracker) reset() {

@@ -217,9 +217,9 @@ func TestEmojiPictographWidthOverride(t *testing.T) {
 		name string
 		in   string
 	}{
-		{"plane no vs16", "\u2708"},        // ✈
+		{"plane no vs16", "\u2708"},           // ✈
 		{"thermometer no vs16", "\U0001F321"}, // 🌡
-		{"tornado", "\U0001F300"},          // 🌀
+		{"tornado", "\U0001F300"},             // 🌀
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -20,12 +20,12 @@ type TUI struct {
 	mu sync.Mutex
 
 	// Differential render state (mirrors PI's TUI fields).
-	previousLines    []string
-	previousWidth    int
-	previousHeight   int
-	cursorRow        int // end-of-content row (for viewport math)
-	hardwareCursorRow int // actual terminal cursor row
-	maxLinesRendered int
+	previousLines       []string
+	previousWidth       int
+	previousHeight      int
+	cursorRow           int // end-of-content row (for viewport math)
+	hardwareCursorRow   int // actual terminal cursor row
+	maxLinesRendered    int
 	previousViewportTop int
 
 	// Scheduling.

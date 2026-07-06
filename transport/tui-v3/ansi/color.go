@@ -15,10 +15,10 @@ const (
 
 // SGR control codes.
 const (
-	Reset = "\x1b[0m"
-	Bold  = "\x1b[1m"
-	Dim   = "\x1b[2m"
-	Ital  = "\x1b[3m"
+	Reset  = "\x1b[0m"
+	Bold   = "\x1b[1m"
+	Dim    = "\x1b[2m"
+	Ital   = "\x1b[3m"
 	Under  = "\x1b[4m"
 	Inv    = "\x1b[7m"
 	Strike = "\x1b[9m"

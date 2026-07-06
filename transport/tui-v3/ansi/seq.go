@@ -14,9 +14,9 @@ const (
 	ShowCursor = "\x1b[?25h"
 
 	// Clearing.
-	ClearLine       = "\x1b[2K"   // clear entire current line
-	ClearToLineEnd  = "\x1b[K"    // clear from cursor to end of line
-	ClearFromCursor = "\x1b[J"    // clear from cursor to end of screen
+	ClearLine       = "\x1b[2K" // clear entire current line
+	ClearToLineEnd  = "\x1b[K"  // clear from cursor to end of line
+	ClearFromCursor = "\x1b[J"  // clear from cursor to end of screen
 	ClearScreenHome = "\x1b[2J\x1b[H"
 	ClearScrollback = "\x1b[3J"
 	// FullClear clears screen, homes the cursor, then drops scrollback.

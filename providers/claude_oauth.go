@@ -29,8 +29,9 @@ const (
 	expiryBufferMs    = 60_000
 
 	// Claude Code stealth identity
-	billingSalt = "59cf53e54c78"
-	mcpPrefix   = "mcp__extensions__"
+	billingSalt   = "59cf53e54c78"
+	toolExtPrefix = "mcp__ext__" // prefix for harness tools exposed as CC extension tools (short = fewer tokens)
+	mcpToolPrefix = "mcp__"      // any already-namespaced MCP tool (mcp__server__tool)
 )
 
 var ccVersion = envOrDefault("ANTHROPIC_CLI_VERSION", "2.1.90")
@@ -353,42 +354,49 @@ func addLastUserCacheControl(msgs []json.RawMessage) []json.RawMessage {
 
 // ── Claude Code stealth identity ─────────────────────────────────────────
 
-// CC-native tools — maps harness tool names to Claude Code canonical names.
-// Our built-in tools that have a CC equivalent map directly (no MCP prefix).
-// Any future tool not in this set gets mcp__extensions__ prefix automatically.
-var ccToolNames = map[string]string{
-	// Harness built-ins → CC canonical
-	"bash": "Bash", "read": "Read", "write": "Write",
-	"edit": "Edit", "fetch": "WebFetch", "skill": "Skill",
-	// CC originals (pass-through)
-	"grep": "Grep", "glob": "Glob", "askuserquestion": "AskUserQuestion",
-	"enterplanmode": "EnterPlanMode", "exitplanmode": "ExitPlanMode",
-	"killshell": "KillShell", "notebookedit": "NotebookEdit",
-	"task": "Task", "taskoutput": "TaskOutput",
-	"todowrite": "TodoWrite", "webfetch": "WebFetch", "websearch": "WebSearch",
+// Tool-name mapping for claude-oauth (Claude Code backend).
+//
+// Most harness built-ins already share Claude Code's canonical names
+// (Bash/Read/Write/Edit/Skill) and pass through unchanged. The ONLY built-in
+// whose name differs is Fetch → WebFetch. MCP tools already carry the canonical
+// mcp__<server>__<tool> form and must NOT be re-prefixed. Anything else (e.g.
+// Subagent, or future built-ins without a CC equivalent) is exposed as an
+// extension tool via the mcp__ext__ prefix.
+var ccOutbound = map[string]string{
+	"Fetch": "WebFetch",
+}
+var ccInbound = map[string]string{
+	"WebFetch": "Fetch",
 }
 
 func mapToolNameToCC(name string) string {
-	if cc, ok := ccToolNames[strings.ToLower(name)]; ok {
+	if cc, ok := ccOutbound[name]; ok {
 		return cc
 	}
-	return mcpPrefix + name
+	// Already-namespaced MCP tools pass through as-is (no double prefix).
+	if strings.HasPrefix(name, mcpToolPrefix) {
+		return name
+	}
+	// Known CC-native built-ins pass through unchanged.
+	if ccNativeTools[name] {
+		return name
+	}
+	// Everything else (Subagent, future custom tools) → extension tool.
+	return toolExtPrefix + name
 }
 
-// harnessToolNames maps CC canonical names → actual harness tool names (inbound).
-// Explicit map needed because ccToolNames uses lowercase keys but harness names
-// are capitalized (e.g. "fetch"→"WebFetch" outbound, "WebFetch"→"Fetch" inbound).
-var harnessToolNames = map[string]string{
-	"Bash": "Bash", "Read": "Read", "Write": "Write",
-	"Edit": "Edit", "WebFetch": "Fetch", "Skill": "Skill",
+// ccNativeTools are harness tools whose names already match Claude Code's, so
+// they pass through without prefixing.
+var ccNativeTools = map[string]bool{
+	"Bash": true, "Read": true, "Write": true, "Edit": true, "Skill": true,
 }
 
 func unmapToolNameFromCC(name string) string {
-	if strings.HasPrefix(name, mcpPrefix) {
-		return strings.TrimPrefix(name, mcpPrefix)
+	if h, ok := ccInbound[name]; ok {
+		return h
 	}
-	if harness, ok := harnessToolNames[name]; ok {
-		return harness
+	if strings.HasPrefix(name, toolExtPrefix) {
+		return strings.TrimPrefix(name, toolExtPrefix)
 	}
 	return name
 }

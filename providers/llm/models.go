@@ -63,11 +63,11 @@ var defaultMeta = types.ModelMeta{
 // cascade. Each tier only fills fields its predecessor left empty — it never
 // overwrites a value already present. Tiers, in order:
 //
-//	0. Provider (the data already in `m`)   — authoritative, never touched
-//	1. OpenRouter catalog                    — fills gaps the provider left
-//	2. Hardcoded registry                    — fills gaps OpenRouter left
-//	3. Name inference                        — fills gaps the registries left
-//	4. Generic defaults                      — final backstop
+//  0. Provider (the data already in `m`)   — authoritative, never touched
+//  1. OpenRouter catalog                    — fills gaps the provider left
+//  2. Hardcoded registry                    — fills gaps OpenRouter left
+//  3. Name inference                        — fills gaps the registries left
+//  4. Generic defaults                      — final backstop
 //
 // CRITICAL: the cascade is ADDITIVE. There are no early returns that would skip
 // a later tier — if OpenRouter supplies context but not thinking, the hardcoded
@@ -226,10 +226,10 @@ func parseRegistry(data []byte) map[string]types.ModelMeta {
 				InputModalities []string `json:"input_modalities"`
 			} `json:"architecture"`
 			Pricing struct {
-				Prompt        string `json:"prompt"`
-				Completion    string `json:"completion"`
-				InputCacheR   string `json:"input_cache_read"`
-				InputCacheW   string `json:"input_cache_write"`
+				Prompt      string `json:"prompt"`
+				Completion  string `json:"completion"`
+				InputCacheR string `json:"input_cache_read"`
+				InputCacheW string `json:"input_cache_write"`
 			} `json:"pricing"`
 			TopProvider struct {
 				MaxCompletionTokens int `json:"max_completion_tokens"`

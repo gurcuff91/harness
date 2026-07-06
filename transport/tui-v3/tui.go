@@ -47,13 +47,13 @@ type TUI struct {
 	resumeID         string
 
 	// Session state.
-	sessionID     string
-	sessionName   string
-	model         string
-	thinking      string
+	sessionID      string
+	sessionName    string
+	model          string
+	thinking       string
 	isSubscription bool
-	sessionCmds   []CommandDef
-	lastSessionID string
+	sessionCmds    []CommandDef
+	lastSessionID  string
 
 	// Render engine + components.
 	tui     *render.TUI
@@ -69,7 +69,7 @@ type TUI struct {
 	liveMD   *components.Markdown            // current streaming assistant block
 	toolBlk  map[string]*components.RawBlock // tool_id -> its result block
 	toolArgs map[string]*components.RawBlock // tool_id -> its arg block
-	lastKind string                         // last history section kind (for spacing)
+	lastKind string                          // last history section kind (for spacing)
 
 	// SSE.
 	sseCancel context.CancelFunc
@@ -83,7 +83,6 @@ type TUI struct {
 	stats        tokensInfo
 	spinning     bool
 	queueCount   int
-	localQueue   []string
 	compactStart time.Time
 	lastTurnText strings.Builder
 

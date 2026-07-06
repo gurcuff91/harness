@@ -75,10 +75,10 @@ type mdTableRow struct {
 type linkState int
 
 const (
-	linkNone   linkState = iota
-	linkInText           // inside [...]
-	linkBetween          // saw ], expecting (
-	linkInURL            // inside (...)
+	linkNone    linkState = iota
+	linkInText            // inside [...]
+	linkBetween           // saw ], expecting (
+	linkInURL             // inside (...)
 )
 
 // NewMarkdownStream creates a fresh streaming renderer (reset per turn).

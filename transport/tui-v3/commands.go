@@ -72,13 +72,20 @@ func (t *TUI) submitPrompt(text string) {
 		t.showWarn("No active session.")
 		return
 	}
-	t.addRaw(ansi.Primary("❯ " + text))
 
+	// The backend is the single source of truth for queueing. When a turn is in
+	// flight it queues the prompt and, when that queued turn starts, emits a
+	// follow_up_start event carrying the text — which is when the TUI echoes it
+	// (see events.go). So:
+	//   - busy → don't echo now; just bump the footer counter. The echo arrives
+	//            via follow_up_start when the backend actually starts it.
+	//   - idle → this is the turn that starts immediately (no follow_up_start is
+	//            emitted for it), so echo it now.
 	if t.spinning {
-		t.localQueue = append(t.localQueue, text)
 		t.queueCount++
 		t.updateInfo()
 	} else {
+		t.addRaw(ansi.Primary("❯ " + text))
 		t.setSpinning(true)
 	}
 

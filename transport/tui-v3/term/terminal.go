@@ -43,10 +43,10 @@ type ProcessTerminal struct {
 	onInput  func(string)
 	onResize func()
 
-	resizeCh  chan os.Signal
-	stopCh    chan struct{}
-	readErr   error
-	started   bool
+	resizeCh chan os.Signal
+	stopCh   chan struct{}
+	readErr  error
+	started  bool
 }
 
 // NewProcessTerminal creates a terminal using stdin/stdout.

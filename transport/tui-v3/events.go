@@ -173,17 +173,24 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				t.liveMD = nil
 				t.mu.Unlock()
 				thinkBlk, thinkBuf = nil, ""
-				// Dispatch any locally queued prompt.
-				if t.queueCount > 0 && len(t.localQueue) > 0 {
-					msg := t.localQueue[0]
-					t.localQueue = t.localQueue[1:]
-					t.queueCount--
-					t.addRaw(ansi.Primary("❯ " + msg))
-					t.setSpinning(true)
-					t.updateInfo()
-				} else {
+				// A follow_up_start (if queued work remains) re-arms the spinner and
+				// echoes the next prompt. If nothing is queued, stop the spinner.
+				if t.queueCount == 0 {
 					t.setSpinning(false)
 				}
+
+			case "follow_up_start":
+				// Backend dequeued a follow-up and is starting its turn. Echo the
+				// prompt now (single source of truth for queued prompts).
+				msg, _ := evt["text"].(string)
+				if t.queueCount > 0 {
+					t.queueCount--
+				}
+				if msg != "" {
+					t.addRaw(ansi.Primary("❯ " + msg))
+				}
+				t.setSpinning(true)
+				t.updateInfo()
 
 			case "error":
 				msg, _ := evt["message"].(string)

@@ -35,6 +35,10 @@ func formatEvent(e types.Event) []byte {
 		}
 	case types.EventTurnStart:
 		payload = map[string]any{"type": "turn_start"}
+	case types.EventFollowUpStart:
+		// A queued follow-up prompt is starting; Output carries its text so the
+		// frontend can echo it at the right moment (no client-side queue needed).
+		payload = map[string]any{"type": "follow_up_start", "text": e.Output}
 	case types.EventTurnEnd:
 		payload = map[string]any{"type": "turn_end"}
 	case types.EventTokens:
