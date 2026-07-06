@@ -86,12 +86,9 @@ func Fetch() Tool {
 				return fmt.Sprintf("HTTP %d — saved %d bytes to %s", resp.StatusCode, len(body), path), nil
 			}
 
-			// Text mode
-			result := string(body)
-			const maxOutput = 15000
-			if len(result) > maxOutput {
-				result = result[:maxOutput] + "\n...(truncated)"
-			}
+			// Text mode. Keep the HEAD: the start of a document matters most. Full
+			// output is saved to a temp file when truncated.
+			result := ApplyTruncation("fetch", string(body), true)
 			return fmt.Sprintf("HTTP %d\n%s", resp.StatusCode, result), nil
 		},
 	}

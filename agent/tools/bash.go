@@ -22,7 +22,7 @@ func Bash() Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        "Bash",
-			Description: "Execute a shell command. Use for builds, git, grep/find, installs, and system tasks. Do NOT use for reading, writing, or editing files — use read_file, write_file, and edit instead.",
+			Description: "Execute a shell command. Use for builds, git, grep/find, installs, and system tasks. Do NOT use for reading, writing, or editing files — use read_file, write_file, and edit instead. Output is truncated to the last 2000 lines or 50KB; if truncated, the full output is saved to a temp file whose path is shown (read it for more).",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -48,10 +48,9 @@ func Bash() Tool {
 			cmd := exec.CommandContext(ctx2, "bash", "-c", args.Command)
 			out, err := cmd.CombinedOutput()
 			result := strings.TrimSpace(string(out))
-			const maxOutput = 10000
-			if len(result) > maxOutput {
-				result = result[:maxOutput] + "\n...(truncated)"
-			}
+			// Keep the TAIL: for shell output the end matters most (errors, final
+			// results). Full output is saved to a temp file when truncated.
+			result = ApplyTruncation("bash", result, false)
 			if ctx2.Err() == context.DeadlineExceeded {
 				err := fmt.Errorf("timeout after %v", timeout)
 				return fmt.Sprintf("Timeout after %v:\n%s", timeout, result), err

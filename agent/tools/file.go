@@ -86,10 +86,9 @@ func ReadFile() Tool {
 				lines = lines[:args.Limit]
 			}
 			content := strings.Join(lines, "\n")
-			const maxSize = 50000
-			if len(content) > maxSize {
-				content = content[:maxSize] + "\n...(truncated)"
-			}
+			// Keep the HEAD. Read already supports offset/limit for paging, so a
+			// truncated read tells the model to continue with a higher offset.
+			content = ApplyTruncation("read", content, true)
 			if args.Offset > 0 || args.Limit > 0 {
 				content = fmt.Sprintf("[lines %d-%d of %d]\n", args.Offset+1, args.Offset+len(lines), totalLines) + content
 			}

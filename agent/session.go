@@ -574,10 +574,12 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 			if isErr && output == "" {
 				output = execErr.Error()
 			}
-			const maxOut = 15000
-			if len(output) > maxOut {
-				output = output[:maxOut] + "\n...(truncated)"
-			}
+			// Safety-net truncation for tools we don't control (e.g. MCP servers).
+			// Built-in tools already truncate with their own head/tail strategy and
+			// are no-ops here (already within limits). Prevents a giant tool result
+			// from blowing the model's context; the full output is saved to a temp
+			// file and the model is told where to find it.
+			output = tools.ApplyTruncation(call.toolName, output, true)
 			s.emit(types.Event{Type: types.EventToolResult, ToolID: call.toolID, ToolName: call.toolName, Output: output, Duration: dur, IsError: isErr})
 			resultsMu.Lock()
 			streamResults = append(streamResults, types.ToolResult{ID: call.toolID, Output: output, Images: images, IsErr: isErr})
