@@ -202,13 +202,14 @@ func (t *TUI) streamEvents(ctx context.Context) {
 }
 
 // toolHeader formats a tool-call header line: "icon Name(args)" with dim args.
-// Args are collapsed to a single logical line; the RawBlock wraps them to the
-// terminal width (and the wrapper keeps the icon+name together).
+// JSON-escaped whitespace in the args (e.g. \n in a multi-line string value) is
+// unescaped so it renders as real line breaks; the RawBlock then wraps/renders
+// those lines faithfully. Applies to both live streaming and history replay.
 func (t *TUI) toolHeader(name, args string) string {
 	colorFn, icon := toolStyle(name)
 	h := colorFn(ansi.Bold+icon+" "+name) + colorFn("(")
 	if args != "" {
-		h += ansi.Dimmed(collapseWhitespace(args))
+		h += ansi.Dimmed(unescapeArgs(args))
 	}
 	return h + colorFn(")")
 }

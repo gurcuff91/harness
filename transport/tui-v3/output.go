@@ -142,6 +142,36 @@ func collapseWhitespace(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
+// unescapeArgs turns the JSON-escaped whitespace inside tool-call args into real
+// characters, so a multi-line string value (e.g. a markdown comment body) shows
+// as actual line breaks instead of literal "\n". The RawBlock then renders those
+// lines faithfully. A literal backslash ("\\") is preserved. Only \n and \t are
+// unescaped — other JSON escapes are left as-is (rare in displayed args).
+func unescapeArgs(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			switch s[i+1] {
+			case 'n':
+				b.WriteByte('\n')
+				i++
+				continue
+			case 't':
+				b.WriteByte('\t')
+				i++
+				continue
+			case '\\':
+				b.WriteByte('\\')
+				i++
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
 func formatDur(ms float64) string {
 	if ms >= 1000 {
 		return fmt.Sprintf("%.1fs", ms/1000)
