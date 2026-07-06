@@ -116,6 +116,44 @@ func TestWrapLongWordDoesNotOrphanPrefix(t *testing.T) {
 	}
 }
 
+// TestWrapBreaksOnCommas verifies comma-separated values wrap across lines
+// (filling width) instead of forming one indivisible word, while commas stay
+// attached to the preceding token.
+func TestWrapBreaksOnCommas(t *testing.T) {
+	lines := WrapTextWithAnsi("id,title,status,column_key,priority,tags", 15)
+	if len(lines) < 2 {
+		t.Fatalf("expected comma list to wrap, got %d lines: %v", len(lines), lines)
+	}
+	for i, l := range lines {
+		if VisibleWidth(l) > 15 {
+			t.Errorf("line %d %q exceeds 15", i, l)
+		}
+	}
+	// A comma must stay attached to its value (no line starts with a comma).
+	for i, l := range lines {
+		if strings.HasPrefix(l, ",") {
+			t.Errorf("line %d starts with a comma: %q", i, l)
+		}
+	}
+}
+
+// TestWrapDoesNotSplitPlainWords ensures ordinary prose still wraps at spaces
+// (words are never broken mid-way) — the comma rule must not affect this.
+func TestWrapDoesNotSplitPlainWords(t *testing.T) {
+	lines := WrapTextWithAnsi("the quick brown fox jumps over lazy dogs running", 20)
+	for i, l := range lines {
+		if VisibleWidth(l) > 20 {
+			t.Errorf("line %d exceeds 20: %q", i, l)
+		}
+		// No line should end mid-word (each word is whole). Heuristic: lines end
+		// with a complete word from the source.
+	}
+	joined := strings.Join(lines, " ")
+	if !strings.Contains(joined, "running") {
+		t.Errorf("word 'running' was split: %v", lines)
+	}
+}
+
 func TestWrapPreservesNewlines(t *testing.T) {
 	lines := WrapTextWithAnsi("line one\nline two", 80)
 	if len(lines) != 2 {

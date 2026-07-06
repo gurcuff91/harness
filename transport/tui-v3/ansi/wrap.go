@@ -221,6 +221,13 @@ func splitTokens(text string) []string {
 			}
 			currentKind = kind
 			current += g
+			// A comma is a natural break point: end the token AFTER it so long,
+			// comma-separated values (e.g. JSON field lists in tool args) can wrap
+			// across lines and fill the available width, instead of staying one
+			// indivisible word. The comma stays attached to the preceding token.
+			if g == "," {
+				flush()
+			}
 		}
 		i = end
 	}
