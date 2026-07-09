@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gurcuff91/harness/providers/authflow"
 	"github.com/gurcuff91/harness/transport/tui-v3/ansi"
 )
 
@@ -184,8 +185,27 @@ func (t *TUI) cmdConnect(args []string) {
 		apiKey = strings.Join(args[1:], " ")
 	}
 
-	// No key yet and the provider isn't OAuth → capture the key.
-	if apiKey == "" && !t.providerIsSubscription(provider) {
+	// Subscription/OAuth providers (e.g. claude-oauth) authenticate via the
+	// OAuth flow, not a typed key: run it locally and send the obtained tokens.
+	if t.providerIsSubscription(provider) {
+		go func() {
+			creds, err := authflow.ObtainOAuthCredentials(provider)
+			if err != nil {
+				t.showWarn(fmt.Sprintf("connect %s: %s", provider, err.Error()))
+				return
+			}
+			if _, err := t.client.ConnectProviderWithCreds(provider, creds); err != nil {
+				t.showWarn(fmt.Sprintf("connect %s: %s", provider, err.Error()))
+				return
+			}
+			t.loadSessionCommands()
+			t.addRaw(ansi.Accent("✔") + " " + ansi.Dimmed("connected "+provider))
+		}()
+		return
+	}
+
+	// API-key providers: capture the key if not supplied.
+	if apiKey == "" {
 		t.beginValueCapture("connect", []string{provider},
 			"Paste the API key for "+provider+" and press Enter (Esc to cancel)")
 		return

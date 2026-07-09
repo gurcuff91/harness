@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -24,7 +23,6 @@ import (
 
 const (
 	anthropicOAuthAPI = "https://api.anthropic.com/v1/messages"
-	oauthTokenURL     = "https://claude.ai/v1/oauth/token"
 	oauthClientID     = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 	expiryBufferMs    = 60_000
 
@@ -33,6 +31,15 @@ const (
 	toolExtPrefix = "mcp__ext__" // prefix for harness tools exposed as CC extension tools (short = fewer tokens)
 	mcpToolPrefix = "mcp__"      // any already-namespaced MCP tool (mcp__server__tool)
 )
+
+// oauthTokenURLs are the token endpoints, newest first. Anthropic migrated the
+// OAuth token endpoint over time (claude.ai → console.anthropic.com →
+// platform.claude.com); we try them in order so refresh keeps working across
+// the migration. Requests use JSON (the current wire format).
+var oauthTokenURLs = []string{
+	"https://platform.claude.com/v1/oauth/token",
+	"https://console.anthropic.com/v1/oauth/token",
+}
 
 var ccVersion = envOrDefault("ANTHROPIC_CLI_VERSION", "2.1.90")
 
@@ -132,6 +139,12 @@ func (c *ClaudeOAuth) Connect(creds types.Credentials) error {
 	c.tokens.creds = &creds
 	if _, err := c.FetchModels(); err != nil {
 		c.tokens.creds = nil
+		// If the stored session is stale, the refresh inside FetchModels already
+		// produced an actionable message — surface it directly instead of wrapping
+		// it in a generic "invalid credentials".
+		if strings.Contains(err.Error(), "session expired") {
+			return err
+		}
 		return fmt.Errorf("invalid credentials: %w", err)
 	}
 
@@ -528,7 +541,7 @@ func (tm *tokenManager) getValidToken() (string, error) {
 	}
 	refreshed, err := tm.refresh(tm.creds.RefreshToken)
 	if err != nil {
-		return "", fmt.Errorf("token expired and refresh failed")
+		return "", fmt.Errorf("session expired — run 'claude auth login' to re-authenticate, then reconnect")
 	}
 	tm.creds = refreshed
 	persistOAuthCreds(refreshed)
@@ -536,21 +549,36 @@ func (tm *tokenManager) getValidToken() (string, error) {
 }
 
 func (tm *tokenManager) refresh(refreshToken string) (*types.Credentials, error) {
-	form := url.Values{
-		"grant_type":    {"refresh_token"},
-		"client_id":     {oauthClientID},
-		"refresh_token": {refreshToken},
+	payload, _ := json.Marshal(map[string]string{
+		"grant_type":    "refresh_token",
+		"client_id":     oauthClientID,
+		"refresh_token": refreshToken,
+	})
+
+	// Try each endpoint in order; a network error or a non-OK response (e.g. a
+	// migrated/dead endpoint) falls through to the next one.
+	var body []byte
+	var lastErr error
+	ok := false
+	for _, endpoint := range oauthTokenURLs {
+		resp, err := http.Post(endpoint, "application/json", bytes.NewReader(payload))
+		if err != nil {
+			lastErr = fmt.Errorf("refresh request (%s): %w", endpoint, err)
+			continue
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			body = b
+			ok = true
+			break
+		}
+		lastErr = fmt.Errorf("refresh HTTP %d (%s): %s", resp.StatusCode, endpoint, string(b))
 	}
-	resp, err := http.Post(oauthTokenURL, "application/x-www-form-urlencoded",
-		bytes.NewBufferString(form.Encode()))
-	if err != nil {
-		return nil, fmt.Errorf("refresh request: %w", err)
+	if !ok {
+		return nil, lastErr
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("refresh HTTP %d: %s", resp.StatusCode, string(body))
-	}
+
 	var result struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
