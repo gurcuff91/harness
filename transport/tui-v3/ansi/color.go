@@ -24,12 +24,18 @@ const (
 	Strike = "\x1b[9m"
 )
 
+// HexMuted is a light gray for secondary text that must still read clearly —
+// paired with Bold in Muted() so tool result/error summaries stand apart from
+// the fainter Dimmed args without competing with the bright tool name.
+const HexMuted = "#AEB6BF"
+
 // Pre-built foreground openers for the palette (truecolor SGR).
 var (
 	fgPrimary = hexFG(HexPrimary)
 	fgAccent  = hexFG(HexAccent)
 	fgErr     = hexFG(HexErr)
 	fgWarn    = hexFG(HexWarn)
+	fgMuted   = hexFG(HexMuted)
 )
 
 // hexFG returns the truecolor foreground SGR opener for a #rrggbb hex string.
@@ -70,6 +76,13 @@ func Warn(s string) string    { return fgWarn + s + Reset }
 
 // Dimmed wraps s in the dim (faint) attribute.
 func Dimmed(s string) string { return Dim + s + Reset }
+
+// Muted wraps s in BOLD + a light gray foreground. Bold gives the text weight
+// ("gordita") so it reads clearly, while the gray keeps it secondary to the
+// tool name. Used for tool result/error summaries so they stand out from the
+// fainter Dimmed args. (Dim+Bold is contradictory and unreliable across
+// terminals, so we use Bold + a brighter gray instead of the faint attribute.)
+func Muted(s string) string { return Bold + fgMuted + s + Reset }
 
 // Boldify wraps s in bold.
 func Boldify(s string) string { return Bold + s + Reset }

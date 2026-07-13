@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/gurcuff91/harness/transport/tui-v3/ansi"
 	"github.com/gurcuff91/harness/transport/tui-v3/components"
@@ -282,13 +281,12 @@ func (t *TUI) renderHistory() {
 			case part["tool_call"] != nil:
 				tc, _ := part["tool_call"].(map[string]any)
 				name, _ := tc["name"].(string)
+				// Pass the COMPLETE args JSON to toolHeader, which parses it into a
+				// readable header (same path as the live tool_call event).
 				args := ""
 				if input, ok := tc["input"].(map[string]any); ok {
 					if b, err := json.Marshal(input); err == nil {
-						s := strings.TrimSpace(string(b))
-						s = strings.TrimPrefix(s, "{")
-						s = strings.TrimSuffix(s, "}")
-						args = strings.TrimSpace(s)
+						args = string(b)
 					}
 				}
 				callID, _ := tc["id"].(string)

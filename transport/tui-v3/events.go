@@ -86,7 +86,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 					t.history.Add(components.NewSpacer(1))
 				}
 				t.beginSection("tool")
-				argBlk := components.NewRawBlock(t.toolHeader(name, ""))
+				argBlk := components.NewRawBlock(t.toolHeaderStreaming(name))
 				resBlk := components.NewRawBlock("")
 				t.history.Add(argBlk)
 				t.history.Add(resBlk)
@@ -102,8 +102,10 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				}
 				toolID, _ := evt["tool_id"].(string)
 				argBufs[toolID] += delta
+				// Args are still partial JSON here — can't parse to key=value yet, so
+				// keep the streaming placeholder. The full render happens on tool_call.
 				if b := t.toolArgs[toolID]; b != nil {
-					b.SetText(t.toolHeader(toolNames[toolID], argBufs[toolID]))
+					b.SetText(t.toolHeaderStreaming(toolNames[toolID]))
 					t.tui.RequestRender(false)
 				}
 
@@ -114,12 +116,9 @@ func (t *TUI) streamEvents(ctx context.Context) {
 					name, _ = evt["tool_name"].(string)
 				}
 				toolArgs, _ := evt["tool_args"].(string)
-				args := strings.TrimSpace(toolArgs)
-				args = strings.TrimPrefix(args, "{")
-				args = strings.TrimSuffix(args, "}")
-				args = strings.TrimSpace(args)
+				// Complete JSON now — parse and render the human-readable header.
 				if b := t.toolArgs[toolID]; b != nil {
-					b.SetText(t.toolHeader(name, args))
+					b.SetText(t.toolHeader(name, toolArgs))
 				}
 				colorFn, _ := toolStyle(name)
 				if b := t.toolBlk[toolID]; b != nil {
@@ -201,17 +200,25 @@ func (t *TUI) streamEvents(ctx context.Context) {
 	}
 }
 
-// toolHeader formats a tool-call header line: "icon Name(args)" with dim args.
-// JSON-escaped whitespace in the args (e.g. \n in a multi-line string value) is
-// unescaped so it renders as real line breaks; the RawBlock then wraps/renders
-// those lines faithfully. Applies to both live streaming and history replay.
-func (t *TUI) toolHeader(name, args string) string {
+// toolHeader formats a tool-call header: "icon Name arg1 key2=value2 …". The
+// argsJSON is the COMPLETE tool arguments as a JSON object; it is parsed and
+// rendered human-readably (built-in primary param shown bare, the rest as
+// key=value, MCP tools all key=value). Multi-line string values keep their line
+// breaks. Applies to both live streaming (on tool_call) and history replay.
+func (t *TUI) toolHeader(name, argsJSON string) string {
 	colorFn, icon := toolStyle(name)
-	h := colorFn(ansi.Bold+icon+" "+name) + colorFn("(")
-	if args != "" {
-		h += ansi.Dimmed(unescapeArgs(args))
+	h := colorFn(ansi.Bold + icon + " " + name)
+	if a := formatToolArgs(name, argsJSON); a != "" {
+		h += " " + ansi.Dimmed(a)
 	}
-	return h + colorFn(")")
+	return h
+}
+
+// toolHeaderStreaming renders the header while args are still streaming in (the
+// partial JSON can't be parsed yet): just the name with an ellipsis.
+func (t *TUI) toolHeaderStreaming(name string) string {
+	colorFn, icon := toolStyle(name)
+	return colorFn(ansi.Bold+icon+" "+name) + ansi.Dimmed(" …")
 }
 
 // formatToolResult renders the one-line result summary (✔/✘ + duration). When
@@ -231,14 +238,16 @@ func (t *TUI) formatToolResult(output string, dur float64, isErr bool) string {
 		if summary == "" {
 			summary = "tool failed"
 		}
-		return ansi.Err("✘") + " " + ansi.Dimmed(durTag+summary)
+		// Muted (mid-gray) rather than Dimmed (faint) so the result reads clearly
+		// and stands apart from the fainter args above it.
+		return ansi.Err("✘") + " " + ansi.Muted(durTag+summary)
 	}
 	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
 	count := len(lines)
 	if count == 1 && lines[0] == "" {
 		count = 0
 	}
-	return ansi.Accent("✔") + " " + ansi.Dimmed(fmt.Sprintf("%s(%d lines)", durTag, count))
+	return ansi.Accent("✔") + " " + ansi.Muted(fmt.Sprintf("%s(%d lines)", durTag, count))
 }
 
 // setSpinning toggles the spinner animation.
