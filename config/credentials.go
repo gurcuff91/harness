@@ -2,19 +2,41 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 )
 
-// CredentialsManager is a thread-safe key-value store for provider credentials.
-// Backed by ~/.harness/credentials.json.
-// Keys are namespaced by provider: "anthropic.api_key", "claude-oauth.access_token", etc.
+// ErrInvalidCredential is returned by SetCredential when the credential fails
+// validation. Detectable with errors.Is.
+var ErrInvalidCredential = errors.New("invalid credential")
+
+// CredentialsManager is a thread-safe, typed store for provider credentials,
+// backed by ~/.harness/credentials.json (0600). Each provider has ONE typed
+// credential entry (not a scatter of prefixed keys). Credentials are INTERNAL:
+// they are never exposed over the HTTP API or a CLI command — only connect /
+// disconnect read and write them.
 type CredentialsManager struct {
 	mu   sync.RWMutex
 	path string
-	data map[string]string
+	data credentialsData
+}
+
+type credentialsData struct {
+	Providers map[string]ProviderCredential `json:"providers,omitempty"`
+}
+
+// ProviderCredential is the complete authentication data for one provider. Only
+// the fields relevant to Type are populated.
+type ProviderCredential struct {
+	Type             string `json:"type"` // "api_key" | "oauth"
+	APIKey           string `json:"api_key,omitempty"`
+	AccessToken      string `json:"access_token,omitempty"`
+	RefreshToken     string `json:"refresh_token,omitempty"`
+	ExpiresAt        int64  `json:"expires_at,omitempty"`
+	SubscriptionType string `json:"subscription_type,omitempty"` // optional (oauth)
 }
 
 func newCredentialsManager() *CredentialsManager {
@@ -23,46 +45,87 @@ func newCredentialsManager() *CredentialsManager {
 	_ = os.MkdirAll(dir, 0700)
 	m := &CredentialsManager{
 		path: filepath.Join(dir, "credentials.json"),
-		data: make(map[string]string),
 	}
 	m.load()
 	return m
 }
 
-// Store persists a credential value by key.
-func (m *CredentialsManager) Store(key, value string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.data[key] = value
-	return m.save()
+// validateCredential enforces the required fields per credential type: an
+// api_key credential needs an APIKey; an oauth credential needs access, refresh
+// and expiry (subscription type is optional).
+func validateCredential(c ProviderCredential) error {
+	switch c.Type {
+	case "api_key":
+		if c.APIKey == "" {
+			return fmt.Errorf("%w: api_key credential requires api_key", ErrInvalidCredential)
+		}
+	case "oauth":
+		if c.AccessToken == "" {
+			return fmt.Errorf("%w: oauth credential requires access_token", ErrInvalidCredential)
+		}
+		if c.RefreshToken == "" {
+			return fmt.Errorf("%w: oauth credential requires refresh_token", ErrInvalidCredential)
+		}
+		if c.ExpiresAt == 0 {
+			return fmt.Errorf("%w: oauth credential requires expires_at", ErrInvalidCredential)
+		}
+	default:
+		return fmt.Errorf("%w: type must be \"api_key\" or \"oauth\", got %q", ErrInvalidCredential, c.Type)
+	}
+	return nil
 }
 
-// Load retrieves a credential value by key.
-// Returns ("", false) if the key does not exist.
-func (m *CredentialsManager) Load(key string) (string, bool) {
+// Credential returns the stored credential for a provider by name (any type).
+func (m *CredentialsManager) Credential(provider string) (ProviderCredential, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	v, ok := m.data[key]
-	return v, ok
+	c, ok := m.data.Providers[provider]
+	return c, ok
 }
 
-// Delete removes a credential by key.
-func (m *CredentialsManager) Delete(key string) error {
+// APIKey returns the stored API key for a provider, or ("", false) if there is
+// no credential or it is not an api_key credential.
+func (m *CredentialsManager) APIKey(provider string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	c, ok := m.data.Providers[provider]
+	if !ok || c.Type != "api_key" || c.APIKey == "" {
+		return "", false
+	}
+	return c.APIKey, true
+}
+
+// OAuth returns the stored OAuth credential for a provider, or (zero, false) if
+// there is no credential or it is not an oauth credential.
+func (m *CredentialsManager) OAuth(provider string) (ProviderCredential, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	c, ok := m.data.Providers[provider]
+	if !ok || c.Type != "oauth" || c.AccessToken == "" {
+		return ProviderCredential{}, false
+	}
+	return c, true
+}
+
+// SetCredential validates and stores (or replaces) a provider's credential.
+func (m *CredentialsManager) SetCredential(provider string, cred ProviderCredential) error {
+	if err := validateCredential(cred); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.data, key)
+	if m.data.Providers == nil {
+		m.data.Providers = make(map[string]ProviderCredential)
+	}
+	m.data.Providers[provider] = cred
 	return m.save()
 }
 
-// DeletePrefix removes all credentials whose keys start with prefix.
-func (m *CredentialsManager) DeletePrefix(prefix string) error {
+// DeleteCredential removes a provider's credential.
+func (m *CredentialsManager) DeleteCredential(provider string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for k := range m.data {
-		if strings.HasPrefix(k, prefix) {
-			delete(m.data, k)
-		}
-	}
+	delete(m.data.Providers, provider)
 	return m.save()
 }
 

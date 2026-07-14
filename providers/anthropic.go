@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"sync"
 
-	"github.com/gurcuff91/harness/config"
 	llm "github.com/gurcuff91/harness/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
@@ -24,10 +22,7 @@ type Anthropic struct {
 	mu     sync.RWMutex
 }
 
-const (
-	anthropicAPIKeyCred = "anthropic.api_key"
-	anthropicAPIKeyEnv  = "ANTHROPIC_API_KEY"
-)
+const anthropicAPIKeyEnv = "ANTHROPIC_API_KEY"
 
 func NewAnthropic() *Anthropic {
 	a := &Anthropic{client: &http.Client{}, cache: make(map[string]types.ModelMeta)}
@@ -40,13 +35,8 @@ func (a *Anthropic) Name() string        { return "anthropic" }
 func (a *Anthropic) DisplayName() string { return "Anthropic" }
 func (a *Anthropic) Description() string { return describeState(a) }
 func (a *Anthropic) ActivationSource() ActivationSource {
-	if v := os.Getenv(anthropicAPIKeyEnv); v != "" {
-		return ActivationEnvVar
-	}
-	if v, ok := config.GetCredentialsManager().Load(anthropicAPIKeyCred); ok && v != "" {
-		return ActivationCredentials
-	}
-	return ActivationNone
+	_, src := resolveAPIKey("anthropic", anthropicAPIKeyEnv)
+	return src
 }
 func (a *Anthropic) IsActive() bool {
 	_, err := a.ResolveCredentials()
@@ -59,11 +49,7 @@ func (a *Anthropic) ResolveCredentials() (types.Credentials, error) {
 	if a.apiKey != "" {
 		return types.APIKeyCredentials(a.apiKey), nil
 	}
-	if v := os.Getenv(anthropicAPIKeyEnv); v != "" {
-		a.apiKey = v
-		return types.APIKeyCredentials(v), nil
-	}
-	if v, ok := config.GetCredentialsManager().Load(anthropicAPIKeyCred); ok && v != "" {
+	if v, src := resolveAPIKey("anthropic", anthropicAPIKeyEnv); src != ActivationNone {
 		a.apiKey = v
 		return types.APIKeyCredentials(v), nil
 	}
@@ -89,7 +75,7 @@ func (a *Anthropic) Connect(creds types.Credentials) error {
 	}
 
 	// Persist to disk only after validation succeeded
-	return config.GetCredentialsManager().Store(anthropicAPIKeyCred, creds.APIKey)
+	return storeAPIKey("anthropic", creds.APIKey)
 }
 
 func (a *Anthropic) Disconnect() error {
@@ -97,7 +83,7 @@ func (a *Anthropic) Disconnect() error {
 	a.cache = make(map[string]types.ModelMeta)
 	a.mu.Unlock()
 	a.apiKey = ""
-	return config.GetCredentialsManager().Delete(anthropicAPIKeyCred)
+	return deleteCredential("anthropic")
 }
 
 func (a *Anthropic) Models() []types.ModelMeta {

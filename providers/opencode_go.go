@@ -5,12 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/gurcuff91/harness/config"
 	llm "github.com/gurcuff91/harness/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
@@ -25,7 +23,6 @@ type OpenCodeGo struct {
 }
 
 const (
-	openCodeGoAPIKeyCred = "opencode-go.api_key"
 	openCodeGoAPIKeyEnv  = "OPENCODE_GO_API_KEY"
 )
 
@@ -41,13 +38,8 @@ func (o *OpenCodeGo) Name() string        { return "opencode-go" }
 func (o *OpenCodeGo) DisplayName() string { return "OpenCode Go" }
 func (o *OpenCodeGo) Description() string { return describeState(o) }
 func (o *OpenCodeGo) ActivationSource() ActivationSource {
-	if v := os.Getenv(openCodeGoAPIKeyEnv); v != "" {
-		return ActivationEnvVar
-	}
-	if v, ok := config.GetCredentialsManager().Load(openCodeGoAPIKeyCred); ok && v != "" {
-		return ActivationCredentials
-	}
-	return ActivationNone
+	_, src := resolveAPIKey("opencode-go", openCodeGoAPIKeyEnv)
+	return src
 }
 func (o *OpenCodeGo) IsActive() bool {
 	_, err := o.ResolveCredentials()
@@ -60,11 +52,7 @@ func (o *OpenCodeGo) ResolveCredentials() (types.Credentials, error) {
 	if o.apiKey != "" {
 		return types.APIKeyCredentials(o.apiKey), nil
 	}
-	if v := os.Getenv(openCodeGoAPIKeyEnv); v != "" {
-		o.apiKey = v
-		return types.APIKeyCredentials(v), nil
-	}
-	if v, ok := config.GetCredentialsManager().Load(openCodeGoAPIKeyCred); ok && v != "" {
+	if v, src := resolveAPIKey("opencode-go", openCodeGoAPIKeyEnv); src != ActivationNone {
 		o.apiKey = v
 		return types.APIKeyCredentials(v), nil
 	}
@@ -87,7 +75,7 @@ func (o *OpenCodeGo) Connect(creds types.Credentials) error {
 		o.apiKey = ""
 		return fmt.Errorf("invalid credentials: %w", err)
 	}
-	return config.GetCredentialsManager().Store(openCodeGoAPIKeyCred, creds.APIKey)
+	return storeAPIKey("opencode-go", creds.APIKey)
 }
 
 func (o *OpenCodeGo) Disconnect() error {
@@ -95,7 +83,7 @@ func (o *OpenCodeGo) Disconnect() error {
 	o.cache = make(map[string]types.ModelMeta)
 	o.mu.Unlock()
 	o.apiKey = ""
-	return config.GetCredentialsManager().Delete(openCodeGoAPIKeyCred)
+	return deleteCredential("opencode-go")
 }
 
 func (o *OpenCodeGo) Models() []types.ModelMeta {

@@ -17,7 +17,6 @@ import (
 )
 
 const (
-	ollamaCloudAPIKeyCred = "ollama-cloud.api_key"
 	ollamaCloudAPIKeyEnv  = "OLLAMA_CLOUD_API_KEY"
 	ollamaCloudURLEnv     = "OLLAMA_CLOUD_URL"
 	ollamaCloudURLDefault = "https://ollama.com/v1"
@@ -57,13 +56,8 @@ func (o *OllamaCloud) Name() string        { return "ollama-cloud" }
 func (o *OllamaCloud) DisplayName() string { return "Ollama Cloud" }
 func (o *OllamaCloud) Description() string { return describeState(o) }
 func (o *OllamaCloud) ActivationSource() ActivationSource {
-	if v := os.Getenv(ollamaCloudAPIKeyEnv); v != "" {
-		return ActivationEnvVar
-	}
-	if v, ok := config.GetCredentialsManager().Load(ollamaCloudAPIKeyCred); ok && v != "" {
-		return ActivationCredentials
-	}
-	return ActivationNone
+	_, src := resolveAPIKey("ollama-cloud", ollamaCloudAPIKeyEnv)
+	return src
 }
 func (o *OllamaCloud) IsActive() bool {
 	_, err := o.ResolveCredentials()
@@ -76,11 +70,7 @@ func (o *OllamaCloud) ResolveCredentials() (types.Credentials, error) {
 	if o.apiKey != "" {
 		return types.APIKeyCredentials(o.apiKey), nil
 	}
-	if v := os.Getenv(ollamaCloudAPIKeyEnv); v != "" {
-		o.apiKey = v
-		return types.APIKeyCredentials(v), nil
-	}
-	if v, ok := config.GetCredentialsManager().Load(ollamaCloudAPIKeyCred); ok && v != "" {
+	if v, src := resolveAPIKey("ollama-cloud", ollamaCloudAPIKeyEnv); src != ActivationNone {
 		o.apiKey = v
 		return types.APIKeyCredentials(v), nil
 	}
@@ -103,7 +93,7 @@ func (o *OllamaCloud) Connect(creds types.Credentials) error {
 		o.apiKey = ""
 		return fmt.Errorf("invalid credentials: %w", err)
 	}
-	return config.GetCredentialsManager().Store(ollamaCloudAPIKeyCred, creds.APIKey)
+	return storeAPIKey("ollama-cloud", creds.APIKey)
 }
 
 func (o *OllamaCloud) Disconnect() error {
@@ -111,7 +101,7 @@ func (o *OllamaCloud) Disconnect() error {
 	o.cache = make(map[string]types.ModelMeta)
 	o.mu.Unlock()
 	o.apiKey = ""
-	return config.GetCredentialsManager().Delete(ollamaCloudAPIKeyCred)
+	return deleteCredential("ollama-cloud")
 }
 
 func (o *OllamaCloud) Models() []types.ModelMeta {

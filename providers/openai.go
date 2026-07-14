@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"sync"
 
-	"github.com/gurcuff91/harness/config"
 	llm "github.com/gurcuff91/harness/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
@@ -23,7 +21,6 @@ type OpenAI struct {
 }
 
 const (
-	openAIAPIKeyCred = "openai.api_key"
 	openAIAPIKeyEnv  = "OPENAI_API_KEY"
 )
 
@@ -43,11 +40,7 @@ func (o *OpenAI) ResolveCredentials() (types.Credentials, error) {
 	if o.apiKey != "" {
 		return types.APIKeyCredentials(o.apiKey), nil
 	}
-	if v := os.Getenv(openAIAPIKeyEnv); v != "" {
-		o.apiKey = v
-		return types.APIKeyCredentials(v), nil
-	}
-	if v, ok := config.GetCredentialsManager().Load(openAIAPIKeyCred); ok && v != "" {
+	if v, src := resolveAPIKey("openai", openAIAPIKeyEnv); src != ActivationNone {
 		o.apiKey = v
 		return types.APIKeyCredentials(v), nil
 	}
@@ -70,7 +63,7 @@ func (o *OpenAI) Connect(creds types.Credentials) error {
 		o.apiKey = ""
 		return fmt.Errorf("invalid credentials: %w", err)
 	}
-	return config.GetCredentialsManager().Store(openAIAPIKeyCred, creds.APIKey)
+	return storeAPIKey("openai", creds.APIKey)
 }
 
 func (o *OpenAI) Disconnect() error {
@@ -78,7 +71,7 @@ func (o *OpenAI) Disconnect() error {
 	o.cache = make(map[string]types.ModelMeta)
 	o.mu.Unlock()
 	o.apiKey = ""
-	return config.GetCredentialsManager().Delete(openAIAPIKeyCred)
+	return deleteCredential("openai")
 }
 
 func NewOpenAIWithConfig(apiKey, baseURL string) *OpenAI {
@@ -94,13 +87,8 @@ func (o *OpenAI) Name() string        { return "openai" }
 func (o *OpenAI) DisplayName() string { return "OpenAI" }
 func (o *OpenAI) Description() string { return describeState(o) }
 func (o *OpenAI) ActivationSource() ActivationSource {
-	if v := os.Getenv(openAIAPIKeyEnv); v != "" {
-		return ActivationEnvVar
-	}
-	if v, ok := config.GetCredentialsManager().Load(openAIAPIKeyCred); ok && v != "" {
-		return ActivationCredentials
-	}
-	return ActivationNone
+	_, src := resolveAPIKey("openai", openAIAPIKeyEnv)
+	return src
 }
 func (o *OpenAI) IsActive() bool {
 	_, err := o.ResolveCredentials()

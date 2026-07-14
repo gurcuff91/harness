@@ -108,15 +108,8 @@ func (c *ClaudeOAuth) loadCredentialsFromSources() error {
 	if c.tokens.creds != nil && c.tokens.creds.AccessToken != "" {
 		return nil // already cached
 	}
-	cm := config.GetCredentialsManager()
-	if at, ok := cm.Load(oauthCredPrefix + "access_token"); ok && at != "" {
-		rt, _ := cm.Load(oauthCredPrefix + "refresh_token")
-		var ea int64
-		if eas, ok := cm.Load(oauthCredPrefix + "expires_at"); ok {
-			fmt.Sscanf(eas, "%d", &ea)
-		}
-		st, _ := cm.Load(oauthCredPrefix + "subscription_type")
-		creds := types.OAuthCredentials(at, rt, ea, st)
+	if cred, ok := config.GetCredentialsManager().Credential("claude-oauth"); ok && cred.AccessToken != "" {
+		creds := types.OAuthCredentials(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType)
 		c.tokens.creds = &creds
 		return nil
 	}
@@ -160,7 +153,7 @@ func (c *ClaudeOAuth) clearCreds() error {
 	c.mu.Lock()
 	c.cache = make(map[string]types.ModelMeta)
 	c.mu.Unlock()
-	return config.GetCredentialsManager().DeletePrefix(oauthCredPrefix)
+	return config.GetCredentialsManager().DeleteCredential("claude-oauth")
 }
 
 // ── Model cache ──────────────────────────────────────────────────────────
@@ -512,20 +505,11 @@ type tokenManager struct {
 
 func newTokenManager() *tokenManager {
 	tm := &tokenManager{}
-	// Load from credentials.json at startup
-	cm := config.GetCredentialsManager()
-	at, _ := cm.Load(oauthCredPrefix + "access_token")
-	if at == "" {
-		return tm
+	// Load from credentials.json at startup.
+	if cred, ok := config.GetCredentialsManager().Credential("claude-oauth"); ok && cred.AccessToken != "" {
+		creds := types.OAuthCredentials(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType)
+		tm.creds = &creds
 	}
-	rt, _ := cm.Load(oauthCredPrefix + "refresh_token")
-	var ea int64
-	if eas, ok := cm.Load(oauthCredPrefix + "expires_at"); ok {
-		fmt.Sscanf(eas, "%d", &ea)
-	}
-	st, _ := cm.Load(oauthCredPrefix + "subscription_type")
-	creds := types.OAuthCredentials(at, rt, ea, st)
-	tm.creds = &creds
 	return tm
 }
 
@@ -606,14 +590,15 @@ func (tm *tokenManager) refresh(refreshToken string) (*types.Credentials, error)
 
 // ── Credential persistence ───────────────────────────────────────────────
 
-const oauthCredPrefix = "claude-oauth."
 
 func persistOAuthCreds(creds *types.Credentials) {
-	cm := config.GetCredentialsManager()
-	cm.Store(oauthCredPrefix+"access_token", creds.AccessToken)
-	cm.Store(oauthCredPrefix+"refresh_token", creds.RefreshToken)
-	cm.Store(oauthCredPrefix+"expires_at", fmt.Sprintf("%d", creds.ExpiresAt))
-	cm.Store(oauthCredPrefix+"subscription_type", creds.SubscriptionType)
+	_ = config.GetCredentialsManager().SetCredential("claude-oauth", config.ProviderCredential{
+		Type:             "oauth",
+		AccessToken:      creds.AccessToken,
+		RefreshToken:     creds.RefreshToken,
+		ExpiresAt:        creds.ExpiresAt,
+		SubscriptionType: creds.SubscriptionType,
+	})
 }
 
 // ── Utilities ────────────────────────────────────────────────────────────

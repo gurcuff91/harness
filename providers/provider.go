@@ -3,7 +3,9 @@ package providers
 import (
 	"context"
 	"fmt"
+	"os"
 
+	"github.com/gurcuff91/harness/config"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -110,4 +112,33 @@ func describeState(p Provider) string {
 		}
 	}
 	return authType + " · " + state
+}
+
+// ── API-key credential helpers ────────────────────────────────────────────
+// Shared by the api_key providers so the env→credential cascade lives in ONE
+// place (the provider only supplies its env-var name).
+
+// resolveAPIKey applies the api-key cascade: environment variable first, then
+// the stored credential. Returns the resolved key ("" if none) and the
+// ActivationSource that produced it — so a provider's ResolveCredentials and
+// ActivationSource share one source of truth.
+func resolveAPIKey(provider, envVar string) (string, ActivationSource) {
+	if v := os.Getenv(envVar); v != "" {
+		return v, ActivationEnvVar
+	}
+	if v, ok := config.GetCredentialsManager().APIKey(provider); ok {
+		return v, ActivationCredentials
+	}
+	return "", ActivationNone
+}
+
+// storeAPIKey persists an API key for a provider as a typed credential.
+func storeAPIKey(provider, key string) error {
+	return config.GetCredentialsManager().SetCredential(provider,
+		config.ProviderCredential{Type: "api_key", APIKey: key})
+}
+
+// deleteCredential removes a provider's stored credential.
+func deleteCredential(provider string) error {
+	return config.GetCredentialsManager().DeleteCredential(provider)
 }

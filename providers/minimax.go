@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
-	"github.com/gurcuff91/harness/config"
 	llm "github.com/gurcuff91/harness/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
@@ -31,7 +29,6 @@ type MiniMax struct {
 }
 
 const (
-	miniMaxAPIKeyCred = "minimax.api_key"
 	miniMaxAPIKeyEnv  = "MINIMAX_API_KEY"
 )
 
@@ -49,13 +46,8 @@ func (o *MiniMax) DisplayName() string { return "MiniMax" }
 func (o *MiniMax) Description() string { return describeState(o) }
 
 func (o *MiniMax) ActivationSource() ActivationSource {
-	if v := os.Getenv(miniMaxAPIKeyEnv); v != "" {
-		return ActivationEnvVar
-	}
-	if v, ok := config.GetCredentialsManager().Load(miniMaxAPIKeyCred); ok && v != "" {
-		return ActivationCredentials
-	}
-	return ActivationNone
+	_, src := resolveAPIKey("minimax", miniMaxAPIKeyEnv)
+	return src
 }
 
 func (o *MiniMax) IsActive() bool {
@@ -69,11 +61,7 @@ func (o *MiniMax) ResolveCredentials() (types.Credentials, error) {
 	if o.apiKey != "" {
 		return types.APIKeyCredentials(o.apiKey), nil
 	}
-	if v := os.Getenv(miniMaxAPIKeyEnv); v != "" {
-		o.apiKey = v
-		return types.APIKeyCredentials(v), nil
-	}
-	if v, ok := config.GetCredentialsManager().Load(miniMaxAPIKeyCred); ok && v != "" {
+	if v, src := resolveAPIKey("minimax", miniMaxAPIKeyEnv); src != ActivationNone {
 		o.apiKey = v
 		return types.APIKeyCredentials(v), nil
 	}
@@ -95,7 +83,7 @@ func (o *MiniMax) Connect(creds types.Credentials) error {
 		o.apiKey = ""
 		return fmt.Errorf("invalid credentials: %w", err)
 	}
-	return config.GetCredentialsManager().Store(miniMaxAPIKeyCred, creds.APIKey)
+	return storeAPIKey("minimax", creds.APIKey)
 }
 
 func (o *MiniMax) Disconnect() error {
@@ -103,7 +91,7 @@ func (o *MiniMax) Disconnect() error {
 	o.cache = make(map[string]types.ModelMeta)
 	o.mu.Unlock()
 	o.apiKey = ""
-	return config.GetCredentialsManager().Delete(miniMaxAPIKeyCred)
+	return deleteCredential("minimax")
 }
 
 func (o *MiniMax) Models() []types.ModelMeta {
