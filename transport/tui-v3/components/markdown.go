@@ -312,6 +312,14 @@ func (m *MarkdownStream) processChar(ch rune) string {
 
 	// Backtick accumulation.
 	if ch == '`' || m.tickBuf != "" {
+		// Line-start text may still be buffered in linePrefix (accumulated while
+		// waiting to recognize a heading/list prefix). Emit it BEFORE the inline
+		// code opens so order is preserved — otherwise the code span prints first
+		// and the pending text leaks out later (e.g. "`agi` y `cm`" → "agicm y").
+		pre := ""
+		if ch == '`' && m.tickBuf == "" && m.atLineStart && m.linePrefix != "" {
+			pre = m.emitLinePrefix()
+		}
 		if ch == '`' {
 			m.tickBuf += "`"
 		}
@@ -323,7 +331,7 @@ func (m *MarkdownStream) processChar(ch rune) string {
 			m.inCodeBlock = true
 			m.codeLangDone = false
 			m.atLineStart = false
-			return out + ansi.Dim + "```"
+			return pre + out + ansi.Dim + "```"
 		}
 		if m.tickBuf == "`" && ch != '`' {
 			m.tickBuf = ""
@@ -332,7 +340,10 @@ func (m *MarkdownStream) processChar(ch rune) string {
 			out := m.resolvePendingStars()
 			m.inInlineCode = true
 			m.inlineCodeBuf = string(ch)
-			return out
+			return pre + out
+		}
+		if pre != "" {
+			return pre
 		}
 		if len(m.tickBuf) == 2 {
 			return ""

@@ -293,6 +293,38 @@ func TestMarkdownHR(t *testing.T) {
 	}
 }
 
+// TestInlineCodeOrder guards against a regression where line-start text buffered
+// in linePrefix leaked out AFTER an inline code span, reordering the output
+// (e.g. "`agi` y `cm`" rendered as "agicm y").
+func TestInlineCodeOrder(t *testing.T) {
+	stripped := func(s string) string {
+		var b strings.Builder
+		i := 0
+		for i < len(s) {
+			if s[i] == 0x1b {
+				for i < len(s) && s[i] != 'm' {
+					i++
+				}
+				i++
+				continue
+			}
+			b.WriteByte(s[i])
+			i++
+		}
+		return b.String()
+	}
+	cases := map[string]string{
+		"`agi` y `cm` son alias":       "agi y cm son alias",
+		"`code` texto":                 "code texto",
+		"`a` `b` `c`":                  "a b c",
+	}
+	for src, want := range cases {
+		if got := stripped(feedAll(src)); got != want {
+			t.Errorf("feedAll(%q) = %q, want %q", src, got, want)
+		}
+	}
+}
+
 func TestMarkdownLinkOSC8(t *testing.T) {
 	// Links emit an OSC 8 hyperlink escape so terminals can make them clickable.
 	out := feedAll("[Google](https://google.com)")

@@ -1,6 +1,8 @@
 package components
 
 import (
+	"sync"
+
 	"github.com/gurcuff91/harness/transport/tui-v3/ansi"
 )
 
@@ -8,9 +10,14 @@ import (
 // that only needs to be wrapped to the current width. Used for content that is
 // not markdown source — user prompts, tool-call blocks, spinners-as-text, etc.
 // On resize it re-wraps (preserving ANSI) but does not re-lay-out structurally.
+//
+// Thread-safe: SetText runs on the SSE-consuming goroutine while Render runs on
+// the render-loop goroutine, so all field access is guarded by mu. Without this,
+// a fast tool call could SetText the real header while the render goroutine was
+// mid-Render on the stale "…" placeholder — leaving the old text on screen.
 type RawBlock struct {
-	text string
-
+	mu         sync.Mutex
+	text       string
 	cacheWidth int
 	cacheLines []string
 	cacheValid bool
@@ -23,15 +30,25 @@ func NewRawBlock(text string) *RawBlock {
 
 // SetText replaces the content.
 func (b *RawBlock) SetText(text string) {
+	b.mu.Lock()
 	b.text = text
 	b.cacheValid = false
+	b.mu.Unlock()
 }
 
 // Text returns the raw content.
-func (b *RawBlock) Text() string { return b.text }
+func (b *RawBlock) Text() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.text
+}
 
 // Invalidate clears the cache (on resize).
-func (b *RawBlock) Invalidate() { b.cacheValid = false }
+func (b *RawBlock) Invalidate() {
+	b.mu.Lock()
+	b.cacheValid = false
+	b.mu.Unlock()
+}
 
 // Render wraps the pre-styled text to width, preserving ANSI across breaks.
 // An empty block renders zero lines (no phantom blank line for unfilled slots).
@@ -42,6 +59,8 @@ func (b *RawBlock) Invalidate() { b.cacheValid = false }
 // line of a multi-line block (e.g. a dim/italic thinking block would render its
 // later lines in default white — the bug this fixes).
 func (b *RawBlock) Render(width int) []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.cacheValid && b.cacheWidth == width {
 		return b.cacheLines
 	}

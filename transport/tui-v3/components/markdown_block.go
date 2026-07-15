@@ -1,6 +1,8 @@
 package components
 
 import (
+	"sync"
+
 	"github.com/gurcuff91/harness/transport/tui-v3/ansi"
 )
 
@@ -11,9 +13,12 @@ import (
 //
 // This mirrors PI's Markdown component: the chat keeps a tree of source-backed
 // blocks, so a width change just re-renders every block.
+// Thread-safe: Append/SetSource run on the SSE goroutine while Render runs on
+// the render loop; mu guards all field access to avoid a torn read of a growing
+// live block.
 type Markdown struct {
-	source string
-
+	mu         sync.Mutex
+	source     string
 	cacheWidth int
 	cacheLines []string
 	cacheValid bool
@@ -27,24 +32,38 @@ func NewMarkdown(source string) *Markdown {
 // SetSource replaces the raw markdown and invalidates the cache. Used by the
 // streaming path to grow the live block as deltas arrive.
 func (b *Markdown) SetSource(source string) {
+	b.mu.Lock()
 	b.source = source
 	b.cacheValid = false
+	b.mu.Unlock()
 }
 
 // Source returns the raw markdown.
-func (b *Markdown) Source() string { return b.source }
+func (b *Markdown) Source() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.source
+}
 
 // Append adds a delta to the raw markdown.
 func (b *Markdown) Append(delta string) {
+	b.mu.Lock()
 	b.source += delta
 	b.cacheValid = false
+	b.mu.Unlock()
 }
 
 // Invalidate clears the render cache (called on resize).
-func (b *Markdown) Invalidate() { b.cacheValid = false }
+func (b *Markdown) Invalidate() {
+	b.mu.Lock()
+	b.cacheValid = false
+	b.mu.Unlock()
+}
 
 // Render lays the raw markdown out at the given width, caching by width.
 func (b *Markdown) Render(width int) []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.cacheValid && b.cacheWidth == width {
 		return b.cacheLines
 	}
