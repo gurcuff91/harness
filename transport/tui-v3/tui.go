@@ -151,6 +151,13 @@ func (t *TUI) Run(ctx context.Context) error {
 
 	t.buildUI()
 
+	// Connect BEFORE the first render so the opening frame already shows the
+	// banner, session and footer — no flash of an empty editor. The internal
+	// server is guaranteed ready (startInternalServer waits for the listener),
+	// so no artificial sleep is needed; the startup just takes as long as the
+	// initial API calls, then paints everything at once.
+	t.autoConnect(ctx)
+
 	if err := t.tui.Start(); err != nil {
 		return fmt.Errorf("start tui: %w", err)
 	}
@@ -159,12 +166,6 @@ func (t *TUI) Run(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
 		t.tui.Stop()
-	}()
-
-	// autoConnect once the server is ready.
-	go func() {
-		time.Sleep(150 * time.Millisecond)
-		t.autoConnect(ctx)
 	}()
 
 	// Block until the render loop signals quit.

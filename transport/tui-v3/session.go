@@ -97,6 +97,10 @@ func (t *TUI) autoConnect(ctx context.Context) {
 		}
 	}
 
+	// New session: show the welcome banner (only here — never on resume, which
+	// already replays history).
+	t.addRaw(t.welcomeBanner())
+
 	// Create new session.
 	d, err := t.client.CreateSession(t.model, cwd)
 	if err != nil {
