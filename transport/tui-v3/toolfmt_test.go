@@ -7,8 +7,8 @@ func TestFormatToolArgsBuiltins(t *testing.T) {
 		"read primary + secondary": {
 			"Read", `{"path":"a.go","offset":1,"limit":50}`, "a.go offset=1 limit=50",
 		},
-		"bash shell prefix": {
-			"Bash", `{"command":"go test"}`, "$ go test",
+		"bash command bare": {
+			"Bash", `{"command":"go test"}`, "go test",
 		},
 		"edit": {
 			"Edit", `{"path":"x.go","old_text":"a","new_text":"b"}`, "x.go old_text=a new_text=b",

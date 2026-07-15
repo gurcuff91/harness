@@ -109,14 +109,29 @@ func (t *TUI) updateInfo() {
 
 // ── Formatting helpers (ported from transport/tui) ──────────────────────────
 
+// toolStyle returns the color and icon for a tool header. Built-in tools each
+// get a distinctive icon; the generic gear (⚙) is reserved for MCP/extension
+// tools we don't recognize, so a glance tells built-in from external.
 func toolStyle(name string) (colorFn func(string) string, icon string) {
 	switch name {
+	case "Bash":
+		return ansi.Accent, "❯" // shell prompt
+	case "Read":
+		return ansi.Accent, "▤" // record/register: reading a file
+	case "Write":
+		return ansi.Accent, "✚" // heavy plus: create/write a file
+	case "Edit":
+		return ansi.Accent, "✎" // pencil: editing
+	case "Fetch":
+		return ansi.Accent, "↓" // down arrow: fetching/downloading
 	case "Skill":
-		return ansi.Accent, "✦"
+		return ansi.Accent, "✦" // star: skill
 	case "Subagent":
-		return ansi.Accent, "⬢"
+		return ansi.Accent, "⊕" // circled plus: spawn a sub-agent
+	case "MemoWrite", "MemoSearch", "MemoDelete":
+		return ansi.Accent, "✳" // asterisk: memory note
 	default:
-		return ansi.Accent, "⚙"
+		return ansi.Accent, "⎔" // technical hexagon: generic MCP/extension tool
 	}
 }
 

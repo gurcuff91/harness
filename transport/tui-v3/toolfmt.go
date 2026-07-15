@@ -10,13 +10,16 @@ import (
 // "key=" label) right after the tool name — e.g. Read shows the path directly.
 // Tools not listed (including all MCP tools) render every param as key=value.
 var primaryParam = map[string]string{
-	"Bash":     "command",
-	"Read":     "path",
-	"Write":    "path",
-	"Edit":     "path",
-	"Fetch":    "url",
-	"Skill":    "name",
-	"Subagent": "prompt",
+	"Bash":       "command",
+	"Read":       "path",
+	"Write":      "path",
+	"Edit":       "path",
+	"Fetch":      "url",
+	"Skill":      "name",
+	"Subagent":   "prompt",
+	"MemoWrite":  "slug",
+	"MemoSearch": "query",
+	"MemoDelete": "slug",
 }
 
 // kvPair is one decoded argument, preserving JSON key order.
@@ -92,12 +95,8 @@ func formatToolArgs(name, argsJSON string) string {
 	var parts []string
 	for _, p := range pairs {
 		if p.key == primary {
-			// Primary param shown bare. Bash gets a "$ " shell prefix.
-			if name == "Bash" {
-				parts = append([]string{"$ " + p.val}, parts...)
-			} else {
-				parts = append([]string{p.val}, parts...)
-			}
+			// Primary param shown bare (the icon already signals the tool kind).
+			parts = append([]string{p.val}, parts...)
 			continue
 		}
 		parts = append(parts, fmt.Sprintf("%s=%s", p.key, p.val))

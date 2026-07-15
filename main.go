@@ -12,6 +12,7 @@ import (
 
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/config"
+	"github.com/gurcuff91/harness/memory"
 	"github.com/gurcuff91/harness/transport/cli"
 	httptransport "github.com/gurcuff91/harness/transport/http"
 	// tui-v1 (tview-based, reference — do not delete):
@@ -223,12 +224,21 @@ func runDelete(id string) {
 
 // newRootAgent builds the process's root agent. EnableMCPs spawns the configured
 // MCP servers (once) and registers their tools; the caller must Close() it to
-// terminate those subprocesses.
+// terminate those subprocesses. It also opens the shared, project-scoped memory
+// store (best-effort: if it can't open, the memory tools are simply absent).
 func newRootAgent() *agent.Agent {
-	return agent.New(agent.AgentOptions{
+	var mem *memory.Store
+	if s, err := memory.Open(""); err == nil {
+		mem = s
+	}
+	opts := agent.AgentOptions{
 		ThinkingLevel: config.GetSettingsManager().ThinkingLevel(),
 		EnableMCPs:    true,
-	})
+	}
+	if mem != nil {
+		opts.Memory = memory.NewToolAdapter(mem)
+	}
+	return agent.New(opts)
 }
 
 func runSettings(args []string) {

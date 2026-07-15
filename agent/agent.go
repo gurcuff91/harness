@@ -53,6 +53,7 @@ type AgentOptions struct {
 	Store          store.SessionStoreManager // default: InMemorySessionStoreManager
 	ResourceLoader resources.ResourceLoader  // default: FileResourceLoader(cwd) per session
 	//                                         // pass NilLoader{} to disable discovery
+	Memory tools.MemoryStore // project-scoped persistent memory; nil disables the memory tools
 }
 
 // New creates a new Agent. Never fails — provider is resolved per session.
@@ -283,6 +284,19 @@ func (a *Agent) buildSessionTools(cwd, model string, res *resources.Resources, l
 	if len(res.Skills) > 0 && a.isToolAllowed(tools.ToolSkill) {
 		reg.Register(tools.Skill(loader.ReadSkill))
 	}
+	// Memory tools — project-scoped persistent memory, registered when a store is
+	// configured. cwd partitions memories per project (like sessions).
+	if a.opts.Memory != nil {
+		if a.isToolAllowed(tools.ToolMemoWrite) {
+			reg.Register(tools.MemoWrite(a.opts.Memory, cwd))
+		}
+		if a.isToolAllowed(tools.ToolMemoSearch) {
+			reg.Register(tools.MemoSearch(a.opts.Memory, cwd))
+		}
+		if a.isToolAllowed(tools.ToolMemoDelete) {
+			reg.Register(tools.MemoDelete(a.opts.Memory, cwd))
+		}
+	}
 	// Subagent tool — only if allowed (excluded for sub-agents themselves)
 	if a.isToolAllowed(tools.ToolSubagent) {
 		// Capture current settings in a closure — Agent has zero knowledge of sub-agent mechanics
@@ -299,9 +313,14 @@ func (a *Agent) buildSessionTools(cwd, model string, res *resources.Resources, l
 				MaxTokens:     parentA.maxTokens,
 				Store:         store.NewInMemorySessionStoreManager(),
 				// Each subagent gets its OWN loader instance — FileResourceLoader is not goroutine-safe
-				ResourceLoader:  resources.NewFileResourceLoader(cwd),
-				DisallowedTools: []string{tools.ToolSubagent},
+				ResourceLoader: resources.NewFileResourceLoader(cwd),
+				// Subagents can't launch further subagents (no recursion) and get
+				// READ-ONLY memory: they may recall context (MemoSearch) but
+				// not write or delete — only the parent agent curates what persists,
+				// avoiding noisy/conflicting writes from ephemeral subagents.
+				DisallowedTools: []string{tools.ToolSubagent, tools.ToolMemoWrite, tools.ToolMemoDelete},
 				Tools:           parentA.MCPTools(),
+				Memory:          parentA.opts.Memory, // share the parent's memory store (read-only for subagents)
 			})
 			sess, err := subAgent.NewSession(cwd, model)
 			if err != nil {
@@ -359,6 +378,10 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) string {
 		for _, s := range res.Skills {
 			b.WriteString(fmt.Sprintf("- %s: %s\n", s.Name, s.Description))
 		}
+	}
+
+	if a.opts.Memory != nil {
+		b.WriteString("\n\n## Memory\n\nYou have persistent, project-scoped memory that carries over between sessions. At the start of a task — or whenever you lack context about earlier work — use MemoSearch with relevant keywords to recover prior decisions, conventions, and context. Save durable, high-value insights with MemoWrite (never transient task state), and remove obsolete ones with MemoDelete.")
 	}
 
 	b.WriteString(fmt.Sprintf("\n\n## Working Directory\n\n%s\n", cwd))
