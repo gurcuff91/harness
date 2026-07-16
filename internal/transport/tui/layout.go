@@ -73,11 +73,19 @@ func (s *separator) Render(width int) []string {
 	return []string{ansi.Primary(strings.Repeat("─", width))}
 }
 
-// globalInput routes input: Ctrl+C/Ctrl+D quit, palette consumes when open.
+// globalInput routes input: Ctrl+C/Ctrl+D quit, Ctrl+V pastes a clipboard
+// image, palette consumes when open.
 func (t *TUI) globalInput(data string) bool {
 	// Ctrl+C / Ctrl+D at empty editor → quit.
 	if data == "\x03" || (data == "\x04" && t.editor.Value() == "") {
 		t.quit() // stops SSE + closes the session (flush to disk) + exits
+		return true
+	}
+	// Ctrl+V (0x16) → paste a clipboard image as a path token. Cmd+V can't be
+	// intercepted in a raw-mode terminal (the terminal owns it), so Ctrl+V is the
+	// portable trigger. Text pastes still arrive via bracketed paste to the editor.
+	if data == "\x16" {
+		t.pasteClipboardImage()
 		return true
 	}
 	// Palette gets first crack at input when open.
@@ -85,6 +93,24 @@ func (t *TUI) globalInput(data string) bool {
 		return t.palette.HandleInputConsumed(data)
 	}
 	return false
+}
+
+// pasteClipboardImage reads a PNG from the clipboard (off the input thread),
+// writes it to a temp file, and inserts the path into the editor as text. The
+// Read tool resolves image paths, so the agent receives the image by reading it.
+func (t *TUI) pasteClipboardImage() {
+	go func() {
+		path, err := PasteImageFromClipboard()
+		switch {
+		case err != nil:
+			t.showWarn("clipboard image: " + err.Error())
+		case path == "":
+			t.showWarn("no image in clipboard")
+		default:
+			t.editor.InsertText(path)
+		}
+		t.tui.RequestRender(false)
+	}()
 }
 
 // onEscape stops an in-flight turn and clears the editor.

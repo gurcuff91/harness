@@ -34,7 +34,7 @@ Providers can also be connected from inside the TUI command palette.
 - **Tool execution** — Bash, Read, Write, Edit, Fetch, Skill, Subagent
 - **MCP** — external tools via Model Context Protocol (local stdio + remote HTTP servers)
 - **Persistent memory** — project-scoped + global memories (SQLite + FTS5), recalled across sessions
-- **Vision** — image support via file paths or clipboard (Cmd+V)
+- **Vision** — image support via file paths or clipboard image paste (Ctrl+V in the TUI)
 - **Pure-Go TUI** — from-scratch terminal UI, zero external TUI libraries
 - **Auto-detection** — Ollama local auto-connects, models fetched from APIs
 - **Zero config** — works with just `harness`, configure via `harness connect`

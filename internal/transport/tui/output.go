@@ -117,7 +117,7 @@ func toolStyle(name string) (colorFn func(string) string, icon string) {
 	case "Bash":
 		return ansi.Accent, "❯" // shell prompt
 	case "Read":
-		return ansi.Accent, "▤" // record/register: reading a file
+		return ansi.Accent, "≡" // triple bar (narrow): text content of a file
 	case "Write":
 		return ansi.Accent, "✚" // heavy plus: create/write a file
 	case "Edit":

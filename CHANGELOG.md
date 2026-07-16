@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [0.9.0] - 2026-06-23
 
+### TUI — clipboard image paste (ported from v1)
+- **Ctrl+V** pastes a clipboard PNG: it's written to a temp file and its path is
+  inserted into the editor as text; the Read tool resolves the image when the
+  agent reads that path (Cmd+V can't be intercepted in a raw-mode terminal, so
+  Ctrl+V is the portable trigger)
+- New `internal/transport/tui/clipboard.go` (`PasteImageFromClipboard`) and
+  `Editor.InsertText`; dep `golang.design/x/clipboard` (approved)
+
 ### SDK boundary — the agent is now a public SDK
 - Root `harness.go` facade (package `harness`) re-exports the essentials:
   `New`, `Agent`, `Session`, `Options`, `Event`, `Handler`

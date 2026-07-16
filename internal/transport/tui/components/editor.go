@@ -48,6 +48,16 @@ func (e *Editor) SetValue(s string) {
 	e.changed()
 }
 
+// InsertText inserts s at the cursor position (e.g. a pasted image path). When
+// text already precedes the cursor, a separating space is added so the inserted
+// token doesn't fuse with the previous word.
+func (e *Editor) InsertText(s string) {
+	if e.cursor > 0 && e.buf[e.cursor-1] != ' ' && e.buf[e.cursor-1] != '\n' {
+		s = " " + s
+	}
+	e.insert(s)
+}
+
 // Clear empties the editor.
 func (e *Editor) Clear() {
 	e.buf = nil
@@ -136,7 +146,7 @@ func (e *Editor) HandleInput(data string) {
 			e.cursor = e.wordRight(e.cursor)
 			e.repaint()
 			return
-		case keys.Tab, keys.ShiftTab, keys.CtrlC, keys.CtrlD, keys.CtrlY:
+		case keys.Tab, keys.ShiftTab, keys.CtrlC, keys.CtrlD, keys.CtrlY, keys.CtrlV:
 			// Not handled by the editor itself — ignored (owner intercepts).
 			return
 		}

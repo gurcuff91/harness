@@ -33,6 +33,7 @@ const (
 	CtrlE Key = "ctrl+e"
 	CtrlK Key = "ctrl+k"
 	CtrlU Key = "ctrl+u"
+	CtrlV Key = "ctrl+v"
 	CtrlW Key = "ctrl+w"
 	CtrlY Key = "ctrl+y"
 
@@ -99,6 +100,7 @@ var ctrlMap = map[byte]Key{
 	0x05: CtrlE,
 	0x0b: CtrlK,
 	0x15: CtrlU,
+	0x16: CtrlV,
 	0x17: CtrlW,
 	0x19: CtrlY,
 }
