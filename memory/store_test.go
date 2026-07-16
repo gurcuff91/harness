@@ -18,7 +18,7 @@ func newTestStore(t *testing.T) *Store {
 
 func TestWriteGetRoundTrip(t *testing.T) {
 	s := newTestStore(t)
-	if _, err := s.Write("/proj", "api-auth", "The refresh token flow works like this..."); err != nil {
+	if _, err := s.Write("/proj", "api-auth", "The refresh token flow works like this...", false); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	m, err := s.Get("/proj", "api-auth")
@@ -32,11 +32,11 @@ func TestWriteGetRoundTrip(t *testing.T) {
 
 func TestWriteUpsert(t *testing.T) {
 	s := newTestStore(t)
-	created, _ := s.Write("/proj", "slug", "body1")
+	created, _ := s.Write("/proj", "slug", "body1", false)
 	if !created {
 		t.Errorf("first write should create")
 	}
-	created, _ = s.Write("/proj", "slug", "body2")
+	created, _ = s.Write("/proj", "slug", "body2", false)
 	if created {
 		t.Errorf("second write should update, not create")
 	}
@@ -59,9 +59,9 @@ func TestGetMissing(t *testing.T) {
 
 func TestSearchReturnsBodyAndPagination(t *testing.T) {
 	s := newTestStore(t)
-	s.Write("/proj", "db-choice", "SQLite gives us zero-dep local storage with FTS5")
-	s.Write("/proj", "api-versioning", "We version via /api/v1 not headers")
-	s.Write("/proj", "deploy", "Push to main triggers CI and deploy")
+	s.Write("/proj", "db-choice", "SQLite gives us zero-dep local storage with FTS5", false)
+	s.Write("/proj", "api-versioning", "We version via /api/v1 not headers", false)
+	s.Write("/proj", "deploy", "Push to main triggers CI and deploy", false)
 
 	res, err := s.Search("/proj", "SQLite", true, 0, 10)
 	if err != nil {
@@ -91,7 +91,7 @@ func TestSearchReturnsBodyAndPagination(t *testing.T) {
 func TestSearchPagination(t *testing.T) {
 	s := newTestStore(t)
 	for _, slug := range []string{"a", "b", "c", "d", "e"} {
-		s.Write("/proj", slug, "common keyword content here")
+		s.Write("/proj", slug, "common keyword content here", false)
 	}
 	// Page 1: skip 0, limit 2.
 	p1, _ := s.Search("/proj", "keyword", true, 0, 2)
@@ -112,7 +112,7 @@ func TestSearchPagination(t *testing.T) {
 func TestSearchDefaultLimit(t *testing.T) {
 	s := newTestStore(t)
 	for i := 0; i < 15; i++ {
-		s.Write("/proj", string(rune('a'+i)), "shared term")
+		s.Write("/proj", string(rune('a'+i)), "shared term", false)
 	}
 	res, _ := s.Search("/proj", "shared", true, 0, 0) // 0 → default 10
 	if res.Limit != 10 || res.Returned != 10 || res.Total != 15 {
@@ -122,8 +122,8 @@ func TestSearchDefaultLimit(t *testing.T) {
 
 func TestSearchPartitionedByCWD(t *testing.T) {
 	s := newTestStore(t)
-	s.Write("/projA", "shared-slug", "content about kubernetes for A")
-	s.Write("/projB", "shared-slug", "content about kubernetes for B")
+	s.Write("/projA", "shared-slug", "content about kubernetes for A", false)
+	s.Write("/projB", "shared-slug", "content about kubernetes for B", false)
 
 	res, _ := s.Search("/projA", "kubernetes", true, 0, 10)
 	if res.Total != 1 || res.Results[0].Content != "content about kubernetes for A" {
@@ -133,15 +133,15 @@ func TestSearchPartitionedByCWD(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 	s := newTestStore(t)
-	s.Write("/proj", "temp", "body text")
-	ok, err := s.Delete("/proj", "temp")
+	s.Write("/proj", "temp", "body text", false)
+	ok, err := s.Delete("/proj", "temp", false)
 	if err != nil || !ok {
 		t.Fatalf("delete: %v ok=%v", err, ok)
 	}
 	if m, _ := s.Get("/proj", "temp"); m != nil {
 		t.Errorf("memory still present after delete")
 	}
-	if ok, _ := s.Delete("/proj", "temp"); ok {
+	if ok, _ := s.Delete("/proj", "temp", false); ok {
 		t.Errorf("deleting missing should return false")
 	}
 	// FTS index cleaned — search finds nothing.
@@ -152,8 +152,8 @@ func TestDelete(t *testing.T) {
 
 func TestSearchRanking(t *testing.T) {
 	s := newTestStore(t)
-	s.Write("/proj", "exact", "how to run database migrations safely, migration steps")
-	s.Write("/proj", "tangent", "we mentioned migration once here")
+	s.Write("/proj", "exact", "how to run database migrations safely, migration steps", false)
+	s.Write("/proj", "tangent", "we mentioned migration once here", false)
 	res, _ := s.Search("/proj", "migration", true, 0, 10)
 	if res.Total < 2 {
 		t.Fatalf("expected 2 results, got %d", res.Total)
@@ -170,11 +170,11 @@ func TestSearchRanking(t *testing.T) {
 func TestListMode(t *testing.T) {
 	s := newTestStore(t)
 	// Small gaps so updated_at differs and the ordering is deterministic.
-	s.Write("/proj", "first", "content one")
+	s.Write("/proj", "first", "content one", false)
 	time.Sleep(2 * time.Millisecond)
-	s.Write("/proj", "second", "content two")
+	s.Write("/proj", "second", "content two", false)
 	time.Sleep(2 * time.Millisecond)
-	s.Write("/proj", "third", "content three")
+	s.Write("/proj", "third", "content three", false)
 
 	// No query → list all, most-recently-updated first.
 	res, err := s.Search("/proj", "", true, 0, 10)
@@ -196,7 +196,7 @@ func TestListMode(t *testing.T) {
 
 func TestIncludeContentFalse(t *testing.T) {
 	s := newTestStore(t)
-	s.Write("/proj", "a", "some searchable content here")
+	s.Write("/proj", "a", "some searchable content here", false)
 
 	// Search with include_content=false → slug + dates, no content.
 	res, _ := s.Search("/proj", "searchable", false, 0, 10)
@@ -218,8 +218,8 @@ func TestIncludeContentFalse(t *testing.T) {
 
 func TestGlobalSearchAcrossCWDs(t *testing.T) {
 	s := newTestStore(t)
-	s.Write("/projA", "deploy", "kubernetes rollout for A")
-	s.Write("/projB", "deploy", "docker compose for B")
+	s.Write("/projA", "deploy", "kubernetes rollout for A", false)
+	s.Write("/projB", "deploy", "docker compose for B", false)
 
 	// cwd="" → search across ALL projects; same slug in both is distinct.
 	res, err := s.Search("", "deploy", true, 0, 10)
@@ -245,5 +245,43 @@ func TestGlobalSearchAcrossCWDs(t *testing.T) {
 	filtered, _ := s.Search("/projA", "deploy", true, 0, 10)
 	if filtered.Total != 1 || filtered.Results[0].CWD != "/projA" {
 		t.Errorf("cwd filter leaked: %+v", filtered)
+	}
+}
+
+func TestGlobalMemories(t *testing.T) {
+	s := newTestStore(t)
+	s.Write("/projA", "local-note", "project A specific", false)
+	s.Write("/projA", "pref", "global preference", true) // global=true → stored under sentinel
+
+	// The global memory is stored under the sentinel, not the passed cwd.
+	res, _ := s.Search(GlobalCWD, "", true, 0, 10)
+	if res.Total != 1 || res.Results[0].Slug != "pref" || res.Results[0].CWD != GlobalCWD {
+		t.Fatalf("global memory not under sentinel: %+v", res.Results)
+	}
+
+	// A project search folds in globals: projA sees its own + the global.
+	proj, _ := s.Search("/projA", "", true, 0, 10)
+	if proj.Total != 2 {
+		t.Fatalf("project search should include globals: got %d", proj.Total)
+	}
+
+	// A different project sees ONLY the global (none of projA's locals).
+	projB, _ := s.Search("/projB", "", true, 0, 10)
+	if projB.Total != 1 || projB.Results[0].Slug != "pref" {
+		t.Fatalf("projB should see only the global: %+v", projB.Results)
+	}
+
+	// FTS search also folds globals in.
+	hit, _ := s.Search("/projB", "preference", true, 0, 10)
+	if hit.Total != 1 || hit.Results[0].Slug != "pref" {
+		t.Fatalf("global should match FTS from another project: %+v", hit.Results)
+	}
+
+	// Global delete requires global=true (symmetry).
+	if ok, _ := s.Delete("/projB", "pref", false); ok {
+		t.Error("project-scoped delete should not remove a global memory")
+	}
+	if ok, _ := s.Delete("/anything", "pref", true); !ok {
+		t.Error("global delete should remove the global memory")
 	}
 }

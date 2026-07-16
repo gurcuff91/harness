@@ -20,6 +20,13 @@ import (
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no cgo)
 )
 
+// GlobalCWD is the sentinel cwd for memories that are not tied to any project.
+// Real cwds are absolute paths (they start with "/"), and the angle brackets
+// cannot appear in a filesystem root, so this can never collide with a real
+// project directory. The sentinel is encapsulated here — callers pass a `global
+// bool` and the store maps it to this value, so no other package hardcodes it.
+const GlobalCWD = "<global>"
+
 // Memory is a single stored memory entry.
 type Memory struct {
 	Slug      string  `json:"slug"`
@@ -110,8 +117,13 @@ END;`
 }
 
 // Write creates or updates a memory (upsert keyed by cwd+slug). Returns whether
-// it created a new memory (true) or updated an existing one (false).
-func (s *Store) Write(cwd, slug, content string) (created bool, err error) {
+// it created a new memory (true) or updated an existing one (false). When global
+// is true, the memory is stored under the GlobalCWD sentinel instead of cwd, so
+// it surfaces in every project's searches.
+func (s *Store) Write(cwd, slug, content string, global bool) (created bool, err error) {
+	if global {
+		cwd = GlobalCWD
+	}
 	now := time.Now().UnixMilli()
 	// Detect create vs update up front (RowsAffected is unreliable for upserts).
 	var exists int
@@ -162,12 +174,15 @@ func (s *Store) Search(cwd, query string, includeContent bool, skip, limit int) 
 		skip = 0
 	}
 
-	// Build the cwd filter clause + args shared by count and select.
+	// Build the cwd filter clause + args shared by count and select. A project
+	// search always includes global memories (cwd = GlobalCWD) alongside the
+	// project's own. For a global-only view the caller passes cwd = GlobalCWD,
+	// which makes both sides of the OR identical — no special case needed.
 	cwdClause := ""
 	var cwdArgs []any
 	if cwd != "" {
-		cwdClause = " AND m.cwd = ?"
-		cwdArgs = []any{cwd}
+		cwdClause = " AND (m.cwd = ? OR m.cwd = ?)"
+		cwdArgs = []any{cwd, GlobalCWD}
 	}
 
 	var total int
@@ -192,10 +207,11 @@ WHERE memories_fts MATCH ?`+cwdClause+`
 ORDER BY bm25(memories_fts)
 LIMIT ? OFFSET ?`, queryArgs...)
 	} else {
-		// List mode. The cwd clause here uses the base table alias `m` too.
+		// List mode. The cwd clause here uses the base table alias `m` too, and
+		// likewise folds in global memories.
 		listCwd := ""
 		if cwd != "" {
-			listCwd = " WHERE m.cwd = ?"
+			listCwd = " WHERE (m.cwd = ? OR m.cwd = ?)"
 		}
 		if err = s.db.QueryRow(`SELECT COUNT(*) FROM memories m`+listCwd, cwdArgs...).Scan(&total); err != nil {
 			return SearchResult{}, fmt.Errorf("memory: list count: %w", err)
@@ -237,8 +253,12 @@ LIMIT ? OFFSET ?`, listArgs...)
 }
 
 // Delete removes a memory by slug within a cwd. Returns whether a row was
-// deleted.
-func (s *Store) Delete(cwd, slug string) (bool, error) {
+// deleted. When global is true, it targets the GlobalCWD sentinel so global
+// memories can be removed (symmetric with Write).
+func (s *Store) Delete(cwd, slug string, global bool) (bool, error) {
+	if global {
+		cwd = GlobalCWD
+	}
 	res, err := s.db.Exec(`DELETE FROM memories WHERE cwd = ? AND slug = ?`, cwd, slug)
 	if err != nil {
 		return false, fmt.Errorf("memory: delete: %w", err)

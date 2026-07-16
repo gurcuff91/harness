@@ -16,10 +16,15 @@ import (
 type MemoOpts struct {
 	Query   string // optional full-text query; empty = list
 	All     bool   // --all: search across ALL projects (no cwd filter)
+	Global  bool   // --global: only global (cross-project) memories
 	Content bool   // --content: include full content in the output
 	Limit   int    // --limit N (default 10)
 	Skip    int    // --skip N (default 0)
 }
+
+// globalCWD mirrors memory.GlobalCWD — the sentinel cwd for global memories.
+// The CLI passes it as the cwd filter to view global-only memories.
+const globalCWD = "<global>"
 
 // RunMemo lists or searches memories for the current working directory (or all
 // projects with --all). Read-only: memories are written/deleted only by the
@@ -32,9 +37,17 @@ func RunMemo(ctx context.Context, a *agent.Agent, opts MemoOpts, output string) 
 	defer server.Close()
 	c := newClient(addr)
 
-	// Build the query string. cwd defaults to the current directory unless --all.
+	// Build the query string. cwd selection:
+	//   --all    → no cwd filter (every project + globals)
+	//   --global → cwd = sentinel (global-only)
+	//   default  → current directory (project + globals, folded in by the store)
 	q := url.Values{}
-	if !opts.All {
+	switch {
+	case opts.All:
+		// no cwd param
+	case opts.Global:
+		q.Set("cwd", globalCWD)
+	default:
 		if cwd, err := os.Getwd(); err == nil {
 			q.Set("cwd", cwd)
 		}
@@ -82,7 +95,9 @@ func RunMemo(ctx context.Context, a *agent.Agent, opts MemoOpts, output string) 
 	fmt.Printf("%d memories (showing %d):\n", res.Total, res.Returned)
 	for _, m := range res.Results {
 		line := "• " + m.Slug
-		if opts.All {
+		// Show the cwd with --all, or whenever a global memory surfaces in a
+		// project view (so it's clear it isn't project-local).
+		if opts.All || m.CWD == globalCWD {
 			line += "  " + shortenPath(m.CWD)
 		}
 		line += "  " + relTime(m.UpdatedAt)

@@ -10,8 +10,8 @@ type ToolAdapter struct{ s *Store }
 // NewToolAdapter returns an adapter exposing the store as a tools.MemoryStore.
 func NewToolAdapter(s *Store) *ToolAdapter { return &ToolAdapter{s: s} }
 
-func (a *ToolAdapter) Write(cwd, slug, content string) (bool, error) {
-	return a.s.Write(cwd, slug, content)
+func (a *ToolAdapter) Write(cwd, slug, content string, global bool) (bool, error) {
+	return a.s.Write(cwd, slug, content, global)
 }
 
 func (a *ToolAdapter) Search(cwd, query string, includeContent bool, skip, limit int) (tools.MemorySearchResult, error) {
@@ -27,8 +27,11 @@ func (a *ToolAdapter) Search(cwd, query string, includeContent bool, skip, limit
 		Results:  make([]tools.MemoryEntry, len(r.Results)),
 	}
 	for i, m := range r.Results {
+		// The agent never sees the raw cwd, but whether a memory is global is
+		// semantically meaningful — translate the sentinel into a bool here.
 		out.Results[i] = tools.MemoryEntry{
 			Slug:      m.Slug,
+			Global:    m.CWD == GlobalCWD,
 			Content:   m.Content,
 			Score:     m.Score,
 			CreatedAt: m.CreatedAt,
@@ -38,6 +41,6 @@ func (a *ToolAdapter) Search(cwd, query string, includeContent bool, skip, limit
 	return out, nil
 }
 
-func (a *ToolAdapter) Delete(cwd, slug string) (bool, error) {
-	return a.s.Delete(cwd, slug)
+func (a *ToolAdapter) Delete(cwd, slug string, global bool) (bool, error) {
+	return a.s.Delete(cwd, slug, global)
 }

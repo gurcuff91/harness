@@ -325,6 +325,8 @@ func parseMemoFlags(args []string) cli.MemoOpts {
 		switch args[i] {
 		case "--all":
 			opts.All = true
+		case "--global":
+			opts.Global = true
 		case "--content":
 			opts.Content = true
 		case "--limit":
@@ -506,9 +508,10 @@ Settings:
   harness mcp rm <name>              Remove MCP server
 
 Memory (read-only — the agent writes memories via its tools):
-  harness memo                       List memories for the current project
+  harness memo                       List memories (this project + globals)
   harness memo <query>               Full-text search memories
   harness memo <query> --all         Search across ALL projects
+  harness memo --global              List only global (cross-project) memories
 
 Flags (CLI / TUI):
   -p, --prompt <text>  Prompt for single-turn CLI mode
@@ -531,6 +534,7 @@ Flags ('mcp add'):
 
 Flags ('memo'):
   --all                Include memories from ALL projects (not just this one)
+  --global             Only global (cross-project) memories
   --content            Show each memory's content preview
   --limit <n>          Max results per page (default 10)
   --skip <n>           Pagination offset (default 0)

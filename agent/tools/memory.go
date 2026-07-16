@@ -12,6 +12,7 @@ import (
 // redefined here so the tools package doesn't import the memory package).
 type MemoryEntry struct {
 	Slug      string  `json:"slug"`
+	Global    bool    `json:"global"` // true if this is a cross-project (global) memory
 	Content   string  `json:"content,omitempty"`
 	Score     float64 `json:"score,omitempty"`
 	CreatedAt int64   `json:"created_at"`
@@ -32,9 +33,9 @@ type MemorySearchResult struct {
 // tools package free of the storage dependency. All operations are scoped to a
 // working directory (cwd) so one project's memories never mix with another's.
 type MemoryStore interface {
-	Write(cwd, slug, content string) (created bool, err error)
+	Write(cwd, slug, content string, global bool) (created bool, err error)
 	Search(cwd, query string, includeContent bool, skip, limit int) (MemorySearchResult, error)
-	Delete(cwd, slug string) (bool, error)
+	Delete(cwd, slug string, global bool) (bool, error)
 }
 
 // MemoWrite returns the tool that creates or updates a project memory.
@@ -42,13 +43,14 @@ func MemoWrite(store MemoryStore, cwd string) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name: ToolMemoWrite,
-			Description: "Save a durable, project-scoped memory that persists across future sessions — decisions, conventions, gotchas, architecture notes, anything genuinely worth recalling later. Do NOT save transient task state, trivia, or low-value details. The slug is a short unique id (e.g. \"db-schema\", \"auth-flow\"); reusing a slug overwrites it. Write clear, self-contained content so it is useful when recalled later.",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{"slug":{"type":"string","description":"Short unique id for the memory (kebab-case, e.g. \"api-auth-flow\")"},"content":{"type":"string","description":"The full memory content to remember"}},"required":["slug","content"]}`),
+			Description: "Save a durable memory that persists across future sessions — decisions, conventions, gotchas, architecture notes, anything genuinely worth recalling later. Do NOT save transient task state, trivia, or low-value details. The slug is a short unique id (e.g. \"db-schema\", \"auth-flow\"); reusing a slug overwrites it. Write clear, self-contained content so it is useful when recalled later. By default the memory is scoped to THIS project; set 'global' to true only for cross-project knowledge (personal conventions, preferences, universal facts) that should surface in every project.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"slug":{"type":"string","description":"Short unique id for the memory (kebab-case, e.g. \"api-auth-flow\")"},"content":{"type":"string","description":"The full memory content to remember"},"global":{"type":"boolean","description":"If true, save as a global (cross-project) memory instead of scoping it to this project. Default false."}},"required":["slug","content"]}`),
 		},
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
 			var p struct {
 				Slug    string `json:"slug"`
 				Content string `json:"content"`
+				Global  bool   `json:"global"`
 			}
 			if err := json.Unmarshal(input, &p); err != nil {
 				return "", fmt.Errorf("MemoWrite: invalid input: %w", err)
@@ -56,14 +58,18 @@ func MemoWrite(store MemoryStore, cwd string) Tool {
 			if p.Slug == "" || p.Content == "" {
 				return "", fmt.Errorf("MemoWrite: slug and content are required")
 			}
-			created, err := store.Write(cwd, p.Slug, p.Content)
+			created, err := store.Write(cwd, p.Slug, p.Content, p.Global)
 			if err != nil {
 				return "", err
 			}
-			if created {
-				return fmt.Sprintf("Saved memory %q.", p.Slug), nil
+			scope := ""
+			if p.Global {
+				scope = " (global)"
 			}
-			return fmt.Sprintf("Updated memory %q.", p.Slug), nil
+			if created {
+				return fmt.Sprintf("Saved memory %q%s.", p.Slug, scope), nil
+			}
+			return fmt.Sprintf("Updated memory %q%s.", p.Slug, scope), nil
 		},
 	}
 }
@@ -111,17 +117,18 @@ func MemoDelete(store MemoryStore, cwd string) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolMemoDelete,
-			Description: "Delete a saved memory by its slug when it is no longer relevant or was superseded.",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{"slug":{"type":"string","description":"The memory slug to delete"}},"required":["slug"]}`),
+			Description: "Delete a saved memory by its slug when it is no longer relevant or was superseded. Set 'global' to true to delete a global (cross-project) memory instead of a project-scoped one.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"slug":{"type":"string","description":"The memory slug to delete"},"global":{"type":"boolean","description":"If true, delete a global (cross-project) memory instead of a project-scoped one. Default false."}},"required":["slug"]}`),
 		},
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
 			var p struct {
-				Slug string `json:"slug"`
+				Slug   string `json:"slug"`
+				Global bool   `json:"global"`
 			}
 			if err := json.Unmarshal(input, &p); err != nil {
 				return "", fmt.Errorf("MemoDelete: invalid input: %w", err)
 			}
-			ok, err := store.Delete(cwd, p.Slug)
+			ok, err := store.Delete(cwd, p.Slug, p.Global)
 			if err != nil {
 				return "", err
 			}
