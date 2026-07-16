@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.15.0] - 2026-06-23
+
+### OAuth credentials — cross-platform support
+- Claude OAuth token discovery now detects the OS and applies the correct
+  strategy: macOS reads the encrypted Keychain (file fallback); Linux and Windows
+  read `~/.claude/.credentials.json`
+- Honors `$CLAUDE_CONFIG_DIR` for the credentials file location (per Claude Code
+  docs, used on Linux/Windows). `UserHomeDir` resolves `%USERPROFILE%` on Windows
+- Verified via cross-compilation for darwin, linux, and windows
+
+## [0.14.0] - 2026-06-23
+
+### OAuth connect — unified CLI/TUI behavior
+- `authflow.ObtainOAuthCredentials` is now **silent-only**: it reads OAuth tokens
+  from the keychain / credentials file and no longer spawns `claude auth login`.
+  Auto-spawning an interactive login corrupted the TUI's raw-mode terminal and
+  made the CLI and TUI diverge; both now behave identically
+- When no credentials are found, connect returns an actionable error — “run
+  'claude auth login' to authenticate, then reconnect” — instead of launching a
+  subprocess. Removed `runClaudeAuthLogin` / `resetTerminal`
+
 ## [0.13.0] - 2026-06-23
 
 ### SDK ergonomics

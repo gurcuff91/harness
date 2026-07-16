@@ -90,7 +90,9 @@ func RunConnect(ctx context.Context, a *agent.Agent, name, apiKey, output string
 	// Branch on the credential type the provider actually needs.
 	switch credType {
 	case "oauth":
-		fmt.Println("Starting OAuth authentication...")
+		// Silent-only: read tokens from the keychain / credentials file. If none
+		// exist, ObtainOAuthCredentials returns an actionable "run claude auth
+		// login" error (we don't spawn the interactive login — same as the TUI).
 		creds, err := ObtainOAuthCredentials(name)
 		if err != nil {
 			return fmt.Errorf("OAuth: %w", err)

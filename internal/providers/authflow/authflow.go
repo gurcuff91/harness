@@ -6,13 +6,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/gurcuff91/harness/types"
 )
 
-// ObtainOAuthCredentials tries to get OAuth credentials for a provider.
-// First tries silent methods (keychain, cached files), then falls back to interactive.
+// ObtainOAuthCredentials gets OAuth credentials for a provider using only
+// SILENT sources: the OS keychain and cached credential files. It never spawns
+// an interactive login — that would corrupt the TUI's raw-mode terminal, and
+// keeping CLI and TUI on the same silent path makes both transports behave
+// identically. If no credentials are found, it returns an actionable error
+// telling the user to run `claude auth login` themselves, then retry.
 func ObtainOAuthCredentials(provName string) (*types.Credentials, error) {
 	switch provName {
 	case "claude-oauth":
@@ -25,48 +30,27 @@ func ObtainOAuthCredentials(provName string) (*types.Credentials, error) {
 // ── Claude OAuth ────────────────────────────────────────────────────────────────
 
 func obtainClaudeOAuth() (*types.Credentials, error) {
-	// 1. Silent: try keychain
-	if creds := readClaudeFromKeychain(); creds != nil {
+	// Storage differs per OS (per Claude Code docs):
+	//   - macOS:         encrypted Keychain (fallback to file for older versions)
+	//   - Linux/Windows: ~/.claude/.credentials.json (mode 0600), or under
+	//                    $CLAUDE_CONFIG_DIR when set.
+	if runtime.GOOS == "darwin" {
+		if creds := readClaudeCredentialsFromKeychain(); creds != nil {
+			return creds, nil
+		}
+	}
+	if creds := readClaudeCredentialsFromFile(); creds != nil {
 		return creds, nil
 	}
-	// 2. Silent: try credentials file
-	if creds := readClaudeCredentialsFile(); creds != nil {
-		return creds, nil
-	}
-	// 3. Interactive: claude auth login
-	return runClaudeAuthLogin()
+	// No credentials found — guide the user to authenticate manually. We do NOT
+	// spawn `claude auth login`: it takes over the terminal (incompatible with
+	// the TUI's raw mode), and running an interactive subprocess implicitly is
+	// surprising. The user runs it once, then retries the connect.
+	return nil, fmt.Errorf("no Claude credentials found — run 'claude auth login' to authenticate, then reconnect\n  (install Claude Code: npm install -g @anthropic-ai/claude-code)")
 }
 
-func runClaudeAuthLogin() (*types.Credentials, error) {
-	fmt.Println("\n  🔑 Starting authentication via Claude Code...")
-	fmt.Println("  A browser window should open. Follow the instructions there.")
-	fmt.Println()
-
-	cmd := exec.Command("claude", "auth", "login")
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		resetTerminal()
-		return nil, fmt.Errorf("claude auth login failed: %w\n  Install: npm install -g @anthropic-ai/claude-code", err)
-	}
-	resetTerminal()
-
-	// After login, try keychain first, then file
-	if creds := readClaudeFromKeychain(); creds != nil {
-		return creds, nil
-	}
-	if creds := readClaudeCredentialsFile(); creds != nil {
-		return creds, nil
-	}
-	return nil, fmt.Errorf("login completed but couldn't import tokens — try again")
-}
-
-func resetTerminal() {
-	exec.Command("stty", "sane").Run()
-	fmt.Print("\033[?25h\033[0m")
-}
-
-// readClaudeFromKeychain reads OAuth tokens from macOS keychain.
-func readClaudeFromKeychain() *types.Credentials {
+// readClaudeCredentialsFromKeychain reads OAuth tokens from macOS keychain.
+func readClaudeCredentialsFromKeychain() *types.Credentials {
 	if t := readKeychainItem("Claude Code-credentials"); t != nil {
 		return t
 	}
@@ -99,10 +83,22 @@ func readKeychainItem(service string) *types.Credentials {
 	}
 }
 
-// readClaudeCredentialsFile reads OAuth tokens from ~/.claude/.credentials.json
-func readClaudeCredentialsFile() *types.Credentials {
+// claudeCredentialsFilePath returns the path to Claude Code's credentials file. It
+// honors $CLAUDE_CONFIG_DIR (used on Linux/Windows per the docs); otherwise it
+// defaults to ~/.claude/.credentials.json. UserHomeDir resolves correctly on
+// all three OSes (incl. Windows %USERPROFILE%).
+func claudeCredentialsFilePath() string {
+	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
+		return filepath.Join(dir, ".credentials.json")
+	}
 	home, _ := os.UserHomeDir()
-	data, err := os.ReadFile(filepath.Join(home, ".claude", ".credentials.json"))
+	return filepath.Join(home, ".claude", ".credentials.json")
+}
+
+// readClaudeCredentialsFromFile reads OAuth tokens from the credentials file. This
+// is the primary source on Linux and Windows, and a fallback on macOS.
+func readClaudeCredentialsFromFile() *types.Credentials {
+	data, err := os.ReadFile(claudeCredentialsFilePath())
 	if err != nil {
 		return nil
 	}
