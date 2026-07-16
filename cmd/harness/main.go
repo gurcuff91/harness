@@ -11,7 +11,6 @@ import (
 	"syscall"
 
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/internal/config"
 	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/internal/transport/cli"
 	httptransport "github.com/gurcuff91/harness/internal/transport/http"
@@ -232,16 +231,16 @@ func newRootAgent() *agent.Agent {
 	if s, err := memory.Open(""); err == nil {
 		mem = s
 	}
+	// ThinkingLevel is left zero — agent.New resolves it from settings (then "off").
 	return agent.New(agent.AgentOptions{
-		ThinkingLevel: config.GetSettingsManager().ThinkingLevel(),
-		EnableMCPs:    true,
-		Memory:        mem, // *memory.Store directly; the agent wraps it in a scoped adapter
+		EnableMCPs: true,
+		Memory:     mem, // *memory.Store directly; the agent wraps it in a scoped adapter
 	})
 }
 
 func runSettings(args []string) {
 	// Settings commands only read/write config — no need to spawn MCP servers.
-	a := agent.New(agent.AgentOptions{ThinkingLevel: config.GetSettingsManager().ThinkingLevel()})
+	a := agent.New(agent.AgentOptions{})
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 

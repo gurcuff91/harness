@@ -12,6 +12,7 @@ import (
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/agent/tools"
+	"github.com/gurcuff91/harness/internal/config"
 	"github.com/gurcuff91/harness/mcp"
 	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/internal/providers"
@@ -65,6 +66,17 @@ func New(opts AgentOptions) *Agent {
 	}
 	if opts.SystemPrompt == "" {
 		opts.SystemPrompt = defaultSystemPrompt
+	}
+	if opts.ThinkingLevel == "" {
+		// Fall back to the user's configured level, then to "off". Doing this in
+		// New — the single entry point for every caller (CLI, TUI, SDK) — lets the
+		// SDK facade stay a thin zero-value pass-through while still yielding a
+		// sensible default.
+		if lvl := config.GetSettingsManager().ThinkingLevel(); lvl != "" {
+			opts.ThinkingLevel = lvl
+		} else {
+			opts.ThinkingLevel = "off"
+		}
 	}
 	if opts.Store == nil {
 		// Default: file-backed store in ~/.harness/agent/sessions/

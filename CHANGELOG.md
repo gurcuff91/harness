@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.17.0] - 2026-06-23
+
+### Defaults
+- `agent.New` now resolves an empty `ThinkingLevel` from the user's settings,
+  falling back to `"off"`. Centralizing this in New — the single entry point for
+  the CLI, TUI, and SDK — keeps the SDK facade a thin zero-value pass-through
+  while still yielding a sensible default
+- Simplified `cmd/harness` call sites that no longer need to pass the thinking
+  level explicitly
+
+## [0.16.0] - 2026-06-23
+
+### SDK — functional options
+- `harness.New` now takes functional options (`...Option`) instead of an
+  `Options` struct — the idiomatic Go pattern. `New()` with no args returns a
+  default agent; options are applied in order (later wins)
+- Added `WithThinking`, `WithSystemPrompt`, `WithMaxTurns`, `WithMaxTokens`,
+  `WithTools`, `WithDisallowedTools`, `WithMCPs`, `WithStore`,
+  `WithResourceLoader`, `WithMemory`, and `WithOptions` (apply a pre-built config)
+- `Options` remains exported for callers who assemble a config directly
+- **Breaking:** `harness.New(Options{…})` → `harness.New(With…())`
+
 ## [0.15.0] - 2026-06-23
 
 ### OAuth credentials — cross-platform support

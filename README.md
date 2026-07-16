@@ -95,7 +95,10 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
-a := harness.New(harness.Options{ThinkingLevel: "medium", EnableMCPs: true})
+a := harness.New(
+	harness.WithThinking("medium"),
+	harness.WithMCPs(),
+)
 defer a.Close()
 
 // Discover what's available (configured beforehand via `harness connect`).
@@ -125,8 +128,11 @@ fmt.Println(answer)
 `Agent.Providers()` and `Agent.Models()`. This keeps interactive flows (OAuth,
 secrets) out of embedded code.
 
-Custom tools, session stores, and resource loaders can be supplied through
-`Options.Tools`, `Options.Store`, and `Options.ResourceLoader`.
+The agent is configured with functional options: `WithThinking`, `WithMCPs`,
+`WithMaxTurns`, `WithMaxTokens`, `WithSystemPrompt`, `WithTools`,
+`WithDisallowedTools`, `WithStore`, `WithResourceLoader`, `WithMemory` (and
+`WithOptions` to apply a pre-built config). `New()` with no options returns a
+sensible default agent.
 
 ## Providers
 
