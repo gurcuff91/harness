@@ -11,9 +11,9 @@ import (
 	"syscall"
 
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/transport/cli"
 	"github.com/gurcuff91/harness/config"
 	"github.com/gurcuff91/harness/memory"
+	"github.com/gurcuff91/harness/transport/cli"
 	httptransport "github.com/gurcuff91/harness/transport/http"
 	"github.com/gurcuff91/harness/transport/tui"
 )
