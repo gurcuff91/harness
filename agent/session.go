@@ -55,6 +55,7 @@ type Session struct {
 
 	// Follow-up prompts — separate mutex to avoid deadlock with mu
 	followMu      sync.Mutex
+	followCond    *sync.Cond // signals when the queue drains (busy → false); lazily created
 	followUps     []followUp
 	busy          bool
 	followCtx     context.Context
@@ -64,6 +65,14 @@ type Session struct {
 type followUp struct {
 	text   string
 	images []types.ImageData
+	// done, when non-nil, receives the turn's final text (or error) once this
+	// specific prompt finishes — used by PromptSync. nil for fire-and-forget.
+	done chan promptResult
+}
+
+type promptResult struct {
+	text string
+	err  error
 }
 
 // modelPricing holds per-million-token rates for cost calculation.
@@ -99,6 +108,7 @@ func newSession(storeInst store.SessionStore,
 		skills:       skills,
 		readSkill:    readSkill,
 	}
+	s.followCond = sync.NewCond(&s.followMu)
 	s.loadModelMeta(modelID)
 	return s
 }
@@ -168,6 +178,45 @@ func (s *Session) IsBusy() bool {
 	return s.busy
 }
 
+// Wait blocks until the session's queue is fully drained (no turn in flight and
+// nothing queued). It uses condition-variable signaling — no polling. Useful for
+// SDK/batch callers that fire several prompts and then wait for all of them:
+//
+//	s.Prompt(ctx, "task 1")
+//	s.Prompt(ctx, "task 2")
+//	s.Wait() // returns when both have finished
+//
+// Events still stream to Subscribe handlers throughout. Wait on an idle session
+// returns immediately.
+func (s *Session) Wait() {
+	s.followMu.Lock()
+	for s.busy {
+		s.followCond.Wait()
+	}
+	s.followMu.Unlock()
+}
+
+// PromptAndWait enqueues a prompt and blocks until THAT prompt's turn finishes,
+// returning its final assistant text (or an error). It's the synchronous
+// convenience for SDK callers who want a single request/response; the async
+// Prompt + Subscribe model remains the primary API for streaming/UIs. Other
+// queued prompts are unaffected. Respects ctx for the turn's execution.
+func (s *Session) PromptAndWait(ctx context.Context, text string, images ...types.ImageData) (string, error) {
+	done := make(chan promptResult, 1)
+	s.followMu.Lock()
+	s.followUps = append(s.followUps, followUp{text: text, images: images, done: done})
+	if !s.busy {
+		s.busy = true
+		s.followCtx = ctx
+		s.followMu.Unlock()
+		go s.drainFollowUps()
+	} else {
+		s.followMu.Unlock()
+	}
+	res := <-done
+	return res.text, res.err
+}
+
 // Skills returns the discovered skills for this session.
 func (s *Session) Skills() []resources.SkillInfo { return s.skills }
 
@@ -200,6 +249,7 @@ func (s *Session) drainFollowUps() {
 		if len(s.followUps) == 0 {
 			s.busy = false
 			s.currentCancel = nil
+			s.followCond.Broadcast() // wake any Wait()/PromptAndWait callers
 			s.followMu.Unlock()
 			return
 		}
@@ -216,10 +266,14 @@ func (s *Session) drainFollowUps() {
 		}
 		first = false
 
-		_, err := s.promptSync(ctx, fu.text, fu.images)
+		result, err := s.promptSync(ctx, fu.text, fu.images)
 		cancel() // always release resources
 		if err != nil && ctx.Err() == nil {
 			s.emit(types.Event{Type: types.EventError, Message: err.Error()})
+		}
+		// Deliver the outcome to a PromptAndWait caller, if any.
+		if fu.done != nil {
+			fu.done <- promptResult{text: result, err: err}
 		}
 	}
 }

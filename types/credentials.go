@@ -26,6 +26,28 @@ type Credentials struct {
 	SubscriptionType string `json:"subscription_type,omitempty"`
 }
 
+// ── SDK read models ────────────────────────────────────────────────────────
+
+// ProviderInfo is a read-only snapshot of a provider's identity and state,
+// returned by the SDK. Provider administration (connect/disconnect) is done via
+// the `harness` CLI, not the SDK — so this carries no credentials.
+type ProviderInfo struct {
+	Name           string         `json:"name"`            // slug, e.g. "anthropic"
+	DisplayName    string         `json:"display_name"`    // human-friendly name
+	Description    string         `json:"description"`     // live blurb (e.g. "12 models")
+	Active         bool           `json:"active"`          // has valid credentials + reachable
+	CredentialType CredentialType `json:"credential_type"` // none | api_key | oauth
+	ModelCount     int            `json:"model_count"`     // number of available models
+}
+
+// ModelListing pairs a model's metadata with its owning provider, as returned by
+// the SDK's Models() listing. Model is the fully-qualified "provider/model" id.
+type ModelListing struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"` // "provider/model" — pass to NewSession
+	ModelMeta
+}
+
 // ── Constructors ──────────────────────────────────────────────────────────
 
 func APIKeyCredentials(key string) Credentials {

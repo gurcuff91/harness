@@ -82,16 +82,51 @@ harness/
 
 ### Embedding the SDK
 
+Providers are configured once via the CLI (`harness connect anthropic <key>`);
+the SDK then reads that configuration and drives the agent. API-key providers
+also work from env vars (`ANTHROPIC_API_KEY`, …) with no CLI step.
+
 ```go
-import "github.com/gurcuff91/harness"
+import (
+	"context"
+	"fmt"
+
+	"github.com/gurcuff91/harness"
+	"github.com/gurcuff91/harness/types"
+)
 
 a := harness.New(harness.Options{ThinkingLevel: "medium", EnableMCPs: true})
 defer a.Close()
 
+// Discover what's available (configured beforehand via `harness connect`).
+for _, m := range a.Models() {
+	fmt.Println(m.Model) // e.g. "anthropic/claude-sonnet-4-20250514"
+}
+
 sess, _ := a.NewSession(cwd, "anthropic/claude-sonnet-4-20250514")
-sess.Subscribe(func(e harness.Event) { /* render */ })
-sess.Prompt(ctx, "Hello!")
+defer sess.Close()
+
+// Async + streaming (primary model): drive via events.
+sess.Subscribe(func(e types.Event) {
+	if e.Type == types.EventStreamTextDelta {
+		fmt.Print(e.Delta)
+	}
+})
+sess.Prompt(context.Background(), "Hello!")
+
+// …or synchronous request/response (SDK convenience):
+answer, err := sess.PromptAndWait(context.Background(), "Explain goroutines, briefly.")
+_ = err
+fmt.Println(answer)
 ```
+
+**Provider administration lives in the CLI, not the SDK** — `harness connect`,
+`harness disconnect`, `harness providers`. The SDK exposes read-only
+`Agent.Providers()` and `Agent.Models()`. This keeps interactive flows (OAuth,
+secrets) out of embedded code.
+
+Custom tools, session stores, and resource loaders can be supplied through
+`Options.Tools`, `Options.Store`, and `Options.ResourceLoader`.
 
 ## Providers
 

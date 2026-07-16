@@ -131,6 +131,56 @@ func (a *Agent) MCPTools() []tools.Tool {
 // own tools use a scoped adapter over the same store.
 func (a *Agent) Memory() *memory.Store { return a.opts.Memory }
 
+// Providers returns a read-only snapshot of every known provider and its state.
+// This is the SDK's window into provider configuration; administration
+// (connecting/disconnecting, entering API keys, OAuth) is done via the `harness`
+// CLI — which is why no credentials are exposed here. Active providers lazily
+// fetch their model list on first call.
+func (a *Agent) Providers() []types.ProviderInfo {
+	providers.EnsureRegistry()
+	var out []types.ProviderInfo
+	for _, p := range providers.All {
+		models := p.Models()
+		if p.IsActive() && len(models) == 0 {
+			models, _ = p.FetchModels()
+		}
+		out = append(out, types.ProviderInfo{
+			Name:           p.Name(),
+			DisplayName:    p.DisplayName(),
+			Description:    p.Description(),
+			Active:         p.IsActive(),
+			CredentialType: p.CredentialType(),
+			ModelCount:     len(models),
+		})
+	}
+	return out
+}
+
+// Models returns every available model across all ACTIVE providers, each tagged
+// with its provider and a fully-qualified "provider/model" id ready to pass to
+// NewSession. Inactive providers are skipped. Models are lazily fetched.
+func (a *Agent) Models() []types.ModelListing {
+	providers.EnsureRegistry()
+	var out []types.ModelListing
+	for _, p := range providers.All {
+		if !p.IsActive() {
+			continue
+		}
+		models := p.Models()
+		if len(models) == 0 {
+			models, _ = p.FetchModels()
+		}
+		for _, m := range models {
+			out = append(out, types.ModelListing{
+				Provider:  p.Name(),
+				Model:     p.Name() + "/" + m.ID,
+				ModelMeta: m,
+			})
+		}
+	}
+	return out
+}
+
 // MCPStatuses reports the connection state of each configured MCP server. Nil
 // when MCP is disabled. Exposed (e.g. via the HTTP API) so clients can render
 // status without the manager writing to stdout.

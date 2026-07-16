@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.13.0] - 2026-06-23
+
+### SDK ergonomics
+- **`Session.Wait()`** — blocks until the prompt queue is fully drained
+  (condition-variable signaling, no polling). For batch callers that fire several
+  prompts and then wait for all of them
+- **`Session.PromptAndWait(ctx, text, images…)`** — synchronous convenience:
+  enqueues a prompt and blocks until that turn finishes, returning its final
+  assistant text. The async `Prompt` + `Subscribe` model remains primary
+- **`Agent.Providers()`** — read-only snapshot of every provider and its state
+  (`[]types.ProviderInfo`; no credentials). Provider administration
+  (connect/disconnect, API keys, OAuth) stays in the `harness` CLI
+- **`Agent.Models()`** — every available model across all active providers
+  (`[]types.ModelListing`, each with a ready-to-use “provider/model” id)
+- New public types `types.ProviderInfo` and `types.ModelListing`
+
 ## [0.12.0] - 2026-06-23
 
 ### TUI
