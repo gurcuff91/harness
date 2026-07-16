@@ -23,7 +23,7 @@ func Bash() Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        "Bash",
-			Description: "Execute a shell command. Use for builds, git, grep/find, installs, and system tasks. Do NOT use for reading, writing, or editing files — use read_file, write_file, and edit instead. The command runs with a default 30s timeout; pass a larger 'timeout' (seconds) for long-running work. Output is truncated to the last 2000 lines or 50KB; if truncated, the full output is saved to a temp file whose path is shown (read it for more).",
+			Description: "Execute a shell command. Use for builds, git, grep/find, installs, and system tasks. Do NOT use for reading, writing, or editing files — use read_file, write_file, and edit instead. The command runs with a default 30s timeout; pass a larger 'timeout' (seconds) for long-running work. To run a process in the background that outlives the call, redirect its output to a file and detach it, e.g. `setsid mycmd > out.log 2>&1 < /dev/null &` — otherwise it holds the output pipe and blocks until the timeout. Output is truncated to the last 2000 lines or 50KB; if truncated, the full output is saved to a temp file whose path is shown (read it for more).",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {

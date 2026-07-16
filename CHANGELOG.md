@@ -13,7 +13,10 @@ All notable changes to this project will be documented in this file.
   cancellation the whole group is killed (`kill -pid`), reaping background jobs
   too. The wait races the timeout in a goroutine so it returns at the limit
 - Cross-platform via build tags (`bash_unix.go` / `bash_windows.go`)
-- Tool description notes that long-running work should pass a larger `timeout`
+- Tool description notes that long-running work should pass a larger `timeout`,
+  and documents how to launch a truly background/detached process
+  (`setsid cmd > out.log 2>&1 < /dev/null &`) so it survives the call instead of
+  holding the output pipe until the timeout
 
 ## [0.18.0] - 2026-06-23
 
