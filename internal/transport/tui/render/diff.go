@@ -96,13 +96,18 @@ func (t *TUI) doRender() {
 		return
 	}
 
-	// Mixed change: content grew AND a line strictly before the old end changed
-	// (not a clean append). This happens when a streaming markdown block flushes
-	// a buffered table — a previously-blank separator line becomes the table's
-	// top border while new rows are appended below. The incremental cursor math
-	// can't reposition cleanly here, so repaint from the first change with a
-	// relative (scrollback-safe) clear, which is always correct.
-	if appended && firstChanged < len(t.previousLines) {
+	// Mixed change: content grew AND a line strictly BEFORE the last previous
+	// line changed. This happens when a streaming markdown block flushes a
+	// buffered table — a previously-blank separator line becomes the table's top
+	// border while new rows are appended below. The incremental cursor math can't
+	// reposition cleanly here, so repaint from the first change with a relative
+	// (scrollback-safe) clear.
+	//
+	// The `-1` is critical: the COMMON streaming case is the last previous line
+	// growing (a partial word completing) while a new line is appended. That's
+	// firstChanged == len-1, which must fall through to Strategy 3 (incremental,
+	// per-line ClearLine) — NOT a full repaint, which would flick on every token.
+	if appended && firstChanged < len(t.previousLines)-1 {
 		t.fullRender(newLines, width, height, clearRelative)
 		return
 	}

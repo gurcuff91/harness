@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.18.0] - 2026-06-23
+
+### TUI — streaming flicker fix
+- Fixed full-screen repaints during fast streaming (thinking, text, tool calls)
+  that caused visible flicker. The diff's “mixed change” branch was too broad:
+  the common case of the last line growing while a new line is appended fell into
+  a full relative repaint on every token. Narrowed the condition
+  (`firstChanged < len-1`) so that case takes the incremental per-line path; the
+  table-flush case (change strictly before the last line) still full-repaints
+- Added regression tests reproducing the flicker and guarding the table case
+
 ## [0.17.0] - 2026-06-23
 
 ### Defaults
