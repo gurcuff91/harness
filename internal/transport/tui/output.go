@@ -115,7 +115,7 @@ func (t *TUI) updateInfo() {
 func toolStyle(name string) (colorFn func(string) string, icon string) {
 	switch name {
 	case "Bash":
-		return ansi.Accent, "❯" // shell prompt
+		return ansi.Accent, "$" // classic shell prompt (distinct from the user's ❯)
 	case "Read":
 		return ansi.Accent, "≡" // triple bar (narrow): text content of a file
 	case "Write":

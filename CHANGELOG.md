@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.12.0] - 2026-06-23
+
+### TUI
+- **Bash tool icon** changed from `❯` to `$` (classic shell prompt), so it no
+  longer collides with the user prompt's `❯`
+
 ## [0.11.0] - 2026-06-23
 
 ### TUI paste & overflow fixes
