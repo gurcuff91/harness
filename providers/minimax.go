@@ -29,7 +29,7 @@ type MiniMax struct {
 }
 
 const (
-	miniMaxAPIKeyEnv  = "MINIMAX_API_KEY"
+	miniMaxAPIKeyEnv = "MINIMAX_API_KEY"
 )
 
 func NewMiniMax() *MiniMax {

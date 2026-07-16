@@ -23,7 +23,7 @@ type OpenCodeGo struct {
 }
 
 const (
-	openCodeGoAPIKeyEnv  = "OPENCODE_GO_API_KEY"
+	openCodeGoAPIKeyEnv = "OPENCODE_GO_API_KEY"
 )
 
 func NewOpenCodeGo() *OpenCodeGo {

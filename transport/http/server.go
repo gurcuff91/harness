@@ -22,10 +22,8 @@ import (
 	"github.com/gurcuff91/harness/mcp"
 	"github.com/gurcuff91/harness/providers"
 	"github.com/gurcuff91/harness/types"
+	"github.com/gurcuff91/harness/version"
 )
-
-// version is set via ldflags at build time.
-var version = "dev"
 
 // Server is the HTTP transport for the agent harness.
 type Server struct {
@@ -120,7 +118,7 @@ var serverInfo = struct {
 	StartedAt string `json:"started_at"`
 }{
 	Name:      "harness",
-	Version:   version,
+	Version:   version.Version,
 	StartedAt: time.Now().UTC().Format(time.RFC3339),
 }
 
@@ -264,7 +262,8 @@ func (s *Server) handlePutMCPServer(w http.ResponseWriter, r *http.Request) {
 // by working directory; the cwd query param is an OPTIONAL filter (omit it for a
 // global view across all projects). Writes/deletes are intentionally NOT exposed
 // — only the agent mutates memory, via its tools. All params are optional:
-//   cwd, query, include_content (default true), skip (default 0), limit (default 10)
+//
+//	cwd, query, include_content (default true), skip (default 0), limit (default 10)
 func (s *Server) handleListMemories(w http.ResponseWriter, r *http.Request) {
 	mem := s.agent.Memory()
 	if mem == nil {

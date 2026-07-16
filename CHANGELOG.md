@@ -2,6 +2,53 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0] - 2026-06-23
+
+### TUI — Pure-Go rewrite (replaces tview)
+- New from-scratch terminal UI in `transport/tui` with **zero external TUI libraries**
+  (only `golang.org/x/term` + `rivo/uniseg`); removed `rivo/tview`, `gdamore/tcell`
+- Differential rendering engine (`render/`) with faithful markdown, buffered tables,
+  word-wrap, and a component model (markdown, history, editor, spinner, select-list)
+- Welcome banner, in-place `/resume`, source-backed history blocks, chronological order
+- Faithful-to-model rendering: the renderer paints, never adds/removes newlines
+
+### Project structure
+- `main.go` moved to `cmd/main.go` (module root freed for a future `harness` SDK facade)
+- `transport/cli` promoted to top-level `cli/` module
+- `transport/` now holds only `http` and `tui`; legacy tview TUI removed
+
+### MCP (Model Context Protocol) — stdlib client
+- Local (stdio) and remote (HTTP + SSE + header auth) servers
+- `harness mcp [list | add <name> --local|--remote ... | rm <name>]`
+- Tools namespaced `mcp__<server>__<tool>`; eager connect with graceful degradation
+- `GET /api/mcp/status`
+
+### Persistent memory (SQLite + FTS5)
+- Project-scoped and **global** (cross-project) memories, partitioned by cwd
+- Tools `MemoWrite` / `MemoSearch` / `MemoDelete` (subagents read-only)
+- Prefix full-text search (`unicode61`, sanitized queries) — `kube` finds `kubernetes`
+- `GET /api/memories` (optional `cwd`, `query`, `include_content`, pagination)
+- CLI `harness memo [<query>] [--all | --global | --content | --limit | --skip]`
+- `Agent.Memory()` exposes the store; `Agent.Close()` now closes the DB
+
+### Settings & credentials
+- Typed, agnostic managers in `config/` (settings + credentials), unified vocabulary
+  (`active_model`, `thinking_level`, `providers`, `mcp`) end-to-end
+- REST: `GET/PATCH /api/settings`, `/api/settings/providers/{name}`, `/api/settings/mcp/{name}`
+- Thinking levels `off|low|medium|high|xhigh`; removed `HARNESS_THINKING` env var
+- `harness settings [set model|thinking <val>]`
+
+### Providers & metadata
+- New **MiniMax** provider
+- Immutable metadata cascade: provider → OpenRouter → hardcode → name-inference → defaults
+- Fixed Claude OAuth token endpoints + actionable re-auth error; shared `authflow` package
+
+### Server & tools
+- `Serve(net.Listener)` replaces `ListenAndServe(addr)` — no close/reopen race
+- PI-style tool output truncation (head/tail per tool, overflow saved to `/tmp`)
+- Redesigned tool-call rendering (ordered args, distinctive icons, one-line errors)
+- Queued-message redesign via `follow_up_start` event; `is_error` empty-content fix
+
 ## [0.7.0] - 2026-06-15
 
 ### TUI — Complete rewrite with tview

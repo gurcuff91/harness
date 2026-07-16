@@ -2,8 +2,8 @@ package memory
 
 import (
 	"path/filepath"
-	"time"
 	"testing"
+	"time"
 )
 
 func newTestStore(t *testing.T) *Store {

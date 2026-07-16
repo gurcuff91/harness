@@ -10,8 +10,8 @@ INSTALL_DIR=$(HOME)/go/bin
 GO=go
 
 # Build flags
-VERSION=v0.7.0
-LDFLAGS=-ldflags "-s -w -X github.com/gurcuff91/harness/transport/http.version=$(VERSION)"
+VERSION=v0.8.0
+LDFLAGS=-ldflags "-s -w -X github.com/gurcuff91/harness/version.Version=$(VERSION)"
 
 # Default target
 help:
@@ -34,24 +34,24 @@ help:
 # Build the binary
 build:
 	@echo "Building $(BINARY_NAME)..."
-	$(GO) build $(LDFLAGS) -o $(BINARY_DIR)/$(BINARY_NAME) .
+	$(GO) build $(LDFLAGS) -o $(BINARY_DIR)/$(BINARY_NAME) ./cmd
 	@echo "✅ Built: ./$(BINARY_NAME)"
 	@ls -lh $(BINARY_DIR)/$(BINARY_NAME)
 
 # Build with race detector
 build-race:
 	@echo "Building with race detector..."
-	$(GO) build -race $(LDFLAGS) -o $(BINARY_DIR)/$(BINARY_NAME) .
+	$(GO) build -race $(LDFLAGS) -o $(BINARY_DIR)/$(BINARY_NAME) ./cmd
 	@echo "✅ Built with -race: ./$(BINARY_NAME)"
 
 # Build for multiple platforms
 build-all:
 	@echo "Building for all platforms..."
 	@mkdir -p dist
-	GOOS=darwin GOARCH=amd64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-darwin-amd64 .
-	GOOS=darwin GOARCH=arm64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-darwin-arm64 .
-	GOOS=linux GOARCH=amd64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-amd64 .
-	GOOS=windows GOARCH=amd64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-windows-amd64.exe .
+	GOOS=darwin GOARCH=amd64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-darwin-amd64 ./cmd
+	GOOS=darwin GOARCH=arm64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-darwin-arm64 ./cmd
+	GOOS=linux GOARCH=amd64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-amd64 ./cmd
+	GOOS=windows GOARCH=amd64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-windows-amd64.exe ./cmd
 	@echo "✅ Binaries in ./dist/"
 	@ls -lh dist/
 

@@ -8,8 +8,9 @@ import (
 	transporthttp "github.com/gurcuff91/harness/transport/http"
 )
 
-// startInternalServer starts the HTTP transport on a random port.
-// Returns the server, address, and error.
+// startInternalServer starts the HTTP transport on a random loopback port.
+// tui talks to this in-process server exactly like an external client —
+// keeping the frontend/backend separation clean.
 func startInternalServer(a *agent.Agent) (*internalServer, string, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -28,6 +29,5 @@ type internalServer struct {
 }
 
 func (s *internalServer) Close() error {
-	// TODO: graceful shutdown
 	return nil
 }

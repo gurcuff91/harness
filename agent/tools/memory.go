@@ -42,7 +42,7 @@ type MemoryStore interface {
 func MemoWrite(store MemoryStore, cwd string) Tool {
 	return Tool{
 		Def: types.ToolDef{
-			Name: ToolMemoWrite,
+			Name:        ToolMemoWrite,
 			Description: "Save a durable memory that persists across future sessions — decisions, conventions, gotchas, architecture notes, anything genuinely worth recalling later. Do NOT save transient task state, trivia, or low-value details. The slug is a short unique id (e.g. \"db-schema\", \"auth-flow\"); reusing a slug overwrites it. Write clear, self-contained content so it is useful when recalled later. By default the memory is scoped to THIS project; set 'global' to true only for cross-project knowledge (personal conventions, preferences, universal facts) that should surface in every project.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"slug":{"type":"string","description":"Short unique id for the memory (kebab-case, e.g. \"api-auth-flow\")"},"content":{"type":"string","description":"The full memory content to remember"},"global":{"type":"boolean","description":"If true, save as a global (cross-project) memory instead of scoping it to this project. Default false."}},"required":["slug","content"]}`),
 		},
@@ -81,7 +81,7 @@ func MemoWrite(store MemoryStore, cwd string) Tool {
 func MemoSearch(store MemoryStore, cwd string) Tool {
 	return Tool{
 		Def: types.ToolDef{
-			Name: ToolMemoSearch,
+			Name:        ToolMemoSearch,
 			Description: "Look up your saved memories for this project. Two modes: (1) with a 'query' — full-text search by keyword or phrase, returns the matching memories ranked by relevance; (2) without a 'query' — lists all memories for this project (most recently updated first). You don't need to know exact slugs. By default each result includes its full 'content'; set 'include_content' to false to get a lightweight list of just slugs and dates — useful to see what exists before pulling specific ones. Paginate with 'skip'/'limit'. Use this to rediscover prior decisions, conventions, and context, especially when you lack context about earlier work.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"Keywords or phrase to search for; omit to list all memories"},"include_content":{"type":"boolean","description":"Include each memory's full content (default true); set false for a lightweight slug+dates listing"},"skip":{"type":"integer","description":"Pagination offset (default 0)"},"limit":{"type":"integer","description":"Max results per page (default 10)"}}}`),
 		},

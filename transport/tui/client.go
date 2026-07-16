@@ -13,7 +13,8 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
-// Client is an HTTP client for the Harness API.
+// Client is an HTTP client for the Harness API. Identical contract to the v1
+// TUI client — tui is a pure frontend over the same HTTP/SSE backend.
 type Client struct {
 	baseURL string
 	http    *http.Client
@@ -73,12 +74,41 @@ type ParamDef struct {
 
 // ── Methods ──────────────────────────────────────────────────────────────
 
-func (c *Client) GetSettings() ([]byte, error) {
-	return c.do("GET", "/api/settings", nil)
+func (c *Client) GetSettings() ([]byte, error)  { return c.do("GET", "/api/settings", nil) }
+func (c *Client) GetProviders() ([]byte, error) { return c.do("GET", "/api/providers", nil) }
+func (c *Client) ListModels() ([]byte, error)   { return c.do("GET", "/api/models", nil) }
+
+// PatchSettings partially updates core settings (persists the global default;
+// does not touch live sessions). Pass a map with the fields to change.
+func (c *Client) PatchSettings(fields map[string]any) ([]byte, error) {
+	return c.do("PATCH", "/api/settings", fields)
 }
 
-func (c *Client) GetProviders() ([]byte, error) {
-	return c.do("GET", "/api/providers", nil)
+// Provider-config collection.
+func (c *Client) GetProviderConfigs() ([]byte, error) {
+	return c.do("GET", "/api/settings/providers", nil)
+}
+func (c *Client) PutProviderConfig(name string, cfg any) ([]byte, error) {
+	return c.do("PUT", "/api/settings/providers/"+name, cfg)
+}
+func (c *Client) DeleteProviderConfig(name string) ([]byte, error) {
+	return c.do("DELETE", "/api/settings/providers/"+name, nil)
+}
+
+// MCP-server collection.
+func (c *Client) GetMCPServers() ([]byte, error) {
+	return c.do("GET", "/api/settings/mcp", nil)
+}
+func (c *Client) PutMCPServer(name string, srv any) ([]byte, error) {
+	return c.do("PUT", "/api/settings/mcp/"+name, srv)
+}
+func (c *Client) DeleteMCPServer(name string) ([]byte, error) {
+	return c.do("DELETE", "/api/settings/mcp/"+name, nil)
+}
+
+// GetMCPStatus returns the live connection status of configured MCP servers.
+func (c *Client) GetMCPStatus() ([]byte, error) {
+	return c.do("GET", "/api/mcp/status", nil)
 }
 
 func (c *Client) ConnectProvider(name, apiKey string) ([]byte, error) {
@@ -127,10 +157,6 @@ func (c *Client) StopSession(sessionID string) ([]byte, error) {
 	return c.do("POST", "/api/sessions/"+sessionID+"/stop", nil)
 }
 
-func (c *Client) ListModels() ([]byte, error) {
-	return c.do("GET", "/api/models", nil)
-}
-
 func (c *Client) CreateSession(model, cwd string) ([]byte, error) {
 	return c.do("POST", "/api/sessions", map[string]string{"model": model, "cwd": cwd})
 }
@@ -158,7 +184,8 @@ func (c *Client) ExecCommand(sessionID, command string, params map[string]any) (
 	})
 }
 
-// StreamEvents opens an SSE connection and returns a channel of events.
+// StreamEvents opens an SSE connection and returns a channel of events. The
+// reader uses a large buffer to tolerate big single-line deltas.
 func (c *Client) StreamEvents(ctx context.Context, sessionID string) (<-chan map[string]any, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/api/sessions/"+sessionID+"/events", nil)
 	if err != nil {
@@ -179,6 +206,7 @@ func (c *Client) StreamEvents(ctx context.Context, sessionID string) (<-chan map
 		defer resp.Body.Close()
 		defer close(ch)
 		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
 			if !strings.HasPrefix(line, "data: ") {

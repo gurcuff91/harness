@@ -21,7 +21,7 @@ type OpenAI struct {
 }
 
 const (
-	openAIAPIKeyEnv  = "OPENAI_API_KEY"
+	openAIAPIKeyEnv = "OPENAI_API_KEY"
 )
 
 func NewOpenAI() *OpenAI {

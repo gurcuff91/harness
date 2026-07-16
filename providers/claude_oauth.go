@@ -590,7 +590,6 @@ func (tm *tokenManager) refresh(refreshToken string) (*types.Credentials, error)
 
 // ── Credential persistence ───────────────────────────────────────────────
 
-
 func persistOAuthCreds(creds *types.Credentials) {
 	_ = config.GetCredentialsManager().SetCredential("claude-oauth", config.ProviderCredential{
 		Type:             "oauth",
