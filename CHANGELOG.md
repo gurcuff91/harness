@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.0] - 2026-06-23
+
+### TUI paste & overflow fixes
+- **Paste line endings** — bracketed paste now normalizes CRLF and bare CR to LF.
+  A raw `\r` returned the cursor to column 0 without advancing, so pasted lines
+  overwrote each other (e.g. “Key west”+“TFCGKE” → “KeytiCGKE”) and the sent
+  message lost its `❯` prompt prefix
+- **Overflow indicator sync** — the “↑ N more” hint is now computed on demand from
+  the current buffer, so it appears the moment you paste and clears the moment you
+  submit (previously it lagged one frame because the separator renders before the
+  editor)
+
+## [0.10.0] - 2026-06-23
+
+### TUI editor & polish
+- **Ctrl+J** inserts a newline in the editor (Enter still submits; Shift+Enter is
+  indistinguishable from Enter without the Kitty protocol). `\n` is now mapped to
+  Ctrl+J instead of Enter
+- **Overflow hint** — when the input exceeds the 5-line window, the separator above
+  the editor shows a left-aligned “↑ N more” indicating hidden lines
+- **Read tool icon** changed from `▤` (looked like a stop square) to `≡` (narrow
+  triple bar), avoiding a double-width gap after the icon
+- Fixed a double “v” in the banner version (`vv0.9.0` → `v0.9.0`); the version
+  string already carries its `v` prefix
+
 ## [0.9.0] - 2026-06-23
 
 ### TUI — clipboard image paste (ported from v1)

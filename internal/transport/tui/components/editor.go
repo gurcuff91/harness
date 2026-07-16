@@ -14,8 +14,8 @@ const maxEditorRows = 5
 // word-wise navigation, and paste handling. Port of the harness's v1 input
 // (transport/tui), built on the Component model.
 //
-// Newline insertion uses Alt+Enter (reliable without Kitty protocol — see the
-// TODO in term/terminal.go). Enter submits.
+// Newline insertion uses Ctrl+J (LF) or Alt+Enter (both reliable without the
+// Kitty protocol — see the TODO in term/terminal.go). Enter (\r) submits.
 type Editor struct {
 	buf         []rune
 	cursor      int // rune index into buf
@@ -80,6 +80,12 @@ func (e *Editor) HandleInput(data string) {
 	if strings.HasPrefix(data, ansi.PasteStart) {
 		content := strings.TrimPrefix(data, ansi.PasteStart)
 		content = strings.TrimSuffix(content, ansi.PasteEnd)
+		// Normalize clipboard line endings: CRLF and bare CR both become LF.
+		// A raw \r moves the cursor to column 0 without advancing a line, so each
+		// pasted line would overwrite the previous one (e.g. "Key west"+"TFCGKE"
+		// → "KeytiCGKE"). Also strips \r that would corrupt the sent message.
+		content = strings.ReplaceAll(content, "\r\n", "\n")
+		content = strings.ReplaceAll(content, "\r", "\n")
 		e.insert(content)
 		return
 	}
@@ -95,7 +101,10 @@ func (e *Editor) HandleInput(data string) {
 				e.OnSubmit(string(e.buf))
 			}
 			return
-		case keys.AltEnter:
+		case keys.AltEnter, keys.CtrlJ:
+			// Insert a newline. Ctrl+J (LF) is the reliable terminal newline;
+			// Alt+Enter is kept as an alternative. Shift+Enter can't be told
+			// apart from Enter without the Kitty keyboard protocol.
 			e.insert("\n")
 			return
 		case keys.Escape:
@@ -298,6 +307,18 @@ func (e *Editor) Render(width int) []string {
 	if len(e.buf) == 0 {
 		return []string{ansi.Dimmed(e.placeholder)}
 	}
+	visible, _ := e.layout(width)
+	return visible
+}
+
+// layout computes the editor's wrapped, cursor-windowed visible lines and how
+// many lines are scrolled off the top. It is pure (no stored state), so callers
+// — including the separator above the editor — always get a value consistent
+// with the CURRENT buffer, independent of child render order.
+func (e *Editor) layout(width int) (visible []string, hiddenAbove int) {
+	if len(e.buf) == 0 {
+		return []string{ansi.Dimmed(e.placeholder)}, 0
+	}
 
 	cursor := e.cursor
 	if cursor < 0 {
@@ -336,10 +357,21 @@ func (e *Editor) Render(width int) []string {
 	return scrollToCursor(lines, cursorRow, maxEditorRows)
 }
 
-// scrollToCursor returns at most maxRows lines, windowed so cursorRow is visible.
-func scrollToCursor(lines []string, cursorRow, maxRows int) []string {
+// HiddenAbove reports how many wrapped input lines are scrolled off the top of
+// the editor's visible window at the given width (0 when everything fits). The
+// separator above the editor uses this to show an "↑ N more" hint. It recomputes
+// from the current buffer, so it's correct even though the separator renders
+// before the editor in the tree.
+func (e *Editor) HiddenAbove(width int) int {
+	_, above := e.layout(width)
+	return above
+}
+
+// scrollToCursor returns at most maxRows lines (windowed so cursorRow is
+// visible) plus the number of lines hidden above the window.
+func scrollToCursor(lines []string, cursorRow, maxRows int) (visible []string, hiddenAbove int) {
 	if len(lines) <= maxRows {
-		return lines
+		return lines, 0
 	}
 	start := cursorRow - maxRows + 1
 	if start < 0 {
@@ -348,7 +380,7 @@ func scrollToCursor(lines []string, cursorRow, maxRows int) []string {
 	if start > len(lines)-maxRows {
 		start = len(lines) - maxRows
 	}
-	return lines[start : start+maxRows]
+	return lines[start : start+maxRows], start
 }
 
 func (e *Editor) changed() {

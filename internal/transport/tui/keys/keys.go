@@ -31,6 +31,7 @@ const (
 	CtrlC Key = "ctrl+c"
 	CtrlD Key = "ctrl+d"
 	CtrlE Key = "ctrl+e"
+	CtrlJ Key = "ctrl+j"
 	CtrlK Key = "ctrl+k"
 	CtrlU Key = "ctrl+u"
 	CtrlV Key = "ctrl+v"
@@ -47,8 +48,8 @@ const (
 
 // seqMap maps fixed escape/control sequences to keys.
 var seqMap = map[string]Key{
-	"\r":     Enter,
-	"\n":     Enter,
+	"\r":     Enter, // Ctrl+M — the universal submit key
+	"\n":     CtrlJ, // Ctrl+J (LF) — newline insertion (Enter is \r everywhere standard)
 	"\x1b":   Escape,
 	"\t":     Tab,
 	"\x1b[Z": ShiftTab,

@@ -38,7 +38,7 @@ func (t *TUI) welcomeBanner() string {
 		add("  " + ansi.Accent(line))
 	}
 	add("")
-	tagline := "  " + ansi.Muted("fast terminal agent") + ansi.Dimmed(" · v"+version.Version)
+	tagline := "  " + ansi.Muted("fast terminal agent") + ansi.Dimmed(" · "+version.Version)
 	if t.model != "" {
 		tagline += ansi.Dimmed(" · ") + ansi.Muted(shortModel(t.model))
 	}
