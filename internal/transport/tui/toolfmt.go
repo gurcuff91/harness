@@ -2,8 +2,9 @@ package tui
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
+
+	"github.com/gurcuff91/harness/internal/transport/tui/ansi"
 )
 
 // primaryParam maps a built-in tool to the argument shown bare (without a
@@ -87,19 +88,22 @@ func formatToolArgs(name, argsJSON string) string {
 	pairs, ok := parseArgsOrdered(argsJSON)
 	if !ok {
 		// Not parseable (partial stream or non-object) — fall back to the raw,
-		// unescaped args so the user still sees something sane.
-		return unescapeArgs(strings.TrimSpace(argsJSON))
+		// unescaped args (dimmed) so the user still sees something sane.
+		return ansi.Dimmed(unescapeArgs(strings.TrimSpace(argsJSON)))
 	}
 
 	primary := primaryParam[name]
 	var parts []string
 	for _, p := range pairs {
 		if p.key == primary {
-			// Primary param shown bare (the icon already signals the tool kind).
-			parts = append([]string{p.val}, parts...)
+			// Primary param shown bare (the icon already signals the tool kind),
+			// dimmed like a value.
+			parts = append([]string{ansi.Dimmed(p.val)}, parts...)
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("%s=%s", p.key, p.val))
+		// Param NAME in Muted (same weight/color as the result line) to make it
+		// stand out; the VALUE stays Dimmed so it reads as secondary.
+		parts = append(parts, ansi.Muted(p.key+"=")+ansi.Dimmed(p.val))
 	}
 	return strings.Join(parts, " ")
 }

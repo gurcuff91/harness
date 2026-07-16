@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.19.0] - 2026-06-23
+
+### Bash tool — timeout process-group kill
+- Fixed the timeout not actually stopping the command when it spawned background
+  children (`cmd &`, `nohup`). `exec.CommandContext` killed only the direct
+  `bash`; the detached child kept the output pipe open, so the wait blocked far
+  past the timeout (observed: a 30s timeout that returned after ~2058s)
+- The command now runs in its own process group (`Setpgid`), and on timeout /
+  cancellation the whole group is killed (`kill -pid`), reaping background jobs
+  too. The wait races the timeout in a goroutine so it returns at the limit
+- Cross-platform via build tags (`bash_unix.go` / `bash_windows.go`)
+- Tool description notes that long-running work should pass a larger `timeout`
+
 ## [0.18.0] - 2026-06-23
 
 ### TUI — streaming flicker fix

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -22,12 +23,12 @@ func Bash() Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        "Bash",
-			Description: "Execute a shell command. Use for builds, git, grep/find, installs, and system tasks. Do NOT use for reading, writing, or editing files — use read_file, write_file, and edit instead. Output is truncated to the last 2000 lines or 50KB; if truncated, the full output is saved to a temp file whose path is shown (read it for more).",
+			Description: "Execute a shell command. Use for builds, git, grep/find, installs, and system tasks. Do NOT use for reading, writing, or editing files — use read_file, write_file, and edit instead. The command runs with a default 30s timeout; pass a larger 'timeout' (seconds) for long-running work. Output is truncated to the last 2000 lines or 50KB; if truncated, the full output is saved to a temp file whose path is shown (read it for more).",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"command": {"type": "string", "description": "The bash command to execute"},
-					"timeout": {"type": "integer", "description": "Timeout in seconds (default: 30)"}
+					"timeout": {"type": "integer", "description": "Timeout in seconds (default: 30). Increase for long-running commands."}
 				},
 				"required": ["command"]
 			}`),
@@ -41,25 +42,58 @@ func Bash() Tool {
 			if args.Timeout > 0 {
 				timeout = time.Duration(args.Timeout) * time.Second
 			}
-			// Combine caller ctx + timeout — whichever fires first
-			ctx2, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
 
-			cmd := exec.CommandContext(ctx2, "bash", "-c", args.Command)
-			out, err := cmd.CombinedOutput()
-			result := strings.TrimSpace(string(out))
-			// Keep the TAIL: for shell output the end matters most (errors, final
-			// results). Full output is saved to a temp file when truncated.
+			cmd := exec.Command("bash", "-c", args.Command)
+			// Run in its own process group so a timeout can kill the WHOLE tree,
+			// not just the direct `bash` child. Without this, background jobs
+			// (`cmd &`, nohup) survive, keep the output pipe open, and make the
+			// wait block far past the timeout (see setProcessGroup per-OS).
+			setProcessGroup(cmd)
+
+			var buf bytes.Buffer
+			cmd.Stdout = &buf
+			cmd.Stderr = &buf
+
+			start := time.Now()
+			if err := cmd.Start(); err != nil {
+				return fmt.Sprintf("Error starting command: %v", err), err
+			}
+
+			// Wait in a goroutine so we can race it against the timeout / ctx.
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+
+			var (
+				runErr    error
+				timedOut  bool
+				cancelled bool
+			)
+			select {
+			case runErr = <-done:
+				// Completed on its own.
+			case <-time.After(timeout):
+				timedOut = true
+				killProcessGroup(cmd) // kill the whole tree, then reap
+				<-done
+			case <-ctx.Done():
+				cancelled = true
+				killProcessGroup(cmd)
+				<-done
+			}
+			_ = time.Since(start)
+
+			result := strings.TrimSpace(buf.String())
 			result = ApplyTruncation("bash", result, false)
-			if ctx2.Err() == context.DeadlineExceeded {
+
+			if timedOut {
 				err := fmt.Errorf("timeout after %v", timeout)
 				return fmt.Sprintf("Timeout after %v:\n%s", timeout, result), err
 			}
-			if ctx.Err() != nil {
+			if cancelled {
 				return "(stopped)", ctx.Err()
 			}
-			if err != nil {
-				return fmt.Sprintf("Exit error: %v\n%s", err, result), err
+			if runErr != nil {
+				return fmt.Sprintf("Exit error: %v\n%s", runErr, result), runErr
 			}
 			if result == "" {
 				return "(no output)", nil

@@ -208,8 +208,10 @@ func (t *TUI) streamEvents(ctx context.Context) {
 func (t *TUI) toolHeader(name, argsJSON string) string {
 	colorFn, icon := toolStyle(name)
 	h := colorFn(ansi.Bold + icon + " " + name)
+	// formatToolArgs already styles its output (param names Muted, values Dimmed),
+	// so it's appended verbatim — no outer wrap.
 	if a := formatToolArgs(name, argsJSON); a != "" {
-		h += " " + ansi.Dimmed(a)
+		h += " " + a
 	}
 	return h
 }
