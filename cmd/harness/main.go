@@ -11,11 +11,11 @@ import (
 	"syscall"
 
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/config"
-	"github.com/gurcuff91/harness/memory"
-	"github.com/gurcuff91/harness/transport/cli"
-	httptransport "github.com/gurcuff91/harness/transport/http"
-	"github.com/gurcuff91/harness/transport/tui"
+	"github.com/gurcuff91/harness/internal/config"
+	"github.com/gurcuff91/harness/agent/memory"
+	"github.com/gurcuff91/harness/internal/transport/cli"
+	httptransport "github.com/gurcuff91/harness/internal/transport/http"
+	"github.com/gurcuff91/harness/internal/transport/tui"
 )
 
 func main() {

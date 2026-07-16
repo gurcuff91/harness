@@ -42,74 +42,55 @@ Providers can also be connected from inside the TUI command palette.
 
 ## Architecture
 
-Frontend/backend separation: the `agent` emits events over an HTTP/SSE API; the
-transports (`cli`, `tui`, `http`) are pure clients. The binary lives in
-`cmd/harness/`, leaving the module root free for an SDK facade.
+The **agent is the SDK**. Public packages form the embeddable surface; everything
+under `internal/` is implementation detail the Go compiler forbids third parties
+from importing. A thin `harness.go` facade at the root re-exports the essentials,
+and the binary lives in `cmd/harness/`.
 
 ```
 harness/
-├── cmd/harness/
-│   └── main.go               # Executable entry point (package main), CLI dispatch
-├── agent/                    # Core ReAct loop
+├── harness.go                # 🔓 SDK facade: New, Agent, Session, Options, Event
+├── cmd/harness/main.go       # Executable entry point (package main), CLI dispatch
+│
+├── agent/                    # 🔓 Core ReAct loop — the SDK
 │   ├── agent.go              # Chat loop, tool execution, MCP + memory wiring, Close()
 │   ├── session.go            # Session lifecycle, history, tool pairing
 │   ├── prompts.go            # System prompt assembly
-│   ├── store/                # Session persistence (JSONL per cwd)
-│   ├── resources/            # Skill/resource discovery
-│   └── tools/                # Built-in tools
-│       ├── bash.go           # Shell execution
-│       ├── file.go           # Read, Write
-│       ├── edit.go           # Find/replace editing
-│       ├── fetch.go          # HTTP client
-│       ├── skill.go          # Skill invocation
-│       ├── memory.go         # MemoWrite / MemoSearch / MemoDelete
-│       └── truncate.go       # PI-style output truncation (head/tail, /tmp overflow)
-├── providers/                # LLM provider layer
-│   ├── provider.go           # Provider interface (streaming-only)
-│   ├── anthropic.go          # Anthropic API key
-│   ├── claude_oauth.go       # Claude OAuth (subscription)
-│   ├── openai.go             # OpenAI + base for compatible APIs
-│   ├── ollama.go             # Ollama local (auto-detect)
-│   ├── ollama_cloud.go       # Ollama Cloud
-│   ├── opencode_go.go        # OpenCode Go
-│   ├── minimax.go            # MiniMax
-│   ├── registry.go           # Provider factory (Resolve)
-│   ├── status.go             # Provider status for transports
-│   ├── authflow/             # Shared OAuth flow (keychain → file → login)
-│   └── llm/                  # Core types + metadata cascade + model registry
-├── config/                   # Typed settings + credentials managers
-│   ├── settings.go           # active_model, thinking_level, providers, mcp
-│   ├── credentials.go        # API keys + OAuth tokens (0600)
-│   └── manager.go            # Singletons
-├── mcp/                      # Model Context Protocol client (stdlib)
-│   ├── jsonrpc.go            # JSON-RPC 2.0
-│   ├── stdio.go              # Local servers (spawned processes)
-│   ├── http.go               # Remote servers (HTTP + SSE + header auth)
-│   ├── client.go             # Initialize / ListTools / CallTool
-│   └── manager.go            # Eager connect, namespacing, statuses
-├── memory/                   # Project-scoped persistent memory
-│   ├── store.go              # SQLite + FTS5 (prefix search), cwd-partitioned + global
-│   └── adapter.go            # Scoped adapter → agent/tools.MemoryStore
-├── transport/
-│   ├── cli/                  # CLI command handlers
-│   │   ├── cli.go            # providers, sessions, connect, disconnect
-│   │   ├── settings.go       # settings [set …]
-│   │   ├── memory.go         # memo [<query>] [--all|--global|--content]
-│   │   ├── oauth.go          # connect OAuth flow (delegates to authflow)
-│   │   └── server.go         # In-process HTTP server bootstrap
-│   ├── http/                 # HTTP/SSE server (Serve(listener), handler())
-│   │   ├── server.go         # Routes: sessions, providers, models, settings, mcp, memories
-│   │   └── sse.go            # Event serialization
-│   └── tui/                  # Pure-Go terminal UI (zero external TUI libs)
-│       ├── tui.go            # Top-level app, banner, autoconnect
-│       ├── session.go        # SSE client, history rendering
-│       ├── toolfmt.go        # Tool-call arg formatting
-│       ├── ansi/             # Color, width, wrap, truncate
-│       ├── render/           # Differential rendering engine
-│       ├── components/       # Widgets (markdown, history, editor, spinner, …)
-│       ├── term/             # Raw terminal + stdin buffer
-│       └── keys/             # Key detection
-└── types/                    # Shared event + tool types
+│   ├── store/                # Session persistence — implement custom stores here
+│   ├── resources/            # Skill/resource discovery — custom loaders here
+│   ├── memory/               # Persistent memory (SQLite + FTS5, cwd + global)
+│   └── tools/                # Built-in tools — implement custom tools here
+│       ├── bash.go / file.go / edit.go / fetch.go / skill.go
+│       └── memory.go / truncate.go / names.go
+├── mcp/                      # 🔓 Model Context Protocol client (stdlib)
+│   └── jsonrpc.go / stdio.go / http.go / client.go / manager.go
+├── types/                    # 🔓 Shared types (Event, Message, ModelMeta)
+│
+└── internal/                 # 🔒 Implementation detail (not importable by third parties)
+    ├── providers/            # LLM provider layer
+    │   ├── anthropic.go / claude_oauth.go / openai.go / ollama*.go
+    │   ├── opencode_go.go / minimax.go / registry.go / status.go
+    │   ├── authflow/         # Shared OAuth flow (keychain → file → login)
+    │   └── llm/              # Core LLM types + metadata cascade + model registry
+    ├── config/               # Typed settings + credentials managers
+    ├── version/              # Build version (ldflags target)
+    └── transport/            # Client transports (used by the binary)
+        ├── cli/              # CLI command handlers
+        ├── http/             # HTTP/SSE server (Serve(listener), handler())
+        └── tui/              # Pure-Go terminal UI (zero external TUI libs)
+```
+
+### Embedding the SDK
+
+```go
+import "github.com/gurcuff91/harness"
+
+a := harness.New(harness.Options{ThinkingLevel: "medium", EnableMCPs: true})
+defer a.Close()
+
+sess, _ := a.NewSession(cwd, "anthropic/claude-sonnet-4-20250514")
+sess.Subscribe(func(e harness.Event) { /* render */ })
+sess.Prompt(ctx, "Hello!")
 ```
 
 ## Providers

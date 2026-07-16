@@ -16,64 +16,60 @@
 1. **No new dependencies** without explicit owner approval. Solve problems with stdlib first.
 2. **Always streaming.** There is no non-streaming path. Every provider implements `CompleteStream()`. Never add `Complete()`.
 3. **`provider/model` format everywhere.** Settings, env vars, CLI display, Resolve — all use `provider/model` (e.g., `anthropic/claude-sonnet-4-20250514`).
-4. **Backend/frontend separation.** `providers/` and `agent/` never import `transport/`. The agent emits events over an HTTP/SSE API; the transports (`tui`, `http`) and `cli` are pure clients.
+4. **Backend/frontend separation.** `agent/` and `internal/providers/` never import `internal/transport/`. The agent emits events over an HTTP/SSE API; the transports (`cli`, `http`, `tui`) are pure clients.
 5. **Persistent state is explicit.** No model caching. On-disk state is limited to `~/.harness/{credentials.json, settings.json}` and `~/.harness/agent/{sessions/, memory.db}`.
+6. **SDK boundary.** Public packages (`agent`, `agent/{tools,store,resources,memory}`, `mcp`, `types`) form the SDK. Keep implementation detail (`providers`, `config`, `transport`, `version`) under `internal/`, and never expose an `internal/…` type in a public signature.
 
 ## Architecture
 
+The **agent is the SDK**. Public packages form the embeddable surface; everything
+under `internal/` is implementation detail the Go compiler forbids third parties
+from importing. A thin `harness.go` facade at the root re-exports the essentials.
+
 ```
-cmd/harness/main.go             ← entry point, CLI dispatch (package main)
-version/version.go              ← single source of truth for the version (ldflags)
-├── agent/                      ← core ReAct loop
+harness.go                      ← 🔓 SDK facade (package harness): New, Agent, Session, Options, Event
+cmd/harness/main.go             ← executable entry point (package main), CLI dispatch
+
+🔓 PUBLIC (the SDK surface)
+├── agent/                      ← core ReAct loop — the SDK
 │   ├── agent.go                ← Chat() loop, tool execution, MCP + memory wiring, Close()
 │   ├── session.go              ← session lifecycle, history, tool pairing
 │   ├── prompts.go              ← system prompt assembly
-│   ├── store/                  ← session persistence (JSONL per cwd)
-│   ├── resources/              ← skill/resource discovery
-│   └── tools/                  ← built-in tools (package tools)
-│       ├── registry.go         ← Tool registry (Register, Run, Definitions)
-│       ├── bash.go             ← Shell execution
-│       ├── file.go             ← Read, Write
-│       ├── edit.go             ← Find/replace editing
-│       ├── fetch.go            ← HTTP client (text + binary via output_path)
-│       ├── skill.go            ← Skill invocation
-│       ├── memory.go           ← MemoWrite / MemoSearch / MemoDelete
-│       └── truncate.go         ← output truncation (head/tail, /tmp overflow)
-├── providers/                  ← LLM provider layer
-│   ├── provider.go             ← Provider interface (streaming-only)
-│   ├── anthropic.go            ← Anthropic API (Messages API)
-│   ├── claude_oauth.go         ← Claude OAuth (subscription, token refresh)
-│   ├── openai.go               ← OpenAI-compatible base
-│   ├── ollama.go / ollama_cloud.go / opencode_go.go / minimax.go
-│   ├── registry.go             ← Resolve("provider/model") → Provider constructor
-│   ├── status.go               ← GetProviderStatuses(), GetModelGroups()
-│   ├── authflow/               ← shared OAuth flow (keychain → file → login)
-│   └── llm/                    ← core types, metadata cascade, model registry
-├── config/                     ← typed settings + credentials managers
-│   ├── settings.go             ← active_model, thinking_level, providers, mcp
-│   ├── credentials.go          ← API keys + OAuth tokens (0600)
-│   └── manager.go              ← singletons
-├── mcp/                        ← Model Context Protocol client (stdlib)
+│   ├── store/                  ← session persistence (JSONL per cwd) — custom stores here
+│   ├── resources/              ← skill/resource discovery — custom loaders here
+│   ├── memory/                 ← persistent memory (SQLite + FTS5, cwd + global)
+│   └── tools/                  ← built-in tools — custom tools here (package tools)
+│       ├── registry.go / bash.go / file.go / edit.go / fetch.go
+│       ├── skill.go / memory.go / truncate.go / names.go
+├── mcp/                        ← Model Context Protocol client (stdlib) — MCPStatuses() exposes it
 │   ├── jsonrpc.go / stdio.go / http.go / client.go / manager.go
-├── memory/                     ← persistent memory (SQLite + FTS5)
-│   ├── store.go                ← cwd-partitioned + global, prefix FTS search
-│   └── adapter.go              ← scoped adapter → agent/tools.MemoryStore
-├── transport/cli/              ← CLI command handlers
-│   ├── cli.go                  ← providers, sessions, connect, disconnect
-│   ├── settings.go / memory.go / oauth.go / server.go
-├── transport/http/             ← HTTP/SSE server
-│   ├── server.go               ← Serve(listener), handler(), all routes
-│   └── sse.go                  ← event serialization
-└── transport/tui/              ← pure-Go terminal UI (zero external TUI libs)
-    ├── tui.go                  ← top-level app, banner, autoconnect
-    ├── session.go              ← SSE client, history rendering
-    ├── toolfmt.go              ← tool-call arg formatting
-    ├── ansi/ render/ components/ term/ keys/
+└── types/                      ← Event, Message, ModelMeta — shared types
+
+🔒 INTERNAL (compiler-enforced, not importable by third parties)
+└── internal/
+    ├── providers/              ← LLM provider layer (Resolve, streaming)
+    │   ├── provider.go / anthropic.go / claude_oauth.go / openai.go
+    │   ├── ollama*.go / opencode_go.go / minimax.go / registry.go / status.go
+    │   ├── authflow/           ← shared OAuth flow (keychain → file → login)
+    │   └── llm/                ← core LLM types, metadata cascade, model registry
+    ├── config/                 ← typed settings + credentials managers
+    │   ├── settings.go / credentials.go / manager.go
+    ├── version/                ← build version (ldflags target)
+    └── transport/              ← client transports (used by the binary)
+        ├── cli/                ← CLI command handlers
+        ├── http/               ← HTTP/SSE server (Serve(listener), handler())
+        └── tui/                ← pure-Go terminal UI (zero external TUI libs)
 ```
+
+> **internal/ rule:** its parent is the module root, so *all* harness code can
+> import `internal/…`, but external modules cannot. This lets the agent use
+> providers/config/transport freely while keeping them out of the SDK contract.
+> **Corollary:** no public package (agent, tools, mcp, memory, types, …) may
+> expose an `internal/…` type in an exported signature.
 
 ## Key Interfaces
 
-### Provider (`providers/provider.go`)
+### Provider (`internal/providers/provider.go`)
 
 Every LLM provider implements this. No exceptions, no optional methods:
 
@@ -167,10 +163,10 @@ make install              # build + install to ~/go/bin
 
 1. Create `providers/<name>.go`
 2. Implement the `providers.Provider` interface
-3. Add constructor to `providers/registry.go` in the `Resolve()` switch
-4. Register the provider key + status in `providers/status.go`
+3. Add constructor to `internal/providers/registry.go` in the `Resolve()` switch
+4. Register the provider key + status in `internal/providers/status.go`
 5. Add credential handling (`config/credentials.go` is the store; api-key providers use `resolveAPIKey`)
-6. Add a connect handler in `transport/cli/cli.go` and, if OAuth, wire `providers/authflow`
+6. Add a connect handler in `internal/transport/cli/cli.go` and, if OAuth, wire `internal/providers/authflow`
 
 ### Adding a New Tool
 
@@ -182,8 +178,8 @@ make install              # build + install to ~/go/bin
 
 ### Adding a New Command
 
-1. Add a subcommand `case` in `cmd/harness/main.go` and a `cli.Run*` handler in `transport/cli/`
-2. Add an HTTP route in `transport/http/server.go` if it needs backend data
+1. Add a subcommand `case` in `cmd/harness/main.go` and a `cli.Run*` handler in `internal/transport/cli/`
+2. Add an HTTP route in `internal/transport/http/server.go` if it needs backend data
 3. Update the `--help` text in `cmd/harness/main.go`
 
 ## Thinking System
@@ -203,7 +199,7 @@ Universal levels mapped per-provider:
   the `--thinking` CLI/TUI flag (there is no `HARNESS_THINKING` env var).
 - Anthropic 4.6+: uses `effort` param (adaptive). Older: `budget_tokens` (legacy).
 - DeepSeek: `reasoning_content` must be replayed in assistant messages when tool calls follow.
-- Mapping lives in `providers/llm/openai.go` `translateThinkingLevel()`. Levels: `off|low|medium|high|xhigh`.
+- Mapping lives in `internal/providers/llm/openai.go` `translateThinkingLevel()`. Levels: `off|low|medium|high|xhigh`.
 
 ## Model Capabilities Resolution
 
@@ -234,13 +230,14 @@ Universal levels mapped per-provider:
 - **Error handling:** Return errors up, don't panic. Log to stderr only for fatal.
 - **Streaming callback:** `StreamCallback = func(StreamEvent)` — events fire inline during HTTP read.
 - **Tool execution during stream:** Tools execute in `StreamToolEnd` callback, not batched after stream ends.
-- **No goroutines in core.** Only the TUI spinner (`transport/tui/components/spinner.go`) uses a goroutine. Agent loop is synchronous.
+- **No goroutines in core.** Only the TUI spinner (`internal/transport/tui/components/spinner.go`) uses a goroutine. Agent loop is synchronous.
 - **`bufio.Writer` for output.** All terminal output goes through the buffered writer with explicit `flush()`. Never use `fmt.Println` directly.
 
 ## Anti-Patterns to Avoid
 
 - ❌ Adding `Complete()` (non-streaming) to Provider interface
-- ❌ Importing `transport/` from `agent/` or `providers/`
+- ❌ Importing `internal/transport/` from `agent/` or `internal/providers/`
+- ❌ Exposing an `internal/…` type in a public (SDK) package signature
 - ❌ File-based model cache
 - ❌ Multiple spinner goroutines running simultaneously
 - ❌ Direct `fmt.Print` to stdout (use `printf()` + `flush()`)
@@ -254,10 +251,10 @@ Keep files focused. Current largest files for reference:
 | File | Lines | Role |
 |------|-------|------|
 | `transport/tui/components/markdown.go` | ~1100 | Faithful streaming markdown renderer (complex by nature) |
-| `transport/http/server.go` | ~960 | HTTP/SSE routes + handlers |
+| `internal/transport/http/server.go` | ~960 | HTTP/SSE routes + handlers |
 | `agent/session.go` | ~680 | Session lifecycle, history, tool pairing |
-| `providers/claude_oauth.go` | ~610 | OAuth token management + streaming |
+| `internal/providers/claude_oauth.go` | ~610 | OAuth token management + streaming |
 | `cmd/harness/main.go` | ~555 | Entry point + CLI dispatch |
-| `providers/llm/anthropic.go` | ~500 | Anthropic request/response types |
+| `internal/providers/llm/anthropic.go` | ~500 | Anthropic request/response types |
 
 If a file grows past ~500 lines, consider splitting — but only along real boundaries.

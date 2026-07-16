@@ -10,7 +10,7 @@ import (
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/agent/tools"
-	"github.com/gurcuff91/harness/providers"
+	"github.com/gurcuff91/harness/internal/providers"
 	"github.com/gurcuff91/harness/types"
 )
 

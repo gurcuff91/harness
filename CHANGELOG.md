@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.0] - 2026-06-23
+
+### SDK boundary — the agent is now a public SDK
+- Root `harness.go` facade (package `harness`) re-exports the essentials:
+  `New`, `Agent`, `Session`, `Options`, `Event`, `Handler`
+- **Public surface (the SDK):** `agent` (+ `agent/tools`, `agent/store`,
+  `agent/resources`, `agent/memory`), `mcp`, `types` — third parties can embed the
+  agent and supply custom tools, session storage, and resource loaders
+- **Implementation detail moved under `internal/`** (compiler-enforced, not
+  importable by external modules): `providers` (+ `llm`, `authflow`), `config`,
+  `transport` (`cli`, `http`, `tui`), `version`
+- `memory` consolidated under `agent/memory` (alongside `store` and `resources`
+  as agent infrastructure)
+- Rule enforced: no public package may expose an `internal/…` type in an exported
+  signature; the module root is the `internal/` parent, so all harness code may
+  import it while third parties cannot
+
 ## [0.8.0] - 2026-06-23
 
 ### TUI — Pure-Go rewrite (replaces tview)
@@ -13,9 +30,10 @@ All notable changes to this project will be documented in this file.
 - Faithful-to-model rendering: the renderer paints, never adds/removes newlines
 
 ### Project structure
-- `main.go` moved to `cmd/harness/main.go` (Go idiom; module root freed for a future `harness` SDK facade)
-- `transport/` holds the three client transports — `cli`, `http`, `tui`; legacy tview TUI removed
-- Version centralized in package `version` (`version.Version`), injected via ldflags
+- `main.go` moved to `cmd/harness/main.go` (Go idiom); legacy tview TUI removed
+- `transport/` holds the three client transports — `cli`, `http`, `tui`
+- Version centralized in a dedicated `version` package (`version.Version`),
+  injected via ldflags
 
 ### MCP (Model Context Protocol) — stdlib client
 - Local (stdio) and remote (HTTP + SSE + header auth) servers

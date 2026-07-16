@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/gurcuff91/harness/agent/tools"
-	"github.com/gurcuff91/harness/config"
+	"github.com/gurcuff91/harness/internal/config"
 	"github.com/gurcuff91/harness/types"
 )
 
