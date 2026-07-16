@@ -43,12 +43,12 @@ Providers can also be connected from inside the TUI command palette.
 ## Architecture
 
 Frontend/backend separation: the `agent` emits events over an HTTP/SSE API; the
-transports (`tui`, `http`) and the `cli` are pure clients. The binary lives in
-`cmd/`, leaving the module root free for an SDK facade.
+transports (`cli`, `tui`, `http`) are pure clients. The binary lives in
+`cmd/harness/`, leaving the module root free for an SDK facade.
 
 ```
 harness/
-├── cmd/
+├── cmd/harness/
 │   └── main.go               # Executable entry point (package main), CLI dispatch
 ├── agent/                    # Core ReAct loop
 │   ├── agent.go              # Chat loop, tool execution, MCP + memory wiring, Close()
@@ -90,13 +90,13 @@ harness/
 ├── memory/                   # Project-scoped persistent memory
 │   ├── store.go              # SQLite + FTS5 (prefix search), cwd-partitioned + global
 │   └── adapter.go            # Scoped adapter → agent/tools.MemoryStore
-├── cli/                      # CLI command handlers (top-level module)
-│   ├── cli.go                # providers, sessions, connect, disconnect
-│   ├── settings.go           # settings [set …]
-│   ├── memory.go             # memo [<query>] [--all|--global|--content]
-│   ├── oauth.go              # connect OAuth flow (delegates to authflow)
-│   └── server.go             # In-process HTTP server bootstrap
 ├── transport/
+│   ├── cli/                  # CLI command handlers
+│   │   ├── cli.go            # providers, sessions, connect, disconnect
+│   │   ├── settings.go       # settings [set …]
+│   │   ├── memory.go         # memo [<query>] [--all|--global|--content]
+│   │   ├── oauth.go          # connect OAuth flow (delegates to authflow)
+│   │   └── server.go         # In-process HTTP server bootstrap
 │   ├── http/                 # HTTP/SSE server (Serve(listener), handler())
 │   │   ├── server.go         # Routes: sessions, providers, models, settings, mcp, memories
 │   │   └── sse.go            # Event serialization

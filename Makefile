@@ -34,24 +34,24 @@ help:
 # Build the binary
 build:
 	@echo "Building $(BINARY_NAME)..."
-	$(GO) build $(LDFLAGS) -o $(BINARY_DIR)/$(BINARY_NAME) ./cmd
+	$(GO) build $(LDFLAGS) -o $(BINARY_DIR)/$(BINARY_NAME) ./cmd/harness
 	@echo "✅ Built: ./$(BINARY_NAME)"
 	@ls -lh $(BINARY_DIR)/$(BINARY_NAME)
 
 # Build with race detector
 build-race:
 	@echo "Building with race detector..."
-	$(GO) build -race $(LDFLAGS) -o $(BINARY_DIR)/$(BINARY_NAME) ./cmd
+	$(GO) build -race $(LDFLAGS) -o $(BINARY_DIR)/$(BINARY_NAME) ./cmd/harness
 	@echo "✅ Built with -race: ./$(BINARY_NAME)"
 
 # Build for multiple platforms
 build-all:
 	@echo "Building for all platforms..."
 	@mkdir -p dist
-	GOOS=darwin GOARCH=amd64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-darwin-amd64 ./cmd
-	GOOS=darwin GOARCH=arm64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-darwin-arm64 ./cmd
-	GOOS=linux GOARCH=amd64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-amd64 ./cmd
-	GOOS=windows GOARCH=amd64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-windows-amd64.exe ./cmd
+	GOOS=darwin GOARCH=amd64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-darwin-amd64 ./cmd/harness
+	GOOS=darwin GOARCH=arm64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-darwin-arm64 ./cmd/harness
+	GOOS=linux GOARCH=amd64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-amd64 ./cmd/harness
+	GOOS=windows GOARCH=amd64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-windows-amd64.exe ./cmd/harness
 	@echo "✅ Binaries in ./dist/"
 	@ls -lh dist/
 

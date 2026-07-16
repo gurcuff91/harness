@@ -7,7 +7,7 @@
 - **What:** Minimal AI agent harness — a CLI tool that connects LLMs to tools via a ReAct loop
 - **Language:** Go 1.24+
 - **Module:** `github.com/gurcuff91/harness`
-- **Binary:** Single binary, ~9MB — entry point in `cmd/main.go` (module root free for an SDK facade)
+- **Binary:** Single binary, ~9MB — entry point in `cmd/harness/main.go` (module root free for an SDK facade)
 - **Version:** single source of truth in package `version` (`version.Version`), injected via ldflags from the `Makefile` (`VERSION=`); falls back to `"dev"` for a plain `go build`.
 - **Dependencies (direct):** `golang.org/x/term` (raw mode), `github.com/rivo/uniseg` (grapheme/width), `github.com/go-chi/chi/v5` (HTTP router), `modernc.org/sqlite` (pure-Go SQLite for the memory store). Keep the set minimal — no new deps without approval.
 
@@ -22,7 +22,7 @@
 ## Architecture
 
 ```
-cmd/main.go                     ← entry point, CLI dispatch (package main)
+cmd/harness/main.go             ← entry point, CLI dispatch (package main)
 version/version.go              ← single source of truth for the version (ldflags)
 ├── agent/                      ← core ReAct loop
 │   ├── agent.go                ← Chat() loop, tool execution, MCP + memory wiring, Close()
@@ -58,7 +58,7 @@ version/version.go              ← single source of truth for the version (ldfl
 ├── memory/                     ← persistent memory (SQLite + FTS5)
 │   ├── store.go                ← cwd-partitioned + global, prefix FTS search
 │   └── adapter.go              ← scoped adapter → agent/tools.MemoryStore
-├── cli/                        ← CLI command handlers (top-level module)
+├── transport/cli/              ← CLI command handlers
 │   ├── cli.go                  ← providers, sessions, connect, disconnect
 │   ├── settings.go / memory.go / oauth.go / server.go
 ├── transport/http/             ← HTTP/SSE server
@@ -157,7 +157,7 @@ Transport renders everything via event handler
 
 ```bash
 make build                # build binary (injects version via ldflags)
-go build -o harness ./cmd # plain build (version = "dev")
+go build -o harness ./cmd/harness # plain build (version = "dev")
 go vet ./...              # lint
 make install              # build + install to ~/go/bin
 ./harness                 # run
@@ -170,7 +170,7 @@ make install              # build + install to ~/go/bin
 3. Add constructor to `providers/registry.go` in the `Resolve()` switch
 4. Register the provider key + status in `providers/status.go`
 5. Add credential handling (`config/credentials.go` is the store; api-key providers use `resolveAPIKey`)
-6. Add a connect handler in `cli/cli.go` and, if OAuth, wire `providers/authflow`
+6. Add a connect handler in `transport/cli/cli.go` and, if OAuth, wire `providers/authflow`
 
 ### Adding a New Tool
 
@@ -182,9 +182,9 @@ make install              # build + install to ~/go/bin
 
 ### Adding a New Command
 
-1. Add a subcommand `case` in `cmd/main.go` and a `cli.Run*` handler in `cli/`
+1. Add a subcommand `case` in `cmd/harness/main.go` and a `cli.Run*` handler in `transport/cli/`
 2. Add an HTTP route in `transport/http/server.go` if it needs backend data
-3. Update the `--help` text in `cmd/main.go`
+3. Update the `--help` text in `cmd/harness/main.go`
 
 ## Thinking System
 
@@ -257,7 +257,7 @@ Keep files focused. Current largest files for reference:
 | `transport/http/server.go` | ~960 | HTTP/SSE routes + handlers |
 | `agent/session.go` | ~680 | Session lifecycle, history, tool pairing |
 | `providers/claude_oauth.go` | ~610 | OAuth token management + streaming |
-| `cmd/main.go` | ~555 | Entry point + CLI dispatch |
+| `cmd/harness/main.go` | ~555 | Entry point + CLI dispatch |
 | `providers/llm/anthropic.go` | ~500 | Anthropic request/response types |
 
 If a file grows past ~500 lines, consider splitting — but only along real boundaries.

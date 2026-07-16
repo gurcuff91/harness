@@ -13,9 +13,9 @@ All notable changes to this project will be documented in this file.
 - Faithful-to-model rendering: the renderer paints, never adds/removes newlines
 
 ### Project structure
-- `main.go` moved to `cmd/main.go` (module root freed for a future `harness` SDK facade)
-- `transport/cli` promoted to top-level `cli/` module
-- `transport/` now holds only `http` and `tui`; legacy tview TUI removed
+- `main.go` moved to `cmd/harness/main.go` (Go idiom; module root freed for a future `harness` SDK facade)
+- `transport/` holds the three client transports — `cli`, `http`, `tui`; legacy tview TUI removed
+- Version centralized in package `version` (`version.Version`), injected via ldflags
 
 ### MCP (Model Context Protocol) — stdlib client
 - Local (stdio) and remote (HTTP + SSE + header auth) servers
