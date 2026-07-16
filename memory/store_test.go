@@ -285,3 +285,47 @@ func TestGlobalMemories(t *testing.T) {
 		t.Error("global delete should remove the global memory")
 	}
 }
+
+func TestSearchPrefixAndContent(t *testing.T) {
+	s := newTestStore(t)
+	s.Write("/proj", "note", "the deployment uses kubernetes rollout", false)
+	s.Write("/proj", "misc", "EEoo AIEAEAIO random", false)
+
+	cases := []struct {
+		query string
+		want  string // expected slug (or "" for no hit)
+	}{
+		{"kubernetes", "note"}, // full token
+		{"kube", "note"},       // prefix → kubernetes
+		{"deploy", "note"},     // prefix → deployment
+		{"EE", "misc"},         // prefix → EEoo (the original bug)
+		{"EEoo", "misc"},       // exact
+		{"nonexistent", ""},    // no match
+	}
+	for _, c := range cases {
+		res, err := s.Search("/proj", c.query, true, 0, 10)
+		if err != nil {
+			t.Fatalf("query %q: %v", c.query, err)
+		}
+		if c.want == "" {
+			if res.Total != 0 {
+				t.Errorf("query %q: expected no hits, got %d", c.query, res.Total)
+			}
+			continue
+		}
+		if res.Total != 1 || res.Results[0].Slug != c.want {
+			t.Errorf("query %q: want slug %q, got %+v", c.query, c.want, res.Results)
+		}
+	}
+}
+
+func TestSearchSanitizesFTSSyntax(t *testing.T) {
+	s := newTestStore(t)
+	s.Write("/proj", "note", "hello world", false)
+	// These would break a naive MATCH; they must not error, just find nothing.
+	for _, q := range []string{`"`, `AND`, `foo OR bar`, `(`, `NEAR("a" "b")`, `*`} {
+		if _, err := s.Search("/proj", q, true, 0, 10); err != nil {
+			t.Errorf("query %q should not error: %v", q, err)
+		}
+	}
+}

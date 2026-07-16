@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strings"
 	"os"
 	"path/filepath"
 	"time"
@@ -96,7 +97,7 @@ CREATE TABLE IF NOT EXISTS memories (
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     slug, content,
     content='memories', content_rowid='id',
-    tokenize='porter unicode61'
+    tokenize='unicode61'
 );
 
 -- Keep the FTS index in sync with the base table.
@@ -157,6 +158,27 @@ FROM memories WHERE cwd = ? AND slug = ?`, cwd, slug)
 	return &m, nil
 }
 
+// toFTSQuery turns a user's raw search string into a safe FTS5 MATCH expression.
+// It splits on whitespace and wraps each term as a quoted prefix token
+// ("term"*), which (1) escapes FTS5 operators so arbitrary input can't break the
+// query or inject syntax, and (2) enables substring-friendly prefix matching so
+// "kube" finds "kubernetes" and "EE" finds "EEoo". Multiple terms are ANDed
+// (all must be present, each as a prefix). Returns "" for an all-whitespace
+// query, which the caller treats as list mode.
+func toFTSQuery(raw string) string {
+	fields := strings.Fields(raw)
+	if len(fields) == 0 {
+		return ""
+	}
+	terms := make([]string, len(fields))
+	for i, f := range fields {
+		// Double any embedded quote to escape it inside the FTS5 string, then
+		// wrap in quotes and append * for prefix matching.
+		terms[i] = `"` + strings.ReplaceAll(f, `"`, `""`) + `"*`
+	}
+	return strings.Join(terms, " ")
+}
+
 // Search looks up memories, paginated by skip/limit (limit <= 0 defaults to 10;
 // skip < 0 becomes 0). Orthogonal filters:
 //   - cwd != "": restrict to that project; cwd == "": across ALL projects.
@@ -189,16 +211,17 @@ func (s *Store) Search(cwd, query string, includeContent bool, skip, limit int) 
 	var rows *sql.Rows
 	var err error
 	searching := query != ""
+	ftsQuery := toFTSQuery(query)
 
 	if searching {
-		countArgs := append([]any{query}, cwdArgs...)
+		countArgs := append([]any{ftsQuery}, cwdArgs...)
 		if err = s.db.QueryRow(`
 SELECT COUNT(*) FROM memories_fts f JOIN memories m ON m.id = f.rowid
 WHERE memories_fts MATCH ?`+cwdClause, countArgs...).Scan(&total); err != nil {
 			return SearchResult{}, fmt.Errorf("memory: search count: %w", err)
 		}
 		// bm25() is lower-is-better; negate so higher = more relevant.
-		queryArgs := append(append([]any{query}, cwdArgs...), limit, skip)
+		queryArgs := append(append([]any{ftsQuery}, cwdArgs...), limit, skip)
 		rows, err = s.db.Query(`
 SELECT m.slug, m.cwd, m.content, -bm25(memories_fts) AS score, m.created_at, m.updated_at
 FROM memories_fts f

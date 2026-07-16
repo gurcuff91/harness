@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -140,13 +141,24 @@ func (a *Agent) MCPStatuses() []mcp.Status {
 	return a.mcpManager.Statuses()
 }
 
-// Close releases agent-owned resources. It terminates MCP subprocesses (root
-// agent only; subagents have no manager). Idempotent and nil-safe.
+// Close releases agent-owned resources: it terminates MCP subprocesses and
+// closes the memory database. Only the root agent should be closed — subagents
+// are ephemeral, have no MCP manager, and merely share the parent's memory
+// store (which they must not close). Idempotent and nil-safe; both resources are
+// released even if one fails.
 func (a *Agent) Close() error {
+	var errs []error
 	if a.mcpManager != nil {
-		return a.mcpManager.Close()
+		if err := a.mcpManager.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return nil
+	if a.opts.Memory != nil {
+		if err := a.opts.Memory.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // NewSession creates a fresh session for the given working directory and model.
