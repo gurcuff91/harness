@@ -12,6 +12,7 @@ import (
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/mcp"
+	"github.com/gurcuff91/harness/memory"
 	"github.com/gurcuff91/harness/providers"
 	"github.com/gurcuff91/harness/types"
 )
@@ -53,7 +54,7 @@ type AgentOptions struct {
 	Store          store.SessionStoreManager // default: InMemorySessionStoreManager
 	ResourceLoader resources.ResourceLoader  // default: FileResourceLoader(cwd) per session
 	//                                         // pass NilLoader{} to disable discovery
-	Memory tools.MemoryStore // project-scoped persistent memory; nil disables the memory tools
+	Memory *memory.Store // project-scoped persistent memory; nil disables the memory tools
 }
 
 // New creates a new Agent. Never fails — provider is resolved per session.
@@ -122,6 +123,12 @@ func (a *Agent) MCPTools() []tools.Tool {
 	}
 	return a.mcpManager.Tools()
 }
+
+// Memory exposes the agent's persistent memory store (nil if memory is
+// disabled). This is the rich, cwd-aware store — used by the HTTP transport to
+// serve read-only memory queries, and available to SDK consumers. The agent's
+// own tools use a scoped adapter over the same store.
+func (a *Agent) Memory() *memory.Store { return a.opts.Memory }
 
 // MCPStatuses reports the connection state of each configured MCP server. Nil
 // when MCP is disabled. Exposed (e.g. via the HTTP API) so clients can render
@@ -285,16 +292,19 @@ func (a *Agent) buildSessionTools(cwd, model string, res *resources.Resources, l
 		reg.Register(tools.Skill(loader.ReadSkill))
 	}
 	// Memory tools — project-scoped persistent memory, registered when a store is
-	// configured. cwd partitions memories per project (like sessions).
+	// configured. cwd partitions memories per project (like sessions). The store
+	// is wrapped in a scoped adapter that hides cwd from the agent — the agent
+	// only ever operates within its session's cwd.
 	if a.opts.Memory != nil {
+		memAdapter := memory.NewToolAdapter(a.opts.Memory)
 		if a.isToolAllowed(tools.ToolMemoWrite) {
-			reg.Register(tools.MemoWrite(a.opts.Memory, cwd))
+			reg.Register(tools.MemoWrite(memAdapter, cwd))
 		}
 		if a.isToolAllowed(tools.ToolMemoSearch) {
-			reg.Register(tools.MemoSearch(a.opts.Memory, cwd))
+			reg.Register(tools.MemoSearch(memAdapter, cwd))
 		}
 		if a.isToolAllowed(tools.ToolMemoDelete) {
-			reg.Register(tools.MemoDelete(a.opts.Memory, cwd))
+			reg.Register(tools.MemoDelete(memAdapter, cwd))
 		}
 	}
 	// Subagent tool — only if allowed (excluded for sub-agents themselves)

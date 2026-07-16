@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +71,7 @@ func (s *Server) handler() http.Handler {
 	r.Put("/api/settings/mcp/{name}", s.handlePutMCPServer)
 	r.Delete("/api/settings/mcp/{name}", s.handleDeleteMCPServer)
 	r.Get("/api/mcp/status", s.handleMCPStatus)
+	r.Get("/api/memories", s.handleListMemories)
 	r.Get("/api/providers", s.handleProviders)
 	r.Post("/api/providers/{name}/connect", s.handleConnectProvider)
 	r.Post("/api/providers/{name}/disconnect", s.handleDisconnectProvider)
@@ -256,6 +258,44 @@ func (s *Server) handlePutMCPServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, srv)
+}
+
+// handleListMemories serves read-only memory queries. Memories are partitioned
+// by working directory; the cwd query param is an OPTIONAL filter (omit it for a
+// global view across all projects). Writes/deletes are intentionally NOT exposed
+// — only the agent mutates memory, via its tools. All params are optional:
+//   cwd, query, include_content (default true), skip (default 0), limit (default 10)
+func (s *Server) handleListMemories(w http.ResponseWriter, r *http.Request) {
+	mem := s.agent.Memory()
+	if mem == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"total": 0, "returned": 0, "skip": 0, "limit": 0, "results": []any{}})
+		return
+	}
+	q := r.URL.Query()
+	cwd := q.Get("cwd")
+	query := q.Get("query")
+	includeContent := q.Get("include_content") != "false" // default true
+	skip := atoiDefault(q.Get("skip"), 0)
+	limit := atoiDefault(q.Get("limit"), 10)
+
+	res, err := mem.Search(cwd, query, includeContent, skip, limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// atoiDefault parses s as an int, returning def when empty or invalid.
+func atoiDefault(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return def
+	}
+	return n
 }
 
 // handleMCPStatus reports the live connection status of each configured MCP

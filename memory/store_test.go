@@ -215,3 +215,35 @@ func TestIncludeContentFalse(t *testing.T) {
 		t.Errorf("list without content should omit content: %q", lst.Results[0].Content)
 	}
 }
+
+func TestGlobalSearchAcrossCWDs(t *testing.T) {
+	s := newTestStore(t)
+	s.Write("/projA", "deploy", "kubernetes rollout for A")
+	s.Write("/projB", "deploy", "docker compose for B")
+
+	// cwd="" → search across ALL projects; same slug in both is distinct.
+	res, err := s.Search("", "deploy", true, 0, 10)
+	if err != nil {
+		t.Fatalf("global search: %v", err)
+	}
+	if res.Total != 2 {
+		t.Fatalf("expected 2 global matches, got %d", res.Total)
+	}
+	// Each result carries its cwd so the caller can tell them apart.
+	cwds := map[string]bool{}
+	for _, m := range res.Results {
+		if m.CWD == "" {
+			t.Errorf("result missing cwd: %+v", m)
+		}
+		cwds[m.CWD] = true
+	}
+	if !cwds["/projA"] || !cwds["/projB"] {
+		t.Errorf("both cwds should be present: %v", cwds)
+	}
+
+	// cwd filter still isolates.
+	filtered, _ := s.Search("/projA", "deploy", true, 0, 10)
+	if filtered.Total != 1 || filtered.Results[0].CWD != "/projA" {
+		t.Errorf("cwd filter leaked: %+v", filtered)
+	}
+}

@@ -23,6 +23,7 @@ import (
 // Memory is a single stored memory entry.
 type Memory struct {
 	Slug      string  `json:"slug"`
+	CWD       string  `json:"cwd,omitempty"`     // project the memory belongs to
 	Content   string  `json:"content,omitempty"` // omitted in lightweight listings
 	Score     float64 `json:"score,omitempty"`   // BM25 relevance (search mode only; higher = more relevant)
 	CreatedAt int64   `json:"created_at"`
@@ -144,14 +145,15 @@ FROM memories WHERE cwd = ? AND slug = ?`, cwd, slug)
 	return &m, nil
 }
 
-// Search looks up memories within a cwd, paginated by skip/limit (limit <= 0
-// defaults to 10; skip < 0 becomes 0). Two modes:
+// Search looks up memories, paginated by skip/limit (limit <= 0 defaults to 10;
+// skip < 0 becomes 0). Orthogonal filters:
+//   - cwd != "": restrict to that project; cwd == "": across ALL projects.
 //   - query != "": FTS5 full-text search over slug/content, ranked by BM25
-//     relevance (score set, higher = more relevant).
-//   - query == "": lists all memories, most-recently-updated first (no score).
+//     relevance (score set, higher = more relevant); query == "": list mode,
+//     most-recently-updated first (no score).
 //
 // includeContent controls whether each result carries its full content or just
-// slug + dates (a lightweight listing).
+// slug + cwd + dates (a lightweight listing). Every result carries its cwd.
 func (s *Store) Search(cwd, query string, includeContent bool, skip, limit int) (SearchResult, error) {
 	if limit <= 0 {
 		limit = 10
@@ -160,36 +162,50 @@ func (s *Store) Search(cwd, query string, includeContent bool, skip, limit int) 
 		skip = 0
 	}
 
+	// Build the cwd filter clause + args shared by count and select.
+	cwdClause := ""
+	var cwdArgs []any
+	if cwd != "" {
+		cwdClause = " AND m.cwd = ?"
+		cwdArgs = []any{cwd}
+	}
+
 	var total int
 	var rows *sql.Rows
 	var err error
 	searching := query != ""
 
 	if searching {
+		countArgs := append([]any{query}, cwdArgs...)
 		if err = s.db.QueryRow(`
 SELECT COUNT(*) FROM memories_fts f JOIN memories m ON m.id = f.rowid
-WHERE m.cwd = ? AND memories_fts MATCH ?`, cwd, query).Scan(&total); err != nil {
+WHERE memories_fts MATCH ?`+cwdClause, countArgs...).Scan(&total); err != nil {
 			return SearchResult{}, fmt.Errorf("memory: search count: %w", err)
 		}
 		// bm25() is lower-is-better; negate so higher = more relevant.
+		queryArgs := append(append([]any{query}, cwdArgs...), limit, skip)
 		rows, err = s.db.Query(`
-SELECT m.slug, m.content, -bm25(memories_fts) AS score, m.created_at, m.updated_at
+SELECT m.slug, m.cwd, m.content, -bm25(memories_fts) AS score, m.created_at, m.updated_at
 FROM memories_fts f
 JOIN memories m ON m.id = f.rowid
-WHERE m.cwd = ? AND memories_fts MATCH ?
+WHERE memories_fts MATCH ?`+cwdClause+`
 ORDER BY bm25(memories_fts)
-LIMIT ? OFFSET ?`, cwd, query, limit, skip)
+LIMIT ? OFFSET ?`, queryArgs...)
 	} else {
-		if err = s.db.QueryRow(`SELECT COUNT(*) FROM memories WHERE cwd = ?`, cwd).Scan(&total); err != nil {
+		// List mode. The cwd clause here uses the base table alias `m` too.
+		listCwd := ""
+		if cwd != "" {
+			listCwd = " WHERE m.cwd = ?"
+		}
+		if err = s.db.QueryRow(`SELECT COUNT(*) FROM memories m`+listCwd, cwdArgs...).Scan(&total); err != nil {
 			return SearchResult{}, fmt.Errorf("memory: list count: %w", err)
 		}
-		// List mode: no FTS, no score; most recently updated first.
+		listArgs := append(append([]any{}, cwdArgs...), limit, skip)
 		rows, err = s.db.Query(`
-SELECT m.slug, m.content, 0 AS score, m.created_at, m.updated_at
-FROM memories m
-WHERE m.cwd = ?
+SELECT m.slug, m.cwd, m.content, 0 AS score, m.created_at, m.updated_at
+FROM memories m`+listCwd+`
 ORDER BY m.updated_at DESC
-LIMIT ? OFFSET ?`, cwd, limit, skip)
+LIMIT ? OFFSET ?`, listArgs...)
 	}
 	if err != nil {
 		return SearchResult{}, fmt.Errorf("memory: search: %w", err)
@@ -199,7 +215,7 @@ LIMIT ? OFFSET ?`, cwd, limit, skip)
 	var out []Memory
 	for rows.Next() {
 		var m Memory
-		if err := rows.Scan(&m.Slug, &m.Content, &m.Score, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		if err := rows.Scan(&m.Slug, &m.CWD, &m.Content, &m.Score, &m.CreatedAt, &m.UpdatedAt); err != nil {
 			return SearchResult{}, fmt.Errorf("memory: scan: %w", err)
 		}
 		if searching {

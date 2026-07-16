@@ -89,6 +89,9 @@ func main() {
 	case "mcp":
 		runMCP(args[1:])
 
+	case "memo":
+		runMemo(args[1:])
+
 	case "-p", "--prompt":
 		// CLI prompt mode (explicit)
 		if len(args) < 2 {
@@ -231,14 +234,11 @@ func newRootAgent() *agent.Agent {
 	if s, err := memory.Open(""); err == nil {
 		mem = s
 	}
-	opts := agent.AgentOptions{
+	return agent.New(agent.AgentOptions{
 		ThinkingLevel: config.GetSettingsManager().ThinkingLevel(),
 		EnableMCPs:    true,
-	}
-	if mem != nil {
-		opts.Memory = memory.NewToolAdapter(mem)
-	}
-	return agent.New(opts)
+		Memory:        mem, // *memory.Store directly; the agent wraps it in a scoped adapter
+	})
 }
 
 func runSettings(args []string) {
@@ -299,6 +299,52 @@ func runMCP(args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runMemo dispatches `harness memo [<query>] [--all] [--content] [--limit N] [--skip N]`.
+// Read-only: with no query it lists memories; with a query it full-text searches
+// them — for the current directory, or across all projects with --all.
+func runMemo(args []string) {
+	a := newRootAgent()
+	defer a.Close()
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	opts := parseMemoFlags(args)
+	if err := cli.RunMemo(ctx, a, opts, "text"); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// parseMemoFlags parses `memo` args: an optional bare query (no query = list),
+// plus --all, --content, --limit, --skip.
+func parseMemoFlags(args []string) cli.MemoOpts {
+	opts := cli.MemoOpts{Limit: 10}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--all":
+			opts.All = true
+		case "--content":
+			opts.Content = true
+		case "--limit":
+			if i+1 < len(args) {
+				fmt.Sscanf(args[i+1], "%d", &opts.Limit)
+				i++
+			}
+		case "--skip":
+			if i+1 < len(args) {
+				fmt.Sscanf(args[i+1], "%d", &opts.Skip)
+				i++
+			}
+		default:
+			// A bare non-flag arg is the query (no query → list mode).
+			if opts.Query == "" && len(args[i]) > 0 && args[i][0] != '-' {
+				opts.Query = args[i]
+			}
+		}
+	}
+	return opts
 }
 
 // parseMCPAddFlags parses `mcp add` flags. The first non-flag arg is the server
@@ -459,6 +505,11 @@ Settings:
   harness mcp add <name> [flags]     Add MCP server (see 'mcp add' flags)
   harness mcp rm <name>              Remove MCP server
 
+Memory (read-only — the agent writes memories via its tools):
+  harness memo                       List memories for the current project
+  harness memo <query>               Full-text search memories
+  harness memo <query> --all         Search across ALL projects
+
 Flags (CLI / TUI):
   -p, --prompt <text>  Prompt for single-turn CLI mode
   --model <m>          Model (provider/model)
@@ -478,6 +529,12 @@ Flags ('mcp add'):
   --header KEY:VAL     Remote: HTTP header (repeatable)
   --disabled           Add the server disabled (default: enabled)
 
+Flags ('memo'):
+  --all                Include memories from ALL projects (not just this one)
+  --content            Show each memory's content preview
+  --limit <n>          Max results per page (default 10)
+  --skip <n>           Pagination offset (default 0)
+
 Examples:
   harness -p "what is 2+2?"
   harness -p "list files" --output json
@@ -488,5 +545,8 @@ Examples:
   harness settings set thinking high
   harness mcp add fs --local --command "npx -y @mcp/fs"
   harness mcp add api --remote --url https://mcp.x --header "Authorization: Bearer t"
+  harness memo
+  harness memo "deploy process" --content
+  harness memo kubernetes --all
   harness http :8080`)
 }

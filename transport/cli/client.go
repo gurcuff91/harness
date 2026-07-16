@@ -59,6 +59,16 @@ func (c *httpClient) GetSettings() ([]byte, error) {
 	return c.do("GET", "/api/settings", nil)
 }
 
+// GetMemories queries the read-only memories endpoint. rawQuery is the URL query
+// string (cwd, query, include_content, skip, limit) already encoded.
+func (c *httpClient) GetMemories(rawQuery string) ([]byte, error) {
+	path := "/api/memories"
+	if rawQuery != "" {
+		path += "?" + rawQuery
+	}
+	return c.do("GET", path, nil)
+}
+
 func (c *httpClient) PatchSettings(fields map[string]any) ([]byte, error) {
 	return c.do("PATCH", "/api/settings", fields)
 }
