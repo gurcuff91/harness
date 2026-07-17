@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.22.0] - 2026-06-23
+
+### TUI
+- **Sub-millisecond tool timing:** the tool result `[time]` tag was inconsistent
+  because durations were serialized as truncated integer milliseconds — two
+  equally fast calls could show `[1ms]` and nothing. Durations now carry
+  fractional milliseconds; `formatDur` renders `<1ms` for sub-ms tools (history
+  replay, with no persisted timing, still omits the tag)
+- **Write header** summarizes the file content as `(N line[s])` instead of
+  dumping the whole file into the header, matching Edit's `(N edit[s])`
+
+## [0.21.0] - 2026-06-23
+
+### Edit tool — PI-level robustness
+- **Multi-edit + dual shape:** pass a single `old_text`/`new_text`, or an `edits[]`
+  array for several disjoint changes in one call (mutually exclusive; validated).
+  Each `old_text` is matched against the original file
+- **Fuzzy matching:** tolerates smart quotes, dash variants, exotic spaces, and
+  trailing whitespace that models often introduce (exact match first, then fuzzy)
+- **Line endings & BOM:** matches in LF space and restores the file's original
+  CRLF/LF ending and leading BOM; preserves the file mode
+- **Overlap detection** and actionable errors (not found / not unique / overlap /
+  empty / no-change), mirroring PI
+- Ported PI's edit-diff core to Go (`editdiff.go`)
+
+### TUI — tool render polish
+- Edit header summarizes edits as `(N edit[s])` instead of dumping raw JSON;
+  a single flat edit shows `(1 edit)` for parity
+- Tool result now shows the message verbatim for single-line outputs (Edit,
+  Write, Memo*, short MCP statuses) instead of a misleading `(1 lines)`;
+  multi-line outputs still summarize as `(N lines)`. The `[time]` tag is kept on
+  both for consistency
+
 ## [0.20.0] - 2026-06-23
 
 ### Bash tool — native background execution

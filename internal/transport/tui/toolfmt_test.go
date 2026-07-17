@@ -19,8 +19,11 @@ func TestFormatToolArgsBuiltins(t *testing.T) {
 		"bash command bare": {
 			"Bash", `{"command":"go test"}`, "go test",
 		},
-		"edit": {
-			"Edit", `{"path":"x.go","old_text":"a","new_text":"b"}`, "x.go old_text=a new_text=b",
+		"edit (flat single — shows (1 edit) for parity)": {
+			"Edit", `{"path":"x.go","old_text":"a","new_text":"b"}`, "x.go (1 edit)",
+		},
+		"edit (array — summarized count)": {
+			"Edit", `{"path":"x.go","edits":[{"old_text":"a","new_text":"b"},{"old_text":"c","new_text":"d"}]}`, "x.go (2 edits)",
 		},
 		"fetch": {
 			"Fetch", `{"url":"http://x","method":"GET"}`, "http://x method=GET",

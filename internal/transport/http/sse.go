@@ -30,8 +30,10 @@ func formatEvent(e types.Event) []byte {
 			"tool_name": e.ToolName,
 			"tool_id":   e.ToolID,
 			"output":    e.Output,
-			"duration":  e.Duration.Milliseconds(),
-			"is_error":  e.IsError,
+			// Fractional milliseconds (from microseconds) so sub-ms tools — e.g. an
+			// in-memory MemoSearch — don't truncate to 0 and drop the [time] tag.
+			"duration": float64(e.Duration.Microseconds()) / 1000.0,
+			"is_error": e.IsError,
 		}
 	case types.EventTurnStart:
 		payload = map[string]any{"type": "turn_start"}

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/gurcuff91/harness/internal/transport/tui/ansi"
@@ -25,8 +26,9 @@ var primaryParam = map[string]string{
 
 // kvPair is one decoded argument, preserving JSON key order.
 type kvPair struct {
-	key string
-	val string
+	key    string
+	val    string
+	rawVal json.RawMessage // original JSON value, for structural inspection (e.g. array counts)
 }
 
 // parseArgsOrdered decodes a JSON object into ordered key/value pairs, keeping
@@ -58,7 +60,7 @@ func parseArgsOrdered(argsJSON string) ([]kvPair, bool) {
 		if err := dec.Decode(&raw); err != nil {
 			return nil, false // incomplete
 		}
-		pairs = append(pairs, kvPair{key: key, val: renderValue(raw)})
+		pairs = append(pairs, kvPair{key: key, val: renderValue(raw), rawVal: raw})
 	}
 	// Closing brace must be present for the object to be complete.
 	if _, err := dec.Token(); err != nil {
@@ -101,9 +103,72 @@ func formatToolArgs(name, argsJSON string) string {
 			parts = append([]string{ansi.Dimmed(p.val)}, parts...)
 			continue
 		}
+		// Write dumps the entire file content into 'content' — summarize it as a
+		// line count so the header stays a clean one-liner (the full content still
+		// flows to the model; this is display only).
+		if name == "Write" && p.key == "content" {
+			if n := countLines(p.val); n > 0 {
+				parts = append(parts, ansi.Muted(lineCountLabel(n)))
+			}
+			continue
+		}
+		// Edit's multi-edit array and the flat old/new text are noisy to dump
+		// verbatim; summarize them so the header stays a clean one-liner. The full
+		// content still flows to the model — this is display only.
+		if name == "Edit" {
+			if p.key == "edits" {
+				if n := countJSONArray(p.rawVal); n > 0 {
+					parts = append(parts, ansi.Muted(editCountLabel(n)))
+				}
+				continue
+			}
+			if p.key == "old_text" || p.key == "new_text" {
+				// Flat single edit: show "(1 edit)" for parity with the array form;
+				// the content itself is redundant noise in the header.
+				if p.key == "old_text" {
+					parts = append(parts, ansi.Muted(editCountLabel(1)))
+				}
+				continue
+			}
+		}
 		// Param NAME in Muted (same weight/color as the result line) to make it
 		// stand out; the VALUE stays Dimmed so it reads as secondary.
 		parts = append(parts, ansi.Muted(p.key+"=")+ansi.Dimmed(p.val))
 	}
 	return strings.Join(parts, " ")
+}
+
+// countJSONArray returns the number of elements in a JSON array value, or 0 if
+// it isn't a parseable array.
+func countJSONArray(raw json.RawMessage) int {
+	var arr []json.RawMessage
+	if json.Unmarshal(raw, &arr) != nil {
+		return 0
+	}
+	return len(arr)
+}
+
+// editCountLabel renders the "(N edit[s])" summary shown in the Edit header.
+func editCountLabel(n int) string {
+	if n == 1 {
+		return "(1 edit)"
+	}
+	return fmt.Sprintf("(%d edits)", n)
+}
+
+// countLines counts the lines in s (a trailing newline doesn't add a phantom
+// empty line). Empty string is 0.
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(strings.TrimSuffix(s, "\n"), "\n") + 1
+}
+
+// lineCountLabel renders the "(N line[s])" summary shown in the Write header.
+func lineCountLabel(n int) string {
+	if n == 1 {
+		return "(1 line)"
+	}
+	return fmt.Sprintf("(%d lines)", n)
 }

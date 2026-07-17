@@ -244,10 +244,19 @@ func (t *TUI) formatToolResult(output string, dur float64, isErr bool) string {
 		// and stands apart from the fainter args above it.
 		return ansi.Err("✘") + " " + ansi.Muted(durTag+summary)
 	}
-	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	trimmed := strings.TrimRight(output, "\n")
+	lines := strings.Split(trimmed, "\n")
 	count := len(lines)
 	if count == 1 && lines[0] == "" {
 		count = 0
+	}
+	// Single-line output is a confirmation MESSAGE (Edit, Write, Memo*, and MCP
+	// tools that return a short status) — show it verbatim. Multi-line output is a
+	// DUMP (Bash, Read, Fetch, …) — summarize as a line count. The [time] tag is
+	// kept in both for consistency across tools.
+	if count == 1 {
+		summary := collapseWhitespace(stripANSI(trimmed))
+		return ansi.Accent("✔") + " " + ansi.Muted(durTag+summary)
 	}
 	return ansi.Accent("✔") + " " + ansi.Muted(fmt.Sprintf("%s(%d lines)", durTag, count))
 }

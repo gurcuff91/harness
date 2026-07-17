@@ -188,10 +188,16 @@ func unescapeArgs(s string) string {
 }
 
 func formatDur(ms float64) string {
-	if ms >= 1000 {
+	switch {
+	case ms >= 1000:
 		return fmt.Sprintf("%.1fs", ms/1000)
+	case ms >= 1:
+		return fmt.Sprintf("%.0fms", ms)
+	default:
+		// Sub-millisecond: show "<1ms" rather than "0ms" so fast tools still read
+		// as having run (and the [time] tag stays consistent across calls).
+		return "<1ms"
 	}
-	return fmt.Sprintf("%.0fms", ms)
 }
 
 func compactNum(n int) string {
