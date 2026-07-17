@@ -96,6 +96,7 @@ func formatToolArgs(name, argsJSON string) string {
 
 	primary := primaryParam[name]
 	var parts []string
+	var deferred []string // summaries pushed to the end (e.g. MemoWrite content)
 	for _, p := range pairs {
 		if p.key == primary {
 			// Primary param shown bare (the icon already signals the tool kind),
@@ -111,6 +112,30 @@ func formatToolArgs(name, argsJSON string) string {
 				parts = append(parts, ansi.Muted(lineCountLabel(n)))
 			}
 			continue
+		}
+		// MemoWrite's content can be many lines; summarize it and defer it to the
+		// END so short params (global=) stay next to the slug.
+		if name == "MemoWrite" && p.key == "content" {
+			if n := countLines(p.val); n > 0 {
+				deferred = append(deferred, ansi.Muted(lineCountLabel(n)))
+			}
+			continue
+		}
+		// Fetch's headers may carry secrets (Authorization, API keys) and the body
+		// can be a large payload — never dump them. Summarize both.
+		if name == "Fetch" {
+			if p.key == "headers" {
+				if n := countJSONObject(p.rawVal); n > 0 {
+					parts = append(parts, ansi.Muted(headerCountLabel(n)))
+				}
+				continue
+			}
+			if p.key == "body" {
+				if b := len(p.val); b > 0 {
+					parts = append(parts, ansi.Muted(fmt.Sprintf("(body: %d bytes)", b)))
+				}
+				continue
+			}
 		}
 		// Edit's multi-edit array and the flat old/new text are noisy to dump
 		// verbatim; summarize them so the header stays a clean one-liner. The full
@@ -135,6 +160,7 @@ func formatToolArgs(name, argsJSON string) string {
 		// stand out; the VALUE stays Dimmed so it reads as secondary.
 		parts = append(parts, ansi.Muted(p.key+"=")+ansi.Dimmed(p.val))
 	}
+	parts = append(parts, deferred...)
 	return strings.Join(parts, " ")
 }
 
@@ -171,4 +197,23 @@ func lineCountLabel(n int) string {
 		return "(1 line)"
 	}
 	return fmt.Sprintf("(%d lines)", n)
+}
+
+// countJSONObject returns the number of keys in a JSON object value, or 0 if it
+// isn't a parseable object.
+func countJSONObject(raw json.RawMessage) int {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil {
+		return 0
+	}
+	return len(m)
+}
+
+// headerCountLabel renders the "(N header[s])" summary for Fetch — values are
+// hidden because they can contain secrets (Authorization, API keys).
+func headerCountLabel(n int) string {
+	if n == 1 {
+		return "(1 header)"
+	}
+	return fmt.Sprintf("(%d headers)", n)
 }

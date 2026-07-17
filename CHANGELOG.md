@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.23.0] - 2026-06-23
+
+### TUI — tool header hygiene
+- **Fetch** no longer dumps request headers (which can contain secrets like
+  `Authorization` / API keys) or the request body into the header. Headers are
+  summarized as `(N header[s])` with values hidden, and the body as
+  `(body: N bytes)`
+- **MemoWrite** summarizes its content as `(N line[s])` (deferred to the end so
+  short params like `global=` stay next to the slug), matching Write/Edit
+- Audited all built-in tools; Bash, Read, Skill, MemoSearch, MemoDelete already
+  render short params cleanly, and Subagent's prompt stays full (it's the
+  primary param)
+
 ## [0.22.0] - 2026-06-23
 
 ### TUI
