@@ -95,8 +95,8 @@ func formatToolArgs(name, argsJSON string) string {
 	}
 
 	primary := primaryParam[name]
-	var parts []string
-	var deferred []string // summaries pushed to the end (e.g. MemoWrite content)
+	var parts []string    // key=value params (and the bare primary), rendered first
+	var deferred []string // (..) summaries, always rendered LAST for a clean layout
 	for _, p := range pairs {
 		if p.key == primary {
 			// Primary param shown bare (the icon already signals the tool kind),
@@ -104,46 +104,58 @@ func formatToolArgs(name, argsJSON string) string {
 			parts = append([]string{ansi.Dimmed(p.val)}, parts...)
 			continue
 		}
-		// Write dumps the entire file content into 'content' — summarize it as a
-		// line count so the header stays a clean one-liner (the full content still
-		// flows to the model; this is display only).
+		// Large or sensitive params are summarized as "(..)" tokens and DEFERRED to
+		// the end, so short key=value params stay grouped near the primary. The full
+		// values still flow to the model — this is display only.
 		if name == "Write" && p.key == "content" {
 			if n := countLines(p.val); n > 0 {
-				parts = append(parts, ansi.Muted(lineCountLabel(n)))
+				deferred = append(deferred, ansi.Muted(lineCountLabel(n)))
 			}
 			continue
 		}
-		// MemoWrite's content can be many lines; summarize it and defer it to the
-		// END so short params (global=) stay next to the slug.
 		if name == "MemoWrite" && p.key == "content" {
 			if n := countLines(p.val); n > 0 {
 				deferred = append(deferred, ansi.Muted(lineCountLabel(n)))
 			}
 			continue
 		}
-		// Fetch's headers may carry secrets (Authorization, API keys) and the body
-		// can be a large payload — never dump them. Summarize both.
+		// Fetch's body-carrying params can be large or carry secrets (headers:
+		// Authorization/API keys). Summarize each and defer to the end.
 		if name == "Fetch" {
-			if p.key == "headers" {
+			switch p.key {
+			case "headers":
 				if n := countJSONObject(p.rawVal); n > 0 {
-					parts = append(parts, ansi.Muted(headerCountLabel(n)))
+					deferred = append(deferred, ansi.Muted(headerCountLabel(n)))
 				}
 				continue
-			}
-			if p.key == "body" {
+			case "body":
 				if b := len(p.val); b > 0 {
-					parts = append(parts, ansi.Muted(fmt.Sprintf("(body: %d bytes)", b)))
+					deferred = append(deferred, ansi.Muted(fmt.Sprintf("(body: %d bytes)", b)))
+				}
+				continue
+			case "json":
+				if len(p.rawVal) > 0 {
+					deferred = append(deferred, ansi.Muted(fmt.Sprintf("(json: %d bytes)", len(p.rawVal))))
+				}
+				continue
+			case "form":
+				if n := countJSONObject(p.rawVal); n > 0 {
+					deferred = append(deferred, ansi.Muted(fieldCountLabel(n)))
+				}
+				continue
+			case "files":
+				if n := countJSONArray(p.rawVal); n > 0 {
+					deferred = append(deferred, ansi.Muted(fileCountLabel(n)))
 				}
 				continue
 			}
 		}
 		// Edit's multi-edit array and the flat old/new text are noisy to dump
-		// verbatim; summarize them so the header stays a clean one-liner. The full
-		// content still flows to the model — this is display only.
+		// verbatim; summarize them and defer.
 		if name == "Edit" {
 			if p.key == "edits" {
 				if n := countJSONArray(p.rawVal); n > 0 {
-					parts = append(parts, ansi.Muted(editCountLabel(n)))
+					deferred = append(deferred, ansi.Muted(editCountLabel(n)))
 				}
 				continue
 			}
@@ -151,7 +163,7 @@ func formatToolArgs(name, argsJSON string) string {
 				// Flat single edit: show "(1 edit)" for parity with the array form;
 				// the content itself is redundant noise in the header.
 				if p.key == "old_text" {
-					parts = append(parts, ansi.Muted(editCountLabel(1)))
+					deferred = append(deferred, ansi.Muted(editCountLabel(1)))
 				}
 				continue
 			}
@@ -216,4 +228,20 @@ func headerCountLabel(n int) string {
 		return "(1 header)"
 	}
 	return fmt.Sprintf("(%d headers)", n)
+}
+
+// fieldCountLabel renders the "(N field[s])" summary for a Fetch form body.
+func fieldCountLabel(n int) string {
+	if n == 1 {
+		return "(1 field)"
+	}
+	return fmt.Sprintf("(%d fields)", n)
+}
+
+// fileCountLabel renders the "(N file[s])" summary for a Fetch multipart upload.
+func fileCountLabel(n int) string {
+	if n == 1 {
+		return "(1 file)"
+	}
+	return fmt.Sprintf("(%d files)", n)
 }

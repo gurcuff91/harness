@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.25.0] - 2026-06-23
+
+### Fetch tool — fine-grained control
+- **`follow_redirects`** (default true): set false to inspect a 3xx response (read
+  its Location header) without following it
+- **`timeout`** (seconds, default 30): configurable per request, consistent with Bash
+- **HEAD** documented as a supported method (arbitrary methods already worked)
+- Fixed the description: text is truncated to the FIRST 2000 lines/50KB (head),
+  not the last — the code always did head truncation; the docs said “last”
+
+### TUI — consistent tool-arg ordering
+- All `(…)` summaries (json/form/files/headers/body/content/edits) now render
+  AFTER the plain `key=value` params, for every tool — short params stay grouped
+  near the primary, summaries trail at the end (matching MemoWrite's layout)
+
+## [0.24.0] - 2026-06-23
+
+### Fetch tool — HTTP swiss-army knife (JS fetch style)
+- **Body helpers** (choose one): `body` (raw string), `json` (object → JSON +
+  `application/json`), `form` (key/values → `x-www-form-urlencoded`), `files`
+  (multipart upload; may combine with `form` for text fields). Content-Type is
+  set automatically; mutual exclusion is validated. All via stdlib — no new deps
+- **Rich response** (JS Response style): the result shows the status line, all
+  response headers, and the body. 4xx/5xx are reported as errors; 3xx redirects
+  are followed automatically. On truncation the full status+headers+body is saved
+  to a temp file
+- **`download_to`** (renamed from `output_path`) saves the raw response bytes to
+  disk. On 4xx/5xx it does NOT save — it reports the failure with the body
+  instead (like `wget` / `curl --fail`), so a failed download never leaves a
+  bogus file
+- Structured, sectioned tool description (Body / Headers / Download / Response)
+- **TUI:** request helpers render as summaries — `(json: N bytes)`, `(N fields)`,
+  `(N files)`, `(body: N bytes)`, `(N headers)` (header values hidden as they may
+  hold secrets); `download_to` shows the path
+
 ## [0.23.0] - 2026-06-23
 
 ### TUI — tool header hygiene
