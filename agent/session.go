@@ -47,7 +47,7 @@ type Session struct {
 
 	// Skills
 	skills    []resources.SkillInfo
-	readSkill func(string) (string, error)
+	readSkill func(string) (content string, dir string, err error)
 
 	mu        sync.Mutex
 	maxTurns  int
@@ -89,7 +89,7 @@ func newSession(storeInst store.SessionStore,
 	provider providers.Provider, modelID, thinkingLvl string,
 	toolReg *tools.Registry, systemPrompt string,
 	maxTurns, maxTokens int,
-	skills []resources.SkillInfo, readSkill func(string) (string, error)) *Session {
+	skills []resources.SkillInfo, readSkill func(string) (content string, dir string, err error)) *Session {
 
 	meta := storeInst.Meta()
 	s := &Session{
@@ -220,10 +220,11 @@ func (s *Session) PromptAndWait(ctx context.Context, text string, images ...type
 // Skills returns the discovered skills for this session.
 func (s *Session) Skills() []resources.SkillInfo { return s.skills }
 
-// ReadSkill returns the content of a skill by name.
-func (s *Session) ReadSkill(name string) (string, error) {
+// ReadSkill returns the content of a skill by name plus the absolute directory
+// it lives in (for resolving relative paths the skill references).
+func (s *Session) ReadSkill(name string) (content string, dir string, err error) {
 	if s.readSkill == nil {
-		return "", fmt.Errorf("no skill reader")
+		return "", "", fmt.Errorf("no skill reader")
 	}
 	return s.readSkill(name)
 }

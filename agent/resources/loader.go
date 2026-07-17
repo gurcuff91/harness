@@ -27,7 +27,9 @@ type ResourceLoader interface {
 	// Load discovers SYSTEM.md, AGENTS.md and available skills.
 	Load() (*Resources, error)
 
-	// ReadSkill returns the full content of a skill by name.
-	// Returns an error if the skill is not found or cannot be read.
-	ReadSkill(name string) (string, error)
+	// ReadSkill returns the full content of a skill by name plus the absolute
+	// directory the skill lives in (so relative paths it references — scripts,
+	// templates — can be resolved). Returns an error if the skill is not found or
+	// cannot be read.
+	ReadSkill(name string) (content string, dir string, err error)
 }

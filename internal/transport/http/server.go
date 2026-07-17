@@ -914,13 +914,14 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 		// Check if it's a skill command: skill:<name>
 		if strings.HasPrefix(req.Command, "skill:") {
 			skillName := strings.TrimPrefix(req.Command, "skill:")
-			content, err := proxy.session.ReadSkill(skillName)
+			content, dir, err := proxy.session.ReadSkill(skillName)
 			if err != nil {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "skill not found: " + skillName})
 				return
 			}
-			// Build prompt: skill content + optional user prompt
-			prompt := content
+			// Build prompt: skill location note + content + optional user prompt. The
+			// location lets the model resolve relative paths the skill references.
+			prompt := fmt.Sprintf("This skill is located at %s\nAny relative paths it references are relative to this directory.\n\n%s", dir, content)
 			if userPrompt, _ := req.Params["prompt"].(string); userPrompt != "" {
 				prompt += "\n\n---\n\n" + userPrompt
 			}

@@ -12,6 +12,6 @@ func (NilLoader) Load() (*Resources, error) {
 	return &Resources{}, nil
 }
 
-func (NilLoader) ReadSkill(name string) (string, error) {
-	return "", fmt.Errorf("skill %q not found (NilLoader has no skills)", name)
+func (NilLoader) ReadSkill(name string) (content string, dir string, err error) {
+	return "", "", fmt.Errorf("skill %q not found (NilLoader has no skills)", name)
 }

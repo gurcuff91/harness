@@ -321,7 +321,7 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 	}
 	res, _ := loader.Load()
 	var skills []resources.SkillInfo
-	var readSkill func(string) (string, error)
+	var readSkill func(string) (content string, dir string, err error)
 	if res != nil {
 		skills = res.Skills
 		readSkill = loader.ReadSkill

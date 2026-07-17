@@ -83,12 +83,14 @@ func (f *FileResourceLoader) Load() (*Resources, error) {
 
 // ReadSkill returns the eagerly loaded content of a skill by name.
 // Must be called after Load().
-func (f *FileResourceLoader) ReadSkill(name string) (string, error) {
+func (f *FileResourceLoader) ReadSkill(name string) (content string, dir string, err error) {
 	entry, ok := f.index[name]
 	if !ok {
-		return "", fmt.Errorf("skill %q not found", name)
+		return "", "", fmt.Errorf("skill %q not found", name)
 	}
-	return entry.content, nil
+	// entry.info.Location is the absolute path to the skill's SKILL.md; the
+	// directory that contains it is the skill's base for relative references.
+	return entry.content, filepath.Dir(entry.info.Location), nil
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────

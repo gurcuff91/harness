@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.27.0] - 2026-06-23
+
+### Skill tool — location-aware
+- The Skill result now begins with the skill's absolute directory and a note that
+  relative paths it references (scripts, templates, data files) resolve against
+  it. Skills can live in any of four locations, so telling the model where a
+  skill loaded from lets it find bundled scripts without guessing
+- `ResourceLoader.ReadSkill` (and `Session.ReadSkill`) now return `(content,
+  dir, error)`; the HTTP `skill:` command injects the location note too
+- Skill content is now head-truncated (like Fetch) — the important guidance is at
+  the top
+
 ## [0.26.0] - 2026-06-23
 
 ### Tool guidance — steer HTTP to Fetch (not curl)
