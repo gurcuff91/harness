@@ -57,7 +57,7 @@ func (c *Client) do(method, path string, body any) ([]byte, error) {
 	return data, nil
 }
 
-// ── Command types (mirror transport/http) ───────────────────────────────
+// ── Command types (mirror server) ───────────────────────────────
 
 type CommandDef struct {
 	Name        string     `json:"name"`

@@ -5,7 +5,7 @@ import (
 	"net"
 
 	"github.com/gurcuff91/harness/agent"
-	transporthttp "github.com/gurcuff91/harness/internal/transport/http"
+	"github.com/gurcuff91/harness/internal/server"
 )
 
 // startInternalServer starts the HTTP transport on a random port. Because we
@@ -19,14 +19,14 @@ func startInternalServer(a *agent.Agent) (*internalServer, string, error) {
 	}
 	addr := listener.Addr().String()
 
-	srv := transporthttp.NewServer(a, transporthttp.ServerOptions{Verbose: false})
+	srv := server.NewServer(a, server.ServerOptions{Verbose: false})
 	go srv.Serve(listener) //nolint:errcheck
 
 	return &internalServer{srv: srv}, addr, nil
 }
 
 type internalServer struct {
-	srv *transporthttp.Server
+	srv *server.Server
 }
 
 func (s *internalServer) Close() error { return nil }

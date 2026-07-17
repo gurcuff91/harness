@@ -16,7 +16,7 @@
 1. **No new dependencies** without explicit owner approval. Solve problems with stdlib first.
 2. **Always streaming.** There is no non-streaming path. Every provider implements `CompleteStream()`. Never add `Complete()`.
 3. **`provider/model` format everywhere.** Settings, env vars, CLI display, Resolve — all use `provider/model` (e.g., `anthropic/claude-sonnet-4-20250514`).
-4. **Backend/frontend separation.** `agent/` and `internal/providers/` never import `internal/transport/`. The agent emits events over an HTTP/SSE API; the transports (`cli`, `http`, `tui`) are pure clients.
+4. **Backend/frontend separation.** `agent/` and `internal/providers/` never import `internal/server` or `internal/transport/`. The agent emits events over an HTTP/SSE API (`internal/server`); the clients (`internal/cli`, `internal/transport/tui`) consume it.
 5. **Persistent state is explicit.** No model caching. On-disk state is limited to `~/.harness/{credentials.json, settings.json}` and `~/.harness/agent/{sessions/, memory.db}`.
 6. **SDK boundary.** Public packages (`agent`, `agent/{tools,store,resources,memory}`, `mcp`, `types`) form the SDK. Keep implementation detail (`providers`, `config`, `transport`, `version`) under `internal/`, and never expose an `internal/…` type in a public signature.
 
@@ -55,10 +55,11 @@ cmd/harness/main.go             ← executable entry point (package main), CLI d
     ├── config/                 ← typed settings + credentials managers
     │   ├── settings.go / credentials.go / manager.go
     ├── version/                ← build version (ldflags target)
-    └── transport/              ← client transports (used by the binary)
-        ├── cli/                ← CLI command handlers
-        ├── http/               ← HTTP/SSE server (Serve(listener), handler())
-        └── tui/                ← pure-Go terminal UI (zero external TUI libs)
+    ├── server/                 ← HTTP/SSE backend (Serve(listener), handler()) — the API all clients talk to
+    │   ├── server.go / sse.go / proxy.go
+    ├── cli/                    ← CLI command handlers (a client of server)
+    └── transport/              ← interactive session frontends (each opens a session over server)
+        └── tui/                ← pure-Go terminal UI (zero external TUI libs); future: telegram, slack…
 ```
 
 > **internal/ rule:** its parent is the module root, so *all* harness code can
@@ -166,7 +167,7 @@ make install              # build + install to ~/go/bin
 3. Add constructor to `internal/providers/registry.go` in the `Resolve()` switch
 4. Register the provider key + status in `internal/providers/status.go`
 5. Add credential handling (`config/credentials.go` is the store; api-key providers use `resolveAPIKey`)
-6. Add a connect handler in `internal/transport/cli/cli.go` and, if OAuth, wire `internal/providers/authflow`
+6. Add a connect handler in `internal/cli/cli.go` and, if OAuth, wire `internal/providers/authflow`
 
 ### Adding a New Tool
 
@@ -178,8 +179,8 @@ make install              # build + install to ~/go/bin
 
 ### Adding a New Command
 
-1. Add a subcommand `case` in `cmd/harness/main.go` and a `cli.Run*` handler in `internal/transport/cli/`
-2. Add an HTTP route in `internal/transport/http/server.go` if it needs backend data
+1. Add a subcommand `case` in `cmd/harness/main.go` and a `cli.Run*` handler in `internal/cli/`
+2. Add an HTTP route in `internal/server/server.go` if it needs backend data
 3. Update the `--help` text in `cmd/harness/main.go`
 
 ## Thinking System
@@ -236,7 +237,7 @@ Universal levels mapped per-provider:
 ## Anti-Patterns to Avoid
 
 - ❌ Adding `Complete()` (non-streaming) to Provider interface
-- ❌ Importing `internal/transport/` from `agent/` or `internal/providers/`
+- ❌ Importing `internal/server` or `internal/transport/` from `agent/` or `internal/providers/`
 - ❌ Exposing an `internal/…` type in a public (SDK) package signature
 - ❌ File-based model cache
 - ❌ Multiple spinner goroutines running simultaneously
@@ -251,7 +252,7 @@ Keep files focused. Current largest files for reference:
 | File | Lines | Role |
 |------|-------|------|
 | `transport/tui/components/markdown.go` | ~1100 | Faithful streaming markdown renderer (complex by nature) |
-| `internal/transport/http/server.go` | ~960 | HTTP/SSE routes + handlers |
+| `internal/server/server.go` | ~960 | HTTP/SSE routes + handlers |
 | `agent/session.go` | ~680 | Session lifecycle, history, tool pairing |
 | `internal/providers/claude_oauth.go` | ~610 | OAuth token management + streaming |
 | `cmd/harness/main.go` | ~555 | Entry point + CLI dispatch |

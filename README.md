@@ -74,10 +74,10 @@ harness/
     │   └── llm/              # Core LLM types + metadata cascade + model registry
     ├── config/               # Typed settings + credentials managers
     ├── version/              # Build version (ldflags target)
-    └── transport/            # Client transports (used by the binary)
-        ├── cli/              # CLI command handlers
-        ├── http/             # HTTP/SSE server (Serve(listener), handler())
-        └── tui/              # Pure-Go terminal UI (zero external TUI libs)
+    ├── server/               # HTTP/SSE backend (Serve(listener)) — the API all clients talk to
+    ├── cli/                  # CLI command handlers (a client of server)
+    └── transport/            # Interactive session frontends
+        └── tui/              # Pure-Go terminal UI (future: telegram, slack…)
 ```
 
 ### Embedding the SDK

@@ -44,7 +44,7 @@ type SettingsManager struct {
 }
 
 // settingsData is the on-disk representation. Field names, struct tags, and the
-// REST API (see transport/http SettingsDTO) all share ONE vocabulary.
+// REST API (see server SettingsDTO) all share ONE vocabulary.
 type settingsData struct {
 	// Core singletons.
 	ActiveModel   string `json:"active_model,omitempty"`

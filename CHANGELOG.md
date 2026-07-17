@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.28.0] - 2026-06-23
+
+### Internal restructure — server / cli / transport
+- `internal/transport/http` → `internal/server` (package `http` → `server`): it's
+  the HTTP/SSE backend the clients talk to, not a transport
+- `internal/transport/cli` → `internal/cli`: CLI commands are a client, not a
+  session frontend
+- `internal/transport/` now holds only interactive session frontends — today the
+  pure-Go `tui`, with room for future transports (telegram, slack, …)
+- Purely internal — no effect on the public SDK surface
+
 ## [0.27.0] - 2026-06-23
 
 ### Skill tool — location-aware

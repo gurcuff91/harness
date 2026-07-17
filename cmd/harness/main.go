@@ -12,8 +12,8 @@ import (
 
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/memory"
-	"github.com/gurcuff91/harness/internal/transport/cli"
-	httptransport "github.com/gurcuff91/harness/internal/transport/http"
+	"github.com/gurcuff91/harness/internal/cli"
+	"github.com/gurcuff91/harness/internal/server"
 	"github.com/gurcuff91/harness/internal/transport/tui"
 )
 
@@ -128,7 +128,7 @@ func main() {
 func runHTTP(addr string) {
 	a := newRootAgent()
 	defer a.Close()
-	srv := httptransport.NewServer(a, httptransport.ServerOptions{Verbose: true})
+	srv := server.NewServer(a, server.ServerOptions{Verbose: true})
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("listen %s: %v", addr, err)

@@ -1,7 +1,7 @@
 // Package tui is a from-scratch, pure-Go terminal frontend for the harness.
 //
 // It is a thin client over the same HTTP/SSE backend the other transports use
-// (transport/http): it starts an in-process server, creates/resumes a session,
+// (server): it starts an in-process server, creates/resumes a session,
 // streams events over SSE, and renders everything with the custom differential
 // renderer in transport/tui/render. No external TUI library — only
 // golang.org/x/term (raw mode) and rivo/uniseg (grapheme width).
