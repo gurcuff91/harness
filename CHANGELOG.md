@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.20.0] - 2026-06-23
+
+### Bash tool — native background execution
+- New `background` parameter: runs a command detached (new session via `Setsid`),
+  writes its output to a temp log file, and returns immediately with the PID and
+  log path — no timeout applies. Replaces the fragile `setsid/nohup &` dance the
+  model had to hand-roll (`setsid(1)` doesn't even exist on macOS). Stop it with
+  `kill <pid>`; read the log to check progress
+- Rewrote the tool description into clear sections (purpose, Timeout, Background,
+  Output)
+
+### Cross-platform process management — real Windows support
+- Replaced the Windows no-ops with real implementations: `setProcessGroup` uses
+  `CREATE_NEW_PROCESS_GROUP`, `setDetached` uses
+  `CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS`, and `killProcessGroup` uses
+  `taskkill /f /t` (tree kill) — the Windows analogues of Setpgid/Setsid and a
+  negative-PID group kill
+- Added an explicit fallback (`bash_other.go`, `!unix && !windows`) where
+  `setDetached` returns a clear “not supported” error instead of silently leaking
+  a non-detached child. Build tag for the Unix file tightened from `!windows` to
+  `unix`
+
 ## [0.19.0] - 2026-06-23
 
 ### Bash tool — timeout process-group kill
