@@ -44,7 +44,7 @@ func Fetch() Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name: "Fetch",
-			Description: "Fetch a URL over HTTP for APIs, web pages, and downloads. Supports GET, HEAD, POST, PUT, PATCH, DELETE.\n\n" +
+			Description: "Fetch a URL over HTTP for APIs, web pages, and downloads. Prefer this over running curl/wget through Bash — it handles headers, JSON, forms, file uploads, redirects, gzip, and binary downloads correctly, and reports status/errors cleanly. Supports GET, HEAD, POST, PUT, PATCH, DELETE.\n\n" +
 				"Body: send a request body one of four ways (choose ONE) — 'body' for a raw string; 'json' for an object (serialized and sent as application/json); 'form' for key/values (sent as application/x-www-form-urlencoded); 'files' to upload files as multipart/form-data. 'files' may be combined with 'form' to include text fields alongside the uploads.\n\n" +
 				"Headers: pass 'headers' as an object; the Content-Type for json/form/files is set automatically.\n\n" +
 				"Behavior: 'timeout' sets the request timeout in seconds (default 30). Redirects are followed by default; set 'follow_redirects' to false to inspect a 3xx response (e.g. read its Location header) without following it.\n\n" +

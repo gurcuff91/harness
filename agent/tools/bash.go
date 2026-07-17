@@ -25,7 +25,7 @@ func Bash() Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        "Bash",
-			Description: "Execute a shell command for builds, git, grep/find, installs, and system tasks. Do NOT use it to read, write, or edit files — use the Read, Write, and Edit tools instead.\n\nTimeout: 30s by default; pass a larger 'timeout' (seconds) for slow commands.\n\nBackground: set 'background' true to run a long-lived process detached from the call. It returns immediately with the PID and a temp log path — stop it with `kill <pid>`, and read the log to check progress.\n\nOutput is truncated to the last 2000 lines or 50KB; when truncated, the full output is saved to a temp file whose path is shown.",
+			Description: "Execute a shell command for builds, git, grep/find, installs, and system tasks. Do NOT use it to read, write, or edit files — use the Read, Write, and Edit tools instead. For HTTP requests, use the Fetch tool instead of curl/wget.\n\nTimeout: 30s by default; pass a larger 'timeout' (seconds) for slow commands.\n\nBackground: set 'background' true to run a long-lived process detached from the call. It returns immediately with the PID and a temp log path — stop it with `kill <pid>`, and read the log to check progress.\n\nOutput is truncated to the last 2000 lines or 50KB; when truncated, the full output is saved to a temp file whose path is shown.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {

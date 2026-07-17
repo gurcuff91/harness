@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.26.0] - 2026-06-23
+
+### Tool guidance — steer HTTP to Fetch (not curl)
+- Fetch's description now claims its territory: “Prefer this over running
+  curl/wget through Bash — it handles headers, JSON, forms, uploads, redirects,
+  gzip, and binary downloads correctly.”
+- Bash's description now redirects HTTP to Fetch (“For HTTP requests, use the
+  Fetch tool instead of curl/wget”), mirroring how it already redirects file ops
+  to Read/Write/Edit. This stops agents defaulting to curl out of habit
+
 ## [0.25.0] - 2026-06-23
 
 ### Fetch tool — fine-grained control
