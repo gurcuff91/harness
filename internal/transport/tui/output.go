@@ -159,32 +159,27 @@ func (t *TUI) statusBadges() string {
 		if t.mcpConnected == 1 {
 			word = "mcp"
 		}
-		parts = append(parts, badge(mcpBadgeIcon, fmt.Sprintf("%d %s", t.mcpConnected, word)))
+		parts = append(parts, badge(fmt.Sprintf("%d %s", t.mcpConnected, word)))
 	}
 	if t.schedulerOn && t.scheduleJobs > 0 {
 		word := "schedules"
 		if t.scheduleJobs == 1 {
 			word = "schedule"
 		}
-		parts = append(parts, badge(scheduleIcon, fmt.Sprintf("%d %s", t.scheduleJobs, word)))
+		parts = append(parts, badge(fmt.Sprintf("%d %s", t.scheduleJobs, word)))
 	}
 	if len(parts) == 0 {
 		return ""
 	}
-	// Separate from the stats line with two spaces; badges joined by spaces.
-	return "  " + strings.Join(parts, " ")
+	// Separate the stats line from the badges with a dim bullet; badges joined by spaces.
+	return ansi.Dimmed(" • ") + strings.Join(parts, " ")
 }
 
-// badge renders "icon text" fully dimmed, matching the rest of the footer,
-// e.g. ⎔ 2 mcps.
-func badge(icon, text string) string {
-	return ansi.Dimmed(icon + " " + text)
+// badge renders bracketed text fully dimmed, matching the rest of the footer,
+// e.g. [2 mcps].
+func badge(text string) string {
+	return ansi.Dimmed("[" + text + "]")
 }
-
-
-
-// mcpBadgeIcon is the gear shown in the MCP footer badge (matches the MCP tool icon).
-const mcpBadgeIcon = "⎔"
 
 // ── Formatting helpers (ported from transport/tui) ──────────────────────────
 

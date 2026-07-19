@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.37.0] - 2026-06-23
+
+### TUI
+- Footer status badges are now bracketed plain text without icons
+  (`[2 mcps] [1 schedule]`), keeping the dim bullet separator from the stats
+  line (`... (medium) • [2 mcps]`)
+
+## [0.36.0] - 2026-06-23
+
+### TUI
+- Footer: tightened the badge separator to a single space on each side of the
+  bullet (` • `)
+
+## [0.35.0] - 2026-06-23
+
+### TUI
+- Footer: a dim bullet (`•`) now separates the stats line from the status
+  badges (e.g. `... (medium)  •  ⎔ 2 mcps`), instead of plain spacing
+
 ## [0.34.0] - 2026-06-23
 
 ### SDK facade — WithScheduler()
