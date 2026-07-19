@@ -11,7 +11,6 @@ import (
 	"syscall"
 
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/internal/cli"
 	"github.com/gurcuff91/harness/internal/server"
 	"github.com/gurcuff91/harness/internal/transport/tui"
@@ -237,19 +236,15 @@ func newAgent() *agent.Agent { return newRootAgent(false) }
 
 // newRootAgent builds the process's root agent. EnableMCPs spawns the configured
 // MCP servers (once) and registers their tools; the caller must Close() it to
-// terminate those subprocesses. It also opens the shared project-scoped memory
-// store. When scheduler is true, the agent also owns the cron engine and the
-// Schedule* management tools; a due schedule fires a prompt into whichever
-// session the transport registers (SetScheduledSession).
+// terminate those subprocesses. EnableMemory opens the shared project-scoped
+// memory store (owned by the agent). When scheduler is true, the agent also owns
+// the cron engine and the Schedule* management tools; a due schedule fires a
+// prompt into whichever session the transport registers (SetScheduledSession).
 func newRootAgent(scheduler bool) *agent.Agent {
-	var mem *memory.Store
-	if s, err := memory.Open(""); err == nil {
-		mem = s
-	}
 	// ThinkingLevel is left zero — agent.New resolves it from settings (then "off").
 	return agent.New(agent.AgentOptions{
 		EnableMCPs:      true,
-		Memory:          mem,
+		EnableMemory:    true,
 		EnableScheduler: scheduler,
 	})
 }

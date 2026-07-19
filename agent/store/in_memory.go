@@ -1,143 +1,85 @@
 package store
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/gurcuff91/harness/types"
 )
 
-// ── InMemorySessionStoreManager ─────────────────────────────────────────────────
+// ── InMemoryStore ─────────────────────────────────────────────────────────
 
-// InMemorySessionStoreManager keeps everything in memory — for tests and SDK no-persist mode.
-type InMemorySessionStoreManager struct {
-	mu        sync.Mutex
-	instances map[string]*InMemorySessionStore
+// InMemoryStore is a SessionStore backed entirely by RAM — for tests and the
+// SDK's no-persist mode. It implements the primitive port; all session semantics
+// live in the *Session handle.
+type InMemoryStore struct {
+	mu    sync.Mutex
+	metas map[string]SessionMeta
+	logs  map[string][]types.Message
 }
 
-func NewInMemorySessionStoreManager() *InMemorySessionStoreManager {
-	return &InMemorySessionStoreManager{instances: make(map[string]*InMemorySessionStore)}
-}
-
-func (m *InMemorySessionStoreManager) Create(meta SessionMeta) (SessionStore, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	inst := &InMemorySessionStore{meta: meta}
-	m.instances[meta.ID] = inst
-	return inst, nil
-}
-
-func (m *InMemorySessionStoreManager) Open(sessionID string) (SessionStore, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	inst, ok := m.instances[sessionID]
-	if !ok {
-		return nil, nil
+// NewInMemoryStore builds an empty in-memory store.
+func NewInMemoryStore() *InMemoryStore {
+	return &InMemoryStore{
+		metas: make(map[string]SessionMeta),
+		logs:  make(map[string][]types.Message),
 	}
-	return inst, nil
 }
 
-func (m *InMemorySessionStoreManager) List(cwd string) ([]SessionMeta, error) {
+func (m *InMemoryStore) SaveMeta(meta SessionMeta) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var result []SessionMeta
-	for _, inst := range m.instances {
-		if inst.meta.CWD == cwd {
-			result = append(result, inst.meta)
+	m.metas[meta.ID] = meta
+	return nil
+}
+
+func (m *InMemoryStore) LoadMeta(sessionID string) (SessionMeta, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	meta, ok := m.metas[sessionID]
+	return meta, ok, nil
+}
+
+func (m *InMemoryStore) ListMetas(cwd string) ([]SessionMeta, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []SessionMeta
+	for _, meta := range m.metas {
+		if cwd == "" || meta.CWD == cwd {
+			out = append(out, meta)
 		}
 	}
-	return result, nil
+	return out, nil
 }
 
-func (m *InMemorySessionStoreManager) ListAll() ([]SessionMeta, error) {
+func (m *InMemoryStore) DeleteSession(sessionID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	result := make([]SessionMeta, 0, len(m.instances))
-	for _, inst := range m.instances {
-		result = append(result, inst.meta)
+	delete(m.metas, sessionID)
+	delete(m.logs, sessionID)
+	return nil
+}
+
+func (m *InMemoryStore) AppendMessage(sessionID string, msg types.Message) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.logs[sessionID] = append(m.logs[sessionID], msg)
+	return nil
+}
+
+func (m *InMemoryStore) LoadMessages(sessionID string, fromIndex int) ([]types.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	log := m.logs[sessionID]
+	if fromIndex < 0 {
+		fromIndex = 0
 	}
-	return result, nil
-}
-
-func (m *InMemorySessionStoreManager) Delete(sessionID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.instances, sessionID)
-	return nil
-}
-
-func (m *InMemorySessionStoreManager) Rename(sessionID, name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	inst, ok := m.instances[sessionID]
-	if !ok {
-		return fmt.Errorf("session %s not found", sessionID)
+	if fromIndex > len(log) {
+		fromIndex = len(log) // out-of-range → empty tail (matches file store)
 	}
-	inst.mu.Lock()
-	inst.meta.Name = name
-	inst.mu.Unlock()
-	return nil
-}
-
-// ── InMemorySessionStore ─────────────────────────────────────────────────
-
-type InMemorySessionStore struct {
-	mu       sync.Mutex
-	meta     SessionMeta
-	messages []types.Message
-	// compactOffset lives in meta.CompactOffset — no separate field needed
-}
-
-func (s *InMemorySessionStore) Meta() SessionMeta {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.meta
-}
-
-func (s *InMemorySessionStore) UpdateMeta(meta SessionMeta) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.meta = meta
-	return nil
-}
-
-// Messages returns only messages since the last compaction checkpoint.
-func (s *InMemorySessionStore) Messages() []types.Message {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	offset := s.meta.CompactOffset
-	slice := s.messages[offset:]
+	slice := log[fromIndex:]
 	out := make([]types.Message, len(slice))
 	copy(out, slice)
-	return out
+	return out, nil
 }
 
-// AllMessages returns the full message history from the beginning, ignoring compaction offset.
-func (s *InMemorySessionStore) AllMessages() []types.Message {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]types.Message, len(s.messages))
-	copy(out, s.messages)
-	return out
-}
-
-func (s *InMemorySessionStore) AddMessage(msg types.Message) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.messages = append(s.messages, msg)
-	return nil
-}
-
-// AddCompactionSummary appends the summary as a user message, moves the compact offset
-// to that position, and increments the compact count.
-// Full history is preserved (append-only — nothing is deleted).
-func (s *InMemorySessionStore) AddCompactionSummary(summary string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.messages = append(s.messages, CompactionMessage(summary))
-	s.meta.CompactOffset = len(s.messages) - 1
-	s.meta.CompactCount++
-	return nil
-}
-
-func (s *InMemorySessionStore) Close() error { return nil }
+func (m *InMemoryStore) Close() error { return nil }

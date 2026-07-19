@@ -30,13 +30,19 @@ type Agent struct {
 	opts            AgentOptions // original opts — used by Subagent tool to clone
 	toolReg         *tools.Registry
 	disallowedTools []string
-	store           store.SessionStoreManager
+	store           store.SessionStore
 	resourceLoader  resources.ResourceLoader // nil = FileResourceLoader(cwd) per session
 	thinkingLevel   string
 	systemPrompt    string
 	maxTurns        int
 	maxTokens       int          // 0 = resolved from ModelMeta in NewSession
 	mcpManager      *mcp.Manager // non-nil only when EnableMCPs; owns MCP subprocesses
+
+	// Memory (non-nil only when enabled). ownsMemory is true when this agent
+	// opened the store itself (root agent) and must Close it; false when it shares
+	// a parent's store (subagent), which must not be closed here.
+	memStore   *memory.Store
+	ownsMemory bool
 
 	// Scheduling (non-nil only when EnableScheduler). The agent owns the store
 	// (for the Schedule* tools) and the engine (which fires due prompts).
@@ -65,10 +71,18 @@ type AgentOptions struct {
 	EnableMCPs      bool         // spawn & connect configured MCP servers (root agent only)
 
 	// ── Infrastructure (optional) ────────────────────────────────────────
-	Store          store.SessionStoreManager // default: InMemorySessionStoreManager
+	Store          store.SessionStore // default: in-memory
 	ResourceLoader resources.ResourceLoader  // default: FileResourceLoader(cwd) per session
 	//                                         // pass NilLoader{} to disable discovery
-	Memory *memory.Store // project-scoped persistent memory; nil disables the memory tools
+
+	// EnableMemory turns on project-scoped persistent memory: the agent opens the
+	// shared memory store (~/.harness/agent/memory.db) and registers the Memo*
+	// tools. Off by default.
+	EnableMemory bool
+	// sharedMemory lets a subagent reuse its parent's already-open store instead
+	// of opening its own. Unexported: only agent.go sets it (subagent path); SDK
+	// callers use EnableMemory.
+	sharedMemory *memory.Store
 	// EnableScheduler turns on cron-scheduled prompts: the Schedule* management
 	// tools AND the engine that fires due prompts. The agent owns both. A
 	// transport marks one session as the scheduler target (SetScheduledSession);
@@ -98,10 +112,10 @@ func New(opts AgentOptions) *Agent {
 	if opts.Store == nil {
 		// Default: file-backed store in ~/.harness/agent/sessions/
 		// Falls back to in-memory if filesystem is unavailable
-		if fs, err := store.NewFileSessionStoreManager(""); err == nil {
+		if fs, err := store.NewFileStore(""); err == nil {
 			opts.Store = fs
 		} else {
-			opts.Store = store.NewInMemorySessionStoreManager()
+			opts.Store = store.NewInMemoryStore()
 		}
 	}
 
@@ -149,6 +163,18 @@ func New(opts AgentOptions) *Agent {
 		if opts.EnableScheduler {
 			a.schedEngine = schedule.NewEngine(st, a.fireScheduledPrompt)
 			a.schedEngine.Start(context.Background())
+		}
+	}
+
+	// Memory: a subagent shares its parent's already-open store (sharedMemory);
+	// a root agent with EnableMemory opens its own (and owns closing it). Failure
+	// to open degrades silently — memory tools simply stay unregistered.
+	if opts.sharedMemory != nil {
+		a.memStore = opts.sharedMemory
+	} else if opts.EnableMemory {
+		if m, err := memory.Open(""); err == nil {
+			a.memStore = m
+			a.ownsMemory = true
 		}
 	}
 
@@ -209,7 +235,7 @@ func (a *Agent) MCPTools() []tools.Tool {
 // disabled). This is the rich, cwd-aware store — used by the HTTP transport to
 // serve read-only memory queries, and available to SDK consumers. The agent's
 // own tools use a scoped adapter over the same store.
-func (a *Agent) Memory() *memory.Store { return a.opts.Memory }
+func (a *Agent) Memory() *memory.Store { return a.memStore }
 
 // Providers returns a read-only snapshot of every known provider and its state.
 // This is the SDK's window into provider configuration; administration
@@ -283,13 +309,18 @@ func (a *Agent) Close() error {
 			errs = append(errs, err)
 		}
 	}
-	if a.opts.Memory != nil {
-		if err := a.opts.Memory.Close(); err != nil {
+	if a.memStore != nil && a.ownsMemory {
+		if err := a.memStore.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	if a.schedEngine != nil {
 		a.schedEngine.Stop()
+	}
+	if a.store != nil {
+		if err := a.store.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	return errors.Join(errs...)
 }
@@ -341,7 +372,7 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 		CreatedAt:    now,
 		LastActiveAt: now,
 	}
-	storeInst, err := a.store.Create(meta)
+	storeInst, err := store.CreateSession(a.store, meta)
 	if err != nil {
 		return nil, fmt.Errorf("create store: %w", err)
 	}
@@ -355,7 +386,7 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 
 // ResumeSession reopens an existing session, fully restoring its state.
 func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
-	storeInst, err := a.store.Open(sessionID)
+	storeInst, err := store.OpenSession(a.store, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
@@ -409,19 +440,19 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 // ── Session management ───────────────────────────────────────────────────
 
 func (a *Agent) ListSessions(cwd string) ([]store.SessionMeta, error) {
-	return a.store.List(cwd)
+	return a.store.ListMetas(cwd)
 }
 
 func (a *Agent) ListAllSessions() ([]store.SessionMeta, error) {
-	return a.store.ListAll()
+	return a.store.ListMetas("")
 }
 
 func (a *Agent) DeleteSession(sessionID string) error {
-	return a.store.Delete(sessionID)
+	return a.store.DeleteSession(sessionID)
 }
 
 func (a *Agent) RenameSession(sessionID, name string) error {
-	return a.store.Rename(sessionID, name)
+	return store.Rename(a.store, sessionID, name)
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────
@@ -440,8 +471,8 @@ func (a *Agent) buildSessionTools(cwd, model string, res *resources.Resources, l
 	// configured. cwd partitions memories per project (like sessions). The store
 	// is wrapped in a scoped adapter that hides cwd from the agent — the agent
 	// only ever operates within its session's cwd.
-	if a.opts.Memory != nil {
-		memAdapter := memory.NewToolAdapter(a.opts.Memory)
+	if a.memStore != nil {
+		memAdapter := memory.NewToolAdapter(a.memStore)
 		if a.isToolAllowed(tools.ToolMemoWrite) {
 			reg.Register(tools.MemoWrite(memAdapter, cwd))
 		}
@@ -479,7 +510,7 @@ func (a *Agent) buildSessionTools(cwd, model string, res *resources.Resources, l
 				SystemPrompt:  subagentSystemPrompt,
 				MaxTurns:      parentA.maxTurns,
 				MaxTokens:     parentA.maxTokens,
-				Store:         store.NewInMemorySessionStoreManager(),
+				Store:         store.NewInMemoryStore(),
 				// Each subagent gets its OWN loader instance — FileResourceLoader is not goroutine-safe
 				ResourceLoader: resources.NewFileResourceLoader(cwd),
 				// Subagents can't launch further subagents (no recursion) and get
@@ -494,8 +525,8 @@ func (a *Agent) buildSessionTools(cwd, model string, res *resources.Resources, l
 					tools.ToolSubagent, tools.ToolMemoWrite, tools.ToolMemoDelete,
 					tools.ToolSchedule, tools.ToolScheduleList, tools.ToolScheduleDelete,
 				},
-				Tools:  parentA.MCPTools(),
-				Memory: parentA.opts.Memory, // share the parent's memory store (read-only for subagents)
+				Tools:        parentA.MCPTools(),
+				sharedMemory: parentA.memStore, // share the parent's store (read-only for subagents; not closed by the subagent)
 			})
 			sess, err := subAgent.NewSession(cwd, model)
 			if err != nil {
@@ -555,7 +586,7 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) string {
 		}
 	}
 
-	if a.opts.Memory != nil {
+	if a.memStore != nil {
 		b.WriteString("\n\n## Memory\n\nYou have persistent, project-scoped memory that carries over between sessions. At the start of a task — or whenever you lack context about earlier work — use MemoSearch with relevant keywords to recover prior decisions, conventions, and context. Save durable, high-value insights with MemoWrite (never transient task state), and remove obsolete ones with MemoDelete.")
 	}
 

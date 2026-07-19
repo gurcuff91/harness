@@ -17,11 +17,14 @@
 //	sess.Prompt(ctx, "Hello!")
 //
 // These are convenience aliases over the [agent] package — the canonical home of
-// the types. Deeper building blocks live in their own public packages:
-//   - agent/tools     — implement custom tools
-//   - agent/store     — implement custom session storage
-//   - agent/resources — implement custom skill/resource loaders
-//   - agent/memory    — the persistent memory store
+// the types. The contracts you implement are re-exported here too, so the common
+// case needs no sub-package imports: [SessionStore] + [SessionMeta] for custom
+// persistence, [ResourceLoader] for custom skill loading, and [Tool] for custom
+// tools. Deeper building blocks still live in their own public packages:
+//   - agent/tools     — tool registry and helpers
+//   - agent/store     — session storage internals
+//   - agent/resources — resource loader internals
+//   - agent/memory    — the persistent memory store internals
 //   - types           — Event, Message, ModelMeta and other shared types
 //
 // Everything under internal/ (providers, config, transports, build version) is
@@ -30,7 +33,6 @@ package harness
 
 import (
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/agent/tools"
@@ -50,6 +52,26 @@ type Session = agent.Session
 // PromptOption configures a [Session.Prompt] call (images, origin). See the
 // agent package's WithImages / WithOriginUser / WithOriginScheduled.
 type PromptOption = agent.PromptOption
+
+// ── Implementable contracts ───────────────────────────────────────────────
+// Re-exported so the common case (a custom store, loader, or tool) needs only
+// the harness import — no sub-package imports to name the type you implement.
+
+// SessionStore is the persistence port for sessions: implement it to back
+// sessions with files, SQLite, Postgres, S3, etc. See [store.SessionStore].
+type SessionStore = store.SessionStore
+
+// SessionMeta is the per-session metadata your [SessionStore] persists. See
+// [store.SessionMeta].
+type SessionMeta = store.SessionMeta
+
+// ResourceLoader discovers skills and project context: implement it to load
+// skills/resources from a custom source. See [resources.ResourceLoader].
+type ResourceLoader = resources.ResourceLoader
+
+// Tool is a custom tool the agent can call. Build one and register it with
+// [WithTools]. See [tools.Tool].
+type Tool = tools.Tool
 
 // WithImages attaches images to a prompt. See [agent.WithImages].
 var WithImages = agent.WithImages
@@ -110,7 +132,7 @@ func WithMaxTokens(n int) Option {
 
 // WithTools registers additional tools alongside the built-ins (Bash, Read,
 // Write, Edit, Fetch). Repeated calls accumulate.
-func WithTools(ts ...tools.Tool) Option {
+func WithTools(ts ...Tool) Option {
 	return func(o *Options) { o.Tools = append(o.Tools, ts...) }
 }
 
@@ -126,19 +148,30 @@ func WithMCPs() Option {
 	return func(o *Options) { o.EnableMCPs = true }
 }
 
-// WithStore sets a custom session store (default: in-memory).
-func WithStore(s store.SessionStoreManager) Option {
+// WithStore sets a custom session store (default: file-backed, falling back to
+// in-memory). Implement store.SessionStore — a small primitive persistence port.
+func WithStore(s SessionStore) Option {
 	return func(o *Options) { o.Store = s }
 }
 
 // WithResourceLoader sets a custom skill/resource loader (default: filesystem
 // per session). Pass resources.NilLoader{} to disable discovery.
-func WithResourceLoader(l resources.ResourceLoader) Option {
+func WithResourceLoader(l ResourceLoader) Option {
 	return func(o *Options) { o.ResourceLoader = l }
 }
 
-// WithMemory enables project-scoped persistent memory backed by the given store
-// (open one with memory.Open). nil leaves memory disabled.
-func WithMemory(m *memory.Store) Option {
-	return func(o *Options) { o.Memory = m }
+// WithMemory enables project-scoped persistent memory. The agent opens and owns
+// the store (~/.harness/agent/memory.db) and registers the Memo* tools. Off by
+// default.
+func WithMemory() Option {
+	return func(o *Options) { o.EnableMemory = true }
+}
+
+// WithScheduler enables cron-scheduled prompts: the agent runs the engine that
+// fires due schedules (in addition to the Schedule* management tools, which are
+// always available). A due prompt is sent to whichever session the caller marks
+// as the target via Agent.SetScheduledPromptsHandler. Only one agent per process
+// should enable this, so prompts don't fire twice. Off by default.
+func WithScheduler() Option {
+	return func(o *Options) { o.EnableScheduler = true }
 }

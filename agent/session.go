@@ -17,7 +17,7 @@ import (
 // ── Session ─────────────────────────────────────────────────────────────
 
 // Session is one conversation. It owns:
-//   - store: source of truth for all messages (no in-memory history)
+//   - store: the *store.Session handle — working set in memory, durable via the port
 //   - provider + modelID: the LLM for this session (mutable via SwitchModel)
 //   - tools: cloned registry with read_skill injected
 //   - systemPrompt: built once at creation, immutable
@@ -30,7 +30,7 @@ type Session struct {
 	name string
 
 	// Dependencies
-	store        store.SessionStore
+	store        *store.Session
 	provider     providers.Provider
 	modelID      string
 	thinkingLvl  string
@@ -127,7 +127,7 @@ type modelPricing struct {
 
 // ── Constructor (called by Agent.NewSession) ───────────────────────────
 
-func newSession(storeInst store.SessionStore,
+func newSession(storeInst *store.Session,
 	provider providers.Provider, modelID, thinkingLvl string,
 	toolReg *tools.Registry, systemPrompt string,
 	maxTurns, maxTokens int,

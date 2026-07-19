@@ -2,6 +2,67 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.34.0] - 2026-06-23
+
+### SDK facade — WithScheduler()
+- Added `WithScheduler()`, the missing option to enable the cron engine
+  (`EnableScheduler`) from the facade — completing the `With*` set alongside
+  `WithMCPs`/`WithMemory`. The engine fires due schedules into the session the
+  caller marks via `Agent.SetScheduledPromptsHandler`; the Schedule* management
+  tools remain available regardless
+
+## [0.33.0] - 2026-06-23
+
+### Memory — agent-owned, simpler opt-in
+- `WithMemory()` now takes no argument (was `WithMemory(*memory.Store)`). Memory
+  is a concrete, internal store — there's no user interface to implement — so the
+  agent opens and owns it internally, matching `EnableMCPs`/`EnableScheduler`.
+  `AgentOptions.Memory *memory.Store` → `AgentOptions.EnableMemory bool`
+- The agent tracks ownership: a root agent that opened the store closes it on
+  `Close()`; a subagent shares the parent's already-open store (via an
+  unexported option) and never closes it. The SDK no longer needs the
+  `agent/memory` import for the common case
+
+## [0.32.0] - 2026-06-23
+
+### SDK facade — re-export implementable contracts
+- The root `harness` package now re-exports the interfaces/types a user
+  implements, so the common case needs no sub-package imports: `SessionStore`
+  and `SessionMeta` (custom persistence), `ResourceLoader` (custom skill/resource
+  loading), and `Tool` (custom tools, used by `WithTools`). Symmetry with the
+  already re-exported output types (`Agent`, `Session`, `Event`, `Handler`,
+  `PromptOption`)
+- `WithStore`/`WithResourceLoader`/`WithTools` signatures now use the facade
+  aliases. Verified end-to-end: an external module implements `SessionStore` and
+  builds a `Tool` importing only `harness` (plus `types` for `Message`)
+
+## [0.31.0] - 2026-06-23
+
+### Session store — one primitive persistence port (SDK simplification)
+- **Collapsed two interfaces into one.** The SDK previously required
+  implementing both `SessionStoreManager` (the collection) and `SessionStore`
+  (an open session), ~15 methods that leaked harness internals (compaction
+  offsets, working-set vs full-history, checkpoint messages). Now SDK users
+  implement a single, dumb **`SessionStore`** port — 7 primitive methods:
+  `SaveMeta`, `LoadMeta`, `ListMetas`, `DeleteSession`, `AppendMessage`,
+  `LoadMessages(sessionID, fromIndex)`, `Close`. A backend is just metadata +
+  a flat append-only message log; files, SQLite, Postgres, S3 are all trivial
+- **All session semantics moved into a `store.Session` handle** owned by
+  harness (not implemented by users): it caches the working set in memory for
+  the hot path, resolves `Messages()` (from the compaction checkpoint) vs
+  `AllMessages()` (full history) by slicing on `fromIndex`, and owns the
+  compaction-offset bookkeeping. The old `diskReadOffset`/`diskWriteCount`
+  memory↔disk offset translation is gone
+- **More durable:** messages now persist on every `AddMessage`
+  (append-immediate) instead of batching until `Close()`, so a crash mid-session
+  no longer loses the turn
+- `ListMetas(cwd)` with `cwd==""` returns all sessions (replaces the separate
+  `List`/`ListAll`); `Rename` is a store helper (load-modify-save), not a port
+  method. Renamed constructors: `NewFileStore`, `NewInMemoryStore`
+- New tests cover both backends against the same port contract plus the handle's
+  compaction/resume behavior; an end-to-end resume-after-restart flow verifies
+  working-set vs full-history reconstruction from disk
+
 ## [0.30.0] - 2026-06-23
 
 ### Scheduling — dynamic engine, @every fix, live badge, min-interval guard
