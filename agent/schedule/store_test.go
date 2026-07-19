@@ -17,10 +17,10 @@ func newTestStore(t *testing.T) *Store {
 
 func TestStoreUpsertAndList(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.Set("standup", "0 9 * * 1-5", "Generate standup"); err != nil {
+	if err := s.Set("standup", "0 9 * * 1-5", "Generate standup", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Set("cleanup", "@daily", "Clean logs"); err != nil {
+	if err := s.Set("cleanup", "@daily", "Clean logs", ""); err != nil {
 		t.Fatal(err)
 	}
 	list := s.List()
@@ -34,7 +34,7 @@ func TestStoreUpsertAndList(t *testing.T) {
 
 	// Edit preserves audit.
 	s.RecordRun("standup", time.Now().UnixMilli())
-	s.Set("standup", "0 10 * * 1-5", "Updated") // edit
+	s.Set("standup", "0 10 * * 1-5", "Updated", "") // edit
 	for _, sc := range s.List() {
 		if sc.Slug == "standup" {
 			if sc.Runs != 1 {
@@ -49,17 +49,17 @@ func TestStoreUpsertAndList(t *testing.T) {
 
 func TestStoreInvalidCron(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.Set("bad", "not a cron", "x"); err == nil {
+	if err := s.Set("bad", "not a cron", "x", ""); err == nil {
 		t.Error("invalid cron should error")
 	}
-	if err := s.Set("bad", "99 99 * * *", "x"); err == nil {
+	if err := s.Set("bad", "99 99 * * *", "x", ""); err == nil {
 		t.Error("out-of-range cron should error")
 	}
 }
 
 func TestStoreDelete(t *testing.T) {
 	s := newTestStore(t)
-	s.Set("x", "@hourly", "p")
+	s.Set("x", "@hourly", "p", "")
 	ok, _ := s.Delete("x")
 	if !ok {
 		t.Error("delete should report existed")
@@ -73,7 +73,7 @@ func TestStoreDelete(t *testing.T) {
 func TestStorePersistence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sched.json")
 	s1, _ := Open(path)
-	s1.Set("x", "@daily", "prompt")
+	s1.Set("x", "@daily", "prompt", "")
 	// Reopen and verify it loaded.
 	s2, _ := Open(path)
 	if len(s2.List()) != 1 {
@@ -83,9 +83,9 @@ func TestStorePersistence(t *testing.T) {
 
 func TestEngineStandardCronFires(t *testing.T) {
 	s := newTestStore(t)
-	s.Set("minutely", "* * * * *", "run") // every minute
+	s.Set("minutely", "* * * * *", "run", "") // every minute
 	var fired []string
-	eng := NewEngine(s, func(slug, prompt string) { fired = append(fired, slug) })
+	eng := NewEngine(s, func(slug, prompt, owner string) { fired = append(fired, slug) })
 
 	// Engine started at 09:00:30, never run. By 09:01:05 the 09:01:00 tick has
 	// passed → fires once.
@@ -110,9 +110,9 @@ func TestEngineStandardCronFires(t *testing.T) {
 // moving cursor) is what makes it fire.
 func TestEngineEveryFires(t *testing.T) {
 	s := newTestStore(t)
-	s.Set("tick", "@every 1m", "run")
+	s.Set("tick", "@every 1m", "run", "")
 	var fired []string
-	eng := NewEngine(s, func(slug, prompt string) { fired = append(fired, slug) })
+	eng := NewEngine(s, func(slug, prompt, owner string) { fired = append(fired, slug) })
 
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.Local)
 	// Before 1m elapsed → not due.
@@ -127,10 +127,37 @@ func TestEngineEveryFires(t *testing.T) {
 	}
 }
 
+// The engine passes each schedule's owner to the fire callback, so a transport
+// can route the fired prompt to the right session.
+func TestEngineFiresWithOwner(t *testing.T) {
+	s := newTestStore(t)
+	s.Set("tick", "* * * * *", "run", "session-abc")
+	var gotOwner string
+	eng := NewEngine(s, func(slug, prompt, owner string) { gotOwner = owner })
+	start := time.Date(2026, 1, 1, 9, 0, 30, 0, time.Local)
+	eng.evaluate(start, time.Date(2026, 1, 1, 9, 1, 5, 0, time.Local))
+	if gotOwner != "session-abc" {
+		t.Errorf("owner should reach the fire callback, got %q", gotOwner)
+	}
+}
+
+// Owner survives a store round-trip (persisted in schedules.json).
+func TestStoreOwnerPersists(t *testing.T) {
+	path := newTestStore(t).path
+	s1, _ := Open(path)
+	s1.Set("x", "@daily", "prompt", "owner-42")
+	s2, _ := Open(path)
+	for _, sc := range s2.List() {
+		if sc.Slug == "x" && sc.Owner != "owner-42" {
+			t.Errorf("owner not persisted: got %q", sc.Owner)
+		}
+	}
+}
+
 func TestEngineReadsFreshEachEval(t *testing.T) {
 	s := newTestStore(t)
 	var fired []string
-	eng := NewEngine(s, func(slug, prompt string) { fired = append(fired, slug) })
+	eng := NewEngine(s, func(slug, prompt, owner string) { fired = append(fired, slug) })
 
 	start := time.Date(2026, 1, 1, 9, 0, 30, 0, time.Local)
 	now := time.Date(2026, 1, 1, 9, 1, 5, 0, time.Local)
@@ -142,7 +169,7 @@ func TestEngineReadsFreshEachEval(t *testing.T) {
 	}
 
 	// Add one WITHOUT restarting the engine → next evaluate picks it up.
-	s.Set("added-live", "* * * * *", "run")
+	s.Set("added-live", "* * * * *", "run", "")
 	eng.evaluate(start, now)
 	if len(fired) != 1 || fired[0] != "added-live" {
 		t.Errorf("a schedule added at runtime should fire, got %v", fired)
@@ -159,7 +186,7 @@ func TestEngineReadsFreshEachEval(t *testing.T) {
 
 func TestEngineStartStop(t *testing.T) {
 	s := newTestStore(t)
-	eng := NewEngine(s, func(slug, prompt string) {})
+	eng := NewEngine(s, func(slug, prompt, owner string) {})
 	ctx := context.Background()
 	eng.Start(ctx)
 	eng.Stop() // must not panic / deadlock

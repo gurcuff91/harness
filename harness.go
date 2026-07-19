@@ -169,9 +169,10 @@ func WithMemory() Option {
 
 // WithScheduler enables cron-scheduled prompts: the agent runs the engine that
 // fires due schedules (in addition to the Schedule* management tools, which are
-// always available). A due prompt is sent to whichever session the caller marks
-// as the target via Agent.SetScheduledPromptsHandler. Only one agent per process
-// should enable this, so prompts don't fire twice. Off by default.
+// always available). Each schedule records the id of the session that created
+// it; when due, the engine routes the prompt back to that session if it's
+// active (otherwise the prompt is dropped). Only one agent per process should
+// enable this, so prompts don't fire twice. Off by default.
 func WithScheduler() Option {
 	return func(o *Options) { o.EnableScheduler = true }
 }

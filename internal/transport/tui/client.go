@@ -143,10 +143,7 @@ func (c *Client) ListSessionsByCWD(cwd string) ([]byte, error) {
 }
 
 func (c *Client) ResumeSession(id string) ([]byte, error) {
-	// The TUI is single-session: it always claims the scheduled-prompt handler so
-	// that, if this agent runs the engine (--scheduler), fired prompts land here.
-	// When the engine is off it's a harmless no-op.
-	return c.do("POST", "/api/sessions/"+id+"/resume?scheduled_prompts_handler=true", nil)
+	return c.do("POST", "/api/sessions/"+id+"/resume", nil)
 }
 
 func (c *Client) DeleteSession(id string) ([]byte, error) {
@@ -166,8 +163,7 @@ func (c *Client) StopSession(sessionID string) ([]byte, error) {
 }
 
 func (c *Client) CreateSession(model, cwd string) ([]byte, error) {
-	// See ResumeSession: the single-session TUI always claims the handler.
-	return c.do("POST", "/api/sessions?scheduled_prompts_handler=true", map[string]string{"model": model, "cwd": cwd})
+	return c.do("POST", "/api/sessions", map[string]string{"model": model, "cwd": cwd})
 }
 
 func (c *Client) SendPrompt(sessionID, text string) ([]byte, error) {

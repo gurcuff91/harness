@@ -48,11 +48,13 @@ type Agent struct {
 	// (for the Schedule* tools) and the engine (which fires due prompts).
 	schedStore  *schedule.Store
 	schedEngine *schedule.Engine
-	// scheduledSession is the session that receives fired prompts. A transport
-	// registers it via SetScheduledSession when it opens a scheduler-enabled
-	// session; the engine drives it.
-	schedMu          sync.Mutex
-	scheduledSession *Session
+
+	// activeSessions tracks every live session (created via NewSession or
+	// ResumeSession, removed on Close) by id. The scheduler routes a fired prompt
+	// to the session named by the schedule's owner; a transport reaches whatever
+	// output it wants by subscribing to that session's events. Guarded by sessMu.
+	sessMu         sync.Mutex
+	activeSessions map[string]*Session
 }
 
 // AgentOptions configures a new Agent.
@@ -150,6 +152,7 @@ func New(opts AgentOptions) *Agent {
 		maxTurns:        opts.MaxTurns,
 		maxTokens:       opts.MaxTokens,
 		mcpManager:      mcpMgr,
+		activeSessions:  make(map[string]*Session),
 	}
 
 	// Scheduling: the agent always opens the store so the Schedule* management
@@ -181,26 +184,46 @@ func New(opts AgentOptions) *Agent {
 	return a
 }
 
-// fireScheduledPrompt is the engine callback: it sends the due prompt to the
-// registered scheduled session, tagged as scheduled. No-op if no session is
-// registered yet (e.g. the transport hasn't opened one).
-func (a *Agent) fireScheduledPrompt(slug, prompt string) {
-	a.schedMu.Lock()
-	sess := a.scheduledSession
-	a.schedMu.Unlock()
-	if sess != nil {
+// fireScheduledPrompt is the engine callback: it routes the due prompt to the
+// session named by the schedule's owner, tagged as scheduled. If that session is
+// not currently active (never opened, or closed), the prompt is dropped — the
+// engine still records the run, so no catch-up piles up. A transport that has
+// subscribed to the owner session's events will see the output; nobody being
+// subscribed doesn't stop the prompt from running.
+//
+// owner == "" is the single-session fallback (e.g. the TUI): if exactly one
+// session is active, it receives the prompt.
+func (a *Agent) fireScheduledPrompt(slug, prompt, owner string) {
+	if sess := a.resolveScheduledSession(owner); sess != nil {
 		sess.Prompt(context.Background(), prompt, WithOriginScheduled())
 	}
 }
 
-// SetScheduledPromptsHandler registers the session that fired schedule prompts
-// are sent to. A transport calls this for the session it wants to handle
-// scheduled prompts. Harmless when the engine is off (EnableScheduler=false):
-// the session is recorded but nothing fires. Pass nil to detach.
-func (a *Agent) SetScheduledPromptsHandler(s *Session) {
-	a.schedMu.Lock()
-	a.scheduledSession = s
-	a.schedMu.Unlock()
+// resolveScheduledSession returns the active session a fired schedule targets —
+// the one named by owner — or nil if it isn't active (the prompt is dropped).
+// Every schedule carries its owner (the creating session's id); an empty owner
+// only comes from a stale pre-owner schedule, which we simply don't run.
+func (a *Agent) resolveScheduledSession(owner string) *Session {
+	if owner == "" {
+		return nil
+	}
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	return a.activeSessions[owner]
+}
+
+// registerSession adds a live session to the active set (keyed by id). Called by
+// NewSession/ResumeSession. unregisterSession removes it (called on Close).
+func (a *Agent) registerSession(s *Session) {
+	a.sessMu.Lock()
+	a.activeSessions[s.id] = s
+	a.sessMu.Unlock()
+}
+
+func (a *Agent) unregisterSession(id string) {
+	a.sessMu.Lock()
+	delete(a.activeSessions, id)
+	a.sessMu.Unlock()
 }
 
 // scheduleAdapter exposes the agent's schedule store to the Schedule* tools.
@@ -355,16 +378,19 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 		return nil, fmt.Errorf("load resources: %w", err)
 	}
 
-	sessionTools := a.buildSessionTools(cwd, model, res, loader)
-	systemPrompt := a.buildSystemPrompt(cwd, res)
-
 	now := time.Now()
 	thinking := a.thinkingLevel
 	if thinking == "" {
 		thinking = "off"
 	}
+	// The id is generated first so the session's Schedule tool can capture it as
+	// the owner for any schedules it creates.
+	sessionID := uuid.New().String()
+	sessionTools := a.buildSessionTools(sessionID, cwd, model, res, loader)
+	systemPrompt := a.buildSystemPrompt(cwd, res)
+
 	meta := store.SessionMeta{
-		ID:           uuid.New().String(),
+		ID:           sessionID,
 		CWD:          cwd,
 		Name:         defaultSessionName(now),
 		Model:        model,
@@ -377,11 +403,14 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 		return nil, fmt.Errorf("create store: %w", err)
 	}
 
-	return newSession(storeInst,
+	sess := newSession(storeInst,
 		provider, modelID, a.thinkingLevel,
 		sessionTools, systemPrompt,
 		a.maxTurns, maxTokens,
-		res.Skills, loader.ReadSkill), nil
+		res.Skills, loader.ReadSkill)
+	sess.agent = a
+	a.registerSession(sess)
+	return sess, nil
 }
 
 // ResumeSession reopens an existing session, fully restoring its state.
@@ -429,12 +458,15 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 		readSkill = loader.ReadSkill
 	}
 
-	return newSession(storeInst,
+	sess := newSession(storeInst,
 		provider, modelID, thinkingLvl,
-		a.buildSessionTools(cwd, meta.Model, res, loader),
+		a.buildSessionTools(meta.ID, cwd, meta.Model, res, loader),
 		a.buildSystemPrompt(cwd, res),
 		a.maxTurns, maxTokens,
-		skills, readSkill), nil
+		skills, readSkill)
+	sess.agent = a
+	a.registerSession(sess)
+	return sess, nil
 }
 
 // ── Session management ───────────────────────────────────────────────────
@@ -457,7 +489,7 @@ func (a *Agent) RenameSession(sessionID, name string) error {
 
 // ── Internal helpers ─────────────────────────────────────────────────────
 
-func (a *Agent) buildSessionTools(cwd, model string, res *resources.Resources, loader resources.ResourceLoader) *tools.Registry {
+func (a *Agent) buildSessionTools(sessionID, cwd, model string, res *resources.Resources, loader resources.ResourceLoader) *tools.Registry {
 	reg := tools.NewRegistry()
 	for _, def := range a.toolReg.Definitions() {
 		if a.isToolAllowed(def.Name) {
@@ -487,7 +519,8 @@ func (a *Agent) buildSessionTools(cwd, model string, res *resources.Resources, l
 	// is enabled; the agent owns the store and the engine that fires them.
 	if adapter := a.scheduleAdapter(); adapter != nil {
 		if a.isToolAllowed(tools.ToolSchedule) {
-			reg.Register(tools.Schedule(adapter))
+			// owner = this session's id: the engine routes a fired prompt back here.
+			reg.Register(tools.Schedule(adapter, sessionID))
 		}
 		if a.isToolAllowed(tools.ToolScheduleList) {
 			reg.Register(tools.ScheduleList(adapter))

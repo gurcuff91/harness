@@ -22,13 +22,16 @@ type ScheduleEntry struct {
 // (package schedule) is injected by the agent, keeping this package free of the
 // storage/cron dependency.
 type ScheduleStore interface {
-	Set(slug, cron, prompt string) error
+	Set(slug, cron, prompt, owner string) error
 	Delete(slug string) (bool, error)
 	Entries() []ScheduleEntry
 }
 
-// Schedule upserts a cron-scheduled prompt (create or edit by slug).
-func Schedule(store ScheduleStore) Tool {
+// Schedule upserts a cron-scheduled prompt (create or edit by slug). owner is the
+// id of the session this tool belongs to; the engine routes a fired prompt back
+// to that session (empty for single-session transports). It's captured here, not
+// exposed to the model.
+func Schedule(store ScheduleStore, owner string) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolSchedule,
@@ -44,7 +47,7 @@ func Schedule(store ScheduleStore) Tool {
 			if err := json.Unmarshal(input, &p); err != nil {
 				return "", fmt.Errorf("Schedule: invalid input: %w", err)
 			}
-			if err := store.Set(p.Slug, p.Cron, p.Prompt); err != nil {
+			if err := store.Set(p.Slug, p.Cron, p.Prompt, owner); err != nil {
 				return "", err
 			}
 			return fmt.Sprintf("Scheduled %q (%s).", p.Slug, p.Cron), nil

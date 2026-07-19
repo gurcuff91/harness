@@ -30,6 +30,7 @@ type Session struct {
 	name string
 
 	// Dependencies
+	agent        *Agent // owning agent — used to unregister on Close (may be nil in tests)
 	store        *store.Session
 	provider     providers.Provider
 	modelID      string
@@ -567,8 +568,12 @@ func (s *Session) Meta() store.SessionMeta {
 	return m
 }
 
-// Close flushes and closes the store.
+// Close flushes and closes the store, and removes the session from its agent's
+// active set (so the scheduler no longer routes prompts to it).
 func (s *Session) Close() error {
+	if s.agent != nil {
+		s.agent.unregisterSession(s.id)
+	}
 	return s.store.Close()
 }
 

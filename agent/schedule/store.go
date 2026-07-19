@@ -22,6 +22,7 @@ type Schedule struct {
 	Slug    string `json:"-"`                  // map key; not stored in the value
 	Cron    string `json:"cron"`               // 5-field standard cron expression
 	Prompt  string `json:"prompt"`             // the prompt text to run
+	Owner   string `json:"owner,omitempty"`    // session id to route the fired prompt to (empty = single-session fallback)
 	Runs    int    `json:"runs,omitempty"`     // audit: how many times it has fired
 	LastRun int64  `json:"last_run,omitempty"` // audit: Unix ms of the last run
 }
@@ -72,9 +73,10 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
-// Set upserts a schedule by slug after validating its cron expression. Runs and
-// LastRun are preserved across edits.
-func (s *Store) Set(slug, spec, prompt string) error {
+// Set upserts a schedule by slug after validating its cron expression. owner is
+// the session id the fired prompt is routed to (empty for single-session
+// transports). Runs and LastRun are preserved across edits.
+func (s *Store) Set(slug, spec, prompt, owner string) error {
 	if slug == "" {
 		return fmt.Errorf("schedule: slug is required")
 	}
@@ -90,6 +92,7 @@ func (s *Store) Set(slug, spec, prompt string) error {
 	s.data[slug] = Schedule{
 		Cron:    spec,
 		Prompt:  prompt,
+		Owner:   owner,
 		Runs:    existing.Runs,    // preserve audit on edit
 		LastRun: existing.LastRun,
 	}

@@ -521,13 +521,6 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	s.sessions[sess.ID()] = proxy
 	s.mu.Unlock()
 
-	// Opt-in: only sessions created with ?scheduled_prompts_handler=true receive
-	// fired schedule prompts, so the caller controls which of N sessions handles
-	// them (harmless if the agent's engine is off).
-	if r.URL.Query().Get("scheduled_prompts_handler") == "true" {
-		s.agent.SetScheduledPromptsHandler(sess)
-	}
-
 	writeJSON(w, http.StatusCreated, sess.Meta())
 }
 
@@ -644,11 +637,6 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.sessions[sess.ID()] = proxy
 	s.mu.Unlock()
-
-	// Opt-in scheduled-prompt handler, same as create.
-	if r.URL.Query().Get("scheduled_prompts_handler") == "true" {
-		s.agent.SetScheduledPromptsHandler(sess)
-	}
 
 	writeJSON(w, http.StatusOK, sess.Meta())
 }

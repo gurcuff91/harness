@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.38.0] - 2026-06-23
+
+### Scheduling — per-session routing (owner), multi-session ready
+- A schedule now records the **owner** — the id of the session that created it.
+  When a schedule fires, the engine routes the prompt back to that session if
+  it's active; if not, the prompt is dropped (the run is still recorded, so
+  nothing piles up). This replaces the single "scheduled prompts handler"
+  session with per-session routing, so a multi-session transport (e.g. Telegram,
+  one session per chat) can have each chat schedule its own prompts and receive
+  them back
+- The agent now tracks all live sessions in an internal active set (registered
+  on `NewSession`/`ResumeSession`, removed on `Close`). The Schedule tool
+  captures its session's id automatically as the owner — the model never sees it
+- **Removed** the old `SetScheduledPromptsHandler` and the
+  `?scheduled_prompts_handler=true` opt-in query param; routing is now implicit
+  via owner. An empty owner (e.g. the single-session TUI) falls back to the sole
+  active session, so existing behavior is unchanged
+- `schedule.Store.Set` gained an `owner` argument; `schedules.json` entries gain
+  an optional `owner` field
+
 ## [0.37.0] - 2026-06-23
 
 ### TUI

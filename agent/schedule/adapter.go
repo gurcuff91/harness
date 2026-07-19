@@ -10,8 +10,10 @@ type ToolAdapter struct{ s *Store }
 // NewToolAdapter returns an adapter exposing the store as a tools.ScheduleStore.
 func NewToolAdapter(s *Store) *ToolAdapter { return &ToolAdapter{s: s} }
 
-func (a *ToolAdapter) Set(slug, cron, prompt string) error { return a.s.Set(slug, cron, prompt) }
-func (a *ToolAdapter) Delete(slug string) (bool, error)    { return a.s.Delete(slug) }
+func (a *ToolAdapter) Set(slug, cron, prompt, owner string) error {
+	return a.s.Set(slug, cron, prompt, owner)
+}
+func (a *ToolAdapter) Delete(slug string) (bool, error) { return a.s.Delete(slug) }
 
 func (a *ToolAdapter) Entries() []tools.ScheduleEntry {
 	list := a.s.List()
