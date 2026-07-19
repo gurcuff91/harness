@@ -45,6 +45,12 @@ type TUI struct {
 	overrideModel    string
 	overrideThinking string
 	resumeID         string
+	schedulerOn      bool // --scheduler: the agent runs the engine
+
+	// Status badges (footer): counts loaded at connect time.
+	mcpConnected  int // MCP servers currently connected
+	scheduleJobs  int // schedules configured (shown only when schedulerOn)
+
 
 	// Session state.
 	sessionID      string
@@ -133,6 +139,12 @@ func (t *TUI) SetFlags(model, thinking, resumeID string) {
 	t.overrideThinking = thinking
 	t.resumeID = resumeID
 }
+
+// SetScheduler records whether this TUI's agent runs the scheduler engine
+// (--scheduler). Drives the footer's scheduler badge.
+func (t *TUI) SetScheduler(on bool) { t.schedulerOn = on }
+
+
 
 // Run starts the internal server, builds the UI, and runs the render loop until
 // the context is cancelled or the user quits.

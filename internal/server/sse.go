@@ -37,10 +37,14 @@ func formatEvent(e types.Event) []byte {
 		}
 	case types.EventTurnStart:
 		payload = map[string]any{"type": "turn_start"}
+	case types.EventReceivedPrompt:
+		// An immediate (non-queued) prompt was received; text + origin let the
+		// frontend echo it (even for prompts it didn't originate, e.g. scheduled).
+		payload = map[string]any{"type": "received_prompt", "text": e.Output, "origin": e.Origin}
 	case types.EventFollowUpStart:
-		// A queued follow-up prompt is starting; Output carries its text so the
-		// frontend can echo it at the right moment (no client-side queue needed).
-		payload = map[string]any{"type": "follow_up_start", "text": e.Output}
+		// A queued follow-up prompt is starting; text + origin so the frontend can
+		// echo it at the right moment (no client-side queue needed).
+		payload = map[string]any{"type": "follow_up_start", "text": e.Output, "origin": e.Origin}
 	case types.EventTurnEnd:
 		payload = map[string]any{"type": "turn_end"}
 	case types.EventTokens:

@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/agent/schedule"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/internal/config"
 	"github.com/gurcuff91/harness/mcp"
@@ -70,6 +71,7 @@ func (s *Server) handler() http.Handler {
 	r.Delete("/api/settings/mcp/{name}", s.handleDeleteMCPServer)
 	r.Get("/api/mcp/status", s.handleMCPStatus)
 	r.Get("/api/memories", s.handleListMemories)
+	r.Get("/api/schedules", s.handleListSchedules)
 	r.Get("/api/providers", s.handleProviders)
 	r.Post("/api/providers/{name}/connect", s.handleConnectProvider)
 	r.Post("/api/providers/{name}/disconnect", s.handleDisconnectProvider)
@@ -256,6 +258,18 @@ func (s *Server) handlePutMCPServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, srv)
+}
+
+// handleListSchedules serves the read-only list of cron-scheduled prompts, in
+// the same shape as the ScheduleList tool (slug, cron, prompt, runs, last_run).
+// Writes/deletes are not exposed — only the agent mutates schedules via its tools.
+func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
+	st := s.agent.Schedules()
+	if st == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	writeJSON(w, http.StatusOK, schedule.NewToolAdapter(st).Entries())
 }
 
 // handleListMemories serves read-only memory queries. Memories are partitioned
@@ -507,6 +521,13 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	s.sessions[sess.ID()] = proxy
 	s.mu.Unlock()
 
+	// Opt-in: only sessions created with ?scheduled_prompts_handler=true receive
+	// fired schedule prompts, so the caller controls which of N sessions handles
+	// them (harmless if the agent's engine is off).
+	if r.URL.Query().Get("scheduled_prompts_handler") == "true" {
+		s.agent.SetScheduledPromptsHandler(sess)
+	}
+
 	writeJSON(w, http.StatusCreated, sess.Meta())
 }
 
@@ -624,6 +645,11 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	s.sessions[sess.ID()] = proxy
 	s.mu.Unlock()
 
+	// Opt-in scheduled-prompt handler, same as create.
+	if r.URL.Query().Get("scheduled_prompts_handler") == "true" {
+		s.agent.SetScheduledPromptsHandler(sess)
+	}
+
 	writeJSON(w, http.StatusOK, sess.Meta())
 }
 
@@ -658,6 +684,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 type promptRequest struct {
 	Text   string            `json:"text"`
 	Images []types.ImageData `json:"images,omitempty"`
+	Origin string            `json:"origin,omitempty"` // "user" (default) | "scheduled"
 }
 
 func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
@@ -689,7 +716,14 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ps := proxy.session.Prompt(context.Background(), req.Text, req.Images...)
+	opts := []agent.PromptOption{}
+	if len(req.Images) > 0 {
+		opts = append(opts, agent.WithImages(req.Images...))
+	}
+	if req.Origin == agent.OriginScheduled {
+		opts = append(opts, agent.WithOriginScheduled())
+	}
+	ps := proxy.session.Prompt(context.Background(), req.Text, opts...)
 
 	status := "started"
 	if ps == types.PromptQueued {

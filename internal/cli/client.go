@@ -69,6 +69,11 @@ func (c *httpClient) GetMemories(rawQuery string) ([]byte, error) {
 	return c.do("GET", path, nil)
 }
 
+// GetSchedules queries the read-only schedules endpoint.
+func (c *httpClient) GetSchedules() ([]byte, error) {
+	return c.do("GET", "/api/schedules", nil)
+}
+
 func (c *httpClient) PatchSettings(fields map[string]any) ([]byte, error) {
 	return c.do("PATCH", "/api/settings", fields)
 }

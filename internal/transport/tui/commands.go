@@ -68,26 +68,36 @@ func (t *TUI) captureValue(value string) {
 
 // submitPrompt sends a prompt to the session, queueing it locally if a turn is
 // already in flight.
+// scheduleIcon marks a prompt fired by the scheduler (a clock); userIcon marks a
+// user prompt. The transport picks the icon from the prompt's origin, carried by
+// the received_prompt / follow_up_start events.
+const (
+	scheduleIcon = "◷"
+	userIcon     = "❯"
+)
+
+// promptIcon returns the echo icon for a prompt origin.
+func promptIcon(origin string) string {
+	if origin == "scheduled" {
+		return scheduleIcon
+	}
+	return userIcon
+}
+
 func (t *TUI) submitPrompt(text string) {
 	if t.sessionID == "" {
 		t.showWarn("No active session.")
 		return
 	}
 
-	// The backend is the single source of truth for queueing. When a turn is in
-	// flight it queues the prompt and, when that queued turn starts, emits a
-	// follow_up_start event carrying the text — which is when the TUI echoes it
-	// (see events.go). So:
-	//   - busy → don't echo now; just bump the footer counter. The echo arrives
-	//            via follow_up_start when the backend actually starts it.
-	//   - idle → this is the turn that starts immediately (no follow_up_start is
-	//            emitted for it), so echo it now.
+	// The backend is the single source of truth for echoing. The TUI no longer
+	// paints the prompt itself: it sends to the server and waits for the
+	// received_prompt (immediate) or follow_up_start (queued) event, then echoes
+	// with the icon matching the prompt's origin. This unifies user and scheduled
+	// prompts through one path (the ~ms round-trip is imperceptible).
 	if t.spinning {
 		t.queueCount++
 		t.updateInfo()
-	} else {
-		t.addRaw(ansi.Primary("❯ " + text))
-		t.setSpinning(true)
 	}
 
 	go func() {

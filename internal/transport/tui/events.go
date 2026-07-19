@@ -178,15 +178,27 @@ func (t *TUI) streamEvents(ctx context.Context) {
 					t.setSpinning(false)
 				}
 
+			case "received_prompt":
+				// The backend received an immediate (non-queued) prompt — echo it with
+				// the icon for its origin. This is the single echo path for prompts
+				// the TUI didn't originate (e.g. scheduled) and for user prompts too.
+				msg, _ := evt["text"].(string)
+				origin, _ := evt["origin"].(string)
+				if msg != "" {
+					t.addRaw(ansi.Primary(promptIcon(origin) + " " + msg))
+				}
+				t.setSpinning(true)
+
 			case "follow_up_start":
 				// Backend dequeued a follow-up and is starting its turn. Echo the
 				// prompt now (single source of truth for queued prompts).
 				msg, _ := evt["text"].(string)
+				origin, _ := evt["origin"].(string)
 				if t.queueCount > 0 {
 					t.queueCount--
 				}
 				if msg != "" {
-					t.addRaw(ansi.Primary("❯ " + msg))
+					t.addRaw(ansi.Primary(promptIcon(origin) + " " + msg))
 				}
 				t.setSpinning(true)
 				t.updateInfo()

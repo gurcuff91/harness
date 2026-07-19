@@ -181,6 +181,7 @@ func (t *TUI) loadSessionCommands() {
 	if t.sessionID == "" {
 		return
 	}
+	t.refreshBadges() // footer status counts (MCP connected, schedule jobs)
 	cmds, err := t.client.ListCommands(t.sessionID)
 	if err != nil {
 		return

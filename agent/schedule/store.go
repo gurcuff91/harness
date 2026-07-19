@@ -1,0 +1,134 @@
+// Package schedule persists and runs cron-scheduled prompts. Schedules are
+// stored in ~/.harness/schedules.json, keyed by slug. The agent manages them via
+// the Schedule* tools; a transport (e.g. the TUI with --scheduler) runs the
+// engine that fires their prompts on time.
+package schedule
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"sync"
+
+	"github.com/robfig/cron/v3"
+)
+
+// Schedule is one cron-scheduled prompt. Runs/LastRun are audit fields updated
+// by the engine and surfaced to the agent via ScheduleList.
+type Schedule struct {
+	Slug    string `json:"-"`                  // map key; not stored in the value
+	Cron    string `json:"cron"`               // 5-field standard cron expression
+	Prompt  string `json:"prompt"`             // the prompt text to run
+	Runs    int    `json:"runs,omitempty"`     // audit: how many times it has fired
+	LastRun int64  `json:"last_run,omitempty"` // audit: Unix ms of the last run
+}
+
+// parser accepts standard 5-field cron plus @daily/@hourly/@every descriptors.
+var parser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
+
+// ValidateCron reports whether spec is a valid 5-field cron expression (or a
+// supported @descriptor). Exposed so the Schedule tool can reject bad input.
+func ValidateCron(spec string) error {
+	_, err := parser.Parse(spec)
+	return err
+}
+
+// Store is the JSON-backed schedule collection, safe for concurrent use.
+type Store struct {
+	mu   sync.Mutex
+	path string
+	data map[string]Schedule // slug → schedule
+}
+
+// Open loads the schedule store from path (default ~/.harness/schedules.json
+// when empty). A missing file yields an empty store.
+func Open(path string) (*Store, error) {
+	if path == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("schedule: home dir: %w", err)
+		}
+		path = filepath.Join(home, ".harness", "schedules.json")
+	}
+	s := &Store{path: path, data: map[string]Schedule{}}
+	if b, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(b, &s.data)
+	}
+	return s, nil
+}
+
+// Set upserts a schedule by slug after validating its cron expression. Runs and
+// LastRun are preserved across edits.
+func (s *Store) Set(slug, spec, prompt string) error {
+	if slug == "" {
+		return fmt.Errorf("schedule: slug is required")
+	}
+	if prompt == "" {
+		return fmt.Errorf("schedule: prompt is required")
+	}
+	if err := ValidateCron(spec); err != nil {
+		return fmt.Errorf("schedule: invalid cron %q: %w", spec, err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing := s.data[slug]
+	s.data[slug] = Schedule{
+		Cron:    spec,
+		Prompt:  prompt,
+		Runs:    existing.Runs,    // preserve audit on edit
+		LastRun: existing.LastRun,
+	}
+	return s.save()
+}
+
+// Delete removes a schedule by slug. Returns whether it existed.
+func (s *Store) Delete(slug string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.data[slug]; !ok {
+		return false, nil
+	}
+	delete(s.data, slug)
+	return true, s.save()
+}
+
+// List returns all schedules sorted by slug (with the Slug field populated).
+func (s *Store) List() []Schedule {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Schedule, 0, len(s.data))
+	for slug, sc := range s.data {
+		sc.Slug = slug
+		out = append(out, sc)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
+	return out
+}
+
+// RecordRun bumps the audit counters for a slug after the engine fires it.
+func (s *Store) RecordRun(slug string, at int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sc, ok := s.data[slug]
+	if !ok {
+		return nil
+	}
+	sc.Runs++
+	sc.LastRun = at
+	s.data[slug] = sc
+	return s.save()
+}
+
+// save writes the store to disk (caller holds the lock).
+func (s *Store) save() error {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(s.data, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.path, b, 0644)
+}

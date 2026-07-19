@@ -30,18 +30,18 @@ func main() {
 
 	// No args → TUI
 	if len(args) == 0 {
-		runTUI("", "", "")
+		runTUI("", "", "", false)
 		return
 	}
 
 	// Dispatch by first argument
 	switch args[0] {
-	case "http":
+	case "serve":
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "usage: harness http <addr>")
+			fmt.Fprintln(os.Stderr, "usage: harness serve <addr>")
 			os.Exit(1)
 		}
-		runHTTP(args[1])
+		runServe(args[1])
 
 	case "providers":
 		runProviders(args[1:])
@@ -89,6 +89,9 @@ func main() {
 	case "memo":
 		runMemo(args[1:])
 
+	case "schedules":
+		runSchedules(args[1:])
+
 	case "-p", "--prompt":
 		// CLI prompt mode (explicit)
 		if len(args) < 2 {
@@ -104,17 +107,19 @@ func main() {
 			os.Exit(1)
 		}
 		model, thinking := extractFlags(args[2:])
-		runTUI(model, thinking, args[1])
+		runTUI(model, thinking, args[1], false)
 
 	default:
 		// Flags for TUI
 		if len(args[0]) > 0 && args[0][0] == '-' {
 			model, thinking, resumeID := extractAllFlags(args)
-			if resumeID != "" {
-				runTUI(model, thinking, resumeID)
-				return
+			scheduler := false
+			for _, a := range args {
+				if a == "--scheduler" {
+					scheduler = true
+				}
 			}
-			runTUI(model, thinking, "")
+			runTUI(model, thinking, resumeID, scheduler)
 			return
 		}
 		// Unknown command
@@ -125,8 +130,11 @@ func main() {
 
 // ── Dispatchers ──────────────────────────────────────────────────────────
 
-func runHTTP(addr string) {
-	a := newRootAgent()
+func runServe(addr string) {
+	// The HTTP server is a passive backend — it doesn't own a session, so it
+	// doesn't run the scheduler engine (that needs a guaranteed session, which
+	// only an interactive transport like the TUI provides).
+	a := newAgent()
 	defer a.Close()
 	srv := server.NewServer(a, server.ServerOptions{Verbose: true})
 	listener, err := net.Listen("tcp", addr)
@@ -136,13 +144,14 @@ func runHTTP(addr string) {
 	log.Fatal(srv.Serve(listener))
 }
 
-func runTUI(model, thinking, resumeID string) {
-	a := newRootAgent()
+func runTUI(model, thinking, resumeID string, scheduler bool) {
+	a := newRootAgent(scheduler)
 	defer a.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	t := tui.New(a)
 	t.SetFlags(model, thinking, resumeID)
+	t.SetScheduler(scheduler)
 	if err := t.Run(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -153,7 +162,7 @@ func runCLI(prompt, model, thinking, output string) {
 	if output == "" {
 		output = "text"
 	}
-	a := newRootAgent()
+	a := newAgent()
 	defer a.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -166,7 +175,7 @@ func runCLI(prompt, model, thinking, output string) {
 }
 
 func runProviders(args []string) {
-	a := newRootAgent()
+	a := newAgent()
 	defer a.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -177,7 +186,7 @@ func runProviders(args []string) {
 }
 
 func runConnect(name, apiKey string) {
-	a := newRootAgent()
+	a := newAgent()
 	defer a.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -188,7 +197,7 @@ func runConnect(name, apiKey string) {
 }
 
 func runDisconnect(name string) {
-	a := newRootAgent()
+	a := newAgent()
 	defer a.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -199,7 +208,7 @@ func runDisconnect(name string) {
 }
 
 func runSessions(all bool) {
-	a := newRootAgent()
+	a := newAgent()
 	defer a.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -210,7 +219,7 @@ func runSessions(all bool) {
 }
 
 func runDelete(id string) {
-	a := newRootAgent()
+	a := newAgent()
 	defer a.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -222,19 +231,26 @@ func runDelete(id string) {
 
 // ── settings / mcp commands ──────────────────────────────────────────────
 
+// newAgent builds the root agent without the scheduler engine (for modes that
+// only need one-shot work).
+func newAgent() *agent.Agent { return newRootAgent(false) }
+
 // newRootAgent builds the process's root agent. EnableMCPs spawns the configured
 // MCP servers (once) and registers their tools; the caller must Close() it to
-// terminate those subprocesses. It also opens the shared, project-scoped memory
-// store (best-effort: if it can't open, the memory tools are simply absent).
-func newRootAgent() *agent.Agent {
+// terminate those subprocesses. It also opens the shared project-scoped memory
+// store. When scheduler is true, the agent also owns the cron engine and the
+// Schedule* management tools; a due schedule fires a prompt into whichever
+// session the transport registers (SetScheduledSession).
+func newRootAgent(scheduler bool) *agent.Agent {
 	var mem *memory.Store
 	if s, err := memory.Open(""); err == nil {
 		mem = s
 	}
 	// ThinkingLevel is left zero — agent.New resolves it from settings (then "off").
 	return agent.New(agent.AgentOptions{
-		EnableMCPs: true,
-		Memory:     mem, // *memory.Store directly; the agent wraps it in a scoped adapter
+		EnableMCPs:      true,
+		Memory:          mem,
+		EnableScheduler: scheduler,
 	})
 }
 
@@ -266,7 +282,7 @@ func runSettings(args []string) {
 
 func runMCP(args []string) {
 	// mcp list reports real connection status, so spawn the servers (root agent).
-	a := newRootAgent()
+	a := newAgent()
 	defer a.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -302,13 +318,32 @@ func runMCP(args []string) {
 // Read-only: with no query it lists memories; with a query it full-text searches
 // them — for the current directory, or across all projects with --all.
 func runMemo(args []string) {
-	a := newRootAgent()
+	a := newAgent()
 	defer a.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	opts := parseMemoFlags(args)
 	if err := cli.RunMemo(ctx, a, opts, "text"); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// runSchedules dispatches `harness schedules [--json]` — a read-only listing of
+// cron-scheduled prompts.
+func runSchedules(args []string) {
+	a := newAgent()
+	defer a.Close()
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	output := "text"
+	for _, arg := range args {
+		if arg == "--json" {
+			output = "json"
+		}
+	}
+	if err := cli.RunSchedules(ctx, a, output); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -487,7 +522,7 @@ func printHelp() {
 Usage:
   harness                            Interactive TUI mode
   harness -p <prompt> [flags]        Single-turn CLI
-  harness http <addr>                HTTP server
+  harness serve <addr>               Start the HTTP/SSE server
   harness --resume <id> [flags]      Resume session in TUI
 
 Management:
@@ -510,12 +545,16 @@ Memory (read-only — the agent writes memories via its tools):
   harness memo <query> --all         Search across ALL projects
   harness memo --global              List only global (cross-project) memories
 
+Schedules (read-only — the agent creates them via its tools):
+  harness schedules [--json]         List cron-scheduled prompts (slug, cron, runs, last run)
+
 Flags (CLI / TUI):
   -p, --prompt <text>  Prompt for single-turn CLI mode
   --model <m>          Model (provider/model)
   --thinking <lvl>     Thinking: off|low|medium|high|xhigh
   --output <mode>      With -p: text|json|json-stream
   --resume <id>        Resume session (TUI only)
+  --scheduler          Run the cron scheduler engine in the TUI (fires scheduled prompts)
   --all                With sessions: list all
   --help, -h           Show this help
 
@@ -549,5 +588,5 @@ Examples:
   harness memo
   harness memo "deploy process" --content
   harness memo kubernetes --all
-  harness http :8080`)
+  harness serve :8080`)
 }

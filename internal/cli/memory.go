@@ -106,7 +106,10 @@ func RunMemo(ctx context.Context, a *agent.Agent, opts MemoOpts, output string) 
 		}
 		fmt.Println(line)
 		if opts.Content && m.Content != "" {
-			fmt.Printf("    %s\n", firstLine(m.Content))
+			// Full content, indented, preserving line breaks.
+			for _, l := range splitLines(m.Content) {
+				fmt.Printf("    %s\n", l)
+			}
 		}
 	}
 	if res.Skip+res.Returned < res.Total {
@@ -133,12 +136,3 @@ func relTime(ms int64) string {
 	}
 }
 
-// firstLine returns the first non-empty line of s (for a compact preview).
-func firstLine(s string) string {
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			return s[:i]
-		}
-	}
-	return s
-}

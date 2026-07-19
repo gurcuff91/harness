@@ -152,7 +152,7 @@ Run `harness` for the interactive TUI, or use subcommands directly:
 ```
 harness                       — Interactive TUI
 harness -p <prompt>           — Single-turn CLI (--model, --thinking, --output)
-harness http <addr>           — HTTP/SSE server
+harness serve <addr>          — HTTP/SSE server
 harness --resume <id>         — Resume a session in the TUI
 
 harness providers             — List providers and status

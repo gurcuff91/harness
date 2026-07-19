@@ -38,7 +38,8 @@ const (
 
 	// ── Limits ─────────────────────────────────────────────────────────────
 	EventMaxTurnsReached // agent reached max turns limit (LLM summarized progress)
-	EventFollowUpStart   // follow-up prompt about to process (Output = text)
+	EventFollowUpStart   // follow-up prompt about to process (Output = text, Origin = source)
+	EventReceivedPrompt  // an immediate (non-queued) prompt was received (Output = text, Origin = source)
 
 	// ── Compaction ─────────────────────────────────────────────────────────
 	EventCompactStart // session compaction started
@@ -74,6 +75,7 @@ type Event struct {
 	Output   string // generic output (tool results, turn text)
 	Message  string // error messages (EventError)
 	Summary  string // compaction summary (EventCompactEnd)
+	Origin   string // prompt source for EventReceivedPrompt/EventFollowUpStart ("user", "scheduled", …)
 	Delta    string
 	Tokens   TokenUsage
 	Duration time.Duration

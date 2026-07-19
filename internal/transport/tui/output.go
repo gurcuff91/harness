@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -59,6 +60,38 @@ func (t *TUI) showWarn(msg string) {
 	t.addRaw(ansi.Warn("⚠ " + msg))
 }
 
+// refreshBadges reloads the footer status counts (MCP connected, schedule jobs)
+// from the server. Cheap read-only calls; run at connect time and after changes.
+func (t *TUI) refreshBadges() {
+	if t.client == nil {
+		return
+	}
+	// MCP: count connected servers.
+	t.mcpConnected = 0
+	if data, err := t.client.GetMCPStatus(); err == nil {
+		var statuses []struct {
+			Connected bool `json:"connected"`
+		}
+		if json.Unmarshal(data, &statuses) == nil {
+			for _, s := range statuses {
+				if s.Connected {
+					t.mcpConnected++
+				}
+			}
+		}
+	}
+	// Schedules: count configured jobs (only meaningful when the engine runs).
+	t.scheduleJobs = 0
+	if t.schedulerOn {
+		if data, err := t.client.GetSchedules(); err == nil {
+			var jobs []json.RawMessage
+			if json.Unmarshal(data, &jobs) == nil {
+				t.scheduleJobs = len(jobs)
+			}
+		}
+	}
+}
+
 // updateInfo refreshes the info and footer status lines.
 func (t *TUI) updateInfo() {
 	cwd, _ := os.Getwd()
@@ -83,7 +116,7 @@ func (t *TUI) updateInfo() {
 	}
 	thinking := ""
 	if t.thinking != "" && t.thinking != "off" {
-		thinking = " • " + t.thinking
+		thinking = " (" + t.thinking + ")"
 	}
 	cache := ""
 	if t.stats.cacheRead > 0 || t.stats.cacheWrite > 0 {
@@ -93,7 +126,7 @@ func (t *TUI) updateInfo() {
 	if t.isSubscription {
 		price += " (sub)"
 	}
-	t.footer.SetText(ansi.Dimmed(fmt.Sprintf(
+	stats := ansi.Dimmed(fmt.Sprintf(
 		"↑%s ↓%s%s %s %.1f%%/%s %s%s",
 		compactNum(t.stats.input),
 		compactNum(t.stats.output),
@@ -103,9 +136,47 @@ func (t *TUI) updateInfo() {
 		compactNum(t.stats.contextWin),
 		t.model,
 		thinking,
-	)))
+	))
+	t.footer.SetText(stats + t.statusBadges())
 	t.tui.RequestRender(false)
 }
+
+// statusBadges renders the chartreuse status badges appended to the footer:
+// connected MCP servers, and (when --scheduler is on with jobs) the scheduler.
+// Each is shown only when it has something to report.
+func (t *TUI) statusBadges() string {
+	var parts []string
+	if t.mcpConnected > 0 {
+		word := "mcps"
+		if t.mcpConnected == 1 {
+			word = "mcp"
+		}
+		parts = append(parts, badge(mcpBadgeIcon, fmt.Sprintf("%d %s", t.mcpConnected, word)))
+	}
+	if t.schedulerOn && t.scheduleJobs > 0 {
+		word := "schedules"
+		if t.scheduleJobs == 1 {
+			word = "schedule"
+		}
+		parts = append(parts, badge(scheduleIcon, fmt.Sprintf("%d %s", t.scheduleJobs, word)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	// Separate from the stats line with two spaces; badges joined by spaces.
+	return "  " + strings.Join(parts, " ")
+}
+
+// badge renders "icon text" fully dimmed, matching the rest of the footer,
+// e.g. ⎔ 2 mcps.
+func badge(icon, text string) string {
+	return ansi.Dimmed(icon + " " + text)
+}
+
+
+
+// mcpBadgeIcon is the gear shown in the MCP footer badge (matches the MCP tool icon).
+const mcpBadgeIcon = "⎔"
 
 // ── Formatting helpers (ported from transport/tui) ──────────────────────────
 
@@ -130,6 +201,8 @@ func toolStyle(name string) (colorFn func(string) string, icon string) {
 		return ansi.Accent, "⊕" // circled plus: spawn a sub-agent
 	case "MemoWrite", "MemoSearch", "MemoDelete":
 		return ansi.Accent, "✳" // asterisk: memory note
+	case "Schedule", "ScheduleList", "ScheduleDelete":
+		return ansi.Accent, "◷" // clock: cron-scheduled prompt management
 	default:
 		return ansi.Accent, "⎔" // technical hexagon: generic MCP/extension tool
 	}

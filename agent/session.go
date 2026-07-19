@@ -65,9 +65,51 @@ type Session struct {
 type followUp struct {
 	text   string
 	images []types.ImageData
+	origin string // where the prompt came from ("user", "scheduled", …); default "user"
 	// done, when non-nil, receives the turn's final text (or error) once this
 	// specific prompt finishes — used by PromptSync. nil for fire-and-forget.
 	done chan promptResult
+}
+
+// ── Prompt options ────────────────────────────────────────────────────────────
+
+// Origin constants tag where a prompt came from, so transports can render it
+// distinctly (e.g. a scheduled prompt with a clock icon).
+const (
+	OriginUser      = "user"
+	OriginScheduled = "scheduled"
+)
+
+// PromptOption configures a Prompt / PromptAndWait call.
+type PromptOption func(*promptConfig)
+
+type promptConfig struct {
+	images []types.ImageData
+	origin string
+}
+
+// WithImages attaches images to the prompt (vision requests).
+func WithImages(images ...types.ImageData) PromptOption {
+	return func(c *promptConfig) { c.images = append(c.images, images...) }
+}
+
+// WithOriginUser tags the prompt as user-originated (the default).
+func WithOriginUser() PromptOption {
+	return func(c *promptConfig) { c.origin = OriginUser }
+}
+
+// WithOriginScheduled tags the prompt as fired by the scheduler, so transports
+// can render it with a scheduled indicator.
+func WithOriginScheduled() PromptOption {
+	return func(c *promptConfig) { c.origin = OriginScheduled }
+}
+
+func buildPromptConfig(opts []PromptOption) promptConfig {
+	c := promptConfig{origin: OriginUser}
+	for _, opt := range opts {
+		opt(&c)
+	}
+	return c
 }
 
 type promptResult struct {
@@ -136,13 +178,15 @@ func (s *Session) loadModelMeta(modelID string) {
 
 // ── Public methods ──────────────────────────────────────────────────────
 
-// Prompt runs one full turn: user message → ReAct loop → final response.
 // Prompt sends a message to the session. If no turn is active, it starts
-// processing immediately. If a turn is running, the message is queued and
-// processed automatically when the current turn finishes.
-func (s *Session) Prompt(ctx context.Context, text string, images ...types.ImageData) types.PromptStatus {
+// processing immediately; if a turn is running, the message is queued and
+// processed when the current turn finishes. Options attach images
+// (WithImages) or tag the origin (WithOriginUser/WithOriginScheduled; default
+// user).
+func (s *Session) Prompt(ctx context.Context, text string, opts ...PromptOption) types.PromptStatus {
+	c := buildPromptConfig(opts)
 	s.followMu.Lock()
-	s.followUps = append(s.followUps, followUp{text: text, images: images})
+	s.followUps = append(s.followUps, followUp{text: text, images: c.images, origin: c.origin})
 	if !s.busy {
 		s.busy = true
 		s.followCtx = ctx // parent context for all turns
@@ -201,10 +245,11 @@ func (s *Session) Wait() {
 // convenience for SDK callers who want a single request/response; the async
 // Prompt + Subscribe model remains the primary API for streaming/UIs. Other
 // queued prompts are unaffected. Respects ctx for the turn's execution.
-func (s *Session) PromptAndWait(ctx context.Context, text string, images ...types.ImageData) (string, error) {
+func (s *Session) PromptAndWait(ctx context.Context, text string, opts ...PromptOption) (string, error) {
+	c := buildPromptConfig(opts)
 	done := make(chan promptResult, 1)
 	s.followMu.Lock()
-	s.followUps = append(s.followUps, followUp{text: text, images: images, done: done})
+	s.followUps = append(s.followUps, followUp{text: text, images: c.images, origin: c.origin, done: done})
 	if !s.busy {
 		s.busy = true
 		s.followCtx = ctx
@@ -262,8 +307,14 @@ func (s *Session) drainFollowUps() {
 		s.currentCancel = cancel
 		s.followMu.Unlock()
 
-		if !first {
-			s.emit(types.Event{Type: types.EventFollowUpStart, Output: fu.text})
+		// Echo the prompt to clients. The immediate (first) prompt gets a
+		// ReceivedPrompt event; queued ones get FollowUpStart. Both carry the text
+		// and origin so transports can render them (e.g. scheduled → clock icon)
+		// even though the client didn't originate the prompt.
+		if first {
+			s.emit(types.Event{Type: types.EventReceivedPrompt, Output: fu.text, Origin: fu.origin})
+		} else {
+			s.emit(types.Event{Type: types.EventFollowUpStart, Output: fu.text, Origin: fu.origin})
 		}
 		first = false
 

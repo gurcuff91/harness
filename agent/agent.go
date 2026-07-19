@@ -5,17 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/agent/resources"
+	"github.com/gurcuff91/harness/agent/schedule"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/internal/config"
-	"github.com/gurcuff91/harness/mcp"
-	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/internal/providers"
+	"github.com/gurcuff91/harness/mcp"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -35,6 +37,16 @@ type Agent struct {
 	maxTurns        int
 	maxTokens       int          // 0 = resolved from ModelMeta in NewSession
 	mcpManager      *mcp.Manager // non-nil only when EnableMCPs; owns MCP subprocesses
+
+	// Scheduling (non-nil only when EnableScheduler). The agent owns the store
+	// (for the Schedule* tools) and the engine (which fires due prompts).
+	schedStore  *schedule.Store
+	schedEngine *schedule.Engine
+	// scheduledSession is the session that receives fired prompts. A transport
+	// registers it via SetScheduledSession when it opens a scheduler-enabled
+	// session; the engine drives it.
+	schedMu          sync.Mutex
+	scheduledSession *Session
 }
 
 // AgentOptions configures a new Agent.
@@ -57,6 +69,11 @@ type AgentOptions struct {
 	ResourceLoader resources.ResourceLoader  // default: FileResourceLoader(cwd) per session
 	//                                         // pass NilLoader{} to disable discovery
 	Memory *memory.Store // project-scoped persistent memory; nil disables the memory tools
+	// EnableScheduler turns on cron-scheduled prompts: the Schedule* management
+	// tools AND the engine that fires due prompts. The agent owns both. A
+	// transport marks one session as the scheduler target (SetScheduledSession);
+	// only one agent should enable this so prompts don't fire twice.
+	EnableScheduler bool
 }
 
 // New creates a new Agent. Never fails — provider is resolved per session.
@@ -108,7 +125,7 @@ func New(opts AgentOptions) *Agent {
 		reg.Register(t)
 	}
 
-	return &Agent{
+	a := &Agent{
 		opts:            opts,
 		toolReg:         reg,
 		disallowedTools: opts.DisallowedTools,
@@ -120,7 +137,58 @@ func New(opts AgentOptions) *Agent {
 		maxTokens:       opts.MaxTokens,
 		mcpManager:      mcpMgr,
 	}
+
+	// Scheduling: the agent always opens the store so the Schedule* management
+	// tools work in any session. EnableScheduler only decides whether this agent
+	// also RUNS the engine that fires due prompts — so a plain session can manage
+	// schedules while exactly one agent (the one with --scheduler) executes them.
+	// Subagents get neither: they pass EnableScheduler=false and disallow the
+	// Schedule* tools.
+	if st, err := schedule.Open(""); err == nil {
+		a.schedStore = st
+		if opts.EnableScheduler {
+			a.schedEngine = schedule.NewEngine(st, a.fireScheduledPrompt)
+			a.schedEngine.Start(context.Background())
+		}
+	}
+
+	return a
 }
+
+// fireScheduledPrompt is the engine callback: it sends the due prompt to the
+// registered scheduled session, tagged as scheduled. No-op if no session is
+// registered yet (e.g. the transport hasn't opened one).
+func (a *Agent) fireScheduledPrompt(slug, prompt string) {
+	a.schedMu.Lock()
+	sess := a.scheduledSession
+	a.schedMu.Unlock()
+	if sess != nil {
+		sess.Prompt(context.Background(), prompt, WithOriginScheduled())
+	}
+}
+
+// SetScheduledPromptsHandler registers the session that fired schedule prompts
+// are sent to. A transport calls this for the session it wants to handle
+// scheduled prompts. Harmless when the engine is off (EnableScheduler=false):
+// the session is recorded but nothing fires. Pass nil to detach.
+func (a *Agent) SetScheduledPromptsHandler(s *Session) {
+	a.schedMu.Lock()
+	a.scheduledSession = s
+	a.schedMu.Unlock()
+}
+
+// scheduleAdapter exposes the agent's schedule store to the Schedule* tools.
+// Returns nil when scheduling is disabled.
+func (a *Agent) scheduleAdapter() tools.ScheduleStore {
+	if a.schedStore == nil {
+		return nil
+	}
+	return schedule.NewToolAdapter(a.schedStore)
+}
+
+// Schedules returns the agent's schedule store (nil if unavailable). Read by the
+// HTTP transport to serve the read-only /api/schedules listing.
+func (a *Agent) Schedules() *schedule.Store { return a.schedStore }
 
 // Options returns the original configuration — used by the Subagent tool to clone.
 func (a *Agent) Options() AgentOptions {
@@ -219,6 +287,9 @@ func (a *Agent) Close() error {
 		if err := a.opts.Memory.Close(); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	if a.schedEngine != nil {
+		a.schedEngine.Stop()
 	}
 	return errors.Join(errs...)
 }
@@ -381,6 +452,19 @@ func (a *Agent) buildSessionTools(cwd, model string, res *resources.Resources, l
 			reg.Register(tools.MemoDelete(memAdapter, cwd))
 		}
 	}
+	// Schedule tools — manage cron-scheduled prompts. Registered when scheduling
+	// is enabled; the agent owns the store and the engine that fires them.
+	if adapter := a.scheduleAdapter(); adapter != nil {
+		if a.isToolAllowed(tools.ToolSchedule) {
+			reg.Register(tools.Schedule(adapter))
+		}
+		if a.isToolAllowed(tools.ToolScheduleList) {
+			reg.Register(tools.ScheduleList(adapter))
+		}
+		if a.isToolAllowed(tools.ToolScheduleDelete) {
+			reg.Register(tools.ScheduleDelete(adapter))
+		}
+	}
 	// Subagent tool — only if allowed (excluded for sub-agents themselves)
 	if a.isToolAllowed(tools.ToolSubagent) {
 		// Capture current settings in a closure — Agent has zero knowledge of sub-agent mechanics
@@ -402,9 +486,16 @@ func (a *Agent) buildSessionTools(cwd, model string, res *resources.Resources, l
 				// READ-ONLY memory: they may recall context (MemoSearch) but
 				// not write or delete — only the parent agent curates what persists,
 				// avoiding noisy/conflicting writes from ephemeral subagents.
-				DisallowedTools: []string{tools.ToolSubagent, tools.ToolMemoWrite, tools.ToolMemoDelete},
-				Tools:           parentA.MCPTools(),
-				Memory:          parentA.opts.Memory, // share the parent's memory store (read-only for subagents)
+				// Schedule management is parent-only too: like the MCP manager (which
+				// runs only in the parent), the scheduler engine and its tools belong
+				// to the root agent. Subagents get neither the engine (EnableScheduler
+				// stays false) nor the Schedule* tools (disallowed).
+				DisallowedTools: []string{
+					tools.ToolSubagent, tools.ToolMemoWrite, tools.ToolMemoDelete,
+					tools.ToolSchedule, tools.ToolScheduleList, tools.ToolScheduleDelete,
+				},
+				Tools:  parentA.MCPTools(),
+				Memory: parentA.opts.Memory, // share the parent's memory store (read-only for subagents)
 			})
 			sess, err := subAgent.NewSession(cwd, model)
 			if err != nil {
@@ -466,6 +557,10 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) string {
 
 	if a.opts.Memory != nil {
 		b.WriteString("\n\n## Memory\n\nYou have persistent, project-scoped memory that carries over between sessions. At the start of a task — or whenever you lack context about earlier work — use MemoSearch with relevant keywords to recover prior decisions, conventions, and context. Save durable, high-value insights with MemoWrite (never transient task state), and remove obsolete ones with MemoDelete.")
+	}
+
+	if a.schedStore != nil {
+		b.WriteString("\n\n## Scheduling\n\nYou can schedule prompts to run automatically on a recurring cron schedule. Use Schedule to create or update one, ScheduleList to review what's scheduled and how often it has run, and ScheduleDelete to remove one. Schedule work the user wants done repeatedly on a cadence; the prompt runs later exactly as if the user sent it.")
 	}
 
 	b.WriteString(fmt.Sprintf("\n\n## Working Directory\n\n%s\n", cwd))

@@ -14,4 +14,7 @@ const (
 	ToolMemoWrite  = "MemoWrite"
 	ToolMemoSearch = "MemoSearch"
 	ToolMemoDelete = "MemoDelete"
+	ToolSchedule       = "Schedule"
+	ToolScheduleList   = "ScheduleList"
+	ToolScheduleDelete = "ScheduleDelete"
 )

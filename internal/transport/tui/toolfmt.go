@@ -22,6 +22,8 @@ var primaryParam = map[string]string{
 	"MemoWrite":  "slug",
 	"MemoSearch": "query",
 	"MemoDelete": "slug",
+	"Schedule":       "slug",
+	"ScheduleDelete": "slug",
 }
 
 // kvPair is one decoded argument, preserving JSON key order.
@@ -119,6 +121,13 @@ func formatToolArgs(name, argsJSON string) string {
 			}
 			continue
 		}
+		// Schedule's prompt is arbitrary text — summarize by line count, deferred.
+		if name == "Schedule" && p.key == "prompt" {
+			if n := countLines(p.val); n > 0 {
+				deferred = append(deferred, ansi.Muted(fmt.Sprintf("(prompt: %s)", plainLineCount(n))))
+			}
+			continue
+		}
 		// Fetch's body-carrying params can be large or carry secrets (headers:
 		// Authorization/API keys). Summarize each and defer to the end.
 		if name == "Fetch" {
@@ -209,6 +218,15 @@ func lineCountLabel(n int) string {
 		return "(1 line)"
 	}
 	return fmt.Sprintf("(%d lines)", n)
+}
+
+// plainLineCount renders "N line" / "N lines" without the surrounding parens,
+// for embedding in a labeled summary like "(prompt: 3 lines)".
+func plainLineCount(n int) string {
+	if n == 1 {
+		return "1 line"
+	}
+	return fmt.Sprintf("%d lines", n)
 }
 
 // countJSONObject returns the number of keys in a JSON object value, or 0 if it

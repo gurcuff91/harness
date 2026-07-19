@@ -47,6 +47,13 @@ type Options = agent.AgentOptions
 // Session is a single conversation with an [Agent]. See [agent.Session].
 type Session = agent.Session
 
+// PromptOption configures a [Session.Prompt] call (images, origin). See the
+// agent package's WithImages / WithOriginUser / WithOriginScheduled.
+type PromptOption = agent.PromptOption
+
+// WithImages attaches images to a prompt. See [agent.WithImages].
+var WithImages = agent.WithImages
+
 // Event is an event emitted by a session. See [agent.Event].
 type Event = agent.Event
 

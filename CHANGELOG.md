@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.29.0] - 2026-06-23
+
+### Scheduling — cron-scheduled prompts
+- The agent can schedule prompts to run automatically on a cron schedule, via
+  three tools: **Schedule** (create/update by slug), **ScheduleList**, and
+  **ScheduleDelete**. Persisted to `~/.harness/schedules.json` with audit fields
+  (runs, last_run). Uses `robfig/cron/v3` (5-field standard + @descriptors)
+- **Store vs engine split:** the agent always opens the store (so the Schedule*
+  tools work anywhere); `AgentOptions.EnableScheduler` additionally runs the
+  engine that fires due prompts. A transport marks its session as the target via
+  `SetScheduledPromptsHandler`. Subagents get neither (parent-only, like MCP)
+- **`harness --scheduler`** runs the engine in the TUI (a guaranteed session).
+  A due prompt is sent tagged origin=scheduled and echoed with a clock icon (◷)
+- **Origin tag:** `Session.Prompt`/`PromptAndWait` take functional options
+  (`WithOriginUser`/`WithOriginScheduled`/`WithImages`). The new
+  `received_prompt` event (and `follow_up_start`) carry text + origin, so the
+  transport paints the right icon — the TUI no longer echoes locally, the server
+  is the single source of truth
+- **`GET /api/schedules`** + **`harness schedules [--json]`** list schedules
+  (slug, cron, runs, relative last-run, full prompt)
+- **Footer badges:** `⎔ N mcps` and (with --scheduler) `◷ N schedules`, shown
+  when present
+- Schedule tools render with the clock icon, slug bare, prompt summarized as
+  `(prompt: N lines)`
+
+### CLI
+- `harness http <addr>` renamed to **`harness serve <addr>`**. The server is a
+  passive backend and no longer accepts `--scheduler` (scheduling needs a
+  guaranteed session, which only an interactive transport provides)
+- `harness memo --content` now prints the full content (was first line only)
+
 ## [0.28.0] - 2026-06-23
 
 ### Internal restructure — server / cli / transport

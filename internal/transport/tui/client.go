@@ -111,6 +111,11 @@ func (c *Client) GetMCPStatus() ([]byte, error) {
 	return c.do("GET", "/api/mcp/status", nil)
 }
 
+// GetSchedules returns the configured cron-scheduled prompts.
+func (c *Client) GetSchedules() ([]byte, error) {
+	return c.do("GET", "/api/schedules", nil)
+}
+
 func (c *Client) ConnectProvider(name, apiKey string) ([]byte, error) {
 	body := map[string]any{}
 	if apiKey != "" {
@@ -138,7 +143,10 @@ func (c *Client) ListSessionsByCWD(cwd string) ([]byte, error) {
 }
 
 func (c *Client) ResumeSession(id string) ([]byte, error) {
-	return c.do("POST", "/api/sessions/"+id+"/resume", nil)
+	// The TUI is single-session: it always claims the scheduled-prompt handler so
+	// that, if this agent runs the engine (--scheduler), fired prompts land here.
+	// When the engine is off it's a harmless no-op.
+	return c.do("POST", "/api/sessions/"+id+"/resume?scheduled_prompts_handler=true", nil)
 }
 
 func (c *Client) DeleteSession(id string) ([]byte, error) {
@@ -158,12 +166,14 @@ func (c *Client) StopSession(sessionID string) ([]byte, error) {
 }
 
 func (c *Client) CreateSession(model, cwd string) ([]byte, error) {
-	return c.do("POST", "/api/sessions", map[string]string{"model": model, "cwd": cwd})
+	// See ResumeSession: the single-session TUI always claims the handler.
+	return c.do("POST", "/api/sessions?scheduled_prompts_handler=true", map[string]string{"model": model, "cwd": cwd})
 }
 
 func (c *Client) SendPrompt(sessionID, text string) ([]byte, error) {
 	return c.do("POST", "/api/sessions/"+sessionID+"/prompt", map[string]string{"text": text})
 }
+
 
 func (c *Client) ListCommands(sessionID string) ([]CommandDef, error) {
 	data, err := c.do("GET", "/api/sessions/"+sessionID+"/commands", nil)
