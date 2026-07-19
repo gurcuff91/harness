@@ -56,6 +56,12 @@ func (t *TUI) streamEvents(ctx context.Context) {
 					t.tui.RequestRender(false)
 				}
 
+			case "thinking_end":
+				// The model finished its reasoning block. Close the thinking section
+				// explicitly (text/tool_start also close it, but this is deterministic
+				// and covers thinking that isn't followed by streamed text).
+				thinkBlk = nil
+
 			case "text":
 				delta, _ := evt["delta"].(string)
 				t.lastTurnText.WriteString(delta)
@@ -213,6 +219,12 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				}
 				t.setSpinning(true)
 				t.updateInfo()
+
+			case "max_turns_reached":
+				// The agent hit its per-turn ReAct cap while still working. Tell the
+				// user so the (summarized) result isn't mistaken for a normal finish.
+				n, _ := evt["max_turns"].(float64)
+				t.addRaw(ansi.Dimmed(fmt.Sprintf("⚠ reached the %d-turn limit — summarizing progress", int(n))))
 
 			case "error":
 				msg, _ := evt["message"].(string)

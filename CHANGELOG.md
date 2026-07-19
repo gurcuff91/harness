@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.48.0] - 2026-06-23
+
+### TUI u2014 consume newly-forwarded events
+- The TUI now shows **`max_turns_reached`**: when the agent hits its per-turn
+  ReAct cap, a dim "reached the N-turn limit u2014 summarizing progress" line is
+  printed so the summarized result isnu2019t mistaken for a normal finish (previously
+  the event was dropped)
+- Thinking now closes on the explicit **`thinking_end`** event too (in addition
+  to the existing text/tool-start close), making reasoning blocks end
+  deterministically even when not followed by streamed text. Thinking rendering
+  itself was audited and confirmed correct (dim+italic, streamed, closed on all
+  transitions)
+
 ## [0.47.0] - 2026-06-23
 
 ### Agent u2014 balanced loop lifecycle events
