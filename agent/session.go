@@ -372,8 +372,9 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 
 		resp, toolResults, err := s.runStream(ctx, req)
 		if ctx.Err() != nil {
-			// Cancelled by user Stop() — emit stop event and exit cleanly
+			// Cancelled by user Stop() — close the loop, emit stop, exit cleanly.
 			s.emit(types.Event{Type: types.EventStop})
+			s.emit(types.Event{Type: types.EventLoopEnd, Loop: i})
 			s.emit(types.Event{Type: types.EventTurnEnd})
 			return "", nil
 		}
@@ -399,6 +400,10 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 				return "", fmt.Errorf("store tool results: %w", err)
 			}
 		}
+
+		// This iteration ran tools and will loop again — close it so LoopStart and
+		// LoopEnd stay balanced across iterations.
+		s.emit(types.Event{Type: types.EventLoopEnd, Loop: i})
 
 		// Auto-compact at 98% context usage before next iteration
 		// Compact emits EventError itself if it fails — no duplication here

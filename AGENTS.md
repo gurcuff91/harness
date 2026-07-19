@@ -59,7 +59,8 @@ cmd/harness/main.go             ← executable entry point (package main), CLI d
     │   ├── server.go / sse.go / proxy.go
     ├── cli/                    ← CLI command handlers (a client of server)
     └── transport/              ← interactive session frontends (each opens a session over server)
-        └── tui/                ← pure-Go terminal UI (zero external TUI libs); future: telegram, slack…
+        ├── tui/                ← pure-Go terminal UI (zero external TUI libs)
+        └── telegram/           ← Telegram bot (stdlib Bot API; one session per chat)
 ```
 
 > **internal/ rule:** its parent is the module root, so *all* harness code can

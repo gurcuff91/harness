@@ -2,6 +2,116 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.47.0] - 2026-06-23
+
+### Agent u2014 balanced loop lifecycle events
+- Audited that every event the SSE now forwards is actually emitted by the react
+  loop. Text/thinking End events (driven by the AI provider stream) were verified
+  correct across all transitions (thinkingu2192text, textu2192tool, usage/done, etc.)
+- Fixed two `EventLoopStart`/`EventLoopEnd` imbalances: an iteration that ran
+  tools and looped again never emitted `LoopEnd` before the next `LoopStart`, and
+  a user Stop mid-iteration skipped `LoopEnd`. Both now close the loop, so
+  `LoopStart`/`LoopEnd` are balanced on every exit path
+
+## [0.46.0] - 2026-06-23
+
+### Server u2014 SSE now forwards every agent event
+- Fixed the SSE layer silently dropping four agent events it had no case for:
+  `EventStreamTextEnd` (u2192 `text_end`), `EventStreamThinkingEnd`
+  (u2192 `thinking_end`), `EventLoopStart` (u2192 `loop_start`), and `EventLoopEnd`
+  (u2192 `loop_end`). The SSE translator now has full parity with the agent's event
+  set, so transports can observe the complete turn lifecycle
+- **Telegram** uses the new `text_end` to flush each text block the moment it
+  finishes streaming (more precise than the previous flush-before-tool-call)
+
+## [0.45.0] - 2026-06-23
+
+### Telegram u2014 live typing + streamed commentary
+- **Typing indicator stays alive:** Telegram clears "typingu2026" after ~5s, so the
+  bot now keeps it lit with a heartbeat (re-sent every 4s) for the whole turn
+  (turn_start u2192 turn_end), instead of a single call that vanished mid-work
+- **Commentary streams as it happens:** text the agent writes between tool calls
+  is now flushed to the chat before each tool call (and at turn end), so the user
+  sees the running narration in real time rather than one lump at the end. This
+  makes it clear the bot is working (calling tools) instead of looking idle
+
+## [0.44.0] - 2026-06-23
+
+### Telegram u2014 fix single-asterisk italic
+- Fixed CommonMark italic (`*text*` / `_text_`) showing literal asterisks in
+  Telegram. The converter only handled `**bold**`/`__bold__`; a single `*` fell
+  through and was escaped. It now maps `*italic*`/`_italic_` to MarkdownV2u2019s
+  `_italic_`, while a stray or arithmetic `*` (e.g. `2 * 3`) is still escaped and
+  bold still wins when doubled
+
+## [0.43.0] - 2026-06-23
+
+### Telegram u2014 fix UTF-8 mojibake in replies
+- Fixed garbled non-ASCII text (accents, u00f1, emoji) in bot messages u2014 e.g.
+  "Du00e9jame" arriving as "Du00c3u00a9jame". The MarkdownV2 escaper was rebuilding each byte
+  with string(byte), which mangles multi-byte UTF-8 runes; it now writes bytes
+  verbatim and only backslash-escapes ASCII specials, so runes pass through
+  intact
+
+## [0.42.0] - 2026-06-23
+
+### Telegram u2014 always start, reject per-chat
+- The bot no longer refuses to start when no chats are paired. It starts, logs a
+  warning, and rejects each unknown chat with the "run pair" message (the
+  per-chat rejection already covers the safety case). With --allow-unpair it
+  accepts and auto-pairs anyone, as before
+
+## [0.41.0] - 2026-06-23
+
+### Telegram u2014 pairing (allowlist in config, no more --allow flag)
+- `~/.harness/telegram.json` now holds both the **allowlist** (paired chat ids)
+  and the **sessions** map (chat u2192 session). The allowlist is managed once via
+  new subcommands instead of a per-launch flag:
+  - `harness telegram pair <chat_id>` u2014 allow a chat (idempotent)
+  - `harness telegram unpair <chat_id>` u2014 revoke a chat AND drop its session
+  - `harness telegram list` u2014 list paired chats
+- **Removed `--allow`**; the bot reads the allowlist from config. It refuses to
+  start with no paired chats unless `--allow-unpair` is set
+- **`--allow-unpair`:** accept any chat, auto-adding it to the allowlist on first
+  contact (logged). Without it, an un-paired chat is rejected with a message
+  telling the user to run `harness telegram pair <chat_id>`, and the rejection is
+  logged as a warning
+
+## [0.40.0] - 2026-06-23
+
+### Telegram u2014 operator logs
+- The Telegram transport now logs the key moments to stderr so the operator can
+  follow activity: an incoming user prompt (`u2190 prompt from chat`), each tool the
+  agent calls (`u2699 tool`), a scheduled prompt fired into a chat (`u25f7 scheduled
+  prompt`), and the reply sent back (`u2192 reply to chat`, noting when split across
+  multiple messages). Prompt/reply text is collapsed to one line and truncated
+
+## [0.39.0] - 2026-06-23
+
+### Telegram transport
+- New **`harness telegram`** transport: run the agent as a Telegram bot. Like the
+  TUI it owns a root agent and an in-process HTTP/SSE server, but the display is
+  a Telegram chat — incoming messages are prompts, the agent's text replies are
+  outgoing messages, **one harness session per chat**
+- **Stdlib only** — the Bot API client (getUpdates long-polling + sendMessage) is
+  built on `net/http` + `encoding/json`; no new dependency
+- **Per-chat sessions**, auto-created on first message and persisted in
+  `~/.harness/telegram.json` (chat id → session id) so conversations survive a
+  restart. All chats share the launch cwd
+- **Scheduling works per chat:** a schedule created from a chat is owned by that
+  chat's session (via the owner routing added in 0.38.0), so with `--scheduler`
+  a fired prompt is delivered back to the right chat — even if the user was away,
+  Telegram holds the message
+- **Markdown replies:** the agent's CommonMark is converted to Telegram
+  MarkdownV2 (headings → bold, escaping specials, preserving code spans/fences),
+  with an automatic plain-text fallback if Telegram rejects the markup (400).
+  Long replies are split across messages (4096-char cap)
+- **Security:** an allowlist is required (`--allow <chat_id,...>`); the bot
+  refuses to run open to everyone and ignores messages from other chats.
+  Commands: `/start`, `/new` (fresh session)
+- Flags: `--token` (or `TELEGRAM_BOT_TOKEN`), `--allow`, `--model`, `--thinking`,
+  `--scheduler`
+
 ## [0.38.0] - 2026-06-23
 
 ### Scheduling — per-session routing (owner), multi-session ready

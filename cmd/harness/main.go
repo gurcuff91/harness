@@ -7,12 +7,14 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/internal/cli"
 	"github.com/gurcuff91/harness/internal/server"
+	"github.com/gurcuff91/harness/internal/transport/telegram"
 	"github.com/gurcuff91/harness/internal/transport/tui"
 )
 
@@ -41,6 +43,9 @@ func main() {
 			os.Exit(1)
 		}
 		runServe(args[1])
+
+	case "telegram":
+		runTelegram(args[1:])
 
 	case "providers":
 		runProviders(args[1:])
@@ -152,6 +157,79 @@ func runTUI(model, thinking, resumeID string, scheduler bool) {
 	t.SetFlags(model, thinking, resumeID)
 	t.SetScheduler(scheduler)
 	if err := t.Run(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// runTelegram runs the Telegram bot transport. Like the TUI it owns a root agent
+// and an in-process server, but the display is a Telegram chat: incoming
+// messages are prompts, the agent's replies are outgoing messages, one session
+// per chat. Flags: --token (or env TELEGRAM_BOT_TOKEN), --allow (required),
+// --model, --thinking, --scheduler.
+func runTelegram(args []string) {
+	// Subcommands: pair / unpair / list are pure config edits (no token, no server).
+	if len(args) > 0 {
+		switch args[0] {
+		case "pair", "unpair":
+			if len(args) < 2 {
+				fmt.Fprintf(os.Stderr, "usage: harness telegram %s <chat_id>\n", args[0])
+				os.Exit(1)
+			}
+			id, err := strconv.ParseInt(strings.TrimSpace(args[1]), 10, 64)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "invalid chat id: %s\n", args[1])
+				os.Exit(1)
+			}
+			if args[0] == "pair" {
+				err = telegram.Pair(id)
+			} else {
+				err = telegram.Unpair(id)
+			}
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "list":
+			if err := telegram.ListPaired(); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+	}
+
+	opts := telegram.Options{Token: os.Getenv("TELEGRAM_BOT_TOKEN")}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--token":
+			if i+1 < len(args) {
+				i++
+				opts.Token = args[i]
+			}
+		case "--model":
+			if i+1 < len(args) {
+				i++
+				opts.Model = args[i]
+			}
+		case "--thinking":
+			if i+1 < len(args) {
+				i++
+				opts.Thinking = args[i]
+			}
+		case "--scheduler":
+			opts.Scheduler = true
+		case "--allow-unpair":
+			opts.AllowUnpair = true
+		}
+	}
+
+	a := newRootAgent(opts.Scheduler)
+	defer a.Close()
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	if err := telegram.Run(ctx, a, opts); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -518,6 +596,10 @@ Usage:
   harness                            Interactive TUI mode
   harness -p <prompt> [flags]        Single-turn CLI
   harness serve <addr>               Start the HTTP/SSE server
+  harness telegram [flags]           Run as a Telegram bot (one session per chat)
+  harness telegram pair <chat_id>    Allow a chat to use the bot
+  harness telegram unpair <chat_id>  Revoke a chat (also drops its session)
+  harness telegram list              List paired chats
   harness --resume <id> [flags]      Resume session in TUI
 
 Management:
@@ -570,6 +652,14 @@ Flags ('memo'):
   --limit <n>          Max results per page (default 10)
   --skip <n>           Pagination offset (default 0)
 
+Flags ('telegram'):
+  --token <token>      Bot token (or set TELEGRAM_BOT_TOKEN)
+  --model <m>          Model override (provider/model)
+  --thinking <lvl>     Thinking level override
+  --scheduler          Run the cron scheduler engine (schedules fire to their chat)
+  --allow-unpair       Accept any chat, auto-pairing it on first contact
+                       (default: only chats paired via 'telegram pair')
+
 Examples:
   harness -p "what is 2+2?"
   harness -p "list files" --output json
@@ -583,5 +673,7 @@ Examples:
   harness memo
   harness memo "deploy process" --content
   harness memo kubernetes --all
-  harness serve :8080`)
+  harness serve :8080
+  harness telegram pair 456789
+  harness telegram --token 123:ABC --scheduler`)
 }

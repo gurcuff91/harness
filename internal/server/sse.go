@@ -14,10 +14,18 @@ func formatEvent(e types.Event) []byte {
 	var payload any
 
 	switch e.Type {
+	case types.EventLoopStart:
+		payload = map[string]any{"type": "loop_start"}
+	case types.EventLoopEnd:
+		payload = map[string]any{"type": "loop_end"}
 	case types.EventStreamThinkingDelta:
 		payload = map[string]any{"type": "thinking", "delta": e.Delta}
+	case types.EventStreamThinkingEnd:
+		payload = map[string]any{"type": "thinking_end"}
 	case types.EventStreamTextDelta:
 		payload = map[string]any{"type": "text", "delta": e.Delta}
+	case types.EventStreamTextEnd:
+		payload = map[string]any{"type": "text_end"}
 	case types.EventToolStart:
 		payload = map[string]any{"type": "tool_start", "tool_name": e.ToolName, "tool_id": e.ToolID}
 	case types.EventToolArgsDelta:

@@ -77,7 +77,8 @@ harness/
     ├── server/               # HTTP/SSE backend (Serve(listener)) — the API all clients talk to
     ├── cli/                  # CLI command handlers (a client of server)
     └── transport/            # Interactive session frontends
-        └── tui/              # Pure-Go terminal UI (future: telegram, slack…)
+        ├── tui/              # Pure-Go terminal UI
+        └── telegram/         # Telegram bot (stdlib Bot API; one session per chat)
 ```
 
 ### Embedding the SDK
