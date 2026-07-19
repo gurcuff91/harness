@@ -80,14 +80,22 @@ func (t *TUI) refreshBadges() {
 			}
 		}
 	}
-	// Schedules: count configured jobs (only meaningful when the engine runs).
+	t.refreshScheduleBadge()
+}
+
+// refreshScheduleBadge reloads just the schedule count (only meaningful when the
+// engine runs). Split out so a Schedule/ScheduleDelete tool result can refresh
+// the badge without also re-querying MCP status.
+func (t *TUI) refreshScheduleBadge() {
+	if t.client == nil || !t.schedulerOn {
+		t.scheduleJobs = 0
+		return
+	}
 	t.scheduleJobs = 0
-	if t.schedulerOn {
-		if data, err := t.client.GetSchedules(); err == nil {
-			var jobs []json.RawMessage
-			if json.Unmarshal(data, &jobs) == nil {
-				t.scheduleJobs = len(jobs)
-			}
+	if data, err := t.client.GetSchedules(); err == nil {
+		var jobs []json.RawMessage
+		if json.Unmarshal(data, &jobs) == nil {
+			t.scheduleJobs = len(jobs)
 		}
 	}
 }

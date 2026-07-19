@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 	"sync"
 
 	"github.com/robfig/cron/v3"
@@ -28,11 +29,23 @@ type Schedule struct {
 // parser accepts standard 5-field cron plus @daily/@hourly/@every descriptors.
 var parser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
 
+// minInterval is the finest schedule the engine can honor — it polls once per
+// this interval, and the smallest cron field (minute) is already 1 minute.
+const minInterval = time.Minute
+
 // ValidateCron reports whether spec is a valid 5-field cron expression (or a
-// supported @descriptor). Exposed so the Schedule tool can reject bad input.
+// supported @descriptor), AND that it doesn't run more often than once a minute.
+// Standard 5-field crons can't be sub-minute; only "@every <sub-minute>" can, so
+// that's the case we reject. Exposed so the Schedule tool rejects bad input.
 func ValidateCron(spec string) error {
-	_, err := parser.Parse(spec)
-	return err
+	sched, err := parser.Parse(spec)
+	if err != nil {
+		return err
+	}
+	if cds, ok := sched.(cron.ConstantDelaySchedule); ok && cds.Delay < minInterval {
+		return fmt.Errorf("interval too short: the minimum is 1 minute (got %q)", spec)
+	}
+	return nil
 }
 
 // Store is the JSON-backed schedule collection, safe for concurrent use.

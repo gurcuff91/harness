@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.30.0] - 2026-06-23
+
+### Scheduling — dynamic engine, @every fix, live badge, min-interval guard
+- **Dynamic engine:** the scheduler no longer registers jobs once at startup.
+  A single goroutine polls every 30s, reads the CURRENT schedules from the store
+  each time, and fires those that are due. Schedules added, edited, or deleted
+  (by the tools or a hand-edited file) now take effect immediately — no restart
+- **Fixed `@every` never firing:** `@every` is a relative schedule
+  (`Next(t) = t + interval`), so a moving cursor pushed its next run forever out
+  of reach. Each job is now anchored on its OWN last run (or the engine start
+  time if it never ran), which fires both absolute crons (`* * * * *`) and
+  relative ones (`@every 1m`) correctly. Past-due runs are not replayed
+- **Live footer badge:** a successful Schedule/ScheduleDelete refreshes the
+  `◷ N schedules` badge immediately (off the SSE goroutine), so the count
+  reflects the agent's changes without waiting for the next poll
+- **1-minute minimum enforced:** `ValidateCron` rejects sub-minute `@every`
+  (e.g. `@every 30s`) with an actionable error — the finest the engine can honor
+  is one minute. The Schedule tool description now lists the supported
+  descriptors (@yearly/@monthly/@weekly/@daily/@midnight/@hourly, @every) and
+  states the 1-minute floor
+- **System prompt:** when scheduling is available, a `## Scheduling` section
+  tells the agent it can schedule recurring prompts and when to use it
+
 ## [0.29.0] - 2026-06-23
 
 ### Scheduling — cron-scheduled prompts

@@ -32,8 +32,8 @@ func Schedule(store ScheduleStore) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolSchedule,
-			Description: "Create or update a scheduled prompt that runs automatically on a cron schedule. The slug is a short unique id (reusing it edits that schedule). The cron is a standard 5-field expression (minute hour day-of-month month day-of-week; @daily/@hourly/@weekly and @every <duration> also work). The prompt is the instruction that will run on schedule, exactly as if you sent it yourself.",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{"slug":{"type":"string","description":"Short unique id for the schedule (kebab-case, e.g. \"daily-standup\")"},"cron":{"type":"string","description":"5-field cron expression, e.g. \"0 9 * * 1-5\" (weekdays 9am), or @daily / @every 1h"},"prompt":{"type":"string","description":"The prompt to run on schedule"}},"required":["slug","cron","prompt"]}`),
+			Description: "Create or update a scheduled prompt that runs automatically on a cron schedule. The slug is a short unique id (reusing it edits that schedule). The prompt is the instruction that will run on schedule, exactly as if you sent it yourself.\n\nCron accepts a standard 5-field expression (minute hour day-of-month month day-of-week) or a descriptor: @yearly, @monthly, @weekly, @daily (=@midnight), @hourly, or @every <duration> (e.g. @every 1h30m). The minimum interval is 1 minute — anything more frequent (e.g. @every 30s) is rejected.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"slug":{"type":"string","description":"Short unique id for the schedule (kebab-case, e.g. \"daily-standup\")"},"cron":{"type":"string","description":"5-field cron (e.g. \"0 9 * * 1-5\" = weekdays 9am), or a descriptor: @daily, @hourly, @weekly, @monthly, @yearly, @every <duration>. Minimum interval: 1 minute."},"prompt":{"type":"string","description":"The prompt to run on schedule"}},"required":["slug","cron","prompt"]}`),
 		},
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
 			var p struct {

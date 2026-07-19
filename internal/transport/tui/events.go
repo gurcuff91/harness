@@ -139,6 +139,17 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				delete(t.toolBlk, toolID)
 				delete(t.toolArgs, toolID)
 				t.mu.Unlock()
+				// A successful Schedule/ScheduleDelete changed the schedule set —
+				// refresh the footer badge. Done off the SSE goroutine (it makes an
+				// HTTP call) so event processing isn't blocked.
+				if !isErr {
+					if tn, _ := evt["tool_name"].(string); tn == "Schedule" || tn == "ScheduleDelete" {
+						go func() {
+							t.refreshScheduleBadge()
+							t.updateInfo()
+						}()
+					}
+				}
 				t.tui.RequestRender(false)
 
 			case "compact_start":
