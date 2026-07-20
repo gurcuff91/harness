@@ -28,7 +28,7 @@ from importing. A thin `harness.go` facade at the root re-exports the essentials
 
 ```
 harness.go                      ← 🔓 SDK facade (package harness): New, Agent, Session, Options, Event
-cmd/harness/main.go             ← executable entry point (package main), CLI dispatch
+cmd/harness/main.go             ← executable entry point (package main) — just calls cli.Main(os.Args)
 
 🔓 PUBLIC (the SDK surface)
 ├── agent/                      ← core ReAct loop — the SDK
@@ -57,7 +57,7 @@ cmd/harness/main.go             ← executable entry point (package main), CLI d
     ├── version/                ← build version (ldflags target)
     ├── server/                 ← HTTP/SSE backend (Serve(listener), handler()) — the API all clients talk to
     │   ├── server.go / sse.go / proxy.go
-    ├── cli/                    ← CLI command handlers (a client of server)
+    ├── cli/                    ← CLI app: app.go router + cmd_*.go handlers (one flag.FlagSet each), agent.go builders, Run* command bodies
     └── transport/              ← interactive session frontends (each opens a session over server)
         ├── tui/                ← pure-Go terminal UI (zero external TUI libs)
         └── telegram/           ← Telegram bot (stdlib Bot API; one session per chat)
@@ -180,9 +180,9 @@ make install              # build + install to ~/go/bin
 
 ### Adding a New Command
 
-1. Add a subcommand `case` in `cmd/harness/main.go` and a `cli.Run*` handler in `internal/cli/`
+1. Add a `case` in `internal/cli/app.go`'s dispatch and a `cmd_*.go` handler (own flag.FlagSet); put the command body in a `Run*` function
 2. Add an HTTP route in `internal/server/server.go` if it needs backend data
-3. Update the `--help` text in `cmd/harness/main.go`
+3. Update the `--help` text in `internal/cli/help.go`
 
 ## Thinking System
 
@@ -256,7 +256,7 @@ Keep files focused. Current largest files for reference:
 | `internal/server/server.go` | ~960 | HTTP/SSE routes + handlers |
 | `agent/session.go` | ~680 | Session lifecycle, history, tool pairing |
 | `internal/providers/claude_oauth.go` | ~610 | OAuth token management + streaming |
-| `cmd/harness/main.go` | ~555 | Entry point + CLI dispatch |
+| `internal/cli/app.go` | ~85 | CLI router + dispatch |
 | `internal/providers/llm/anthropic.go` | ~500 | Anthropic request/response types |
 
 If a file grows past ~500 lines, consider splitting — but only along real boundaries.

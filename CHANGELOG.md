@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.53.0] - 2026-06-23
+
+### CLI u2014 serve --scheduler (headless transport)
+- `harness serve` gained `--scheduler`, re-enabling the cron engine on the
+  server. This is now sound thanks to owner routing (0.38.0): a due schedule
+  fires into its owner session if that session is currently active (a connected
+  client that opened it), otherwise it's skipped. `serve` is effectively a
+  headless transport u2014 an agent behind an API, with clients bringing their own
+  sessions u2014 so it can host the engine like any other transport
+- The flag parses regardless of position relative to the address
+  (`serve :8080 --scheduler` or `serve --scheduler :8080`)
+
+## [0.52.0] - 2026-06-23
+
+### CLI u2014 restructured into internal/cli, main.go is now a thin entry point
+- `cmd/harness/main.go` shrank from ~690 lines to ~10: it just calls
+  `cli.Main(os.Args)`. All parsing and dispatch moved into `internal/cli`
+- Each command is its own handler with its **own `flag.FlagSet`**
+  (`cmd_tui.go`, `cmd_serve.go`, `cmd_telegram.go`, `cmd_manage.go`,
+  `cmd_mcp.go`, `cmd_memo.go`), replacing the hand-rolled `extract*Flags`
+  parsers. Repeatable `--env`/`--header` use a small `flag.Var`. Still stdlib
+  only u2014 no CLI framework dependency
+- **Agent construction moved to where it's used:** `internal/cli/agent.go` has
+  `newAgent`/`newInteractiveAgent`/`newTelegramAgent`/`newConfigAgent`; each
+  command builds the agent it needs and hands it to its transport/server (the
+  server receives the agent, as it should). The router lives in `app.go`, help
+  in `help.go`
+
 ## [0.51.0] - 2026-06-23
 
 ### Telegram u2014 correct media routing for uploads
