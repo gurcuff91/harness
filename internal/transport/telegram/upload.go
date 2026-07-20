@@ -36,9 +36,17 @@ func collapseBlankLines(s string) string {
 	return s
 }
 
-// imageExts are extensions sent as inline photos; anything else is a document.
-var imageExts = map[string]bool{
-	".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true,
+// photoExts are sent inline via sendPhoto — the formats Telegram renders as a
+// photo. GIF is NOT here: sendPhoto would deliver it as a single static frame,
+// so it goes through sendAnimation instead (animExts). Everything else (BMP,
+// SVG, PDF, ZIP, …) is sent as a document.
+var photoExts = map[string]bool{
+	".jpg": true, ".jpeg": true, ".png": true, ".webp": true,
+}
+
+// animExts are sent via sendAnimation so they play (animated GIF / silent MP4).
+var animExts = map[string]bool{
+	".gif": true, ".mp4": true,
 }
 
 // sendUploads uploads each path to the chat: images inline (sendPhoto), other
@@ -48,9 +56,12 @@ func (t *Transport) sendUploads(ctx context.Context, chatID int64, paths []strin
 	for _, p := range paths {
 		ext := strings.ToLower(filepath.Ext(p))
 		var err error
-		if imageExts[ext] {
+		switch {
+		case photoExts[ext]:
 			err = t.bot.SendPhotoFile(ctx, chatID, p)
-		} else {
+		case animExts[ext]:
+			err = t.bot.SendAnimationFile(ctx, chatID, p)
+		default:
 			err = t.bot.SendDocumentFile(ctx, chatID, p)
 		}
 		if err != nil {

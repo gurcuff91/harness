@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.51.0] - 2026-06-23
+
+### Telegram u2014 correct media routing for uploads
+- File uploads now route by type to the right Bot API method: .jpg/.jpeg/.png/
+  .webp u2192 sendPhoto (inline), .gif/.mp4 u2192 **sendAnimation** so GIFs actually play
+  (sendPhoto would deliver a GIF as a single static frame), everything else u2192
+  sendDocument. Fixes animated GIFs arriving frozen; the directive was updated to
+  match
+
 ## [0.50.0] - 2026-06-23
 
 ### SDK u2014 WithDirectives (custom system-prompt instructions)

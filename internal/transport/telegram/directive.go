@@ -16,6 +16,6 @@ To send the user a file or image, include this action tag anywhere in your reply
 
 <tel:uploadFile>/absolute/path/to/file</tel:uploadFile>
 
-The path must be a local file you have already created or downloaded (e.g. with Fetch's download_to, or written with your tools). Images (.jpg .png .gif .webp) are shown inline; other files are sent as documents. You may include several tags to send multiple files. The tags are removed from the message before the user sees it, so write natural text around them, e.g.:
+The path must be a local file you have already created or downloaded (e.g. with Fetch's download_to, or written with your tools). Images (.jpg .png .webp) are shown inline, GIFs play as animations, and every other file type (PDF, ZIP, CSV, TXT, …) is sent as a document. You may include several tags to send multiple files. The tags are removed from the message before the user sees it, so write natural text around them, e.g.:
 
 Here's the logo you asked for. <tel:uploadFile>/tmp/go-logo.png</tel:uploadFile>`

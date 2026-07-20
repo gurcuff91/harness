@@ -204,6 +204,12 @@ func (b *Bot) SendDocumentFile(ctx context.Context, chatID int64, path string) e
 	return b.uploadFile(ctx, "sendDocument", "document", chatID, path)
 }
 
+// SendAnimationFile uploads a GIF (or silent MP4/H.264) as an animation so it
+// plays in the chat — sendPhoto would deliver a GIF as a single static frame.
+func (b *Bot) SendAnimationFile(ctx context.Context, chatID int64, path string) error {
+	return b.uploadFile(ctx, "sendAnimation", "animation", chatID, path)
+}
+
 // uploadFile posts a local file to a Bot API method via multipart/form-data,
 // streaming the file rather than buffering it in memory.
 func (b *Bot) uploadFile(ctx context.Context, method, field string, chatID int64, path string) error {
