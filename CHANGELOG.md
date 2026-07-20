@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.49.0] - 2026-06-23
+
+### Telegram u2014 receive images
+- The bot now accepts photos. A single photo becomes a prompt with one image;
+  its caption (if any) is the prompt text. Images are downloaded via getFile +
+  the file endpoint, base64-encoded, and sent to the existing vision-capable
+  prompt path (the server rejects them if the model lacks vision)
+- **Albums:** Telegram delivers a multi-photo album as separate messages sharing
+  a media_group_id with no "album complete" signal, so photos are buffered by
+  group id and debounced (~1s); when the window closes they fire as ONE prompt
+  carrying all images plus the caption u2014 matching the agent's multi-image
+  support
+- Bot API client gained getFile/file download (stdlib); no new dependency
+
 ## [0.48.0] - 2026-06-23
 
 ### TUI u2014 consume newly-forwarded events

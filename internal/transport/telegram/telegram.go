@@ -36,6 +36,8 @@ type Transport struct {
 
 	mu    sync.Mutex
 	pumps map[int64]*chatPump // chat id → its live session pump
+
+	pendingAlbums *albums // in-flight photo albums, keyed by media_group_id
 }
 
 // Run starts the bot and blocks until ctx is cancelled. It builds the agent,
@@ -66,9 +68,10 @@ func Run(ctx context.Context, a *agent.Agent, opts Options) error {
 		agent: a,
 		api:   newAPIClient(listener.Addr().String()),
 		bot:   NewBot(opts.Token),
-		store: st,
-		cwd:   cwd,
-		pumps: make(map[int64]*chatPump),
+		store:         st,
+		cwd:           cwd,
+		pumps:         make(map[int64]*chatPump),
+		pendingAlbums: newAlbums(),
 	}
 
 	// Resolve the model once (shared by all chats).
@@ -149,7 +152,8 @@ func (t *Transport) pollLoop(ctx context.Context) error {
 		}
 		for _, u := range updates {
 			offset = u.UpdateID + 1
-			if u.Message == nil || u.Message.Text == "" {
+			// Skip updates with nothing we handle (no text and no photo).
+			if u.Message == nil || (u.Message.Text == "" && len(u.Message.Photo) == 0) {
 				continue
 			}
 			t.handleMessage(ctx, u.Message)
@@ -163,6 +167,12 @@ func (t *Transport) handleMessage(ctx context.Context, msg *Message) {
 	if !t.authorize(ctx, chatID) {
 		return
 	}
+	// Photos (single or album) — downloaded and sent as image prompts.
+	if len(msg.Photo) > 0 {
+		t.handlePhotoMessage(ctx, msg)
+		return
+	}
+
 	text := strings.TrimSpace(msg.Text)
 
 	// Commands.

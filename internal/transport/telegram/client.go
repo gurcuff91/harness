@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/gurcuff91/harness/types"
 )
 
 // apiClient talks to the in-process Harness server over HTTP/SSE — the same
@@ -108,6 +110,16 @@ func (c *apiClient) CloseSession(id string) error {
 // SendPrompt submits a user prompt to a session.
 func (c *apiClient) SendPrompt(sessionID, text string) error {
 	_, err := c.do("POST", "/api/sessions/"+sessionID+"/prompt", map[string]string{"text": text})
+	return err
+}
+
+// SendPromptWithImages submits a prompt carrying one or more images (base64).
+// The server validates that the session's model supports vision.
+func (c *apiClient) SendPromptWithImages(sessionID, text string, images []types.ImageData) error {
+	_, err := c.do("POST", "/api/sessions/"+sessionID+"/prompt", map[string]any{
+		"text":   text,
+		"images": images,
+	})
 	return err
 }
 

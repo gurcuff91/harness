@@ -46,10 +46,27 @@ type Update struct {
 
 // Message is a chat message.
 type Message struct {
-	MessageID int    `json:"message_id"`
-	From      *User  `json:"from"`
-	Chat      Chat   `json:"chat"`
-	Text      string `json:"text"`
+	MessageID    int         `json:"message_id"`
+	From         *User       `json:"from"`
+	Chat         Chat        `json:"chat"`
+	Text         string      `json:"text"`
+	Caption      string      `json:"caption"`        // text sent with a photo/media
+	Photo        []PhotoSize `json:"photo"`          // present when the message is a photo (multiple sizes)
+	MediaGroupID string      `json:"media_group_id"` // same for all messages in one album
+}
+
+// PhotoSize is one size variant of a photo. Telegram sends several; the last
+// (largest file_size) is the best quality.
+type PhotoSize struct {
+	FileID   string `json:"file_id"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	FileSize int    `json:"file_size"`
+}
+
+// tgFile is the getFile result — file_path is appended to the file download URL.
+type tgFile struct {
+	FilePath string `json:"file_path"`
 }
 
 // User is the sender of a message.
@@ -128,6 +145,47 @@ func (b *Bot) SendMessage(ctx context.Context, chatID int64, text, parseMode str
 func (b *Bot) SendChatAction(ctx context.Context, chatID int64, action string) error {
 	_, err := b.call(ctx, "sendChatAction", map[string]any{"chat_id": chatID, "action": action})
 	return err
+}
+
+// DownloadPhoto fetches the best-quality variant of a photo and returns its raw
+// bytes. It resolves the file path via getFile, then downloads from the file
+// endpoint (link valid ~1h; 20MB cap). Telegram photos are JPEG.
+func (b *Bot) DownloadPhoto(ctx context.Context, sizes []PhotoSize) ([]byte, error) {
+	if len(sizes) == 0 {
+		return nil, fmt.Errorf("telegram: no photo sizes")
+	}
+	// Pick the largest by file size (last is usually biggest, but be explicit).
+	best := sizes[0]
+	for _, s := range sizes[1:] {
+		if s.FileSize > best.FileSize {
+			best = s
+		}
+	}
+	raw, err := b.call(ctx, "getFile", map[string]any{"file_id": best.FileID})
+	if err != nil {
+		return nil, err
+	}
+	var f tgFile
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return nil, err
+	}
+	if f.FilePath == "" {
+		return nil, fmt.Errorf("telegram: getFile returned no file_path")
+	}
+	url := "https://api.telegram.org/file/bot" + b.token + "/" + f.FilePath
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := b.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("telegram: download file: status %d", resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
 }
 
 // ── transport ─────────────────────────────────────────────────────────────
