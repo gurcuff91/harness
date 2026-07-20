@@ -179,9 +179,24 @@ func (t *Transport) flush(ctx context.Context, p *chatPump) {
 	}
 }
 
-// reply sends text to a chat as MarkdownV2, splitting long messages and falling
-// back to plain text if Telegram rejects the markdown (a 400).
+// reply delivers agent text to a chat. It first extracts any <tel:uploadFile>
+// action tags (always stripping them so they never leak to the user), sends the
+// cleaned text as MarkdownV2 (falling back to plain text on a 400), then uploads
+// the tagged files. A parse/upload failure is a no-op for the user — the text is
+// still cleaned and sent.
 func (t *Transport) reply(ctx context.Context, chatID int64, text string) {
+	uploads, text := extractUploads(text)
+	if text != "" {
+		t.sendText(ctx, chatID, text)
+	}
+	if len(uploads) > 0 {
+		t.sendUploads(ctx, chatID, uploads)
+	}
+}
+
+// sendText sends plain agent text as MarkdownV2, splitting long messages and
+// falling back to plain text if Telegram rejects the markdown (a 400).
+func (t *Transport) sendText(ctx context.Context, chatID int64, text string) {
 	chunks := splitMessage(text)
 	for _, chunk := range chunks {
 		md := toMarkdownV2(chunk)

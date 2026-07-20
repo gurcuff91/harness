@@ -63,9 +63,10 @@ type AgentOptions struct {
 	ThinkingLevel string // "disable"|"low"|"medium"|"high"|"xhigh"
 
 	// ── Behavior ─────────────────────────────────────────────────────────
-	SystemPrompt string // base system prompt for all sessions
-	MaxTurns     int    // max ReAct iterations per turn — default: 25
-	MaxTokens    int    // max output tokens — default: model's MaxTokens from ModelMeta
+	SystemPrompt string   // base system prompt for all sessions
+	Directives   []string // extra instruction blocks appended to the system prompt (e.g. transport-specific capabilities)
+	MaxTurns     int      // max ReAct iterations per turn — default: 25
+	MaxTokens    int      // max output tokens — default: model's MaxTokens from ModelMeta
 
 	// ── Tools ────────────────────────────────────────────────────────────
 	Tools           []tools.Tool // additional tools (defaults always included)
@@ -632,6 +633,15 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) string {
 	if res.AgentsMD != "" {
 		b.WriteString("\n\n## Project Context\n\n")
 		b.WriteString(res.AgentsMD)
+	}
+
+	// Caller-supplied directives (e.g. a transport's capabilities). Appended last
+	// so they can reference everything above.
+	for _, d := range a.opts.Directives {
+		if d = strings.TrimSpace(d); d != "" {
+			b.WriteString("\n\n")
+			b.WriteString(d)
+		}
 	}
 
 	return b.String()

@@ -225,7 +225,7 @@ func runTelegram(args []string) {
 		}
 	}
 
-	a := newRootAgent(opts.Scheduler)
+	a := newTelegramAgent(opts.Scheduler)
 	defer a.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -324,6 +324,19 @@ func newRootAgent(scheduler bool) *agent.Agent {
 		EnableMCPs:      true,
 		EnableMemory:    true,
 		EnableScheduler: scheduler,
+	})
+}
+
+// newTelegramAgent is the root agent for the Telegram transport. Same as
+// newRootAgent plus the Telegram directive, which teaches the agent how to send
+// files back to the chat via <tel:uploadFile> tags the transport's renderer
+// parses and strips.
+func newTelegramAgent(scheduler bool) *agent.Agent {
+	return agent.New(agent.AgentOptions{
+		EnableMCPs:      true,
+		EnableMemory:    true,
+		EnableScheduler: scheduler,
+		Directives:      []string{telegram.Directive},
 	})
 }
 

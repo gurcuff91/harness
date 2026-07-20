@@ -120,6 +120,14 @@ func WithSystemPrompt(prompt string) Option {
 	return func(o *Options) { o.SystemPrompt = prompt }
 }
 
+// WithDirectives appends extra instruction blocks to the system prompt. Each is
+// added verbatim (below the base prompt, skills, memory, etc.), so a caller —
+// typically a transport — can teach the agent capabilities specific to its
+// environment (e.g. how to send files over Telegram). Repeated calls accumulate.
+func WithDirectives(directives ...string) Option {
+	return func(o *Options) { o.Directives = append(o.Directives, directives...) }
+}
+
 // WithMaxTurns caps the ReAct iterations per turn (default 25).
 func WithMaxTurns(n int) Option {
 	return func(o *Options) { o.MaxTurns = n }

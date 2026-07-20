@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.50.0] - 2026-06-23
+
+### SDK u2014 WithDirectives (custom system-prompt instructions)
+- New `WithDirectives(...string)` option (and `AgentOptions.Directives`) appends
+  arbitrary instruction blocks to the system prompt, below the base prompt and
+  the built-in sections (skills, memory, scheduling). A general mechanism for a
+  caller u2014 typically a transport u2014 to teach the agent capabilities specific to
+  its environment
+
+### Telegram u2014 reply with files via action tags
+- The agent can now send files/images back to the chat. Instead of a tool, a
+  Telegram **directive** teaches it to emit a `<tel:uploadFile>/path</tel:uploadFile>`
+  action tag in its reply; the transport's renderer parses these tags, uploads
+  the files (images inline via sendPhoto, others as documents via sendDocument,
+  multipart/form-data), and **strips the tags from the text** the user sees
+- Parsing/upload failures are no-ops for the user u2014 the tag is always removed and
+  the cleaned text still sent, so nothing leaks. The design is transport-owned
+  and extensible (more `<tel:...>` actions can follow) with no change to the
+  agent core
+- `newTelegramAgent` injects the directive; the Bot API client gained
+  photo/document upload (stdlib multipart), no new dependency
+
 ## [0.49.0] - 2026-06-23
 
 ### Telegram u2014 receive images

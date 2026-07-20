@@ -12,7 +12,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -189,6 +193,65 @@ func (b *Bot) DownloadPhoto(ctx context.Context, sizes []PhotoSize) ([]byte, err
 }
 
 // ── transport ─────────────────────────────────────────────────────────────
+
+// SendPhotoFile uploads a local image file to the chat as an inline photo
+// (multipart/form-data). SendDocumentFile does the same as a generic document.
+func (b *Bot) SendPhotoFile(ctx context.Context, chatID int64, path string) error {
+	return b.uploadFile(ctx, "sendPhoto", "photo", chatID, path)
+}
+
+func (b *Bot) SendDocumentFile(ctx context.Context, chatID int64, path string) error {
+	return b.uploadFile(ctx, "sendDocument", "document", chatID, path)
+}
+
+// uploadFile posts a local file to a Bot API method via multipart/form-data,
+// streaming the file rather than buffering it in memory.
+func (b *Bot) uploadFile(ctx context.Context, method, field string, chatID int64, path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+	go func() {
+		// Write the form in a goroutine; the request reads from the pipe.
+		var werr error
+		defer func() { _ = pw.CloseWithError(werr) }()
+		if werr = mw.WriteField("chat_id", strconv.FormatInt(chatID, 10)); werr != nil {
+			return
+		}
+		part, werr := mw.CreateFormFile(field, filepath.Base(path))
+		if werr != nil {
+			return
+		}
+		if _, werr = io.Copy(part, f); werr != nil {
+			return
+		}
+		werr = mw.Close()
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", b.api+"/"+method, pr)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := b.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	var env apiResponse
+	if json.Unmarshal(data, &env) == nil && !env.OK {
+		return &apiError{Code: env.ErrorCode, Desc: env.Description}
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("telegram %s: status %d", method, resp.StatusCode)
+	}
+	return nil
+}
 
 // apiError carries Telegram's error code so callers can branch (e.g. 400 →
 // retry without markdown).
