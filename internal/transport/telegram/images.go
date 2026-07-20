@@ -3,7 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/base64"
-	"log"
+	"github.com/gurcuff91/harness/internal/logx"
 	"sync"
 	"time"
 
@@ -87,7 +87,7 @@ func (t *Transport) dispatchImages(ctx context.Context, chatID int64, caption st
 	for _, sizes := range photos {
 		data, err := t.bot.DownloadPhoto(ctx, sizes)
 		if err != nil {
-			log.Printf("telegram: download photo (chat %d): %v", chatID, err)
+			logx.Error("telegram", "download_photo", "chat", chatID, "error", err.Error())
 			continue
 		}
 		images = append(images, types.ImageData{
@@ -99,8 +99,8 @@ func (t *Transport) dispatchImages(ctx context.Context, chatID int64, caption st
 		t.reply(ctx, chatID, "⚠️ Couldn't download the image(s).")
 		return
 	}
-	log.Printf("telegram: ← %d image(s) from chat %d (%s): %s",
-		len(images), chatID, sessionShort(pump.sessionID), oneLine(caption, 120))
+	logx.Info("telegram", "images",
+		"chat", chatID, "count", len(images), "caption", oneLine(caption, 120))
 	if err := t.api.SendPromptWithImages(pump.sessionID, caption, images); err != nil {
 		t.reply(ctx, chatID, "⚠️ "+err.Error())
 	}

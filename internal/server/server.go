@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -15,9 +14,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/schedule"
+	"github.com/gurcuff91/harness/internal/logx"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/internal/config"
 	"github.com/gurcuff91/harness/mcp"
@@ -55,7 +54,7 @@ func (s *Server) handler() http.Handler {
 
 	// Middleware
 	if s.verbose {
-		r.Use(middleware.Logger)
+		r.Use(requestLogger)
 	}
 	r.Use(corsMiddleware)
 
@@ -99,7 +98,7 @@ func (s *Server) handler() http.Handler {
 // net.Listen("tcp", addr) then Serve(l).
 func (s *Server) Serve(l net.Listener) error {
 	if s.verbose {
-		log.Printf("⚔️  Harness HTTP transport listening on %s", l.Addr().String())
+		logx.Info("server", "listening", "addr", l.Addr().String())
 	}
 	return http.Serve(l, s.handler())
 }

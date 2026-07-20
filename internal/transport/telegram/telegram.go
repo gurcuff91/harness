@@ -3,7 +3,7 @@ package telegram
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/gurcuff91/harness/internal/logx"
 	"net"
 	"os"
 	"strings"
@@ -64,10 +64,10 @@ func Run(ctx context.Context, a *agent.Agent, opts Options) error {
 
 	cwd, _ := os.Getwd()
 	t := &Transport{
-		opts:  opts,
-		agent: a,
-		api:   newAPIClient(listener.Addr().String()),
-		bot:   NewBot(opts.Token),
+		opts:          opts,
+		agent:         a,
+		api:           newAPIClient(listener.Addr().String()),
+		bot:           NewBot(opts.Token),
 		store:         st,
 		cwd:           cwd,
 		pumps:         make(map[int64]*chatPump),
@@ -84,10 +84,11 @@ func Run(ctx context.Context, a *agent.Agent, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("telegram: invalid token or unreachable API: %w", err)
 	}
-	log.Printf("telegram: connected as @%s — model=%s scheduler=%v paired=%d allow-unpair=%v",
-		me.Username, t.model, opts.Scheduler, len(st.allowlist()), opts.AllowUnpair)
+	logx.Info("telegram", "connected",
+		"bot", "@"+me.Username, "model", t.model,
+		"scheduler", opts.Scheduler, "paired", len(st.allowlist()), "allow_unpair", opts.AllowUnpair)
 	if len(st.allowlist()) == 0 && !opts.AllowUnpair {
-		log.Printf("telegram: WARN no paired chats — everyone is rejected until you run 'harness telegram pair <chat_id>' (or use --allow-unpair)")
+		logx.Warn("telegram", "no_paired_chats", "hint", "run 'harness telegram pair <chat_id>' or use --allow-unpair")
 	}
 
 	return t.pollLoop(ctx)
@@ -142,7 +143,7 @@ func (t *Transport) pollLoop(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			log.Printf("telegram: getUpdates: %v (retrying)", err)
+			logx.Error("telegram", "get_updates", "error", err.Error(), "action", "retrying")
 			select {
 			case <-ctx.Done():
 				return nil
@@ -186,7 +187,7 @@ func (t *Transport) handleMessage(ctx context.Context, msg *Message) {
 		t.reply(ctx, chatID, "⚠️ "+err.Error())
 		return
 	}
-	log.Printf("telegram: ← prompt from chat %d (%s): %s", chatID, sessionShort(pump.sessionID), oneLine(text, 200))
+	logx.Info("telegram", "prompt", "chat", chatID, "text", oneLine(text, 200))
 	// The typing indicator is driven by the SSE drain (turn_start→turn_end) so it
 	// stays alive for the whole turn, not just Telegram's ~5s window.
 	if err := t.api.SendPrompt(pump.sessionID, text); err != nil {
@@ -204,11 +205,11 @@ func (t *Transport) authorize(ctx context.Context, chatID int64) bool {
 	}
 	if t.opts.AllowUnpair {
 		if added, err := t.store.pair(chatID); err == nil && added {
-			log.Printf("telegram: auto-paired chat %d (--allow-unpair)", chatID)
+			logx.Info("telegram", "auto_paired", "chat", chatID)
 		}
 		return true
 	}
-	log.Printf("telegram: WARN rejected chat %d (not paired)", chatID)
+	logx.Warn("telegram", "rejected", "chat", chatID, "reason", "not paired")
 	t.reply(ctx, chatID, fmt.Sprintf(
 		"You're not authorized to use this bot yet.\n\nTo pair this chat, run on the host:\n`harness telegram pair %d`",
 		chatID))
@@ -246,12 +247,4 @@ func oneLine(s string, max int) string {
 		return string(r[:max]) + "…"
 	}
 	return s
-}
-
-// sessionShort returns a short prefix of a session id for readable logs.
-func sessionShort(id string) string {
-	if len(id) > 8 {
-		return id[:8]
-	}
-	return id
 }

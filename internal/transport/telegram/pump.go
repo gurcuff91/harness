@@ -2,8 +2,8 @@ package telegram
 
 import (
 	"context"
-	"fmt"
-	"log"
+
+	"github.com/gurcuff91/harness/internal/logx"
 	"strings"
 	"sync"
 	"time"
@@ -14,10 +14,10 @@ import (
 // One pump per active chat; it stays alive for the process so scheduled prompts
 // (routed to this session by owner) are delivered to the chat too.
 type chatPump struct {
-	chatID    int64
-	sessionID string
-	buf       strings.Builder // accumulates the current turn's text
-	typingMu  sync.Mutex
+	chatID       int64
+	sessionID    string
+	buf          strings.Builder // accumulates the current turn's text
+	typingMu     sync.Mutex
 	typingCancel context.CancelFunc // stops the current typing heartbeat, if any
 }
 
@@ -103,7 +103,7 @@ func (t *Transport) acquireSession(chatID int64) (string, error) {
 		return "", err
 	}
 	if err := t.store.bind(chatID, id); err != nil {
-		log.Printf("telegram: persist chat mapping: %v", err)
+		logx.Error("telegram", "persist_mapping", "chat", chatID, "error", err.Error())
 	}
 	return id, nil
 }
@@ -142,7 +142,7 @@ func (t *Transport) drain(ctx context.Context, p *chatPump, events <-chan map[st
 			// engine into this session. Log it, and keep typing alive for it too.
 			if origin, _ := evt["origin"].(string); origin == "scheduled" {
 				text, _ := evt["text"].(string)
-				log.Printf("telegram: ◷ scheduled prompt → chat %d: %s", p.chatID, oneLine(text, 200))
+				logx.Info("telegram", "scheduled_prompt", "chat", p.chatID, "text", oneLine(text, 200))
 				p.startTyping(ctx, t.bot)
 			}
 		case "text_end":
@@ -152,7 +152,7 @@ func (t *Transport) drain(ctx context.Context, p *chatPump, events <-chan map[st
 			t.flush(ctx, p)
 		case "tool_call":
 			name, _ := evt["tool_name"].(string)
-			log.Printf("telegram:   ⚙ tool %s (chat %d)", name, p.chatID)
+			logx.Info("telegram", "tool", "chat", p.chatID, "name", name)
 		case "turn_end":
 			t.flush(ctx, p)
 			p.stopTyping()
@@ -207,14 +207,14 @@ func (t *Transport) sendText(ctx context.Context, chatID int64, text string) {
 			err = t.bot.SendMessage(ctx, chatID, chunk, "")
 		}
 		if err != nil {
-			log.Printf("telegram: send to %d: %v", chatID, err)
+			logx.Error("telegram", "send", "chat", chatID, "error", err.Error())
 		}
 	}
 	if n := len(chunks); n > 0 {
-		suffix := ""
+		kv := []any{"chat", chatID, "text", oneLine(text, 200)}
 		if n > 1 {
-			suffix = fmt.Sprintf(" [%d msgs]", n)
+			kv = append(kv, "messages", n)
 		}
-		log.Printf("telegram: → reply to chat %d%s: %s", chatID, suffix, oneLine(text, 200))
+		logx.Info("telegram", "reply", kv...)
 	}
 }

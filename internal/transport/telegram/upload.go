@@ -2,7 +2,7 @@ package telegram
 
 import (
 	"context"
-	"log"
+	"github.com/gurcuff91/harness/internal/logx"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -65,9 +65,9 @@ func (t *Transport) sendUploads(ctx context.Context, chatID int64, paths []strin
 			err = t.bot.SendDocumentFile(ctx, chatID, p)
 		}
 		if err != nil {
-			log.Printf("telegram: upload %q to chat %d failed: %v", p, chatID, err)
+			logx.Error("telegram", "upload", "chat", chatID, "file", filepath.Base(p), "error", err.Error())
 		} else {
-			log.Printf("telegram: ↑ uploaded %s to chat %d", filepath.Base(p), chatID)
+			logx.Info("telegram", "upload", "chat", chatID, "file", filepath.Base(p))
 		}
 	}
 }

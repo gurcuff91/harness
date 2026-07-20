@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.54.0] - 2026-06-23
+
+### Logging u2014 structured backend logs (logx)
+- New `internal/logx` structured logger renders one line per event in a
+  consistent backend format: `LEVEL [component] event key=value` (values quoted
+  only when they contain spaces). Levels: INFO/WARN/ERROR, fixed-width so lines
+  align and grep cleanly
+- **Telegram** transport logs migrated to logx u2014 replacing the ad-hoc mix of
+  arrows/symbols (u2190 u2192 u2191 u26f7 u2699) with structured events (connected, prompt, reply,
+  tool, upload, images, rejected, u2026), each carrying chat= and session= context
+- **Server** (`serve`) request logging replaced chi's middleware.Logger with a
+  custom middleware in the same logx format
+  (`INFO [server] request method=GET path=/api/server status=200 bytes=128
+  dur=80u00b5s`), and the startup line too. Dropped the chi middleware dependency
+
 ## [0.53.0] - 2026-06-23
 
 ### CLI u2014 serve --scheduler (headless transport)
