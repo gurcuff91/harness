@@ -20,6 +20,10 @@ const telegramMaxLen = 4096
 //
 // The caller still falls back to plain text if Telegram rejects the result.
 func toMarkdownV2(md string) string {
+	// Telegram has no tables; rewrite pipe tables into aligned code blocks first
+	// (which it does render, monospaced).
+	md = tablesToCodeBlocks(md)
+
 	var out strings.Builder
 	lines := strings.Split(md, "\n")
 	inFence := false

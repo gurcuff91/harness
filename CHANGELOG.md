@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.56.0] - 2026-06-23
+
+### Telegram — fix table column alignment with accented text
+- Table columns were misaligned when cells contained multi-byte runes (accents,
+  ñ): column widths were measured in bytes, so "Categoría" (10 bytes, 9 chars)
+  got under-padded and the pipe borders drifted. Width is now measured in Unicode
+  code points, so columns align correctly in Telegram's monospace rendering
+- Added an alignment test that asserts every bordered row has the same visual
+  (rune) width AND identical pipe positions, including a case with accented cells
+
+## [0.55.0] - 2026-06-23
+
+### Telegram — render markdown tables as aligned code blocks
+- Telegram supports neither Markdown nor HTML tables, so a model-generated pipe
+  table (`| col | col |`) was showing up as raw literal text. The converter now
+  detects pipe tables (header + `|---|` delimiter + rows) and wraps them in a
+  fenced code block, **keeping the table structure** (pipe borders + header
+  separator) but padding every column to a uniform width so it stays aligned in
+  Telegram's monospace rendering. Tables inside existing code fences, and stray
+  prose pipes, are left untouched
+
 ## [0.54.0] - 2026-06-23
 
 ### Logging u2014 structured backend logs (logx)

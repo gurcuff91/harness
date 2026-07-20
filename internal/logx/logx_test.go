@@ -27,7 +27,7 @@ func TestInfoFormat(t *testing.T) {
 	got := capture(t, func() {
 		Info("telegram", "prompt", "chat", 5353, "session", "dde9")
 	})
-	want := "INFO  [telegram] prompt chat=5353 session=dde9"
+	want := "INFO [telegram] prompt chat=5353 session=dde9"
 	if got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
@@ -52,7 +52,7 @@ func TestLevels(t *testing.T) {
 		{Error, "ERROR"},
 	} {
 		got := capture(t, func() { tc.fn("server", "event") })
-		if !strings.HasPrefix(got, tc.level+" [server] event") {
+		if !strings.HasPrefix(got, tc.level+"[server] event") {
 			t.Errorf("level %q: got %q", tc.level, got)
 		}
 	}
