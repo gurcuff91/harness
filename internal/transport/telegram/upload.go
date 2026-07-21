@@ -12,19 +12,106 @@ import (
 // path is captured; whitespace around it is trimmed later.
 var uploadTagRe = regexp.MustCompile(`(?s)<tel:uploadFile>(.*?)</tel:uploadFile>`)
 
-// extractUploads pulls the file paths from all upload tags in text and returns
-// them along with the text stripped of those tags. Stripping always happens —
-// even for malformed/empty tags — so nothing leaks to the user. Leftover blank
-// lines from removed tags are collapsed.
+// extractUploads pulls file paths from upload tags in the NORMAL text and
+// returns them plus the text stripped of those tags. Tags that appear inside a
+// code span (`…`) or fenced code block (```…```) are left untouched: the
+// directive tells the agent to emit real tags as plain text, so a tag inside
+// code is an example (it's explaining how to use them), not a request to upload.
+// Respecting our own directive avoids trying to send an example's fake path.
 func extractUploads(text string) (paths []string, cleaned string) {
-	for _, m := range uploadTagRe.FindAllStringSubmatch(text, -1) {
-		if p := strings.TrimSpace(m[1]); p != "" {
-			paths = append(paths, p)
+	segs := splitByCode(text)
+	var out strings.Builder
+	for _, seg := range segs {
+		if seg.code {
+			out.WriteString(seg.text) // verbatim — examples/snippets pass through
+			continue
+		}
+		s := seg.text
+		last := 0
+		for _, loc := range uploadTagRe.FindAllStringSubmatchIndex(s, -1) {
+			start, end := loc[0], loc[1] // whole tag
+			pathStart, pathEnd := loc[2], loc[3]
+			// A tag immediately wrapped in quotes or parentheses is an example (the
+			// directive forbids that for real tags), so leave it verbatim.
+			if wrapped(s, start, end) {
+				continue
+			}
+			if p := strings.TrimSpace(s[pathStart:pathEnd]); p != "" {
+				paths = append(paths, p)
+			}
+			out.WriteString(s[last:start]) // text before the tag
+			last = end                     // skip the tag itself
+		}
+		out.WriteString(s[last:])
+	}
+	return paths, strings.TrimSpace(collapseBlankLines(out.String()))
+}
+
+// wrapped reports whether the tag occupying s[start:end] is immediately
+// enclosed by a matching quote or parenthesis — "…", '…', or (…) — which the
+// directive uses to denote an example rather than a real upload request.
+func wrapped(s string, start, end int) bool {
+	if start == 0 || end >= len(s) {
+		return false
+	}
+	switch s[start-1] {
+	case '"':
+		return s[end] == '"'
+	case '\'':
+		return s[end] == '\''
+	case '(':
+		return s[end] == ')'
+	}
+	return false
+}
+
+// codeSeg is a slice of the message tagged as code (inside ``` or `) or not.
+type codeSeg struct {
+	text string
+	code bool
+}
+
+// splitByCode splits text into alternating normal/code segments, recognizing
+// fenced blocks (```) and inline spans (`). Delimiters stay with their code
+// segment so the text round-trips exactly when the segments are concatenated.
+func splitByCode(text string) []codeSeg {
+	var segs []codeSeg
+	var cur strings.Builder
+	flush := func(code bool) {
+		if cur.Len() > 0 {
+			segs = append(segs, codeSeg{cur.String(), code})
+			cur.Reset()
 		}
 	}
-	cleaned = uploadTagRe.ReplaceAllString(text, "")
-	cleaned = collapseBlankLines(cleaned)
-	return paths, strings.TrimSpace(cleaned)
+	for i := 0; i < len(text); {
+		if strings.HasPrefix(text[i:], "```") {
+			flush(false)
+			end := strings.Index(text[i+3:], "```")
+			if end < 0 { // unterminated fence — rest is code
+				segs = append(segs, codeSeg{text[i:], true})
+				return segs
+			}
+			segs = append(segs, codeSeg{text[i : i+3+end+3], true})
+			i += 3 + end + 3
+			continue
+		}
+		if text[i] == '`' {
+			flush(false)
+			end := strings.IndexByte(text[i+1:], '`')
+			if end < 0 { // unterminated span — treat the backtick as normal text
+				cur.WriteByte('`')
+				i++
+				continue
+			}
+			segs = append(segs, codeSeg{text[i : i+1+end+1], true})
+			i += 1 + end + 1
+			continue
+		}
+		cur.WriteByte(text[i])
+		i++
+	}
+	flush(false)
+	return segs
 }
 
 // collapseBlankLines squeezes 3+ consecutive newlines (left by removed tags)

@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.66.0] - 2026-06-23
+
+### Telegram — ignore upload tags wrapped in quotes/parentheses too
+- Completing 0.65.0: the directive tells the agent a real `<tel:uploadFile>` tag
+  must be plain text — never in code fences, backticks, quotes, or parentheses.
+  The parser now also honors the last two: a tag immediately wrapped in `"…"`,
+  `'…'`, or `(…)` is treated as an example and passed through verbatim (not
+  uploaded). Wrapping must be immediate — a parenthesis elsewhere in the sentence
+  doesn't block a real tag
+
+## [0.65.0] - 2026-06-23
+
+### Telegram — don't act on upload tags shown as examples
+- `<tel:uploadFile>` tags inside a code span (`…`) or fenced code block
+  (```…```) are now ignored by the parser and passed through verbatim. The
+  directive tells the agent to emit real tags as plain text (never in code), so
+  a tag inside code is the agent *explaining* how tags work — not a request to
+  send a file. Previously the parser stripped and tried to upload such example
+  tags, failing on their placeholder paths. Real tags in normal text still work,
+  even alongside an example in the same message
+
 ## [0.64.0] - 2026-06-23
 
 ### Compaction — preserve lifetime token totals
