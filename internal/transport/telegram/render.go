@@ -1,6 +1,39 @@
 package telegram
 
-import "strings"
+import (
+	"bytes"
+	"encoding/json"
+	"strings"
+)
+
+// formatError renders an error message for the chat. If the message embeds a
+// JSON object (as API errors do), the JSON is pretty-printed and wrapped in a
+// code block — Telegram renders it monospaced, and code blocks don't interpret
+// markdown, so underscores in fields like invalid_request_error / request_id no
+// longer turn into stray italics. Non-JSON errors are returned as-is.
+func formatError(msg string) string {
+	start := strings.IndexByte(msg, '{')
+	end := strings.LastIndexByte(msg, '}')
+	if start < 0 || end <= start {
+		return "⚠️ " + msg
+	}
+	prefix := strings.TrimSpace(msg[:start])
+	jsonPart := msg[start : end+1]
+	var pretty bytes.Buffer
+	if json.Indent(&pretty, []byte(jsonPart), "", "  ") == nil {
+		jsonPart = pretty.String()
+	}
+	var b strings.Builder
+	b.WriteString("⚠️ ")
+	if prefix != "" {
+		b.WriteString(strings.TrimRight(prefix, ": "))
+		b.WriteByte('\n')
+	}
+	b.WriteString("```\n")
+	b.WriteString(jsonPart)
+	b.WriteString("\n```")
+	return b.String()
+}
 
 // telegramMaxLen is Telegram's per-message character cap. Longer replies are
 // split across multiple messages.

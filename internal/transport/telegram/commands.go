@@ -11,10 +11,10 @@ import (
 // botCommands is the command menu registered with Telegram (setMyCommands) and
 // the set this transport handles. Descriptions show in the "/" suggestion list.
 var botCommands = []BotCommand{
-	{Command: "new", Description: "Start a fresh session"},
-	{Command: "stop", Description: "Stop the current work"},
-	{Command: "compact", Description: "Summarize & compact the conversation"},
-	{Command: "info", Description: "Session & model info"},
+	{Command: "new", Description: "🆕 Start a fresh session"},
+	{Command: "stop", Description: "🛑 Stop the current work"},
+	{Command: "compact", Description: "🗜 Summarize & compact the conversation"},
+	{Command: "info", Description: "📊 Session & model info"},
 }
 
 // handleCommand routes a /command to its handler. Unknown commands get a short
@@ -65,18 +65,28 @@ func (t *Transport) cmdStop(ctx context.Context, chatID int64) {
 	t.reply(ctx, chatID, "Stopped.")
 }
 
-// cmdCompact triggers conversation compaction on the chat's session.
+// cmdCompact triggers conversation compaction on the chat's session. The start
+// message reflects whether it ran now or was queued behind current work; the
+// completion (or failure) is reported by the SSE drain (compact_start/end).
 func (t *Transport) cmdCompact(ctx context.Context, chatID int64) {
 	p, err := t.pumpFor(ctx, chatID)
 	if err != nil {
 		t.reply(ctx, chatID, "⚠️ "+err.Error())
 		return
 	}
-	if err := t.api.ExecCommand(p.sessionID, "compact", nil); err != nil {
+	status, err := t.api.ExecCommand(p.sessionID, "compact", nil)
+	if err != nil {
 		t.reply(ctx, chatID, "⚠️ "+err.Error())
 		return
 	}
-	t.reply(ctx, chatID, "Compacting the conversation…")
+	// Mark this compaction as user-requested so the drain's compact_start doesn't
+	// re-announce it as automatic.
+	p.compactExpected.Store(true)
+	if status == "queued" {
+		t.reply(ctx, chatID, "🗜 Compaction queued — it'll run after the current task.")
+	} else {
+		t.reply(ctx, chatID, "🗜 Compacting the conversation…")
+	}
 }
 
 // cmdInfo reports the same picture as the TUI footer: harness version + session
@@ -131,7 +141,11 @@ func (t *Transport) cmdInfo(ctx context.Context, chatID int64) {
 
 	b.WriteByte('\n')
 	fmt.Fprintf(&b, "MCPs: %d connected\n", t.api.CountConnectedMCPs())
-	fmt.Fprintf(&b, "Schedules: %d\n", t.api.CountSchedules(p.sessionID))
+	// Schedules only fire when this bot runs the engine (--scheduler); without it,
+	// reporting a count would be misleading (they'd never run).
+	if t.opts.Scheduler {
+		fmt.Fprintf(&b, "Schedules: %d\n", t.api.CountSchedules(p.sessionID))
+	}
 
 	t.reply(ctx, chatID, strings.TrimRight(b.String(), "\n"))
 }

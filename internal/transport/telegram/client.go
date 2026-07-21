@@ -115,10 +115,17 @@ func (c *apiClient) StopSession(id string) error {
 }
 
 // ExecCommand runs a session command (e.g. "compact", "model", "thinking").
-func (c *apiClient) ExecCommand(id, command string, params map[string]any) error {
-	_, err := c.do("POST", "/api/sessions/"+id+"/commands",
+func (c *apiClient) ExecCommand(id, command string, params map[string]any) (string, error) {
+	data, err := c.do("POST", "/api/sessions/"+id+"/commands",
 		map[string]any{"command": command, "params": params})
-	return err
+	if err != nil {
+		return "", err
+	}
+	var resp struct {
+		Status string `json:"status"`
+	}
+	_ = json.Unmarshal(data, &resp)
+	return resp.Status, nil
 }
 
 // GetSession returns a session's metadata (model, thinking, stats, …).

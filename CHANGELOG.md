@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.62.0] - 2026-06-23
+
+### Telegram — pretty error rendering
+- Agent errors that embed a JSON payload (API errors) are now pretty-printed and
+  wrapped in a code block, with the human-readable prefix kept on top. Telegram
+  renders it monospaced and — crucially — doesn't interpret markdown inside code,
+  so underscores in fields like `invalid_request_error` / `request_id` no longer
+  turn into stray italics. Non-JSON errors are shown as plain text as before
+
+## [0.61.0] - 2026-06-23
+
+### Telegram — /compact feedback
+- `/compact` now reports the full lifecycle instead of a one-off "Compacting…"
+  with no closure:
+  - start: "🗜 Compacting the conversation…", or "🗜 Compaction queued — it'll
+    run after the current task." when the session is busy (uses the server's
+    started/queued status)
+  - automatic compaction (engine compacts near-full context, not user-requested):
+    "🗜 Context almost full — compacting automatically…"
+  - completion: "✅ Conversation compacted." (on the compact_end event)
+  - failure surfaces via the existing error event
+- The drain now handles compact_start/compact_end; a per-pump atomic flag
+  distinguishes a user-requested compaction (already announced) from an
+  automatic one
+
 ## [0.60.0] - 2026-06-23
 
 ### Scheduling — tools scoped to the owning session

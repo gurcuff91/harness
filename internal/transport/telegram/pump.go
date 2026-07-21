@@ -6,6 +6,7 @@ import (
 	"github.com/gurcuff91/harness/internal/logx"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,6 +21,9 @@ type chatPump struct {
 	buf          strings.Builder // accumulates the current turn's text
 	typingMu     sync.Mutex
 	typingCancel context.CancelFunc // stops the current typing heartbeat, if any
+	// compactExpected is set by /compact so the drain knows the next compact_start
+	// was user-requested (already announced) vs an automatic one to announce.
+	compactExpected atomic.Bool
 }
 
 // startTyping keeps a "typing…" indicator alive in the chat until stopTyping is
@@ -112,7 +116,7 @@ func (t *Transport) acquireSession(chatID int64) (string, error) {
 			// A resumed session keeps its own model, exactly like the TUI — unless
 			// the bot was launched with an explicit --model, which overrides it.
 			if t.opts.Model != "" {
-				if err := t.api.ExecCommand(id, "model", map[string]any{"model": t.opts.Model}); err != nil {
+				if _, err := t.api.ExecCommand(id, "model", map[string]any{"model": t.opts.Model}); err != nil {
 					logx.Warn("telegram", "override_model", "chat", chatID, "error", err.Error())
 				}
 			}
@@ -178,11 +182,19 @@ func (t *Transport) drain(ctx context.Context, p *chatPump, events <-chan map[st
 		case "turn_end":
 			t.flush(ctx, p)
 			p.stopTyping()
+		case "compact_start":
+			// A manual /compact already announced itself; only announce here when the
+			// engine compacts on its own (context near full).
+			if !p.compactExpected.Swap(false) {
+				t.reply(ctx, p.chatID, "🗜 Context almost full — compacting automatically…")
+			}
+		case "compact_end":
+			t.reply(ctx, p.chatID, "✅ Conversation compacted.")
 		case "error":
 			p.buf.Reset()
 			p.stopTyping()
 			if msg, _ := evt["message"].(string); msg != "" {
-				t.reply(ctx, p.chatID, "⚠️ "+msg)
+				t.reply(ctx, p.chatID, formatError(msg))
 			}
 		case "max_turns_reached":
 			t.flush(ctx, p)

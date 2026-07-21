@@ -173,3 +173,28 @@ func TestStoreAllowlistAndSessionsCoexist(t *testing.T) {
 		t.Errorf("session should persist alongside allowlist: %q %v", id, ok)
 	}
 }
+
+func TestFormatErrorJSON(t *testing.T) {
+	msg := `oops: {"type":"error","error":{"type":"invalid_request_error"}}`
+	got := formatError(msg)
+	if !strings.Contains(got, "```") {
+		t.Errorf("JSON error should be fenced:\n%s", got)
+	}
+	if !strings.Contains(got, "⚠️ oops") {
+		t.Errorf("prefix should be kept:\n%s", got)
+	}
+	// Pretty-printed (indented).
+	if !strings.Contains(got, "\n  \"type\"") {
+		t.Errorf("JSON should be indented:\n%s", got)
+	}
+}
+
+func TestFormatErrorPlain(t *testing.T) {
+	got := formatError("session not found")
+	if strings.Contains(got, "```") {
+		t.Errorf("plain error should not be fenced:\n%s", got)
+	}
+	if got != "⚠️ session not found" {
+		t.Errorf("got %q", got)
+	}
+}
