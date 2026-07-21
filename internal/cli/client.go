@@ -50,7 +50,7 @@ func (c *httpClient) do(method, path string, body any) ([]byte, error) {
 		return nil, fmt.Errorf("read: %w", err)
 	}
 	if resp.StatusCode >= 400 {
-		return data, fmt.Errorf("%s", strings.TrimSpace(string(data)))
+		return data, fmt.Errorf("%s", errorMessage(data))
 	}
 	return data, nil
 }
@@ -194,4 +194,25 @@ func (c *httpClient) StreamEvents(ctx context.Context, sessionID string) (<-chan
 		}
 	}()
 	return ch, nil
+}
+
+// errorMessage extracts a human-readable message from a standard error response
+// ({"error": {"message": ..., "details": {...}}}), appending compact details
+// when present. Falls back to the raw body for non-standard responses.
+func errorMessage(body []byte) string {
+	var env struct {
+		Error struct {
+			Message string         `json:"message"`
+			Details map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &env) == nil && env.Error.Message != "" {
+		if len(env.Error.Details) > 0 {
+			if d, err := json.Marshal(env.Error.Details); err == nil {
+				return env.Error.Message + ": " + string(d)
+			}
+		}
+		return env.Error.Message
+	}
+	return strings.TrimSpace(string(body))
 }

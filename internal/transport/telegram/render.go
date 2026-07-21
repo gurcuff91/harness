@@ -1,37 +1,29 @@
 package telegram
 
 import (
-	"bytes"
 	"encoding/json"
 	"strings"
 )
 
-// formatError renders an error message for the chat. If the message embeds a
-// JSON object (as API errors do), the JSON is pretty-printed and wrapped in a
-// code block — Telegram renders it monospaced, and code blocks don't interpret
-// markdown, so underscores in fields like invalid_request_error / request_id no
-// longer turn into stray italics. Non-JSON errors are returned as-is.
-func formatError(msg string) string {
-	start := strings.IndexByte(msg, '{')
-	end := strings.LastIndexByte(msg, '}')
-	if start < 0 || end <= start {
-		return "⚠️ " + msg
-	}
-	prefix := strings.TrimSpace(msg[:start])
-	jsonPart := msg[start : end+1]
-	var pretty bytes.Buffer
-	if json.Indent(&pretty, []byte(jsonPart), "", "  ") == nil {
-		jsonPart = pretty.String()
-	}
+// formatError renders an error for the chat: the human message on top, and when
+// structured details are present, their JSON pretty-printed in a code block —
+// Telegram renders that monospaced and doesn't interpret markdown inside code,
+// so field names with underscores don't turn into stray italics. With no
+// details it's just the ⚠️ message line.
+func formatError(msg string, details map[string]any) string {
 	var b strings.Builder
 	b.WriteString("⚠️ ")
-	if prefix != "" {
-		b.WriteString(strings.TrimRight(prefix, ": "))
-		b.WriteByte('\n')
+	b.WriteString(msg)
+	if len(details) > 0 {
+		if pretty, err := json.MarshalIndent(details, "", "  "); err == nil {
+			if msg != "" {
+				b.WriteByte('\n')
+			}
+			b.WriteString("```\n")
+			b.Write(pretty)
+			b.WriteString("\n```")
+		}
 	}
-	b.WriteString("```\n")
-	b.WriteString(jsonPart)
-	b.WriteString("\n```")
 	return b.String()
 }
 

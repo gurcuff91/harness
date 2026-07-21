@@ -80,7 +80,7 @@ func (t *Transport) handlePhotoMessage(ctx context.Context, msg *Message) {
 func (t *Transport) dispatchImages(ctx context.Context, chatID int64, caption string, photos [][]PhotoSize) {
 	pump, err := t.pumpFor(ctx, chatID)
 	if err != nil {
-		t.reply(ctx, chatID, "⚠️ "+err.Error())
+		t.replyError(ctx, chatID, err)
 		return
 	}
 	var images []types.ImageData
@@ -102,6 +102,6 @@ func (t *Transport) dispatchImages(ctx context.Context, chatID int64, caption st
 	logx.Info("telegram", "images",
 		"chat", chatID, "count", len(images), "caption", oneLine(caption, 120))
 	if err := t.api.SendPromptWithImages(pump.sessionID, caption, images); err != nil {
-		t.reply(ctx, chatID, "⚠️ "+err.Error())
+		t.replyError(ctx, chatID, err)
 	}
 }

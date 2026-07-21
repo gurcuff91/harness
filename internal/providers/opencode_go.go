@@ -155,7 +155,7 @@ func fetchOpenCodeGoModels(apiKey string) ([]types.ModelMeta, error) {
 		return nil, fmt.Errorf("invalid API key")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (status %d)", resp.StatusCode)
+		return nil, types.NewProviderAPIError("opencode", resp.StatusCode, nil)
 	}
 
 	var result struct {

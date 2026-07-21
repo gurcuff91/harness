@@ -67,7 +67,11 @@ func formatEvent(e types.Event) []byte {
 			"context_window": e.Tokens.ContextWindow,
 		}
 	case types.EventError:
-		payload = map[string]any{"type": "error", "message": e.Message}
+		p := map[string]any{"type": "error", "message": e.Message}
+		if len(e.Details) > 0 {
+			p["details"] = e.Details
+		}
+		payload = p
 	case types.EventMaxTurnsReached:
 		payload = map[string]any{"type": "max_turns_reached", "max_turns": e.MaxTurns}
 	case types.EventCompactStart:

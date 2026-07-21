@@ -73,8 +73,9 @@ type Event struct {
 	ToolName string
 	ToolArgs string
 	Output   string // generic output (tool results, turn text)
-	Message  string // error messages (EventError)
-	Summary  string // compaction summary (EventCompactEnd)
+	Message  string         // error messages (EventError)
+	Details  map[string]any // structured error details, if any (EventError)
+	Summary  string         // compaction summary (EventCompactEnd)
 	Origin   string // prompt source for EventReceivedPrompt/EventFollowUpStart ("user", "scheduled", …)
 	Delta    string
 	Tokens   TokenUsage

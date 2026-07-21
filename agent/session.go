@@ -227,6 +227,18 @@ func (s *Session) IsBusy() bool {
 // ErrBusy is returned by Compact when a turn is in flight.
 var ErrBusy = errors.New("session is busy; try again when the current turn finishes")
 
+// errorEvent builds an EventError from an error, lifting a provider ProviderAPIError's
+// structured details into the event so transports can render them richly.
+func errorEvent(err error) types.Event {
+	e := types.Event{Type: types.EventError, Message: err.Error()}
+	var apiErr *types.ProviderAPIError
+	if errors.As(err, &apiErr) {
+		e.Message = apiErr.Message
+		e.Details = apiErr.Details
+	}
+	return e
+}
+
 // Compact summarizes the conversation and stores a checkpoint, reclaiming
 // context. It refuses to run while a turn is active (returns ErrBusy) —
 // compacting mid-turn mutates the message history the turn is still using,
@@ -332,7 +344,7 @@ func (s *Session) drainFollowUps() {
 		result, err := s.promptSync(ctx, fu.text, fu.images)
 		cancel() // always release resources
 		if err != nil && ctx.Err() == nil {
-			s.emit(types.Event{Type: types.EventError, Message: err.Error()})
+			s.emit(errorEvent(err))
 		}
 		// Deliver the outcome to a PromptAndWait caller, if any.
 		if fu.done != nil {
@@ -389,7 +401,7 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 			return "", nil
 		}
 		if err != nil {
-			s.emit(types.Event{Type: types.EventError, Message: err.Error()})
+			s.emit(errorEvent(err))
 			s.emit(types.Event{Type: types.EventLoopEnd})
 			s.emit(types.Event{Type: types.EventTurnEnd})
 			return "", err

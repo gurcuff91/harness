@@ -165,7 +165,7 @@ func fetchAnthropicModels(tokenOrKey string) ([]types.ModelMeta, error) {
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, fmt.Errorf("API error (status %d)", resp.StatusCode)
+		return nil, types.NewProviderAPIError("anthropic", resp.StatusCode, nil)
 	}
 	defer resp.Body.Close()
 

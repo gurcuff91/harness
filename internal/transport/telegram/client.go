@@ -46,6 +46,9 @@ func (c *apiClient) do(method, path string, body any) ([]byte, error) {
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
+		if ae := parseHarnessError(data); ae != nil {
+			return data, ae // structured: message + details for rich rendering
+		}
 		return data, fmt.Errorf("%s", strings.TrimSpace(string(data)))
 	}
 	return data, nil
@@ -115,22 +118,23 @@ func (c *apiClient) StopSession(id string) error {
 }
 
 // ExecCommand runs a session command (e.g. "compact", "model", "thinking").
-// ExecCommand runs a session command and returns its status field. The command
-// endpoint always responds with a consistent {"status": ...} shape; the HTTP
-// code signals the outcome (e.g. 409 for a busy compact). The status is read
-// from the body regardless of the code, so callers branch on status (e.g.
-// "started" vs "busy") rather than parsing an error string.
+// ExecCommand runs a session command and returns its status code. The command
+// endpoint responds on success with {"status": {"code": ...}}; on conflict it
+// returns an error via do()'s standard error shape. The returned code (e.g.
+// "started") lets callers confirm the command took effect.
 func (c *apiClient) ExecCommand(id, command string, params map[string]any) (string, error) {
 	data, err := c.do("POST", "/api/sessions/"+id+"/commands",
 		map[string]any{"command": command, "params": params})
+	if err != nil {
+		return "", err
+	}
 	var resp struct {
-		Status string `json:"status"`
+		Status struct {
+			Code string `json:"code"`
+		} `json:"status"`
 	}
 	_ = json.Unmarshal(data, &resp)
-	if resp.Status != "" {
-		return resp.Status, nil // a known status — even on a 4xx like busy
-	}
-	return "", err
+	return resp.Status.Code, nil
 }
 
 // GetSession returns a session's metadata (model, thinking, stats, …).
@@ -249,4 +253,39 @@ func (c *apiClient) StreamEvents(ctx context.Context, sessionID string) (<-chan 
 		}
 	}()
 	return ch, nil
+}
+
+// parseHarnessError parses a standard error response body into a harnessError
+// (message + structured details). Returns nil if the body isn't the standard
+// {"error": {"message": ...}} shape.
+
+// harnessError is a structured error from the harness API: a human message plus
+// optional details (the provider's parsed error payload). do() returns it for
+// 4xx/5xx so the transport can render the details richly (formatError) rather
+// than collapsing them into a plain string.
+type harnessError struct {
+	message string
+	details map[string]any
+}
+
+func (e *harnessError) Error() string {
+	if len(e.details) > 0 {
+		if d, err := json.Marshal(e.details); err == nil {
+			return e.message + ": " + string(d)
+		}
+	}
+	return e.message
+}
+
+func parseHarnessError(body []byte) *harnessError {
+	var env struct {
+		Error struct {
+			Message string         `json:"message"`
+			Details map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &env) == nil && env.Error.Message != "" {
+		return &harnessError{message: env.Error.Message, details: env.Error.Details}
+	}
+	return nil
 }

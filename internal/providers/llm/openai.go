@@ -83,7 +83,7 @@ func DoOpenAIStream(ctx context.Context, client *http.Client, apiURL, apiKey str
 
 	if httpResp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(httpResp.Body)
-		return nil, fmt.Errorf("openai API error %d: %s", httpResp.StatusCode, string(b))
+		return nil, types.NewProviderAPIError("openai", httpResp.StatusCode, b)
 	}
 	return parseOpenAIStream(httpResp.Body, cb)
 }

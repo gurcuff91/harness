@@ -147,7 +147,7 @@ func fetchOpenAIModels(apiKey, baseURL string) ([]types.ModelMeta, error) {
 		return nil, fmt.Errorf("invalid API key")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (status %d)", resp.StatusCode)
+		return nil, types.NewProviderAPIError("openai", resp.StatusCode, nil)
 	}
 
 	var result struct {

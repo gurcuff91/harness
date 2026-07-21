@@ -174,23 +174,22 @@ func TestStoreAllowlistAndSessionsCoexist(t *testing.T) {
 	}
 }
 
-func TestFormatErrorJSON(t *testing.T) {
-	msg := `oops: {"type":"error","error":{"type":"invalid_request_error"}}`
-	got := formatError(msg)
+func TestFormatErrorWithDetails(t *testing.T) {
+	details := map[string]any{"type": "invalid_request_error", "code": 400}
+	got := formatError("anthropic API error 400", details)
 	if !strings.Contains(got, "```") {
-		t.Errorf("JSON error should be fenced:\n%s", got)
+		t.Errorf("details should be fenced:\n%s", got)
 	}
-	if !strings.Contains(got, "⚠️ oops") {
-		t.Errorf("prefix should be kept:\n%s", got)
+	if !strings.Contains(got, "⚠️ anthropic API error 400") {
+		t.Errorf("message should be kept:\n%s", got)
 	}
-	// Pretty-printed (indented).
-	if !strings.Contains(got, "\n  \"type\"") {
-		t.Errorf("JSON should be indented:\n%s", got)
+	if !strings.Contains(got, "invalid_request_error") {
+		t.Errorf("details content should be present:\n%s", got)
 	}
 }
 
 func TestFormatErrorPlain(t *testing.T) {
-	got := formatError("session not found")
+	got := formatError("session not found", nil)
 	if strings.Contains(got, "```") {
 		t.Errorf("plain error should not be fenced:\n%s", got)
 	}

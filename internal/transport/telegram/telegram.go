@@ -191,14 +191,14 @@ func (t *Transport) handleMessage(ctx context.Context, msg *Message) {
 
 	pump, err := t.pumpFor(ctx, chatID)
 	if err != nil {
-		t.reply(ctx, chatID, "⚠️ "+err.Error())
+		t.replyError(ctx, chatID, err)
 		return
 	}
 	logx.Info("telegram", "prompt", "chat", chatID, "text", oneLine(text, 200))
 	// The typing indicator is driven by the SSE drain (turn_start→turn_end) so it
 	// stays alive for the whole turn, not just Telegram's ~5s window.
 	if err := t.api.SendPrompt(pump.sessionID, text); err != nil {
-		t.reply(ctx, chatID, "⚠️ "+err.Error())
+		t.replyError(ctx, chatID, err)
 	}
 }
 
@@ -222,8 +222,6 @@ func (t *Transport) authorize(ctx context.Context, chatID int64) bool {
 		chatID))
 	return false
 }
-
-
 
 // oneLine collapses text to a single line and truncates it to max runes, for
 // tidy one-line log entries.

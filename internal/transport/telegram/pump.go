@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 
 	"github.com/gurcuff91/harness/internal/logx"
 	"strings"
@@ -193,8 +194,10 @@ func (t *Transport) drain(ctx context.Context, p *chatPump, events <-chan map[st
 		case "error":
 			p.buf.Reset()
 			p.stopTyping()
-			if msg, _ := evt["message"].(string); msg != "" {
-				t.reply(ctx, p.chatID, formatError(msg))
+			msg, _ := evt["message"].(string)
+			details, _ := evt["details"].(map[string]any)
+			if msg != "" || len(details) > 0 {
+				t.reply(ctx, p.chatID, formatError(msg, details))
 			}
 		case "max_turns_reached":
 			t.flush(ctx, p)
@@ -226,6 +229,19 @@ func (t *Transport) reply(ctx context.Context, chatID int64, text string) {
 	if len(uploads) > 0 {
 		t.sendUploads(ctx, chatID, uploads)
 	}
+}
+
+// replyError delivers an error to the chat. An API error with structured
+// details (e.g. a provider's JSON payload) is rendered by formatError — the
+// message on top, the details pretty-printed in a code fence. Plain errors get
+// the standard ⚠️ prefix.
+func (t *Transport) replyError(ctx context.Context, chatID int64, err error) {
+	var ae *harnessError
+	if errors.As(err, &ae) {
+		t.reply(ctx, chatID, formatError(ae.message, ae.details))
+		return
+	}
+	t.reply(ctx, chatID, "⚠️ "+err.Error())
 }
 
 // sendText sends plain agent text as MarkdownV2, splitting long messages and

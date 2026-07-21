@@ -2,6 +2,62 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.72.0] - 2026-06-23
+
+### Telegram — HTTP errors now render structured details too
+- The API `do()` now returns a structured `harnessError{message, details}` for
+  4xx/5xx instead of a plain string — a missing piece: the SSE `error` event
+  already rendered `details` as pretty-JSON in a code fence (`formatError`),
+  but HTTP errors were rendered as plain text. Now both paths produce the same
+  rich output: `⚠️ <message>` + the details as pretty-printed JSON in a fence
+- `replyError` is the single helper for showing errors in the transport:
+  `harnessError` → `formatError(msg, details)`; any other error → `"⚠️ " + err.Error()`
+- Removed the now-unused `errorMessage` helper from the telegram client (TUI
+  and CLI keep theirs; their error display stays as plain text)
+
+## [0.71.0] - 2026-06-23
+
+### API — standardized action responses, clean compact-busy error
+- Action endpoints now return a consistent nested shape on success:
+  `{"status": {"code": "...", "message": "..."}}` (message optional), symmetric
+  with the error shape. 13 sites migrated to `writeStatus(code, message?)`.
+  Resource GETs stay data-direct
+- **409 compact-busy is now a proper error** with a user-friendly message the
+  client shows verbatim (no string-sniffing):
+  `{"error":{"message":"⏳ I'm working on something — try /compact again when
+  I'm done."}}`. The Telegram `/compact` shows the server's error message
+  directly, trusting the structured format
+- Action endpoints (connect, disconnect, delete, close, stop, commands…) now
+  return a consistent nested shape on success: `{"status": {"code": "...",
+  "message": "..."}}` (message optional), symmetric with the error shape.
+  13 sites migrated to `writeStatus(code, message?)`. A `writeErr` helper
+  lifts ProviderAPIError details (0.70.0) when present
+- **409 compact-busy is now a proper error** (`{"error":{"message":"session is
+  busy"}}`) instead of a status — only 2XX responses carry status; conflicts
+  are errors. Telegram's `/compact` detects "busy" in the error message (the
+  client's `errorMessage` parser now extracts the nested shape from all three
+  clients, so the message is clean "session is busy" rather than raw JSON)
+- Resource GETs (sessions, models, settings…) remain data-direct, not wrapped
+
+## [0.70.0] - 2026-06-23
+
+### Errors — standardized structured format end-to-end
+- New `types.ProviderAPIError` ({message, details}) is the structured error
+  providers return (named to distinguish it from harness's own API errors):
+  `NewProviderAPIError` parses a provider's JSON body into `Details` instead of
+  embedding raw JSON in a string. All LLM providers now use it
+- `EventError` gained a `Details map[string]any` field; the session lifts a
+  provider APIError's details into the event (`errorEvent` helper), and SSE
+  serializes them
+- **API error shape is now consistent and nested:** every endpoint error is
+  `{"error": {"message": ..., "details": {...}}}` (details optional). Replaced
+  47 hand-built `{"error": "..."}` responses with `writeError`/`writeErr`
+  helpers; `writeErr` lifts APIError details automatically
+- **All three clients** (CLI, TUI, Telegram) parse the nested shape via a shared
+  `errorMessage` helper. Telegram renders structured details as a pretty JSON
+  code block (`formatError` now takes the details map directly instead of
+  regex-scraping the string)
+
 ## [0.69.0] - 2026-06-23
 
 ### Server — consistent command response shape

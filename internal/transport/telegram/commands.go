@@ -45,7 +45,7 @@ func (t *Transport) handleCommand(ctx context.Context, chatID int64, text string
 func (t *Transport) cmdNew(ctx context.Context, chatID int64) {
 	t.resetChat(ctx, chatID)
 	if _, err := t.pumpFor(ctx, chatID); err != nil {
-		t.reply(ctx, chatID, "⚠️ "+err.Error())
+		t.replyError(ctx, chatID, err)
 		return
 	}
 	t.reply(ctx, chatID, "Started a fresh session.")
@@ -59,7 +59,7 @@ func (t *Transport) cmdStop(ctx context.Context, chatID int64) {
 		return
 	}
 	if err := t.api.StopSession(p.sessionID); err != nil {
-		t.reply(ctx, chatID, "⚠️ "+err.Error())
+		t.replyError(ctx, chatID, err)
 		return
 	}
 	t.reply(ctx, chatID, "Stopped.")
@@ -71,24 +71,18 @@ func (t *Transport) cmdStop(ctx context.Context, chatID int64) {
 func (t *Transport) cmdCompact(ctx context.Context, chatID int64) {
 	p, err := t.pumpFor(ctx, chatID)
 	if err != nil {
-		t.reply(ctx, chatID, "⚠️ "+err.Error())
+		t.replyError(ctx, chatID, err)
 		return
 	}
 	// Mark this compaction as user-requested BEFORE the call: the server runs
 	// Compact() asynchronously and can emit compact_start before ExecCommand even
 	// returns, so the flag must already be set when the drain sees that event.
 	p.compactExpected.Store(true)
-	status, err := t.api.ExecCommand(p.sessionID, "compact", nil)
+	_, err = t.api.ExecCommand(p.sessionID, "compact", nil)
 	if err != nil {
 		p.compactExpected.Store(false) // call failed — no compaction will happen
-		t.reply(ctx, chatID, "⚠️ "+err.Error())
-		return
-	}
-	// The server reports busy (409, status=busy) when a turn is active — it won't
-	// compact mid-turn. Read the status field, not the error string.
-	if status == "busy" {
-		p.compactExpected.Store(false)
-		t.reply(ctx, chatID, "⏳ I'm working on something — try /compact again when I'm done.")
+		// API errors render with details (pretty JSON); plain errors as ⚠️ message.
+		t.replyError(ctx, chatID, err)
 		return
 	}
 	t.reply(ctx, chatID, "🗜 Compacting the conversation…")
@@ -101,7 +95,7 @@ func (t *Transport) cmdCompact(ctx context.Context, chatID int64) {
 func (t *Transport) cmdInfo(ctx context.Context, chatID int64) {
 	p, err := t.pumpFor(ctx, chatID)
 	if err != nil {
-		t.reply(ctx, chatID, "⚠️ "+err.Error())
+		t.replyError(ctx, chatID, err)
 		return
 	}
 	var b strings.Builder

@@ -165,13 +165,13 @@ func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 		ThinkingLevel *string `json:"thinking_level"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		writeError(w, http.StatusBadRequest, "invalid body: " + err.Error(), nil)
 		return
 	}
 	sm := config.GetSettingsManager()
 	if body.ActiveModel != nil {
 		if err := sm.SetActiveModel(*body.ActiveModel); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
 	}
@@ -181,7 +181,7 @@ func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 			if errors.Is(err, config.ErrInvalidThinkingLevel) {
 				status = http.StatusUnprocessableEntity
 			}
-			writeJSON(w, status, map[string]string{"error": err.Error()})
+			writeErr(w, status, err)
 			return
 		}
 	}
@@ -206,11 +206,11 @@ func (s *Server) handlePutProviderConfig(w http.ResponseWriter, r *http.Request)
 	name := chi.URLParam(r, "name")
 	var cfg config.ProviderConfig
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		writeError(w, http.StatusBadRequest, "invalid body: " + err.Error(), nil)
 		return
 	}
 	if err := config.GetSettingsManager().SetProvider(name, cfg); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, cfg)
@@ -221,14 +221,14 @@ func (s *Server) handleDeleteProviderConfig(w http.ResponseWriter, r *http.Reque
 	name := chi.URLParam(r, "name")
 	sm := config.GetSettingsManager()
 	if _, ok := sm.Provider(name); !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider config not found: " + name})
+		writeError(w, http.StatusNotFound, "provider config not found: " + name, nil)
 		return
 	}
 	if err := sm.DeleteProvider(name); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	writeStatus(w, http.StatusOK, "deleted", "")
 }
 
 // ── MCP servers (settings collection) ───────────────────────────────────
@@ -244,7 +244,7 @@ func (s *Server) handlePutMCPServer(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	var srv config.MCPServer
 	if err := json.NewDecoder(r.Body).Decode(&srv); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		writeError(w, http.StatusBadRequest, "invalid body: " + err.Error(), nil)
 		return
 	}
 	if err := config.GetSettingsManager().SetMCPServer(name, srv); err != nil {
@@ -252,7 +252,7 @@ func (s *Server) handlePutMCPServer(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, config.ErrInvalidMCPServer) {
 			status = http.StatusUnprocessableEntity // 422: well-formed JSON, invalid content
 		}
-		writeJSON(w, status, map[string]string{"error": err.Error()})
+		writeErr(w, status, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, srv)
@@ -310,7 +310,7 @@ func (s *Server) handleListMemories(w http.ResponseWriter, r *http.Request) {
 
 	res, err := mem.Search(cwd, query, includeContent, skip, limit)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -344,14 +344,14 @@ func (s *Server) handleDeleteMCPServer(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	sm := config.GetSettingsManager()
 	if _, ok := sm.MCPServer(name); !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "mcp server not found: " + name})
+		writeError(w, http.StatusNotFound, "mcp server not found: " + name, nil)
 		return
 	}
 	if err := sm.DeleteMCPServer(name); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	writeStatus(w, http.StatusOK, "deleted", "")
 }
 
 // providerInfo is the API representation of a provider.
@@ -430,13 +430,13 @@ func (s *Server) handleConnectProvider(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if target == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider not found: " + name})
+		writeError(w, http.StatusNotFound, "provider not found: " + name, nil)
 		return
 	}
 
 	var req connectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		writeError(w, http.StatusBadRequest, "invalid body: " + err.Error(), nil)
 		return
 	}
 
@@ -449,14 +449,11 @@ func (s *Server) handleConnectProvider(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := target.Connect(creds); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":      "connected",
-		"model_count": len(target.Models()),
-	})
+	writeStatus(w, http.StatusOK, "connected", fmt.Sprintf("%d models", len(target.Models())))
 }
 
 func (s *Server) handleDisconnectProvider(w http.ResponseWriter, r *http.Request) {
@@ -471,16 +468,16 @@ func (s *Server) handleDisconnectProvider(w http.ResponseWriter, r *http.Request
 		}
 	}
 	if target == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider not found: " + name})
+		writeError(w, http.StatusNotFound, "provider not found: " + name, nil)
 		return
 	}
 
 	if err := target.Disconnect(); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "disconnected"})
+	writeStatus(w, http.StatusOK, "disconnected", "")
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
@@ -512,17 +509,17 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var req createSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		writeError(w, http.StatusBadRequest, "invalid body: " + err.Error(), nil)
 		return
 	}
 	if req.Model == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "model is required"})
+		writeError(w, http.StatusBadRequest, "model is required", nil)
 		return
 	}
 
 	sess, err := s.agent.NewSession(req.CWD, req.Model)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 
@@ -552,7 +549,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		sessions, err = s.agent.ListAllSessions()
 	}
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	if sessions == nil {
@@ -575,7 +572,7 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	if err := s.agent.DeleteSession(id); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -594,11 +591,11 @@ func (s *Server) handleCloseSession(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not active"})
+		writeError(w, http.StatusNotFound, "session not active", nil)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "closed"})
+	writeStatus(w, http.StatusOK, "closed", "")
 }
 
 // handleResumeSession reactivates a persisted session.
@@ -608,11 +605,11 @@ func (s *Server) handleStopSession(w http.ResponseWriter, r *http.Request) {
 	proxy, ok := s.sessions[id]
 	s.mu.RUnlock()
 	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session is not active"})
+		writeError(w, http.StatusBadRequest, "session is not active", nil)
 		return
 	}
 	proxy.session.Stop()
-	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+	writeStatus(w, http.StatusOK, "stopped", "")
 }
 
 func (s *Server) handleGetMessages(w http.ResponseWriter, r *http.Request) {
@@ -621,7 +618,7 @@ func (s *Server) handleGetMessages(w http.ResponseWriter, r *http.Request) {
 	proxy, ok := s.sessions[id]
 	s.mu.RUnlock()
 	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session is not active"})
+		writeError(w, http.StatusBadRequest, "session is not active", nil)
 		return
 	}
 	messages := proxy.session.AllMessages()
@@ -635,7 +632,7 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	if _, ok := s.sessions[id]; ok {
 		s.mu.RUnlock()
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "session is already active"})
+		writeError(w, http.StatusConflict, "session is already active", nil)
 		return
 	}
 	s.mu.RUnlock()
@@ -646,7 +643,7 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(err.Error(), "not found") {
 			status = http.StatusNotFound
 		}
-		writeJSON(w, status, map[string]string{"error": err.Error()})
+		writeErr(w, status, err)
 		return
 	}
 
@@ -673,7 +670,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	// Fallback: check store (persisted sessions from previous runs)
 	sessions, err := s.agent.ListAllSessions()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	for _, s := range sessions {
@@ -683,7 +680,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+	writeError(w, http.StatusNotFound, "session not found", nil)
 }
 
 type promptRequest struct {
@@ -698,17 +695,17 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	proxy, ok := s.sessions[id]
 	s.mu.RUnlock()
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+		writeError(w, http.StatusNotFound, "session not found", nil)
 		return
 	}
 
 	var req promptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		writeError(w, http.StatusBadRequest, "invalid body: " + err.Error(), nil)
 		return
 	}
 	if req.Text == "" && len(req.Images) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "text or images is required"})
+		writeError(w, http.StatusBadRequest, "text or images is required", nil)
 		return
 	}
 
@@ -716,7 +713,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	if len(req.Images) > 0 {
 		meta := proxy.session.ModelMeta()
 		if meta == nil || !meta.Vision {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "current model does not support images"})
+			writeError(w, http.StatusBadRequest, "current model does not support images", nil)
 			return
 		}
 	}
@@ -734,7 +731,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	if ps == types.PromptQueued {
 		status = "queued"
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": status})
+	writeStatus(w, http.StatusAccepted, status, "")
 }
 
 // handleEvents streams agent events as SSE.
@@ -744,13 +741,13 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	proxy, ok := s.sessions[id]
 	s.mu.RUnlock()
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+		writeError(w, http.StatusNotFound, "session not found", nil)
 		return
 	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming not supported"})
+		writeError(w, http.StatusInternalServerError, "streaming not supported", nil)
 		return
 	}
 
@@ -830,7 +827,7 @@ func (s *Server) handleListCommands(w http.ResponseWriter, r *http.Request) {
 	proxy, ok := s.sessions[id]
 	s.mu.RUnlock()
 	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session is not active"})
+		writeError(w, http.StatusBadRequest, "session is not active", nil)
 		return
 	}
 
@@ -881,13 +878,13 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 	proxy, ok := s.sessions[id]
 	s.mu.RUnlock()
 	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session is not active"})
+		writeError(w, http.StatusBadRequest, "session is not active", nil)
 		return
 	}
 
 	var req execCommandRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		writeError(w, http.StatusBadRequest, "invalid body: " + err.Error(), nil)
 		return
 	}
 
@@ -895,19 +892,19 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 	case "rename":
 		name, _ := req.Params["name"].(string)
 		if name == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "param 'name' is required"})
+			writeError(w, http.StatusBadRequest, "param 'name' is required", nil)
 			return
 		}
 		if err := proxy.session.Rename(name); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		writeStatus(w, http.StatusOK, "ok", "")
 
 	case "thinking":
 		level, _ := req.Params["level"].(string)
 		if level == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "param 'level' is required"})
+			writeError(w, http.StatusBadRequest, "param 'level' is required", nil)
 			return
 		}
 		// Validate + persist FIRST. Only if the level is accepted do we apply it
@@ -917,28 +914,28 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 			if errors.Is(err, config.ErrInvalidThinkingLevel) {
 				status = http.StatusUnprocessableEntity
 			}
-			writeJSON(w, status, map[string]string{"error": err.Error()})
+			writeErr(w, status, err)
 			return
 		}
 		if err := proxy.session.SwitchThinking(level); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		writeStatus(w, http.StatusOK, "ok", "")
 
 	case "model":
 		model, _ := req.Params["model"].(string)
 		if model == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "param 'model' is required"})
+			writeError(w, http.StatusBadRequest, "param 'model' is required", nil)
 			return
 		}
 		if err := proxy.session.SwitchModel(context.Background(), model); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
 		// Persist to settings
 		_ = config.GetSettingsManager().SetActiveModel(model)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		writeStatus(w, http.StatusOK, "ok", "")
 
 	case "compact":
 		// Refuse to compact mid-turn (it would corrupt the active conversation).
@@ -946,11 +943,11 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 		// code signaling the outcome (409 for the busy conflict), so clients read
 		// status rather than sniffing an error string.
 		if proxy.session.IsBusy() {
-			writeJSON(w, http.StatusConflict, map[string]string{"status": "busy"})
+			writeError(w, http.StatusConflict, "session is busy", nil)
 			return
 		}
 		go proxy.session.Compact(context.Background()) //nolint
-		writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+		writeStatus(w, http.StatusAccepted, "started", "")
 
 	default:
 		// Check if it's a skill command: skill:<name>
@@ -958,7 +955,7 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 			skillName := strings.TrimPrefix(req.Command, "skill:")
 			content, dir, err := proxy.session.ReadSkill(skillName)
 			if err != nil {
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": "skill not found: " + skillName})
+				writeError(w, http.StatusNotFound, "skill not found: " + skillName, nil)
 				return
 			}
 			// Build prompt: skill location note + content + optional user prompt. The
@@ -972,10 +969,10 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 			if ps == types.PromptQueued {
 				status = "queued"
 			}
-			writeJSON(w, http.StatusAccepted, map[string]string{"status": status})
+			writeStatus(w, http.StatusAccepted, status, "")
 			return
 		}
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown command: " + req.Command})
+		writeError(w, http.StatusBadRequest, "unknown command: " + req.Command, nil)
 	}
 }
 
@@ -985,6 +982,39 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+// writeError writes a standard error response: {"error": {"message": ...,
+// "details": {...}}}. details is optional (omitted when nil). All error
+// responses go through here so the shape is consistent across endpoints.
+func writeError(w http.ResponseWriter, status int, message string, details map[string]any) {
+	err := map[string]any{"message": message}
+	if len(details) > 0 {
+		err["details"] = details
+	}
+	writeJSON(w, status, map[string]any{"error": err})
+}
+
+// writeErr writes an error response from a Go error, lifting a provider
+// ProviderAPIError's structured details into the response when present.
+func writeErr(w http.ResponseWriter, status int, e error) {
+	var apiErr *types.ProviderAPIError
+	if errors.As(e, &apiErr) {
+		writeError(w, status, apiErr.Message, apiErr.Details)
+		return
+	}
+	writeError(w, status, e.Error(), nil)
+}
+
+// writeStatus writes a 2XX action-confirmation response in the standard shape:
+// {"status": {"code": ..., "message": ...}}. message is optional (omitted when
+// empty). Only for successful (2XX) responses; errors use writeError/writeErr.
+func writeStatus(w http.ResponseWriter, httpCode int, code string, message string) {
+	s := map[string]any{"code": code}
+	if message != "" {
+		s["message"] = message
+	}
+	writeJSON(w, httpCode, map[string]any{"status": s})
 }
 
 func corsMiddleware(next http.Handler) http.Handler {

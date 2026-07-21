@@ -146,7 +146,7 @@ func DoAnthropicStream(ctx context.Context, client *http.Client, apiURL, apiKey 
 
 	if httpResp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(httpResp.Body)
-		return nil, fmt.Errorf("anthropic API error %d: %s", httpResp.StatusCode, string(b))
+		return nil, types.NewProviderAPIError("anthropic", httpResp.StatusCode, b)
 	}
 
 	unmapTool := req.UnmapTool
