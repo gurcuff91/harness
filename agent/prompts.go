@@ -22,6 +22,11 @@ Include:
 Be specific and factual. Use bullet points. Do NOT ask questions or add commentary.
 Respond with ONLY the summary text.`
 
+// compactRequestPrompt is appended as a final user message when generating a
+// compaction summary. It makes the request explicit and ensures the conversation
+// ends on a user turn (required by providers that reject assistant prefill).
+const compactRequestPrompt = "Summarize the conversation so far following the instructions above."
+
 // maxTurnsPrompt is injected as a user message when the agent hits the max tool-call limit.
 // It asks the model to report progress and check with the user before continuing.
 const maxTurnsPrompt = "You've reached the maximum number of tool calls allowed for this turn. " +

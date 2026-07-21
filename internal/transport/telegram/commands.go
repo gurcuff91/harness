@@ -74,14 +74,16 @@ func (t *Transport) cmdCompact(ctx context.Context, chatID int64) {
 		t.reply(ctx, chatID, "⚠️ "+err.Error())
 		return
 	}
+	// Mark this compaction as user-requested BEFORE the call: the server runs
+	// Compact() asynchronously and can emit compact_start before ExecCommand even
+	// returns, so the flag must already be set when the drain sees that event.
+	p.compactExpected.Store(true)
 	status, err := t.api.ExecCommand(p.sessionID, "compact", nil)
 	if err != nil {
+		p.compactExpected.Store(false) // call failed — no compaction will happen
 		t.reply(ctx, chatID, "⚠️ "+err.Error())
 		return
 	}
-	// Mark this compaction as user-requested so the drain's compact_start doesn't
-	// re-announce it as automatic.
-	p.compactExpected.Store(true)
 	if status == "queued" {
 		t.reply(ctx, chatID, "🗜 Compaction queued — it'll run after the current task.")
 	} else {

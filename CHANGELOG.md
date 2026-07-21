@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.64.0] - 2026-06-23
+
+### Compaction — preserve lifetime token totals
+- Compacting no longer zeroes the session's accumulated input tokens. Those
+  totals are historical (they happened, they cost money, they drive stats), so
+  they're preserved along with the output totals. Compaction only resets the
+  **context-usage gauge** (and the last-turn input it's derived from), since
+  that's what actually shrinks when the active context is summarized — `/info`
+  and the footer now keep showing the real cumulative usage after a compact
+
+## [0.63.0] - 2026-06-23
+
+### Compaction — fix failure on assistant-prefill-restricted providers
+- Compacting could fail with "This model does not support assistant message
+  prefill. The conversation must end with a user message." (e.g. Claude
+  subscription/oauth) when the working set ended on an assistant message. The
+  summary request now appends a final user message asking for the summary, so
+  the conversation always ends on a user turn — fixing the 400 while making the
+  request explicit. The working set isn't mutated (Messages() returns a copy)
+
 ## [0.62.0] - 2026-06-23
 
 ### Telegram — pretty error rendering

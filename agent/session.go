@@ -496,8 +496,11 @@ func (s *Session) Compact(ctx context.Context) error {
 		return fmt.Errorf("compact: checkpoint: %w", err)
 	}
 
-	// Reset context usage stats
-	s.stats.InputTokens = 0
+	// Compaction shrinks the ACTIVE context, not the session's lifetime usage.
+	// Reset only the context-usage gauge (and the last-turn input it's derived
+	// from); the accumulated input/output token totals are historical — they
+	// already happened and drive cost/stats, so they must be preserved.
+	s.lastInputTokens = 0
 	s.stats.ContextUsage = 0
 	meta := s.store.Meta()
 	meta.Stats = s.stats
@@ -511,10 +514,15 @@ func (s *Session) Compact(ctx context.Context) error {
 // for use as a compaction checkpoint. Uses no tools and a dedicated system prompt.
 // The result is stored internally — NOT streamed to the transport.
 func (s *Session) generateCompactionSummary(ctx context.Context) (string, error) {
+	// Append a user message asking for the summary. Besides making the request
+	// explicit, it guarantees the conversation ends with a user turn — required by
+	// providers that reject assistant-message prefill (e.g. Claude subscription),
+	// since the working set may otherwise end on an assistant message.
+	messages := append(s.store.Messages(), types.NewUserTextMessage(compactRequestPrompt))
 	req := &types.Request{
 		SystemPrompt: compactSystemPrompt,
 		Model:        s.modelID,
-		Messages:     s.store.Messages(),
+		Messages:     messages,
 		Tools:        nil, // no tools — pure text
 		MaxTokens:    4096,
 	}
