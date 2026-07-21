@@ -123,6 +123,19 @@ func (s *Store) List() []Schedule {
 	return out
 }
 
+// Owners returns a slug→owner map for the current schedules. Used to filter a
+// listing to a single session's schedules (the owner is not part of the
+// agent-facing ScheduleEntry, so it's exposed separately).
+func (s *Store) Owners() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]string, len(s.data))
+	for slug, sc := range s.data {
+		out[slug] = sc.Owner
+	}
+	return out
+}
+
 // RecordRun bumps the audit counters for a slug after the engine fires it.
 func (s *Store) RecordRun(slug string, at int64) error {
 	s.mu.Lock()

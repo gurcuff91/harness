@@ -23,8 +23,12 @@ type ScheduleEntry struct {
 // storage/cron dependency.
 type ScheduleStore interface {
 	Set(slug, cron, prompt, owner string) error
-	Delete(slug string) (bool, error)
-	Entries() []ScheduleEntry
+	// Delete removes a schedule only if it belongs to owner; a slug owned by
+	// another session is treated as absent (false, nil) — no cross-session deletes.
+	Delete(slug, owner string) (bool, error)
+	// Entries returns only the schedules owned by owner — each session sees just
+	// its own.
+	Entries(owner string) []ScheduleEntry
 }
 
 // Schedule upserts a cron-scheduled prompt (create or edit by slug). owner is the
@@ -55,8 +59,9 @@ func Schedule(store ScheduleStore, owner string) Tool {
 	}
 }
 
-// ScheduleList returns all schedules with their cron, prompt, and audit fields.
-func ScheduleList(store ScheduleStore) Tool {
+// ScheduleList returns this session's schedules with their cron, prompt, and
+// audit fields. owner scopes the listing so a session only sees its own.
+func ScheduleList(store ScheduleStore, owner string) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolScheduleList,
@@ -64,7 +69,7 @@ func ScheduleList(store ScheduleStore) Tool {
 			InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 		},
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
-			entries := store.Entries()
+			entries := store.Entries(owner)
 			if len(entries) == 0 {
 				return "No schedules.", nil
 			}
@@ -77,8 +82,9 @@ func ScheduleList(store ScheduleStore) Tool {
 	}
 }
 
-// ScheduleDelete removes a scheduled prompt by slug.
-func ScheduleDelete(store ScheduleStore) Tool {
+// ScheduleDelete removes one of this session's scheduled prompts by slug. owner
+// scopes it: a slug owned by another session is reported as not found (no-op).
+func ScheduleDelete(store ScheduleStore, owner string) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolScheduleDelete,
@@ -92,7 +98,7 @@ func ScheduleDelete(store ScheduleStore) Tool {
 			if err := json.Unmarshal(input, &p); err != nil {
 				return "", fmt.Errorf("ScheduleDelete: invalid input: %w", err)
 			}
-			ok, err := store.Delete(p.Slug)
+			ok, err := store.Delete(p.Slug, owner)
 			if err != nil {
 				return "", err
 			}

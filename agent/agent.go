@@ -524,10 +524,11 @@ func (a *Agent) buildSessionTools(sessionID, cwd, model string, res *resources.R
 			reg.Register(tools.Schedule(adapter, sessionID))
 		}
 		if a.isToolAllowed(tools.ToolScheduleList) {
-			reg.Register(tools.ScheduleList(adapter))
+			// owner = this session: it only sees its own schedules.
+			reg.Register(tools.ScheduleList(adapter, sessionID))
 		}
 		if a.isToolAllowed(tools.ToolScheduleDelete) {
-			reg.Register(tools.ScheduleDelete(adapter))
+			reg.Register(tools.ScheduleDelete(adapter, sessionID))
 		}
 	}
 	// Subagent tool — only if allowed (excluded for sub-agents themselves)

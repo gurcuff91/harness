@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/gurcuff91/harness/types"
@@ -144,6 +145,41 @@ func (c *apiClient) GetServerInfo() (map[string]any, error) {
 		return nil, err
 	}
 	return m, nil
+}
+
+// CountConnectedMCPs returns how many configured MCP servers are connected.
+func (c *apiClient) CountConnectedMCPs() int {
+	data, err := c.do("GET", "/api/mcp/status", nil)
+	if err != nil {
+		return 0
+	}
+	var statuses []struct {
+		Connected bool `json:"connected"`
+	}
+	if json.Unmarshal(data, &statuses) != nil {
+		return 0
+	}
+	n := 0
+	for _, s := range statuses {
+		if s.Connected {
+			n++
+		}
+	}
+	return n
+}
+
+// CountSchedules returns how many schedules are owned by the given session (the
+// ones that will actually fire in it).
+func (c *apiClient) CountSchedules(owner string) int {
+	data, err := c.do("GET", "/api/schedules?owner="+url.QueryEscape(owner), nil)
+	if err != nil {
+		return 0
+	}
+	var jobs []json.RawMessage
+	if json.Unmarshal(data, &jobs) != nil {
+		return 0
+	}
+	return len(jobs)
 }
 
 // SendPrompt submits a user prompt to a session.

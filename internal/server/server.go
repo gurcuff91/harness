@@ -15,7 +15,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/agent/schedule"
 	"github.com/gurcuff91/harness/internal/logx"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/internal/config"
@@ -268,7 +267,26 @@ func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []any{})
 		return
 	}
-	writeJSON(w, http.StatusOK, schedule.NewToolAdapter(st).Entries())
+	// Optional ?owner=<session_id> filters to the schedules that will actually
+	// fire into that session — the honest count for a single session's view
+	// (a schedule only ever runs in its owner session). Omit owner for all
+	// (the operator view, e.g. `harness schedules`).
+	owner := r.URL.Query().Get("owner")
+	type entry struct {
+		Slug    string `json:"slug"`
+		Cron    string `json:"cron"`
+		Prompt  string `json:"prompt"`
+		Runs    int    `json:"runs"`
+		LastRun int64  `json:"last_run,omitempty"`
+	}
+	out := []entry{}
+	for _, sc := range st.List() {
+		if owner != "" && sc.Owner != owner {
+			continue
+		}
+		out = append(out, entry{sc.Slug, sc.Cron, sc.Prompt, sc.Runs, sc.LastRun})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleListMemories serves read-only memory queries. Memories are partitioned

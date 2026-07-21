@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/gurcuff91/harness/types"
@@ -111,9 +112,14 @@ func (c *Client) GetMCPStatus() ([]byte, error) {
 	return c.do("GET", "/api/mcp/status", nil)
 }
 
-// GetSchedules returns the configured cron-scheduled prompts.
-func (c *Client) GetSchedules() ([]byte, error) {
-	return c.do("GET", "/api/schedules", nil)
+// GetSchedules returns the configured cron-scheduled prompts. A non-empty owner
+// filters to the schedules owned by that session (the ones that fire in it).
+func (c *Client) GetSchedules(owner string) ([]byte, error) {
+	path := "/api/schedules"
+	if owner != "" {
+		path += "?owner=" + url.QueryEscape(owner)
+	}
+	return c.do("GET", path, nil)
 }
 
 func (c *Client) ConnectProvider(name, apiKey string) ([]byte, error) {

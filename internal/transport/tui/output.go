@@ -92,7 +92,10 @@ func (t *TUI) refreshScheduleBadge() {
 		return
 	}
 	t.scheduleJobs = 0
-	if data, err := t.client.GetSchedules(); err == nil {
+	// Count only the schedules owned by this session — the ones that will actually
+	// fire here. A schedule only ever runs in its owner session, so a global count
+	// would be dishonest for this session's footer.
+	if data, err := t.client.GetSchedules(t.sessionID); err == nil {
 		var jobs []json.RawMessage
 		if json.Unmarshal(data, &jobs) == nil {
 			t.scheduleJobs = len(jobs)

@@ -79,7 +79,10 @@ func (t *Transport) cmdCompact(ctx context.Context, chatID int64) {
 	t.reply(ctx, chatID, "Compacting the conversation…")
 }
 
-// cmdInfo reports harness version, the session's model/thinking, and usage stats.
+// cmdInfo reports the same picture as the TUI footer: harness version + session
+// name, the model with its context window/usage and thinking level, token/cache/
+// cost usage, and the connected MCPs + schedules owned by THIS session (a
+// schedule only fires in its owner session, so that's the honest count).
 func (t *Transport) cmdInfo(ctx context.Context, chatID int64) {
 	p, err := t.pumpFor(ctx, chatID)
 	if err != nil {
@@ -87,29 +90,49 @@ func (t *Transport) cmdInfo(ctx context.Context, chatID int64) {
 		return
 	}
 	var b strings.Builder
-	b.WriteString("*Session info*\n")
+	b.WriteString("📊 *Session info*\n\n")
 
 	if info, err := t.api.GetServerInfo(); err == nil {
 		if v, _ := info["version"].(string); v != "" {
-			fmt.Fprintf(&b, "harness: %s\n", v)
+			fmt.Fprintf(&b, "harness %s\n", v)
 		}
 	}
 	if meta, err := t.api.GetSession(p.sessionID); err == nil {
-		if m, _ := meta["model"].(string); m != "" {
-			fmt.Fprintf(&b, "model: %s\n", m)
+		if name, _ := meta["name"].(string); name != "" {
+			fmt.Fprintf(&b, "Session: %s\n", name)
 		}
-		if th, _ := meta["thinking"].(string); th != "" {
-			fmt.Fprintf(&b, "thinking: %s\n", th)
+		b.WriteByte('\n')
+		if m, _ := meta["model"].(string); m != "" {
+			fmt.Fprintf(&b, "Model: %s\n", m)
 		}
 		if stats, ok := meta["stats"].(map[string]any); ok {
-			in := numField(stats, "input_tokens")
-			out := numField(stats, "output_tokens")
-			fmt.Fprintf(&b, "tokens: %d in / %d out\n", in, out)
+			win := numField(stats, "context_window")
+			pct, _ := stats["context_usage"].(float64)
+			if win > 0 {
+				fmt.Fprintf(&b, "Context: %s window · %.1f%% used\n", compactNum(win), pct*100)
+			}
+		}
+		if th, _ := meta["thinking"].(string); th != "" {
+			fmt.Fprintf(&b, "Thinking: %s\n", th)
+		}
+		if stats, ok := meta["stats"].(map[string]any); ok {
+			b.WriteByte('\n')
+			fmt.Fprintf(&b, "Tokens: ↑%s ↓%s\n",
+				compactNum(numField(stats, "input_tokens")), compactNum(numField(stats, "output_tokens")))
+			cr, cw := numField(stats, "cache_read"), numField(stats, "cache_write")
+			if cr > 0 || cw > 0 {
+				fmt.Fprintf(&b, "Cache: R%s W%s\n", compactNum(cr), compactNum(cw))
+			}
 			if c, ok := stats["cost_usd"].(float64); ok {
-				fmt.Fprintf(&b, "cost: $%.4f\n", c)
+				fmt.Fprintf(&b, "Cost: $%.3f\n", c)
 			}
 		}
 	}
+
+	b.WriteByte('\n')
+	fmt.Fprintf(&b, "MCPs: %d connected\n", t.api.CountConnectedMCPs())
+	fmt.Fprintf(&b, "Schedules: %d\n", t.api.CountSchedules(p.sessionID))
+
 	t.reply(ctx, chatID, strings.TrimRight(b.String(), "\n"))
 }
 
@@ -120,4 +143,22 @@ func numField(m map[string]any, key string) int64 {
 		return int64(f)
 	}
 	return 0
+}
+
+// compactNum renders a token count compactly (1300 -> 1.3k, 406600 -> 406.6k,
+// 200000 -> 200k), matching the TUI footer. Round values drop the ".0".
+func compactNum(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return trimDotZero(fmt.Sprintf("%.1f", float64(n)/1_000_000)) + "M"
+	case n >= 1_000:
+		return trimDotZero(fmt.Sprintf("%.1f", float64(n)/1_000)) + "k"
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
+
+// trimDotZero drops a trailing ".0" so 200.0 -> 200 while 1.3 stays 1.3.
+func trimDotZero(s string) string {
+	return strings.TrimSuffix(s, ".0")
 }

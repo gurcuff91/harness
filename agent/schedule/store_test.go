@@ -206,3 +206,30 @@ func TestValidateMinInterval(t *testing.T) {
 		}
 	}
 }
+
+// The tool adapter isolates schedules by owner: List shows only the owner's,
+// and Delete refuses (no-op) a slug owned by another session.
+func TestAdapterOwnerIsolation(t *testing.T) {
+	s := newTestStore(t)
+	s.Set("mine", "@daily", "p", "sess-A")
+	s.Set("theirs", "@daily", "p", "sess-B")
+	a := NewToolAdapter(s)
+
+	// A sees only its own.
+	got := a.Entries("sess-A")
+	if len(got) != 1 || got[0].Slug != "mine" {
+		t.Fatalf("A should see only 'mine', got %v", got)
+	}
+	// A cannot delete B's schedule (no-op, reported as not found).
+	if ok, _ := a.Delete("theirs", "sess-A"); ok {
+		t.Error("A must not delete B's schedule")
+	}
+	// It still exists.
+	if _, found := s.Owners()["theirs"]; !found {
+		t.Error("B's schedule should still exist after A's failed delete")
+	}
+	// A can delete its own.
+	if ok, _ := a.Delete("mine", "sess-A"); !ok {
+		t.Error("A should delete its own schedule")
+	}
+}

@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.60.0] - 2026-06-23
+
+### Scheduling — tools scoped to the owning session
+- The Schedule* tools now fully honor the owner (session) boundary, matching the
+  per-session counts: **ScheduleList** shows only the current session's
+  schedules, and **ScheduleDelete** refuses a slug owned by another session,
+  reporting it as not found (a no-op — no cross-session deletes, no info leak).
+  **Schedule** already tagged new schedules with the session as owner
+- `tools.ScheduleStore` gained the owner argument on `Entries(owner)` and
+  `Delete(slug, owner)`; the adapter enforces it. The `harness schedules`
+  operator view (no owner) still lists everything
+
+## [0.59.0] - 2026-06-23
+
+### Telegram — richer /info; honest per-session schedule counts
+- `/info` now mirrors the TUI footer: harness version + session name, model with
+  context window and % used, thinking level, token usage (↑/↓), cache R/W (when
+  present), cost, connected MCPs, and schedules — grouped into readable sections
+  with a 📊 title
+- **Schedule counts are now per-session (by owner).** A schedule only ever fires
+  in its owner session, so counting all of them was misleading. `GET
+  /api/schedules?owner=<session_id>` filters to a session's own schedules; both
+  the Telegram `/info` and the **TUI footer badge** now use it — "in THIS session,
+  N schedules run", the honest count. Added `schedule.Store.Owners()`
+- Compact number formatting drops a trailing ".0" (200k, not 200.0k) while
+  keeping real fractions (1.3k, 406.6k)
+
 ## [0.58.0] - 2026-06-23
 
 ### Telegram — model resolution on resume aligned with the TUI, honest logs
