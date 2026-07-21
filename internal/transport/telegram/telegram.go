@@ -84,11 +84,18 @@ func Run(ctx context.Context, a *agent.Agent, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("telegram: invalid token or unreachable API: %w", err)
 	}
+	// default_model is what new sessions get; a resumed chat keeps its own model
+	// unless --model was passed. The per-prompt log reports the real model in use.
 	logx.Info("telegram", "connected",
-		"bot", "@"+me.Username, "model", t.model,
+		"bot", "@"+me.Username, "default_model", t.model,
 		"scheduler", opts.Scheduler, "paired", len(st.allowlist()), "allow_unpair", opts.AllowUnpair)
 	if len(st.allowlist()) == 0 && !opts.AllowUnpair {
 		logx.Warn("telegram", "no_paired_chats", "hint", "run 'harness telegram pair <chat_id>' or use --allow-unpair")
+	}
+
+	// Register the command menu so Telegram suggests commands on "/". Best effort.
+	if err := t.bot.SetMyCommands(ctx, botCommands); err != nil {
+		logx.Warn("telegram", "set_commands", "error", err.Error())
 	}
 
 	return t.pollLoop(ctx)
@@ -216,27 +223,7 @@ func (t *Transport) authorize(ctx context.Context, chatID int64) bool {
 	return false
 }
 
-// handleCommand handles the small set of slash commands.
-func (t *Transport) handleCommand(ctx context.Context, chatID int64, text string) {
-	cmd := strings.Fields(text)[0]
-	switch cmd {
-	case "/start":
-		if _, err := t.pumpFor(ctx, chatID); err != nil {
-			t.reply(ctx, chatID, "⚠️ "+err.Error())
-			return
-		}
-		t.reply(ctx, chatID, "Ready. Send a message and I'll get to work.")
-	case "/new":
-		t.resetChat(ctx, chatID)
-		if _, err := t.pumpFor(ctx, chatID); err != nil {
-			t.reply(ctx, chatID, "⚠️ "+err.Error())
-			return
-		}
-		t.reply(ctx, chatID, "Started a fresh session.")
-	default:
-		t.reply(ctx, chatID, "Unknown command. Available: /start, /new")
-	}
-}
+
 
 // oneLine collapses text to a single line and truncates it to max runes, for
 // tidy one-line log entries.

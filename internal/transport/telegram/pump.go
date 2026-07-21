@@ -16,6 +16,7 @@ import (
 type chatPump struct {
 	chatID       int64
 	sessionID    string
+	model        string          // the session's actual model (for logs)
 	buf          strings.Builder // accumulates the current turn's text
 	typingMu     sync.Mutex
 	typingCancel context.CancelFunc // stops the current typing heartbeat, if any
@@ -58,6 +59,15 @@ func (p *chatPump) stopTyping() {
 	}
 }
 
+// pump returns the chat's live pump if one exists, or nil. Unlike pumpFor it
+// never creates a session — used by commands that should act only on an already
+// active session (e.g. /stop).
+func (t *Transport) pump(chatID int64) *chatPump {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.pumps[chatID]
+}
+
 // pumpFor returns the chat's live pump, creating the session (or resuming the
 // stored one) and starting the SSE drain on first use.
 func (t *Transport) pumpFor(ctx context.Context, chatID int64) (*chatPump, error) {
@@ -74,6 +84,11 @@ func (t *Transport) pumpFor(ctx context.Context, chatID int64) (*chatPump, error
 	}
 
 	p := &chatPump{chatID: chatID, sessionID: sessionID}
+	// Record the session's actual model (it may differ from the bot default when
+	// a resumed session kept its own) so logs report what's really running.
+	if meta, err := t.api.GetSession(sessionID); err == nil {
+		p.model, _ = meta["model"].(string)
+	}
 	t.mu.Lock()
 	t.pumps[chatID] = p
 	t.mu.Unlock()
@@ -94,6 +109,13 @@ func (t *Transport) pumpFor(ctx context.Context, chatID int64) (*chatPump, error
 func (t *Transport) acquireSession(chatID int64) (string, error) {
 	if id, ok := t.store.sessionFor(chatID); ok {
 		if resumed, err := t.api.ResumeSession(id); err == nil && resumed {
+			// A resumed session keeps its own model, exactly like the TUI — unless
+			// the bot was launched with an explicit --model, which overrides it.
+			if t.opts.Model != "" {
+				if err := t.api.ExecCommand(id, "model", map[string]any{"model": t.opts.Model}); err != nil {
+					logx.Warn("telegram", "override_model", "chat", chatID, "error", err.Error())
+				}
+			}
 			return id, nil
 		}
 		// Stored session is gone or failed to resume — fall through to create.
@@ -211,7 +233,11 @@ func (t *Transport) sendText(ctx context.Context, chatID int64, text string) {
 		}
 	}
 	if n := len(chunks); n > 0 {
-		kv := []any{"chat", chatID, "text", oneLine(text, 200)}
+		kv := []any{"chat", chatID}
+		if p := t.pump(chatID); p != nil && p.model != "" {
+			kv = append(kv, "model", p.model)
+		}
+		kv = append(kv, "text", oneLine(text, 200))
 		if n > 1 {
 			kv = append(kv, "messages", n)
 		}

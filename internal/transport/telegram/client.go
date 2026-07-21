@@ -107,6 +107,45 @@ func (c *apiClient) CloseSession(id string) error {
 	return err
 }
 
+// StopSession interrupts any in-flight work on a session.
+func (c *apiClient) StopSession(id string) error {
+	_, err := c.do("POST", "/api/sessions/"+id+"/stop", nil)
+	return err
+}
+
+// ExecCommand runs a session command (e.g. "compact", "model", "thinking").
+func (c *apiClient) ExecCommand(id, command string, params map[string]any) error {
+	_, err := c.do("POST", "/api/sessions/"+id+"/commands",
+		map[string]any{"command": command, "params": params})
+	return err
+}
+
+// GetSession returns a session's metadata (model, thinking, stats, …).
+func (c *apiClient) GetSession(id string) (map[string]any, error) {
+	data, err := c.do("GET", "/api/sessions/"+id, nil)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// GetServerInfo returns the server info document (version, etc.).
+func (c *apiClient) GetServerInfo() (map[string]any, error) {
+	data, err := c.do("GET", "/api/server", nil)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // SendPrompt submits a user prompt to a session.
 func (c *apiClient) SendPrompt(sessionID, text string) error {
 	_, err := c.do("POST", "/api/sessions/"+sessionID+"/prompt", map[string]string{"text": text})

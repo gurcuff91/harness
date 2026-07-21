@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.58.0] - 2026-06-23
+
+### Telegram — model resolution on resume aligned with the TUI, honest logs
+- A resumed chat session now keeps its own persisted model (like the TUI),
+  unless the bot was launched with an explicit `--model`, which overrides every
+  session's model. Previously the connect banner implied one model while a
+  resumed chat silently ran on its own (a stale one), causing e.g. an anthropic
+  rate-limit error under a bot whose default was deepseek
+- **Logs now report the real model in use:** the per-prompt log includes
+  `model=<actual session model>`, and the startup line labels its value
+  `default_model=` (what new sessions get) to avoid implying it applies to all
+  sessions
+
+## [0.57.0] - 2026-06-23
+
+### Telegram — slash commands (phase 1: actions & info)
+- Added a command system operating on each chat's own session:
+  - `/new` — start a fresh session
+  - `/stop` — interrupt in-flight work
+  - `/compact` — summarize & compact the conversation
+  - `/info` — harness version, the session's model/thinking, token usage & cost
+- Commands are registered via `setMyCommands` at startup, so Telegram suggests
+  them (with descriptions) when the user types "/". A `@botname` suffix (groups)
+  is stripped; unknown commands get a hint
+- All backed by existing server endpoints (stop, commands/compact, session meta,
+  server info); the Bot API client gained setMyCommands. Removed the old
+  /start; selection-list commands (/models, /thinking) come in phase 2
+
 ## [0.56.0] - 2026-06-23
 
 ### Telegram — fix table column alignment with accented text

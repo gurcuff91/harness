@@ -151,6 +151,20 @@ func (b *Bot) SendChatAction(ctx context.Context, chatID int64, action string) e
 	return err
 }
 
+// BotCommand is one entry in the bot's command menu (the list shown when a user
+// types "/").
+type BotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+}
+
+// SetMyCommands registers the bot's command menu so Telegram suggests them when
+// the user types "/". Called once at startup.
+func (b *Bot) SetMyCommands(ctx context.Context, cmds []BotCommand) error {
+	_, err := b.call(ctx, "setMyCommands", map[string]any{"commands": cmds})
+	return err
+}
+
 // DownloadPhoto fetches the best-quality variant of a photo and returns its raw
 // bytes. It resolves the file path via getFile, then downloads from the file
 // endpoint (link valid ~1h; 20MB cap). Telegram photos are JPEG.
