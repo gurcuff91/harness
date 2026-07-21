@@ -941,13 +941,16 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 
 	case "compact":
-		busy := proxy.session.IsBusy()
-		go proxy.session.Compact(context.Background()) //nolint
-		status := "started"
-		if busy {
-			status = "queued"
+		// Refuse to compact mid-turn (it would corrupt the active conversation).
+		// The response shape is consistent — always {"status": ...} — with the HTTP
+		// code signaling the outcome (409 for the busy conflict), so clients read
+		// status rather than sniffing an error string.
+		if proxy.session.IsBusy() {
+			writeJSON(w, http.StatusConflict, map[string]string{"status": "busy"})
+			return
 		}
-		writeJSON(w, http.StatusAccepted, map[string]string{"status": status})
+		go proxy.session.Compact(context.Background()) //nolint
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 
 	default:
 		// Check if it's a skill command: skill:<name>

@@ -115,17 +115,22 @@ func (c *apiClient) StopSession(id string) error {
 }
 
 // ExecCommand runs a session command (e.g. "compact", "model", "thinking").
+// ExecCommand runs a session command and returns its status field. The command
+// endpoint always responds with a consistent {"status": ...} shape; the HTTP
+// code signals the outcome (e.g. 409 for a busy compact). The status is read
+// from the body regardless of the code, so callers branch on status (e.g.
+// "started" vs "busy") rather than parsing an error string.
 func (c *apiClient) ExecCommand(id, command string, params map[string]any) (string, error) {
 	data, err := c.do("POST", "/api/sessions/"+id+"/commands",
 		map[string]any{"command": command, "params": params})
-	if err != nil {
-		return "", err
-	}
 	var resp struct {
 		Status string `json:"status"`
 	}
 	_ = json.Unmarshal(data, &resp)
-	return resp.Status, nil
+	if resp.Status != "" {
+		return resp.Status, nil // a known status — even on a 4xx like busy
+	}
+	return "", err
 }
 
 // GetSession returns a session's metadata (model, thinking, stats, …).

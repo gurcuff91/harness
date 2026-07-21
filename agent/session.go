@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -223,6 +224,24 @@ func (s *Session) IsBusy() bool {
 	return s.busy
 }
 
+// ErrBusy is returned by Compact when a turn is in flight.
+var ErrBusy = errors.New("session is busy; try again when the current turn finishes")
+
+// Compact summarizes the conversation and stores a checkpoint, reclaiming
+// context. It refuses to run while a turn is active (returns ErrBusy) —
+// compacting mid-turn mutates the message history the turn is still using,
+// corrupting the conversation. (Automatic compaction runs internally between
+// ReAct iterations, where it's safe.)
+//
+// Events emitted: EventCompactStart, then EventCompactEnd on success or
+// EventError on failure. The store is untouched if summary generation fails.
+func (s *Session) Compact(ctx context.Context) error {
+	if s.IsBusy() {
+		return ErrBusy
+	}
+	return s.compact(ctx)
+}
+
 // Wait blocks until the session's queue is fully drained (no turn in flight and
 // nothing queued). It uses condition-variable signaling — no polling. Useful for
 // SDK/batch callers that fire several prompts and then wait for all of them:
@@ -278,15 +297,6 @@ func (s *Session) ReadSkill(name string) (content string, dir string, err error)
 // ModelMeta returns the current model's metadata.
 func (s *Session) ModelMeta() *types.ModelMeta {
 	return s.provider.ModelMeta(s.modelID)
-}
-
-// PeekQueue calls fn with the next queued message without removing it.
-func (s *Session) PeekQueue(fn func(string)) {
-	s.followMu.Lock()
-	defer s.followMu.Unlock()
-	if len(s.followUps) > 0 {
-		fn(s.followUps[0].text)
-	}
 }
 
 func (s *Session) drainFollowUps() {
@@ -405,10 +415,11 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 		// LoopEnd stay balanced across iterations.
 		s.emit(types.Event{Type: types.EventLoopEnd, Loop: i})
 
-		// Auto-compact at 98% context usage before next iteration
-		// Compact emits EventError itself if it fails — no duplication here
+		// Auto-compact at 98% context usage before next iteration. Uses the
+		// unguarded compact: we're mid-turn (busy), which the public Compact would
+		// reject, but here it's the safe between-iterations point.
 		if s.stats.ContextUsage >= 0.98 {
-			s.Compact(ctx) //nolint:errcheck — error already emitted as EventError
+			s.compact(ctx) //nolint:errcheck — error already emitted as EventError
 		}
 	}
 
@@ -439,7 +450,7 @@ func (s *Session) SwitchModel(ctx context.Context, fullModel string) error {
 	// compact is mandatory — switch fails if compact fails.
 	if meta := provider.ModelMeta(modelID); meta != nil && meta.ContextWindow > 0 {
 		if s.lastInputTokens > meta.ContextWindow {
-			if compactErr := s.Compact(ctx); compactErr != nil {
+			if compactErr := s.compact(ctx); compactErr != nil {
 				// Compact already emitted EventError — just return
 				return fmt.Errorf("cannot switch to %s: history (%d tokens) exceeds context window (%d): %w",
 					fullModel, s.lastInputTokens, meta.ContextWindow, compactErr)
@@ -479,8 +490,11 @@ func (s *Session) SwitchThinking(level string) error {
 //   - EventCompactEnd{Output: summary} on success
 //   - EventError{Output: msg} on failure (no EventCompactEnd)
 //
-// The store is never modified if summary generation fails.
-func (s *Session) Compact(ctx context.Context) error {
+// compact does the actual summarize-and-checkpoint work, unsynchronized. The
+// auto-compaction path calls it directly between ReAct iterations (inside the
+// turn), where it's safe; external callers go through the public Compact, which
+// guards against running mid-turn.
+func (s *Session) compact(ctx context.Context) error {
 	s.emit(types.Event{Type: types.EventCompactStart})
 
 	// Generate compaction summary — store is untouched until this succeeds

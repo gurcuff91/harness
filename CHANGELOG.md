@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.69.0] - 2026-06-23
+
+### Server — consistent command response shape
+- The session command endpoint now returns a consistent `{"status": ...}` body
+  for compact regardless of outcome; a busy conflict is `409` with
+  `{"status": "busy"}` (was `{"error": "busy"}`). Clients branch on the status
+  field instead of sniffing an error string for the word "busy"
+- Telegram and TUI both read the status: Telegram's `/compact` shows "⏳ I'm
+  working on something…" on busy; the TUI shows a friendly "busy — finish or
+  stop the current turn first" instead of the raw JSON error
+
+## [0.68.0] - 2026-06-23
+
+### SDK — trimmed Session's public surface
+- Removed the confusing dual `Compact`/`RequestCompact`: there's now a single
+  public **`Compact`** (guards against running mid-turn, returns `ErrBusy`); the
+  actual work lives in an unexported `compact` used by automatic compaction.
+  Callers no longer have to guess which one to use
+- Removed `PeekQueue` (dead code, no callers)
+- Session's public API is now just what an SDK embedder needs: Prompt/
+  PromptAndWait/Stop/Wait/IsBusy/FollowUpCount, ID/Name/Rename/Meta/Stats/
+  AllMessages/ModelMeta, SwitchModel/SwitchThinking/Compact, Skills/ReadSkill,
+  Subscribe, Close
+
+## [0.67.0] - 2026-06-23
+
+### Compaction — refuse manual compact mid-turn (fixes corrupted conversation)
+- A manual compact requested while a turn was active used to run **concurrently**
+  with it — the server launched `Compact()` in a goroutine regardless of busy
+  state (the "queued" status was a lie; nothing was queued). Compacting mutates
+  the message history the turn is still using, corrupting the conversation
+  (e.g. follow-ups drifting mid-turn)
+- New `Session.RequestCompact` is the external entry point and returns `ErrBusy`
+  when a turn is in flight; the server rejects the command with 409. Automatic
+  compaction is unaffected — it runs between ReAct iterations from inside the
+  turn, where it's safe. Telegram `/compact` now replies "⏳ I'm working on
+  something — try again when I'm done" instead of silently corrupting state
+
 ## [0.66.0] - 2026-06-23
 
 ### Telegram — ignore upload tags wrapped in quotes/parentheses too

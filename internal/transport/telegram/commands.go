@@ -84,11 +84,14 @@ func (t *Transport) cmdCompact(ctx context.Context, chatID int64) {
 		t.reply(ctx, chatID, "⚠️ "+err.Error())
 		return
 	}
-	if status == "queued" {
-		t.reply(ctx, chatID, "🗜 Compaction queued — it'll run after the current task.")
-	} else {
-		t.reply(ctx, chatID, "🗜 Compacting the conversation…")
+	// The server reports busy (409, status=busy) when a turn is active — it won't
+	// compact mid-turn. Read the status field, not the error string.
+	if status == "busy" {
+		p.compactExpected.Store(false)
+		t.reply(ctx, chatID, "⏳ I'm working on something — try /compact again when I'm done.")
+		return
 	}
+	t.reply(ctx, chatID, "🗜 Compacting the conversation…")
 }
 
 // cmdInfo reports the same picture as the TUI footer: harness version + session
