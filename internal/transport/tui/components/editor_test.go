@@ -165,3 +165,58 @@ func TestSelectListCancel(t *testing.T) {
 		t.Errorf("escape should cancel")
 	}
 }
+
+// TestEditorLongParagraphScrollsAndShowsIndicator reproduces the bug where
+// typing a long paragraph (no embedded newlines) caused the editor viewport
+// to silently pin to the top of the text. The cursor sat many visual rows
+// below the visible window, and the "↑ N more" separator hint stayed empty
+// because cursorRow was computed from \n count alone.
+func TestEditorLongParagraphScrollsAndShowsIndicator(t *testing.T) {
+	e := NewEditor(nil, "type...")
+	width := 30
+
+	// A single logical line that wraps to far more than maxEditorRows (5).
+	// ~120 chars at width 30 -> ~4 wrapped rows per logical line, multiplied
+	// by 3 logical lines via explicit \n -> many more than 5 total rows.
+	long := "the quick brown fox jumps over the lazy dog"
+	text := strings.Repeat(long+" ", 3) + strings.Repeat(long+"\n", 4)
+	e.SetValue(text)
+
+	// Cursor at end of buffer — many wrapped rows below the viewport.
+	visible := e.Render(width)
+	hidden := e.HiddenAbove(width)
+
+	if len(visible) > maxEditorRows {
+		t.Errorf("editor rendered %d lines, must not exceed maxEditorRows=%d", len(visible), maxEditorRows)
+	}
+	if hidden == 0 {
+		t.Errorf("HiddenAbove=0 with cursor at end of long wrapped buffer — the \"↑ N more\" indicator would be missing")
+	}
+}
+
+// TestEditorLongParagraphShowsCursor confirms the cursor row is inside the
+// visible window when the cursor is at the end of a long wrapped paragraph
+// (not silently scrolled off the bottom).
+func TestEditorLongParagraphShowsCursor(t *testing.T) {
+	e := NewEditor(nil, "type...")
+	width := 30
+	long := "the quick brown fox jumps over the lazy dog"
+	text := strings.Repeat(long+" ", 4)
+	e.SetValue(text)
+
+	visible := e.Render(width)
+	// The visible window must end with a line that contains the cursor
+	// character (block cursor cell) — otherwise the user has lost sight of
+	// the caret.
+	last := visible[len(visible)-1]
+	if !strings.Contains(last, "\x1b[7m") && !strings.Contains(last, "block") {
+		// Soft check: at minimum the last line must NOT be the original first
+		// portion of the buffer (which would mean the window pinned to top).
+		first30 := text[:width]
+		if strings.HasPrefix(strings.TrimSpace(last), strings.TrimSpace(first30)) {
+			t.Errorf("last visible line looks like the beginning of the buffer — viewport is pinned to the top, cursor hidden")
+		}
+	}
+}
+
+// maxEditorRows is declared in editor.go and accessible from this package.

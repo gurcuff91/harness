@@ -352,8 +352,28 @@ func (e *Editor) layout(width int) (visible []string, hiddenAbove int) {
 		lines = append(lines, wrapped...)
 	}
 
-	// Find the row containing the cursor (count newlines before it).
-	cursorRow := strings.Count(before, "\n")
+	// Find the row containing the cursor. We must count WRAPPED lines, not
+	// just newlines: when the user types a long paragraph (no embedded \n),
+	// the cursor can be many visual rows down due to word wrapping even
+	// though there is only one logical line. Counting only \n would say the
+	// cursor is at row 0, the viewport would pin to the top, and the cursor
+	// (and the "↑ N more" indicator) would silently disappear.
+	//
+	// Build the layout up to the cursor position and count those rows.
+	beforeWithCursor := before + cursorCell
+	beforeLogical := strings.Split(beforeWithCursor, "\n")
+	beforeRows := 0
+	for _, ll := range beforeLogical {
+		wrapped := ansi.WrapTextWithAnsi(ll, width)
+		beforeRows += len(wrapped)
+	}
+	// beforeRows counts wrapped rows of (before + cursorCell). The cursor
+	// itself sits at the first wrapped row of that prefix within the last
+	// logical line — so the cursor's visual row index is (beforeRows - 1).
+	if beforeRows == 0 {
+		beforeRows = 1
+	}
+	cursorRow := beforeRows - 1
 	return scrollToCursor(lines, cursorRow, maxEditorRows)
 }
 

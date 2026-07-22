@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.16] - 2026-07-22
+
+### TUI — editor scrolls and shows "↑ N more" for long wrapped paragraphs
+- Typing a long paragraph (no embedded newlines) used to pin the editor
+  viewport to the top of the buffer once word-wrapping pushed the cursor
+  past 5 rows. The "↑ N more" separator hint stayed empty and the cursor
+  silently disappeared below the visible window.
+- `editor.layout` now counts WRAPPED rows up to the cursor position (not
+  just `\n` count), so `HiddenAbove` reports the true number of rows scrolled
+  off the top and the cursor stays in view. Existing `\n`-separated behaviour
+  is unchanged.
+
 ## [0.73.15] - 2026-07-22
 
 ### TUI — new thinking after tool calls no longer overwrites old blocks
