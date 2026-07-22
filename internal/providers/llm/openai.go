@@ -232,6 +232,39 @@ func translateThinkingLevel(model, level string) string {
 	return ""
 }
 
+// stripThinkingTags removes inline reasoning delimiters that some OpenAI-
+// compatible providers leak into their reasoning_content or content streams
+// (Qwen, DeepSeek, MiniMax, …) — even with reasoning_split enabled. The
+// closing tag most often slips into either the last reasoning_content delta
+// or the first content delta at the thinking→answer transition. The opening
+// tag is rarer but stripped too for symmetry.
+//
+// Returns the cleaned string and whether anything was actually stripped.
+// When stripped=true and cleaned=="", the entire chunk was a tag and the
+// caller should drop the emit (otherwise we'd emit an empty delta).
+//
+// This is intentionally provider-agnostic: it lives at the parser funnel so
+// every consumer (streaming TUI render AND the persisted history message
+// built via NewAssistantToolCallMessage at the bottom of parseOpenAIStream)
+// sees the same clean text. Anthropic never emits these tags in the first
+// place (wire-typed blocks) so its parser is unaffected.
+func stripThinkingTags(s string) (cleaned string, stripped bool) {
+	if !strings.ContainsAny(s, "<") {
+		return s, false
+	}
+	cleaned = s
+	for _, tag := range []string{"</thinking>", "<think>", "<thinking>", "</think>", "<!-- /thinking -->", "<!-- thinking -->"} {
+		if strings.Contains(cleaned, tag) {
+			cleaned = strings.ReplaceAll(cleaned, tag, "")
+			stripped = true
+		}
+	}
+	if stripped {
+		cleaned = strings.TrimSpace(cleaned)
+	}
+	return cleaned, stripped
+}
+
 func parseOpenAIStream(body io.Reader, cb types.StreamCallback) (*types.Response, error) {
 	emit := func(e types.StreamEvent) {
 		if cb != nil {
@@ -268,15 +301,28 @@ func parseOpenAIStream(body io.Reader, cb types.StreamCallback) (*types.Response
 		delta, _ := choice["delta"].(map[string]any)
 
 		if r, ok := delta["reasoning_content"].(string); ok && r != "" {
-			reasoningBuf += r
-			emit(types.StreamEvent{Type: types.StreamThinkingDelta, Delta: r})
+			if r, _ = stripThinkingTags(r); r != "" {
+				reasoningBuf += r
+				emit(types.StreamEvent{Type: types.StreamThinkingDelta, Delta: r})
+			}
 		} else if r, ok := delta["reasoning"].(string); ok && r != "" {
-			reasoningBuf += r
-			emit(types.StreamEvent{Type: types.StreamThinkingDelta, Delta: r})
+			if r, _ = stripThinkingTags(r); r != "" {
+				reasoningBuf += r
+				emit(types.StreamEvent{Type: types.StreamThinkingDelta, Delta: r})
+			}
 		}
 		if text, ok := delta["content"].(string); ok && text != "" {
-			textBuf += text
-			emit(types.StreamEvent{Type: types.StreamTextDelta, Delta: text})
+			c, stripped := stripThinkingTags(text)
+			// Defense in depth: some providers emit the closing tag in the
+			// FIRST content delta right at the thinking→answer transition.
+			// If the entire chunk was a tag, drop it (no empty emit).
+			if !stripped || c != "" {
+				if stripped {
+					text = c
+				}
+				textBuf += text
+				emit(types.StreamEvent{Type: types.StreamTextDelta, Delta: text})
+			}
 		}
 		if tcs, ok := delta["tool_calls"].([]any); ok {
 			for _, tc := range tcs {

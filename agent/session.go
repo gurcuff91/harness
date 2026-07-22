@@ -437,11 +437,15 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 
 	// Max turns reached while still executing tools.
 	// Ask the LLM to summarize progress and let the user decide what to do next.
+	// EventMaxTurnsReached fires BEFORE the summary request so the TUI's
+	// "⚠ reached the N-turn limit — summarizing progress" arrives as a
+	// forewarning, not an afterword. The error, if any, is propagated up
+	// so drainFollowUps emits an EventError (we don't double-emit here).
 	s.emit(types.Event{Type: types.EventLoopEnd})
-	summary, _ := s.requestProgressUpdate(ctx)
 	s.emit(types.Event{Type: types.EventMaxTurnsReached, MaxTurns: s.maxTurns})
+	summary, err := s.requestProgressUpdate(ctx)
 	s.emit(types.Event{Type: types.EventTurnEnd})
-	return summary, nil
+	return summary, err
 }
 
 // Subscribe registers an event handler for this session.

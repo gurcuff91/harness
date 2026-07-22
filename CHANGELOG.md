@@ -2,6 +2,57 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.1] - 2026-07-22
+
+### Agent — `max_turns_reached` fires before the progress-update summary
+- `Session.promptSync` now emits `EventMaxTurnsReached` BEFORE calling
+  `requestProgressUpdate`, not after. The TUI's
+  `"⚠ reached the 25-turn limit — summarizing progress"` now arrives as a
+  forewarning; the model's streamed summary lands below it in the correct
+  reading order. The wording (`summarizing progress`, present participle)
+  was always written for that order — only the implementation put it
+  backwards
+- **Bonus fix**: `requestProgressUpdate`'s error is no longer discarded.
+  Previously `summary, _ := s.requestProgressUpdate(ctx)` swallowed
+  failures silently, so a network/timeout/cancel during the final LLM call
+  left the user staring at the "summarizing progress" warning with no
+  summary and no error. Now the error propagates up through `promptSync`
+  to `drainFollowUps`, which emits `EventError` (with `ProviderAPIError`
+  details lifted, per v0.70.0) unless `ctx.Err() != nil` — i.e. user
+  cancellation is still treated cleanly
+- Telegram transport is unaffected: its drain ignores `max_turns_reached`
+  for the chat reply (`case "max_turns_reached": flush + stopTyping`) and
+  the streamed summary itself was already the user's visible output
+
+## [0.73.0] - 2026-07-22
+
+### Providers — strip leaked reasoning tags from OpenAI-compatible streams
+- Some OpenAI-compatible providers (MiniMax in particular, even with
+  `reasoning_split:true`) leak inline reasoning delimiters into the stream:
+  the closing tag most often slips into the last `reasoning_content` delta,
+  or the first `content` delta, at the thinking→answer transition. Result:
+  literal `</thinking>` (and similar) bled into the TUI thinking block, the
+  persisted session history, and resumption renders
+- New `stripThinkingTags(s) (cleaned, stripped)` helper in
+  `internal/providers/llm/openai.go` removes six delimiter variants — both
+  full forms (`<thinking>...</thinking>`) and abbreviated forms
+  (`<think>...</think>`), plus the HTML-comment style (`<!-- thinking -->`,
+  `<!-- /thinking -->`). Applied to all three delta paths the parser
+  handles (`reasoning_content`, `reasoning`, `content`), so streaming TUI
+  render AND the persisted `NewAssistantToolCallMessage` both see the same
+  clean text. Short-circuits with `strings.ContainsAny(s, "<")` so there's
+  zero allocation when no tags are present
+- When an entire delta is just a tag, the emit is dropped (no empty
+  `StreamThinkingDelta`/`StreamTextDelta` reaches the SSE/TUI pipeline)
+- Defense in depth: Anthropic is unaffected (wire-typed `thinking_delta`
+  blocks never emit literal tags), and the strip also covers Qwen /
+  DeepSeek / Ollama Cloud / OpenCode Go / OpenAI proper since they all
+  funnel through the same `parseOpenAIStream`
+- Seven regression tests in `internal/providers/llm/openai_test.go` lock
+  every variant (closing tag in last reasoning delta, closing tag as first
+  content delta, opening + closing together, HTML-comment style,
+  abbreviated form, no-tags no-op, mixed-with-other-text strip)
+
 ## [0.72.0] - 2026-06-23
 
 ### Telegram — HTTP errors now render structured details too
