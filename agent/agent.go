@@ -74,8 +74,8 @@ type AgentOptions struct {
 	EnableMCPs      bool         // spawn & connect configured MCP servers (root agent only)
 
 	// ── Infrastructure (optional) ────────────────────────────────────────
-	Store          store.SessionStore // default: in-memory
-	ResourceLoader resources.ResourceLoader  // default: FileResourceLoader(cwd) per session
+	Store          store.SessionStore       // default: in-memory
+	ResourceLoader resources.ResourceLoader // default: FileResourceLoader(cwd) per session
 	//                                         // pass NilLoader{} to disable discovery
 
 	// EnableMemory turns on project-scoped persistent memory: the agent opens the

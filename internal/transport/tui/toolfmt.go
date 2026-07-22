@@ -12,16 +12,16 @@ import (
 // "key=" label) right after the tool name — e.g. Read shows the path directly.
 // Tools not listed (including all MCP tools) render every param as key=value.
 var primaryParam = map[string]string{
-	"Bash":       "command",
-	"Read":       "path",
-	"Write":      "path",
-	"Edit":       "path",
-	"Fetch":      "url",
-	"Skill":      "name",
-	"Subagent":   "prompt",
-	"MemoWrite":  "slug",
-	"MemoSearch": "query",
-	"MemoDelete": "slug",
+	"Bash":           "command",
+	"Read":           "path",
+	"Write":          "path",
+	"Edit":           "path",
+	"Fetch":          "url",
+	"Skill":          "name",
+	"Subagent":       "prompt",
+	"MemoWrite":      "slug",
+	"MemoSearch":     "query",
+	"MemoDelete":     "slug",
 	"Schedule":       "slug",
 	"ScheduleDelete": "slug",
 }

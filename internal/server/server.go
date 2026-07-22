@@ -15,13 +15,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/internal/logx"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/internal/config"
-	"github.com/gurcuff91/harness/mcp"
+	"github.com/gurcuff91/harness/internal/logx"
 	"github.com/gurcuff91/harness/internal/providers"
-	"github.com/gurcuff91/harness/types"
 	"github.com/gurcuff91/harness/internal/version"
+	"github.com/gurcuff91/harness/mcp"
+	"github.com/gurcuff91/harness/types"
 )
 
 // Server is the HTTP transport for the agent harness.
@@ -165,7 +165,7 @@ func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 		ThinkingLevel *string `json:"thinking_level"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body: " + err.Error(), nil)
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
 		return
 	}
 	sm := config.GetSettingsManager()
@@ -206,7 +206,7 @@ func (s *Server) handlePutProviderConfig(w http.ResponseWriter, r *http.Request)
 	name := chi.URLParam(r, "name")
 	var cfg config.ProviderConfig
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body: " + err.Error(), nil)
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
 		return
 	}
 	if err := config.GetSettingsManager().SetProvider(name, cfg); err != nil {
@@ -221,7 +221,7 @@ func (s *Server) handleDeleteProviderConfig(w http.ResponseWriter, r *http.Reque
 	name := chi.URLParam(r, "name")
 	sm := config.GetSettingsManager()
 	if _, ok := sm.Provider(name); !ok {
-		writeError(w, http.StatusNotFound, "provider config not found: " + name, nil)
+		writeError(w, http.StatusNotFound, "provider config not found: "+name, nil)
 		return
 	}
 	if err := sm.DeleteProvider(name); err != nil {
@@ -244,7 +244,7 @@ func (s *Server) handlePutMCPServer(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	var srv config.MCPServer
 	if err := json.NewDecoder(r.Body).Decode(&srv); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body: " + err.Error(), nil)
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
 		return
 	}
 	if err := config.GetSettingsManager().SetMCPServer(name, srv); err != nil {
@@ -344,7 +344,7 @@ func (s *Server) handleDeleteMCPServer(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	sm := config.GetSettingsManager()
 	if _, ok := sm.MCPServer(name); !ok {
-		writeError(w, http.StatusNotFound, "mcp server not found: " + name, nil)
+		writeError(w, http.StatusNotFound, "mcp server not found: "+name, nil)
 		return
 	}
 	if err := sm.DeleteMCPServer(name); err != nil {
@@ -430,13 +430,13 @@ func (s *Server) handleConnectProvider(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if target == nil {
-		writeError(w, http.StatusNotFound, "provider not found: " + name, nil)
+		writeError(w, http.StatusNotFound, "provider not found: "+name, nil)
 		return
 	}
 
 	var req connectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body: " + err.Error(), nil)
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
 		return
 	}
 
@@ -468,7 +468,7 @@ func (s *Server) handleDisconnectProvider(w http.ResponseWriter, r *http.Request
 		}
 	}
 	if target == nil {
-		writeError(w, http.StatusNotFound, "provider not found: " + name, nil)
+		writeError(w, http.StatusNotFound, "provider not found: "+name, nil)
 		return
 	}
 
@@ -509,7 +509,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var req createSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body: " + err.Error(), nil)
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
 		return
 	}
 	if req.Model == "" {
@@ -701,7 +701,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 
 	var req promptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body: " + err.Error(), nil)
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
 		return
 	}
 	if req.Text == "" && len(req.Images) == 0 {
@@ -884,7 +884,7 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 
 	var req execCommandRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body: " + err.Error(), nil)
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
 		return
 	}
 
@@ -955,7 +955,7 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 			skillName := strings.TrimPrefix(req.Command, "skill:")
 			content, dir, err := proxy.session.ReadSkill(skillName)
 			if err != nil {
-				writeError(w, http.StatusNotFound, "skill not found: " + skillName, nil)
+				writeError(w, http.StatusNotFound, "skill not found: "+skillName, nil)
 				return
 			}
 			// Build prompt: skill location note + content + optional user prompt. The
@@ -972,7 +972,7 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 			writeStatus(w, http.StatusAccepted, status, "")
 			return
 		}
-		writeError(w, http.StatusBadRequest, "unknown command: " + req.Command, nil)
+		writeError(w, http.StatusBadRequest, "unknown command: "+req.Command, nil)
 	}
 }
 

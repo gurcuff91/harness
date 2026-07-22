@@ -26,7 +26,7 @@ func cmdServe(args []string) error {
 		return errUsage("serve <addr> [--scheduler]")
 	}
 
-	a := newInteractiveAgent(*scheduler)
+	a := newInteractiveAgent(*scheduler, 50)
 	defer a.Close()
 
 	listener, err := net.Listen("tcp", addr)

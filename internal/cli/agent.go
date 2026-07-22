@@ -18,12 +18,13 @@ func newAgent() *agent.Agent {
 
 // newInteractiveAgent is like newAgent but optionally runs the cron scheduler
 // engine — used by interactive transports (TUI) that provide a session for a
-// fired schedule to run in.
-func newInteractiveAgent(scheduler bool) *agent.Agent {
+// fired schedule to run in. maxTurns overrides the default 25 when > 0.
+func newInteractiveAgent(scheduler bool, maxTurns int) *agent.Agent {
 	return agent.New(agent.AgentOptions{
 		EnableMCPs:      true,
 		EnableMemory:    true,
 		EnableScheduler: scheduler,
+		MaxTurns:        maxTurns,
 	})
 }
 
@@ -35,6 +36,7 @@ func newTelegramAgent(scheduler bool) *agent.Agent {
 		EnableMCPs:      true,
 		EnableMemory:    true,
 		EnableScheduler: scheduler,
+		MaxTurns:        50,
 		Directives:      []string{telegram.Directive},
 	})
 }

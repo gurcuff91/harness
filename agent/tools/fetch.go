@@ -34,7 +34,7 @@ type fetchInput struct {
 	Form  map[string]string `json:"form,omitempty"`  // → x-www-form-urlencoded, or multipart when files present
 	Files []fetchFile       `json:"files,omitempty"` // → multipart/form-data (may include form fields)
 	// Behavior.
-	Timeout         int  `json:"timeout,omitempty"`          // request timeout in seconds (default 30)
+	Timeout         int   `json:"timeout,omitempty"`          // request timeout in seconds (default 30)
 	FollowRedirects *bool `json:"follow_redirects,omitempty"` // default true; false returns the 3xx as-is
 	// Response destination.
 	DownloadTo string `json:"download_to,omitempty"` // save the response bytes to this path (binary-safe)

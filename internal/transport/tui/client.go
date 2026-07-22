@@ -176,7 +176,6 @@ func (c *Client) SendPrompt(sessionID, text string) ([]byte, error) {
 	return c.do("POST", "/api/sessions/"+sessionID+"/prompt", map[string]string{"text": text})
 }
 
-
 func (c *Client) ListCommands(sessionID string) ([]CommandDef, error) {
 	data, err := c.do("GET", "/api/sessions/"+sessionID+"/commands", nil)
 	if err != nil {

@@ -72,11 +72,11 @@ type Event struct {
 	ToolID   string // unique tool call ID (from LLM) — correlates Start/ArgsDelta/Call/Result
 	ToolName string
 	ToolArgs string
-	Output   string // generic output (tool results, turn text)
+	Output   string         // generic output (tool results, turn text)
 	Message  string         // error messages (EventError)
 	Details  map[string]any // structured error details, if any (EventError)
 	Summary  string         // compaction summary (EventCompactEnd)
-	Origin   string // prompt source for EventReceivedPrompt/EventFollowUpStart ("user", "scheduled", …)
+	Origin   string         // prompt source for EventReceivedPrompt/EventFollowUpStart ("user", "scheduled", …)
 	Delta    string
 	Tokens   TokenUsage
 	Duration time.Duration

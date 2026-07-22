@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.2] - 2026-07-22
+
+### TUI — per-turn ReAct cap raised to 50
+- The TUI now creates its agent with `MaxTurns: 50` (via
+  `newInteractiveAgent(scheduler, 50)`), doubling the default 25 used by
+  the headless server, one-shot CLI commands, and Telegram. Interactive
+  coding tasks frequently span more tool iterations before a summary pause
+  is appropriate, so the interactive terminal UI gets a longer leash without
+  changing the SDK default or other transports
+- `newInteractiveAgent` now takes a `maxTurns int` parameter; `0` keeps
+  the default 25. The headless `serve` command still passes 0, leaving its
+  sessions capped at the standard 25 iterations per turn
+
 ## [0.73.1] - 2026-07-22
 
 ### Agent — `max_turns_reached` fires before the progress-update summary

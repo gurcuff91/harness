@@ -48,7 +48,6 @@ func TestEditMulti(t *testing.T) {
 	}
 }
 
-
 func TestEditNotFound(t *testing.T) {
 	p := writeTmp(t, "hello")
 	_, err := runEdit(t, p, editInput{Edits: []editEntry{{"xyz", "q"}}})

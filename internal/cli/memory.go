@@ -135,4 +135,3 @@ func relTime(ms int64) string {
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
 }
-

@@ -10,8 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"time"
 	"sync"
+	"time"
 
 	"github.com/robfig/cron/v3"
 )
@@ -93,7 +93,7 @@ func (s *Store) Set(slug, spec, prompt, owner string) error {
 		Cron:    spec,
 		Prompt:  prompt,
 		Owner:   owner,
-		Runs:    existing.Runs,    // preserve audit on edit
+		Runs:    existing.Runs, // preserve audit on edit
 		LastRun: existing.LastRun,
 	}
 	return s.save()
