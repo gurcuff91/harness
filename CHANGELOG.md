@@ -2,6 +2,98 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.10] - 2026-07-22
+
+### TUI — restore native text selection
+- Disabled mouse button-event tracking (`\x1b[?1002h`) that was breaking the
+  terminal's native click+drag text selection. With that mode active, the
+  terminal intercepted every mouse event and forwarded it as an ANSI sequence
+  to the TUI, so users could no longer click+drag to copy the agent's output.
+- Mouse-wheel scroll is no longer supported; scroll is still available via
+  keyboard (PageUp/PageDown/Home/End). Keyboard scrolling preserves native
+  text selection and is the standard for inline TUIs that share the terminal
+  with the shell.
+
+## [0.73.9] - 2026-07-22
+
+### TUI — fix interleaved thinking/tool rendering and scroll-to-bottom redraw
+- Fixed a bug where resuming thinking after an intervening text or tool-call
+  block duplicated earlier reasoning content, making it look like the new
+  thinking overwrote prior tool-call output. The thinking buffer is now reset
+  when the previous thinking block is frozen, so each resumed reasoning
+  fragment starts a fresh block containing only its new deltas.
+- Fixed a bug where returning from manual scroll (scrollOffset > 0) back to
+  "stick to bottom" corrupted the input/session/footer area. The renderer now
+  detects the transition and issues a full relative redraw, re-anchoring the
+  viewport to the end of the content instead of reusing the scrolled viewport
+  top.
+
+## [0.73.8] - 2026-07-22
+
+### TUI — show structured error details
+- The TUI now renders the structured `details` payload from `EventError`, not
+  just the human-readable `message`. When a provider returns a structured error
+  (e.g. OpenAI rate-limit JSON), the JSON is pretty-printed and shown inline in
+  a dimmed block below the error message, limited to 20 lines with an ellipsis
+  if longer. This matches the behavior already present in the Telegram transport
+  and removes the need to guess what the provider actually responded.
+
+## [0.73.7] - 2026-07-22
+
+### TUI — fix interleaved thinking style + empty summary reporting
+- Replaced the `thinkingClosed` flag with `thinkingFrozen`: the current
+  reasoning block is frozen in place when text/tool content starts (preventing
+  the previous collapse flicker), but a later `thinking` delta now creates a
+  fresh Dim+Italic block instead of being silently dropped. This fixes the
+  bug where some reasoning blocks lost their style or appeared as plain text
+  in models that emit interleaved thinking/content deltas
+- `requestProgressUpdate` now returns an explicit error when the model emits an
+  empty summary at the max-turns cap. Previously the warning
+  "⚠ reached the N-turn limit — summarizing progress" was followed by silence;
+  now `drainFollowUps` emits `EventError` so the user sees
+  `✘ model returned an empty summary; conversation capped at N turns` instead
+  of a seemingly hung turn
+
+## [0.73.6] - 2026-07-22
+
+### TUI — manual scrollback with mouse and keyboard
+- The TUI now supports reading earlier conversation output without losing your
+  place while the model is streaming. Mouse wheel scroll and PageUp/PageDown
+  keys shift the viewport up; PageDown, End, or sending a new prompt snaps back
+  to the bottom
+- Mouse tracking is enabled via the SGR extended protocol (button-event mode),
+  so scroll-wheel events are reported without flooding on every mouse
+  movement. `stdin_buffer.go` already parsed these events; the TUI now maps
+  scroll-up/down to `scrollBy`
+- New `render.TUI.scrollOffset` state: `0` means stick to the bottom (previous
+  behavior); `>0` shows that many content lines above the bottom. When
+  `scrollOffset > 0`, `doRender` uses a new `renderFromTop` path that repaints
+  the visible window from the desired content row instead of forcing the view
+  back to the end with CRLF scroll-up
+- Reset triggers: `turn_start` (new model work), sending a prompt, or explicit
+  `End`/scroll-to-bottom. This prevents the "I scrolled up to read something
+  and the next token pulled me back down" problem
+- `keys` package gains `PgUp`/`PgDown`/`Home`/`End` constants for the keyboard
+  fallback
+
+## [0.73.5] - 2026-07-22
+
+### TUI — freeze thinking block to prevent thinking→text flicker
+- During fast streaming, some OpenAI-compatible providers emit the entire
+  reasoning block very quickly and then switch to `content` deltas. The TUI
+  previously set `thinkBlk = nil` on the first text delta, which collapsed the
+  thinking `RawBlock` and caused the renderer to repaint the region — a
+  visible micro-flicker where the text block above briefly jumped into the
+  space the thinking block had just vacated
+- Added `thinkingClosed` flag to the SSE event loop: once `text` or
+  `tool_start` arrives, subsequent `thinking` deltas are ignored and the
+  existing thinking block is left frozen in the scrollback. The new content
+  then streams below it, eliminating the collapse/repaint jump. `turn_start`
+  and `turn_end` reset the flag for the next turn
+- `thinking_end` now only sets `thinkingClosed = true` instead of clearing
+  the block pointer, so an empty thinking section that ends without text
+  still stays visible (consistent behavior)
+
 ## [0.73.4] - 2026-07-22
 
 ### Patch release — TUI max-turns experience + OpenAI-compatible provider cleanup

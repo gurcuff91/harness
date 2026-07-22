@@ -31,6 +31,12 @@ const (
 	BracketedPasteOff = "\x1b[?2004l"
 	PasteStart        = "\x1b[200~"
 	PasteEnd          = "\x1b[201~"
+
+	// Mouse button-event tracking (SGR extended protocol) is intentionally
+	// NOT enabled: the mode captures every mouse click+drag as an ANSI sequence,
+	// which prevents the terminal from performing its native text selection —
+	// users would no longer be able to click+drag to copy the agent's output.
+	// Scroll via PageUp/PageDown/Home/End is always available.
 )
 
 // MoveUp returns the sequence to move the cursor up n rows (n>0).

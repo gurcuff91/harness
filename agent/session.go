@@ -824,6 +824,14 @@ func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 		return "", err
 	}
 
+	// Guard against providers that return an empty response when asked for a
+	// progress summary (e.g. some OpenAI-compatible endpoints ignore Tools:nil
+	// or fail to emit content deltas). Returning an error lets drainFollowUps
+	// emit EventError so the user sees something instead of a silent stop.
+	if resp.Text == "" {
+		return "", fmt.Errorf("model returned an empty summary; conversation capped at %d turns", s.maxTurns)
+	}
+
 	return resp.Text, nil
 }
 

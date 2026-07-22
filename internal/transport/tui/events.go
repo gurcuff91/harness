@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -24,6 +25,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 	argBufs := make(map[string]string)
 	var thinkBlk *components.RawBlock // live thinking block
 	var thinkBuf string
+	var thinkingFrozen bool               // current block is frozen; a new thinking delta starts a fresh block
 
 	for {
 		select {
@@ -43,11 +45,24 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				t.mu.Lock()
 				t.liveMD = nil
 				t.mu.Unlock()
-				thinkBlk, thinkBuf = nil, ""
+				thinkBlk, thinkBuf, thinkingFrozen = nil, "", false
+				t.scrollToBottom() // new agent work: snap back to the latest output
 				t.setSpinning(true)
 
 			case "thinking":
 				delta, _ := evt["delta"].(string)
+				if delta == "" {
+					break
+				}
+				// When the previous thinking block was frozen by intervening
+				// text/tool content, a new thinking delta belongs to a FRESH
+				// reasoning fragment, not a continuation of the old one. Reset
+				// the buffer so the new block contains only the new content and
+				// never overwrites or duplicates earlier history.
+				if thinkingFrozen {
+					thinkBuf = ""
+					thinkingFrozen = false
+				}
 				thinkBuf += delta
 				if thinkBlk == nil {
 					thinkBlk = t.addSection("thinking", ansi.Dim+ansi.Ital+thinkBuf+ansi.Reset)
@@ -57,15 +72,16 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				}
 
 			case "thinking_end":
-				// The model finished its reasoning block. Close the thinking section
-				// explicitly (text/tool_start also close it, but this is deterministic
-				// and covers thinking that isn't followed by streamed text).
-				thinkBlk = nil
+				// Freeze the current thinking block so subsequent text/tools render
+				// below it. We do NOT clear the pointer, which prevents the flicker
+				// caused by the block disappearing; a later thinking delta will start
+				// a new block if the model emits interleaved thinking.
+				thinkingFrozen = true
 
 			case "text":
 				delta, _ := evt["delta"].(string)
 				t.lastTurnText.WriteString(delta)
-				thinkBlk = nil // thinking section is closed once real text starts
+				thinkingFrozen = true // freeze current thinking block; text flows below
 				t.mu.Lock()
 				if t.liveMD == nil {
 					t.beginSection("text")
@@ -81,7 +97,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				toolID, _ := evt["tool_id"].(string)
 				toolNames[toolID] = name
 				argBufs[toolID] = ""
-				thinkBlk = nil
+				thinkingFrozen = true // freeze current thinking block; tool renders below
 				// Two blocks per tool: the header (icon + name + args) and the
 				// result line. beginSection closes the live markdown block so any
 				// post-tool response starts a NEW block below — chronological order.
@@ -188,7 +204,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				t.mu.Lock()
 				t.liveMD = nil
 				t.mu.Unlock()
-				thinkBlk, thinkBuf = nil, ""
+				thinkBlk, thinkBuf, thinkingFrozen = nil, "", false
 				// A follow_up_start (if queued work remains) re-arms the spinner and
 				// echoes the next prompt. If nothing is queued, stop the spinner.
 				if t.queueCount == 0 {
@@ -229,6 +245,18 @@ func (t *TUI) streamEvents(ctx context.Context) {
 			case "error":
 				msg, _ := evt["message"].(string)
 				t.addRaw(ansi.Err("✘ " + msg))
+				if details, ok := evt["details"].(map[string]any); ok && len(details) > 0 {
+					if pretty, err := json.MarshalIndent(details, "", "  "); err == nil {
+						const maxErrorDetailLines = 20
+						out := string(pretty)
+						lines := strings.Split(out, "\n")
+						if len(lines) > maxErrorDetailLines {
+							lines = lines[:maxErrorDetailLines]
+							lines = append(lines, "…")
+						}
+						t.addRaw(ansi.Dimmed(strings.Join(lines, "\n")))
+					}
+				}
 				t.setSpinning(false)
 			}
 		}

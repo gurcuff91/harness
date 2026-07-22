@@ -25,6 +25,8 @@ const (
 	Right     Key = "right"
 	Home      Key = "home"
 	End       Key = "end"
+	PgUp      Key = "pageup"
+	PgDown    Key = "pagedown"
 	Space     Key = "space"
 
 	CtrlA Key = "ctrl+a"
@@ -73,6 +75,9 @@ var seqMap = map[string]Key{
 	"\x1b[3~": Delete,
 	"\x1b[7~": Home,
 	"\x1b[8~": End,
+
+	"\x1b[5~": PgUp,
+	"\x1b[6~": PgDown,
 
 	// Word navigation (xterm modifier-aware sequences).
 	"\x1b[1;5D": CtrlLeft,

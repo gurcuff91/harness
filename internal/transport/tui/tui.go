@@ -51,6 +51,13 @@ type TUI struct {
 	mcpConnected int // MCP servers currently connected
 	scheduleJobs int // schedules configured (shown only when schedulerOn)
 
+	// Viewport scrolling. 0 means stick to the bottom (default). >0 means that
+	// many content lines above the bottom are visible; updated by
+// PageUp/PageDown/Home/End. Reset when a new turn starts or the user submits.
+// (Mouse-wheel scrolling was removed because enabling mouse button-event
+// tracking breaks the terminal's native text selection.)
+	scrollOffset int
+
 	// Session state.
 	sessionID      string
 	sessionName    string

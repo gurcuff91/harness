@@ -27,6 +27,11 @@ type TUI struct {
 	hardwareCursorRow   int // actual terminal cursor row
 	maxLinesRendered    int
 	previousViewportTop int
+	previousScrollOffset int // tracks last render's scroll offset
+
+	// scrollOffset is the number of content lines the user has scrolled up
+	// from the bottom. 0 means stick to the bottom.
+	scrollOffset int
 
 	// Scheduling.
 	stopped         bool
@@ -55,8 +60,35 @@ func (t *TUI) SetFocus(component Component) {
 // Focused returns the currently focused component.
 func (t *TUI) Focused() Component { return t.focused }
 
+// SetScrollOffset sets how many lines above the bottom of the content are
+// visible. 0 sticks to the bottom. Negative values are treated as 0; values
+// larger than the content are clamped by doRender.
+func (t *TUI) SetScrollOffset(offset int) {
+	t.mu.Lock()
+	if offset < 0 {
+		offset = 0
+	}
+	if offset == t.scrollOffset {
+		t.mu.Unlock()
+		return
+	}
+	t.scrollOffset = offset
+	t.mu.Unlock()
+	t.RequestRender(false)
+}
+
+// ScrollOffset returns the current scroll offset.
+func (t *TUI) ScrollOffset() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.scrollOffset
+}
+
 // Width returns the current terminal width in columns.
 func (t *TUI) Width() int { return t.terminal.Columns() }
+
+// Rows returns the current terminal height in rows.
+func (t *TUI) Rows() int { return t.terminal.Rows() }
 
 // AddInputListener registers a pre-dispatch input hook. The listener returns
 // true to consume the input (stopping further dispatch). Returns an unsubscribe

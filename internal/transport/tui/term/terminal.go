@@ -87,6 +87,13 @@ func (t *ProcessTerminal) Start(onInput func(string), onResize func()) error {
 	// Enable bracketed paste — pastes wrap in ESC[200~ ... ESC[201~.
 	t.Write(ansi.BracketedPasteOn)
 
+	// NOTE: we intentionally do NOT enable mouse button-event tracking
+	// (\x1b[?1002h) here. That mode captures every mouse click and drag as an
+	// ANSI sequence, which prevents the terminal from doing its NATIVE text
+	// selection — the user would no longer be able to click+drag to copy the
+	// agent's output. Scroll-without-selecting is not worth that cost. Scroll
+	// is still available via keyboard (PageUp/PageDown/Home/End).
+
 	// stdin sequence buffer: reassembles split escape sequences and
 	// surfaces pastes as a single bracketed blob (matches PI's StdinBuffer).
 	t.buffer = newStdinBuffer(func(seq string) {

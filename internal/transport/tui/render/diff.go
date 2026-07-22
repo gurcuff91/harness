@@ -31,6 +31,31 @@ func (t *TUI) doRender() {
 	newLines := t.Render(width)
 	newLines = sanitizeLines(newLines, width)
 
+	contentHeight := len(newLines)
+	maxOffset := max(0, contentHeight-height)
+	effectiveOffset := clamp(t.scrollOffset, 0, maxOffset)
+	desiredViewportTop := max(0, contentHeight-height-effectiveOffset)
+
+	// Manual scroll: repaint the visible window from the desired top instead
+	// of the bottom-sticking incremental path (which would CRLF-scroll new
+	// lines into view and break the user's chosen viewport).
+	if t.scrollOffset > 0 {
+		t.previousScrollOffset = t.scrollOffset
+		t.renderFromTop(newLines, width, height, desiredViewportTop)
+		return
+	}
+
+	// Transitioning from a manual scroll back to "stick to bottom" requires a
+	// full redraw: the previous frame's viewport top was somewhere mid-buffer
+	// and the incremental path would try to append from there, corrupting the
+	// input/session/footer area. Use a clear that wipes the active screen but
+	// preserves the shell scrollback above our region.
+	if t.previousScrollOffset > 0 {
+		t.previousScrollOffset = 0
+		t.fullRender(newLines, width, height, clearRelativeFromTop)
+		return
+	}
+
 	widthChanged := t.previousWidth != 0 && t.previousWidth != width
 	heightChanged := t.previousHeight != 0 && t.previousHeight != height
 
@@ -204,9 +229,10 @@ func (t *TUI) doRender() {
 type clearMode int
 
 const (
-	clearNone     clearMode = iota // first render — assume a clean screen
-	clearRelative                  // move up + \x1b[J — scrollback-safe, geometry unchanged
-	clearAbsolute                  // \x1b[2J\x1b[H\x1b[3J — resize: full reset like PI
+	clearNone            clearMode = iota // first render — assume a clean screen
+	clearRelative                         // move up + \x1b[J — scrollback-safe, geometry unchanged
+	clearAbsolute                         // \x1b[2J\x1b[H\x1b[3J — resize: full reset like PI
+	clearRelativeFromTop                  // \x1b[2J\x1b[H — clear active screen only, re-anchor to (0,0); preserves scrollback
 )
 
 // fullRender writes all lines, clearing per the given mode.
@@ -236,6 +262,11 @@ func (t *TUI) fullRender(newLines []string, width, height int, mode clearMode) {
 		}
 	case clearAbsolute:
 		buf.WriteString(ansi.FullClear) // \x1b[2J\x1b[H\x1b[3J
+	case clearRelativeFromTop:
+		// Clear the active screen and home the cursor, but leave the shell
+		// scrollback intact. Used when returning from a manual scroll so we
+		// don't erase what the user was reading above.
+		buf.WriteString(ansi.ClearScreenHome) // \x1b[2J\x1b[H
 	}
 	for i, line := range newLines {
 		if i > 0 {
@@ -258,6 +289,50 @@ func (t *TUI) fullRender(newLines []string, width, height int, mode clearMode) {
 	t.previousLines = newLines
 	t.previousWidth = width
 	t.previousHeight = height
+	t.previousScrollOffset = t.scrollOffset
+}
+
+// renderFromTop repaints the visible window starting at topRow in the content.
+// Used when the user has scrolled up and the normal incremental path would
+// incorrectly pull the viewport back to the bottom. It moves the cursor to the
+// desired top, clears from there to the end of the screen, and writes the
+// visible slice of content. Scrollback is preserved.
+func (t *TUI) renderFromTop(newLines []string, width, height, topRow int) {
+	var buf strings.Builder
+	buf.WriteString(ansi.SyncBegin)
+
+	// Move the cursor from its current screen row to the screen row that
+	// corresponds to topRow.
+	currentScreenRow := t.hardwareCursorRow - t.previousViewportTop
+	targetScreenRow := topRow - t.previousViewportTop
+	lineDiff := targetScreenRow - currentScreenRow
+	if lineDiff > 0 {
+		buf.WriteString(ansi.MoveDown(lineDiff))
+	} else if lineDiff < 0 {
+		buf.WriteString(ansi.MoveUp(-lineDiff))
+	}
+	buf.WriteString(ansi.CR)
+	buf.WriteString(ansi.ClearFromCursor)
+
+	endRow := min(len(newLines), topRow+height)
+	for i := topRow; i < endRow; i++ {
+		if i > topRow {
+			buf.WriteString(ansi.CRLF)
+		}
+		buf.WriteString(newLines[i])
+	}
+
+	buf.WriteString(ansi.SyncEnd)
+	t.terminal.Write(buf.String())
+
+	t.cursorRow = max(0, len(newLines)-1)
+	t.hardwareCursorRow = endRow - 1
+	t.maxLinesRendered = max(t.maxLinesRendered, len(newLines))
+	t.previousViewportTop = topRow
+	t.previousLines = newLines
+	t.previousWidth = width
+	t.previousHeight = height
+	t.previousScrollOffset = t.scrollOffset
 }
 
 // renderDeletedTail handles the case where all changed lines are deletions:
