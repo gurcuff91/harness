@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+### TUI — test helpers moved to `export_test.go`
+- The two `*ForTest` helpers for `userViewportTop` were moved out of
+  `render/tui.go` (production code) into `render/export_test.go`, which is
+  compiled only during `go test` and never ships in the binary.
+
+### TUI — also clear scroll state on `harness --resume` boot
+- The previous fix reset the scroll pin for `/resume` (in-session switch),
+  but `harness --resume SESSION` took a different code path (`autoConnect`)
+  that did not call `resetForNewSession`. Although the render.TUI starts
+  fresh on boot, the explicit reset is now applied in both resume paths
+  so the new session always begins at the bottom with no leftover pin.
+
+## [0.73.17] - 2026-07-22
+
+### TUI — reset manual scroll state on session resume
+- A user who scrolled up in session A and then ran `/resume B` kept the
+  pinned viewport top from A. The new session's history was rendered with
+  `renderFromTop(topRow=N)` against rows that didn't exist in B — producing
+  an empty viewport, missing cursor, and a scroll position that silently
+  jumped to the wrong place.
+- `resumeInPlace` now calls `resetForNewSession`, which clears the scrollback,
+  the live markdown pointer, the last-section kind, the stats, and snaps the
+  scroll position to the bottom (clearing `scrollOffset` and the renderer's
+  pinned `userViewportTop`). The user can scroll up again in the new session.
+
 ## [0.73.16] - 2026-07-22
 
 ### TUI — editor scrolls and shows "↑ N more" for long wrapped paragraphs

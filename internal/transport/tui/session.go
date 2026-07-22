@@ -68,6 +68,14 @@ func (t *TUI) autoConnect(ctx context.Context) {
 
 	// Resume path.
 	if t.resumeID != "" {
+		// Defensive: even though the render.TUI is constructed fresh in
+		// buildUI() with userViewportTop=-1, explicitly clear any scroll
+		// state here. Mirrors resetForNewSession (used by `/resume`) so
+		// both `--resume SESSION` and `/resume SESSION` start the new
+		// session at the bottom with no leftover pin.
+		t.tui.SetScrollOffset(0)
+		t.scrollOffset = 0
+
 		t.addRaw(ansi.Dimmed("── resuming session ──"))
 		if d, err := t.client.ResumeSession(t.resumeID); err != nil {
 			t.showWarn(fmt.Sprintf("Failed to resume: %s", err.Error()))
@@ -142,12 +150,7 @@ func (t *TUI) resumeInPlace(sessID string) {
 	json.Unmarshal(d, &sess)
 
 	// Reset state + scrollback for the incoming session.
-	t.mu.Lock()
-	t.history.Clear()
-	t.liveMD = nil
-	t.lastKind = ""
-	t.stats = tokensInfo{}
-	t.mu.Unlock()
+	t.resetForNewSession()
 
 	t.sessionID, _ = sess["id"].(string)
 	t.sessionName, _ = sess["name"].(string)
@@ -174,6 +177,24 @@ func (t *TUI) startSSE(ctx context.Context) {
 	sseCtx, cancel := context.WithCancel(ctx)
 	t.sseCancel = cancel
 	go t.streamEvents(sseCtx)
+}
+
+// resetForNewSession wipes the scrollback and per-session state in preparation
+// for loading a different session (resume). It also clears any manual scroll
+// state from the previous session: the pinned viewport top (set when the user
+// scrolled up to read history) is tied to absolute content rows of the OLD
+// session's history — keeping it would make renderFromTop paint lines that
+// don't exist in the new session (empty viewport) and the user's scroll
+// position would silently jump to the wrong place. Snap to bottom; the user
+// can scroll up again if they want to read history.
+func (t *TUI) resetForNewSession() {
+	t.mu.Lock()
+	t.history.Clear()
+	t.liveMD = nil
+	t.lastKind = ""
+	t.stats = tokensInfo{}
+	t.mu.Unlock()
+	t.scrollToBottom()
 }
 
 // loadSessionCommands fetches the dynamic command list for the session.

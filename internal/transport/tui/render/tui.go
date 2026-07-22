@@ -248,3 +248,4 @@ func (t *TUI) handleInput(data string) {
 		}
 	}
 }
+
