@@ -929,6 +929,9 @@ const maxUnbrokenWordWidth = 30
 // to word-aware minimums. Port of PI's renderTable column math.
 func (m *MarkdownStream) computeColumnWidths(rr []renderedTableRow, numCols int) []int {
 	// Natural widths (longest cell) and minimum word widths per column.
+	// renderTableRow reserves 1 column of right-side padding per cell so
+	// over-wide emoji glyphs can't overwrite the `│` border. We account for
+	// that reservation in the border-overhead math below.
 	natural := make([]int, numCols)
 	minWord := make([]int, numCols)
 	for i := 0; i < numCols; i++ {
@@ -949,12 +952,26 @@ func (m *MarkdownStream) computeColumnWidths(rr []renderedTableRow, numCols int)
 		}
 	}
 
-	// Unconstrained (width 0, e.g. tests): use natural widths.
+	// Unconstrained (width 0, e.g. tests): use natural widths. Each column
+	// gets +1 for the right-side safety margin (see renderTableRow) so a cell
+	// that's exactly the natural width still leaves room for an over-wide
+	// emoji glyph and a trailing space before the right border.
 	if m.width <= 0 {
-		return natural
+		out := make([]int, numCols)
+		for i := range out {
+			out[i] = natural[i] + 1
+		}
+		return out
 	}
 
-	borderOverhead := 3*numCols + 1
+	// borderOverhead accounts for:
+//   - +3 per column for the per-cell border characters (left pipe + space +
+//     right pipe+space split between adjacent columns).
+//   - +numCols for the 1-column right-side safety margin per cell (the pad
+//     that keeps over-wide emoji glyphs from overwriting the `│` border —
+//     see renderTableRow).
+//   - +1 for the final right edge "│" that closes the table.
+	borderOverhead := 4*numCols + 1
 	availableForCells := m.width - borderOverhead
 	if availableForCells < numCols {
 		// Too narrow for a stable grid — clamp to 1 col each (caller still
@@ -1047,6 +1064,11 @@ func (m *MarkdownStream) renderTableRow(cells []string, colWidths []int) string 
 		if i < len(cells) {
 			cell = cells[i]
 		}
+		// Wrap at colWidths[i]. Any leftover space is filled with spaces below
+		// so the cell flushes to colWidths[i] — keeping every row aligned. The
+		// 1-column right-side safety margin (which keeps over-wide emoji
+		// glyphs from overwriting the `│` border) is baked into colWidths[i]
+		// by computeColumnWidths' borderOverhead accounting.
 		wrapped[i] = ansi.WrapTextWithAnsi(cell, colWidths[i])
 		if len(wrapped[i]) > maxLines {
 			maxLines = len(wrapped[i])
@@ -1063,6 +1085,11 @@ func (m *MarkdownStream) renderTableRow(cells []string, colWidths []int) string 
 			if li < len(wrapped[i]) {
 				text = wrapped[i][li]
 			}
+			// Pad to colWidths[i] so every cell flushes. colWidths[i] already
+			// reserves 1 column of right-side padding (the safety margin that
+			// stops over-wide emoji glyphs from clobbering the border), so
+			// short cells get enough trailing space to stay flush with long
+			// cells in the same column.
 			pad := colWidths[i] - ansi.VisibleWidth(text)
 			if pad < 0 {
 				pad = 0

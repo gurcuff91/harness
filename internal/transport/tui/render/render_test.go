@@ -1,6 +1,7 @@
 package render
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -279,6 +280,129 @@ func TestScrollReturnToBottomForcesRedraw(t *testing.T) {
 	if strings.Contains(out, "\x1b[3J") {
 		// \x1b[3J erases scrollback; we want to preserve it on this transition.
 		t.Errorf("return-to-bottom render should not erase scrollback: %q", out)
+	}
+}
+
+// TestStreamingNoFlickWhenContentGrowsPastWrap models the real-world TUI case
+// where a Markdown block is streaming AND a spinner is ticking at ~80ms. When
+// the streamed text crosses the wrap point, the history grows by one line and
+// everything below it (the spinner, the footer) shifts down. The renderer must
+// NOT full-repaint in that case — only an incremental scroll-and-paint is
+// needed. A full repaint causes the visible flick the user reported.
+//
+// Reproduces the regression where the "change before last line" guard fired on
+// the shifted spinner lines and triggered a fullRender(clearRelative).
+func TestStreamingNoFlickWhenContentGrowsPastWrap(t *testing.T) {
+	tui, term := newTestTUI(80, 20)
+
+	// A growing component (the live Markdown block) + a static block after it
+	// (the spinner that takes 3 lines: blank + frame + blank). Mimics the real
+	// tree where spinner sits directly under the history.
+	grow := &growingComponent{}
+	// Pre-fill with enough text that the next chunks push past the wrap.
+	grow.text = strings.Repeat("x", 70) // 70 chars at width 80 -> 1 line
+	spinner := &staticComponent{lines: []string{"", "⠋ Thinking", ""}}
+	tui.AddChild(grow)
+	tui.AddChild(spinner)
+
+	// Prime render so previousLines is established.
+	tui.doRender()
+	base := len(term.writes)
+
+	preLines := len(grow.Render(80))
+	// Stream chunks. Each chunk must force a wrap boundary eventually.
+	for tick := 0; tick < 30; tick++ {
+		if tick%2 == 0 {
+			// Add ~20 chars each time -> crosses the 80-col boundary on the first tick.
+			grow.text += fmt.Sprintf(" chunk%02d_padding_padding", tick)
+		}
+		tui.doRender()
+	}
+
+	postLines := len(grow.Render(80))
+	if postLines <= preLines {
+		t.Skipf("content did not cross the wrap point (pre=%d post=%d)", preLines, postLines)
+	}
+
+	relClears, fullClears := 0, 0
+	for _, w := range term.writes[base:] {
+		if strings.Contains(w, "\x1b[J") {
+			relClears++
+		}
+		if strings.Contains(w, "\x1b[2J") {
+			fullClears++
+		}
+	}
+	if relClears > 0 || fullClears > 0 {
+		t.Errorf("FLICK: streaming+growing content triggered %d relative and %d full clears (should be 0)", relClears, fullClears)
+	}
+}
+
+// TestScrollPinnedWhileContentGrows verifies that when the user has scrolled
+// up to read history, the viewport stays pinned at the line they were
+// reading even as the agent streams new content below. Previously, the
+// renderer recomputed the viewport top as contentHeight-height-scrollOffset
+// on every render, which slid the user's view down as new content arrived —
+// effectively kicking them back to the bottom while they were reading.
+func TestScrollPinnedWhileContentGrows(t *testing.T) {
+	tui, _ := newTestTUI(20, 5)
+	// 10 content lines, terminal is 5 rows tall.
+	grow := &growingComponent{text: "L0\nL1\nL2\nL3\nL4\nL5\nL6\nL7\nL8\nL9"}
+	tui.AddChild(grow)
+
+	tui.doRender()
+	if tui.previousViewportTop != 5 {
+		t.Fatalf("first render viewport top got %d want 5", tui.previousViewportTop)
+	}
+
+	// User scrolls up 2 lines. Viewport should now be at row 3.
+	tui.SetScrollOffset(2)
+	tui.doRender()
+	if tui.previousViewportTop != 3 {
+		t.Fatalf("scrolled viewport top got %d want 3", tui.previousViewportTop)
+	}
+	pinned := tui.previousViewportTop
+
+	// Agent streams new content (append 3 lines). The viewport must NOT move.
+	grow.text += "\nL10\nL11\nL12"
+	tui.doRender()
+	if tui.previousViewportTop != pinned {
+		t.Errorf("viewport moved during streaming: top=%d want %d (user was scrolled, content should slide in below)", tui.previousViewportTop, pinned)
+	}
+
+	// Stream more. Still pinned.
+	grow.text += "\nL13\nL14"
+	tui.doRender()
+	if tui.previousViewportTop != pinned {
+		t.Errorf("viewport moved during streaming: top=%d want %d", tui.previousViewportTop, pinned)
+	}
+
+	// Return to bottom: clears the pin, snaps to the new end.
+	tui.SetScrollOffset(0)
+	tui.doRender()
+	want := len(grow.Render(20)) - 5 // stick to bottom
+	if tui.previousViewportTop != want {
+		t.Errorf("after scrollToBottom: top=%d want %d", tui.previousViewportTop, want)
+	}
+}
+
+// TestScrollUpReturnsToSameLine verifies that scrolling up to read history
+// keeps the same absolute content row visible across multiple renders (as
+// long as no new content is added).
+func TestScrollUpReturnsToSameLine(t *testing.T) {
+	tui, _ := newTestTUI(20, 5)
+	grow := &growingComponent{text: "L0\nL1\nL2\nL3\nL4\nL5\nL6\nL7\nL8\nL9"}
+	tui.AddChild(grow)
+	tui.doRender()
+	tui.SetScrollOffset(2)
+	tui.doRender()
+	top := tui.previousViewportTop
+	// Several idle renders (e.g. spinner ticks with no new content) — must stay.
+	for i := 0; i < 5; i++ {
+		tui.doRender()
+	}
+	if tui.previousViewportTop != top {
+		t.Errorf("viewport drifted on idle renders: top=%d want %d", tui.previousViewportTop, top)
 	}
 }
 

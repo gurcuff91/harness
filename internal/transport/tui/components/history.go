@@ -93,6 +93,14 @@ func NewHistory() *History { return &History{} }
 // Add appends a block.
 func (h *History) Add(b Block) { h.blocks = append(h.blocks, b) }
 
+// Blocks returns a snapshot of the current block list. The slice is a copy;
+// callers can iterate without locking concerns.
+func (h *History) Blocks() []Block {
+	out := make([]Block, len(h.blocks))
+	copy(out, h.blocks)
+	return out
+}
+
 // Len returns the number of blocks.
 func (h *History) Len() int { return len(h.blocks) }
 

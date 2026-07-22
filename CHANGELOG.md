@@ -2,6 +2,66 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.15] - 2026-07-22
+
+### TUI — new thinking after tool calls no longer overwrites old blocks
+- When a streaming `thinking` delta arrived after one or more tool calls,
+  the renderer kept editing the FIRST thinking block in place. The new
+  reasoning visually appeared above the tool calls (where the old block
+  sat), not after them where it chronologically belonged.
+- The frozen-state reset in `consumeEvents` now also drops the `thinkBlk`
+  pointer. A new thinking fragment after a tool call creates its own block
+  at the end of the history via `addSection("thinking")`.
+
+## [0.73.14] - 2026-07-22
+
+### TUI — pin the user's scroll position while the agent streams
+- Scrolling up to read history used to drag the user's view back toward the
+  bottom every time the agent emitted new content. The renderer recomputed
+  the viewport top as `contentHeight - height - scrollOffset` on every render,
+  so growing content pushed the read line down.
+- The renderer now pins the viewport top at the line the user was reading
+  (`userViewportTop`) when `scrollOffset > 0`. New streamed content fills in
+  below the pin; pressing End (`scrollToBottom`) clears the pin and snaps to
+  the new end. Multiple idle spinner ticks no longer drift the viewport either.
+
+## [0.73.13] - 2026-07-22
+
+### TUI — fix flick when streaming content crosses the wrap point
+- During agent streaming (spinner active), each spinner tick fires a re-render
+  at ~80ms. When the streamed text crossed the wrap point, the renderer saw
+  the spinner lines as having "changed" (their position shifted down by 1) and
+  took the full-repaint branch — producing a visible flick every wrap crossing.
+- The renderer now distinguishes a real content change before the last line
+  (e.g. a buffered markdown table flushing) from a pure positional shift
+  (the lines below a new wrap just moved down by one slot). When `isPureShift`
+  reports true, the incremental Strategy 3 path handles the rewrite without
+  clearing the screen.
+
+## [0.73.12] - 2026-07-22
+
+### TUI — reserve right-side padding in markdown tables
+- Each table column now reserves 1 column of right-side padding between the
+  cell text and the `│` border. Some terminals render emoji ZWJ / VS-16
+  sequences (e.g. 👨‍💻, 🏳️‍🌈, 🇺🇸) wider than uniseg reports — without this
+  slack, the wider glyph would overwrite the border and break the column
+  alignment. The reservation is baked into the column-width calculation, the
+  wrap budget, the border dash count, and the trailing pad of each cell so
+  every row stays flush.
+
+## [0.73.11] - 2026-07-22
+
+### TUI — consistent single-line tool results (success and error)
+- Tool results are now formatted with a single rule that applies to both
+  success and error: single-line output is shown verbatim, multi-line output
+  is summarized as `(N lines)`. Previously, a successful multi-line tool
+  result was summarized as `(N lines)` but a failed one was collapsed with
+  `collapseWhitespace` into a single line containing the ENTIRE output,
+  flooding the scrollback with build traces, test reports, fetched HTML, and
+  stack traces wrapped to the terminal width.
+- The full output still flows unchanged to the LLM and to persisted session
+  history; only the visual summary in the TUI changed.
+
 ## [0.73.10] - 2026-07-22
 
 ### TUI — restore native text selection

@@ -29,6 +29,16 @@ type TUI struct {
 	previousViewportTop int
 	previousScrollOffset int // tracks last render's scroll offset
 
+	// userViewportTop freezes the viewport top at the line the user is
+	// reading while scrollOffset > 0. Without this, the renderer would
+	// recompute the viewport top relative to the end of the buffer on every
+	// stream tick (contentHeight grows as the agent streams) and the user's
+	// reading position would slide down with the new content — a surprising
+	// jump-to-the-bottom behavior. We pin the viewport to userViewportTop
+	// instead so the user can keep reading while the agent streams below.
+	// Cleared (set to -1) when scrollOffset returns to 0.
+	userViewportTop int
+
 	// scrollOffset is the number of content lines the user has scrolled up
 	// from the bottom. 0 means stick to the bottom.
 	scrollOffset int
@@ -49,7 +59,7 @@ type TUI struct {
 
 // New creates a TUI bound to the given terminal.
 func New(t term.Terminal) *TUI {
-	return &TUI{terminal: t}
+	return &TUI{terminal: t, userViewportTop: -1}
 }
 
 // SetFocus directs keyboard input to component (nil clears focus).
@@ -71,6 +81,12 @@ func (t *TUI) SetScrollOffset(offset int) {
 	if offset == t.scrollOffset {
 		t.mu.Unlock()
 		return
+	}
+	// Returning to bottom: clear any pinned viewport so future renders snap
+	// to the end and a fresh scroll-up can re-pick a (possibly different)
+	// natural viewport top.
+	if offset == 0 {
+		t.userViewportTop = -1
 	}
 	t.scrollOffset = offset
 	t.mu.Unlock()

@@ -39,9 +39,34 @@ func (t *TUI) doRender() {
 	// Manual scroll: repaint the visible window from the desired top instead
 	// of the bottom-sticking incremental path (which would CRLF-scroll new
 	// lines into view and break the user's chosen viewport).
+	//
+	// When the user has scrolled up, we PIN the viewport at userViewportTop
+	// (the absolute content row they were reading) instead of recomputing
+	// relative to the new content height. This lets the agent stream new
+	// content below the user's reading position without dragging the view
+	// down with it.
+	//
+	// The first time we enter the scrolled branch in a session, we capture
+	// desiredViewportTop (the natural offset for the user's scrollOffset) as
+	// the pin. Subsequent renders reuse that pin so new streaming content
+	// fills in below without moving the view. Pressing End (scrollToBottom)
+	// clears the pin via SetScrollOffset so the view snaps to the new end.
 	if t.scrollOffset > 0 {
 		t.previousScrollOffset = t.scrollOffset
-		t.renderFromTop(newLines, width, height, desiredViewportTop)
+		pinned := t.userViewportTop
+		if pinned < 0 {
+			// First scrolled render: take the natural viewport top for this
+			// scrollOffset and freeze it.
+			pinned = desiredViewportTop
+			t.userViewportTop = pinned
+		}
+		// Clamp into the valid content range so we never ask the renderer to
+		// start above the buffer or below the last visible row.
+		maxTop := max(0, contentHeight-height)
+		if pinned > maxTop {
+			pinned = maxTop
+		}
+		t.renderFromTop(newLines, width, height, pinned)
 		return
 	}
 
@@ -132,9 +157,22 @@ func (t *TUI) doRender() {
 	// growing (a partial word completing) while a new line is appended. That's
 	// firstChanged == len-1, which must fall through to Strategy 3 (incremental,
 	// per-line ClearLine) — NOT a full repaint, which would flick on every token.
+	//
+	// BUT: when the history content wraps (e.g. streamed text crosses the wrap
+	// point), the lines below the wrap point are unchanged in content — they
+	// just shifted down by 1. diffRange reports them as "changed" because
+	// their position in the slice changed, even though their values are byte-
+	// for-byte identical to the line just above in the new layout. Falling
+	// into the full-repaint branch here produces a visible flick on every
+	// wrap crossing while the spinner is active (the spinner sits right
+	// below the history). We detect the pure-shift case by checking whether
+	// previousLines[firstChanged:] matches newLines[firstChanged+1:] — if so,
+	// the "changes" are just a shift, not a real content change.
 	if appended && firstChanged < len(t.previousLines)-1 {
-		t.fullRender(newLines, width, height, clearRelative)
-		return
+		if !isPureShift(t.previousLines, newLines, firstChanged) {
+			t.fullRender(newLines, width, height, clearRelative)
+			return
+		}
 	}
 
 	// All changes are in deleted lines (new content is shorter).
@@ -405,6 +443,44 @@ func diffRange(old, new []string) (first, last int) {
 		}
 	}
 	return first, last
+}
+
+// isPureShift reports whether the change between old and new is purely a
+// positional shift (no content changed). This happens when streaming content
+// grows past the wrap point: every line below the new wrap moved down by one
+// slot, but its value is identical to the line just above its new position.
+//
+// Example (shift by 1, growing):
+//
+//	old: [A, B, C]
+//	new: [A, B, C, D]   ← B, C, D all "changed" positionally, but
+//	                       old[0:] == new[0+1:] = [A, B, C, D]
+//	                       → firstChanged would be 0 even though content is fine
+//
+// We only call this after verifying appended=true and firstChanged is in the
+// range that suggests a shift (strictly before the last previous line). If
+// previousLines[firstChanged:] matches newLines[firstChanged+1:], the only real
+// change is a single appended line and everything below shifted down — no full
+// repaint is needed.
+func isPureShift(old, new []string, firstChanged int) bool {
+	if firstChanged < 0 {
+		return false
+	}
+	if firstChanged >= len(old) {
+		return false
+	}
+	// Shift by 1: every old line from firstChanged onward appears at
+	// firstChanged+1 in new. If new is one line longer than old and the slices
+	// match after that offset, it's a clean shift.
+	if len(new) != len(old)+1 {
+		return false
+	}
+	for i := firstChanged; i < len(old); i++ {
+		if old[i] != new[i+1] {
+			return false
+		}
+	}
+	return true
 }
 
 // sanitizeLines clips any line wider than width to protect the diff state.

@@ -459,3 +459,111 @@ func TestRawBlockReWrapsOnResize(t *testing.T) {
 		t.Errorf("narrow raw block should wrap into more lines: wide=%d narrow=%d", len(wide), len(narrow))
 	}
 }
+
+// TestMarkdownTableEmojiRightPadding verifies that every cell has at least 1
+// column of right-side padding between the cell text and the `│` border. Some
+// terminals render emoji ZWJ / VS-16 sequences wider than uniseg reports (e.g.
+// 👨‍💻 can render at 4 columns even though we compute 2). Without this slack the
+// wider glyph overwrites the border and breaks the column alignment. The fix
+// reserves 1 column per cell as safety padding; this test asserts it survives.
+func TestMarkdownTableEmojiRightPadding(t *testing.T) {
+	cases := []struct {
+		name string
+		md   string
+	}{
+		{"zwj_man_computer", "| Name | Status |\n|------|--------|\n| 👨‍💻 dev | active |\n| 👩‍🔬 sci | active |\n"},
+		{"zwj_rainbow_flag", "| Flag | State |\n|------|-------|\n| 🏳️‍🌈 pride | on |\n"},
+		{"regional_flag", "| Country | Code |\n|---------|------|\n| 🇺🇸 USA | US |\n| 🇯🇵 Japan | JP |\n"},
+		{"vs16_check", "| State | Done |\n|-------|------|\n| ☑️ yes | ✔️ |\n| ☐ no | ✖️ |\n"},
+		{"plain_text_safety", "| A | B |\n|---|---|\n| x | y |\n"},
+		{"single_emoji", "| E | S |\n|---|---|\n| ✅ | ☐ |\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out := feedAll(c.md)
+			stripped := stripANSIForTest(out)
+			// Every body row should end with ` │` — exactly 1 space between the
+			// last cell character and the right border.
+			for _, line := range strings.Split(stripped, "\n") {
+				if !strings.Contains(line, "│") {
+					continue
+				}
+				if strings.HasPrefix(line, "┌") || strings.HasPrefix(line, "├") || strings.HasPrefix(line, "└") {
+					continue
+				}
+				// Last char of a body row must be the right border pipe.
+				if !strings.HasSuffix(line, "│") {
+					t.Errorf("%s: row does not end with right border: %q", c.name, line)
+				}
+				// Char before the final pipe must be a space (the reserved
+				// padding). If it's something else, an emoji overran the budget.
+				trimmed := strings.TrimSuffix(line, "│")
+				if len(trimmed) == 0 {
+					t.Errorf("%s: row has no content before right border: %q", c.name, line)
+					continue
+				}
+				last := trimmed[len(trimmed)-1]
+				if last != ' ' {
+					t.Errorf("%s: cell text touches right border (no safety padding) on row %q (last char=%q)", c.name, line, last)
+				}
+			}
+		})
+	}
+}
+
+// TestMarkdownTableEmojiAlignmentZwj specifically guards against the original
+// regression where 👨‍💻 / 🏳️‍🌈 / 🇺🇸 (ZWJ + regional-indicator clusters) caused
+// the row borders to misalign because uniseg reports them as 2 columns while
+// some terminals render them wider. We assert all body rows have the same
+// visible width as the header row.
+func TestMarkdownTableEmojiAlignmentZwj(t *testing.T) {
+	md := "| Name | Status |\n|------|--------|\n| 👨‍💻 dev | active |\n| 👩‍🔬 sci | active |\n| 🏳️‍🌈 flag | test |\n| 🇺🇸 US | test |\n"
+	out := feedAll(md)
+	stripped := stripANSIForTest(out)
+
+	var widths []int
+	for _, line := range strings.Split(stripped, "\n") {
+		if !strings.Contains(line, "│") {
+			continue
+		}
+		if strings.HasPrefix(line, "┌") || strings.HasPrefix(line, "├") || strings.HasPrefix(line, "└") {
+			continue
+		}
+		w := ansi.VisibleWidth(line)
+		widths = append(widths, w)
+		t.Logf("row width=%d bytes=%d: %q", w, len(line), line)
+	}
+	if len(widths) < 2 {
+		t.Fatalf("expected at least 2 body rows, got %d", len(widths))
+	}
+	first := widths[0]
+	for i, w := range widths {
+		if w != first {
+			t.Errorf("row %d width=%d, expected %d (rows misaligned with ZWJ/regional-indicator emoji)", i, w, first)
+		}
+	}
+}
+
+// TestMarkdownTableEmojiMixedWidths verifies that the safety padding keeps a
+// table aligned even when cells mix plain ASCII, single-codepoint emoji, and
+// ZWJ/VS-16 clusters in the same column.
+func TestMarkdownTableEmojiMixedWidths(t *testing.T) {
+	md := "| Mark | State |\n|------|-------|\n| ok | done |\n| ✅ | yes |\n| 👨‍💻 | coding |\n| 🏳️‍🌈 | pride |\n"
+	out := feedAll(md)
+	stripped := stripANSIForTest(out)
+
+	var bodyWidths []int
+	for _, line := range strings.Split(stripped, "\n") {
+		if strings.HasPrefix(line, "│") && strings.Contains(line, "│") {
+			bodyWidths = append(bodyWidths, ansi.VisibleWidth(line))
+		}
+	}
+	if len(bodyWidths) < 2 {
+		t.Fatalf("expected multiple body rows, got %d", len(bodyWidths))
+	}
+	for i := 1; i < len(bodyWidths); i++ {
+		if bodyWidths[i] != bodyWidths[0] {
+			t.Errorf("row %d width=%d differs from row 0 width=%d (rows: %v)", i, bodyWidths[i], bodyWidths[0], bodyWidths)
+		}
+	}
+}

@@ -20,6 +20,13 @@ func (t *TUI) streamEvents(ctx context.Context) {
 		t.setSpinning(false)
 		return
 	}
+	t.consumeEvents(ctx, events)
+}
+
+// consumeEvents is streamEvents without the client connection step, exposed so
+// tests can drive the event loop with a synthetic channel of events without
+// needing an HTTP/SSE server.
+func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 
 	toolNames := make(map[string]string)
 	argBufs := make(map[string]string)
@@ -57,10 +64,14 @@ func (t *TUI) streamEvents(ctx context.Context) {
 				// When the previous thinking block was frozen by intervening
 				// text/tool content, a new thinking delta belongs to a FRESH
 				// reasoning fragment, not a continuation of the old one. Reset
-				// the buffer so the new block contains only the new content and
-				// never overwrites or duplicates earlier history.
+				// the buffer AND drop the pointer to the old block so the new
+				// block is appended at the end of the history (chronologically
+				// after the tool calls/text), not edited in place at the old
+				// block's position — which would otherwise paint the new
+				// reasoning on top of unrelated history and confuse the reader.
 				if thinkingFrozen {
 					thinkBuf = ""
+					thinkBlk = nil
 					thinkingFrozen = false
 				}
 				thinkBuf += delta
@@ -289,23 +300,18 @@ func (t *TUI) toolHeaderStreaming(name string) string {
 // formatToolResult renders the one-line result summary (✔/✘ + duration). When
 // dur is 0 (e.g. replaying history, where timing isn't persisted) the [time]
 // prefix is omitted.
+//
+// Single-line output (success OR error) shows the text verbatim — short error
+// messages like "Permission denied" or "command not found" are the most useful
+// to read at a glance. Multi-line output (a build trace, a fetched HTML body,
+// a test run report) is summarized as "(N lines)" exactly the same way for
+// success and error, so the visual pattern is consistent regardless of outcome.
+// The FULL output always flows unchanged to the LLM and to persisted history;
+// this function only controls the presentation in the TUI.
 func (t *TUI) formatToolResult(output string, dur float64, isErr bool) string {
 	durTag := ""
 	if dur > 0 {
 		durTag = "[" + formatDur(dur) + "] "
-	}
-	if isErr {
-		// Presentation only: collapse any multi-line error (JSON body, stack
-		// trace, plain text — format-agnostic) into a single summary line. The
-		// FULL error text still flows unchanged to the LLM and to persisted
-		// history; this only affects what the TUI shows.
-		summary := collapseWhitespace(stripANSI(output))
-		if summary == "" {
-			summary = "tool failed"
-		}
-		// Muted (mid-gray) rather than Dimmed (faint) so the result reads clearly
-		// and stands apart from the fainter args above it.
-		return ansi.Err("✘") + " " + ansi.Muted(durTag+summary)
 	}
 	trimmed := strings.TrimRight(output, "\n")
 	lines := strings.Split(trimmed, "\n")
@@ -313,15 +319,34 @@ func (t *TUI) formatToolResult(output string, dur float64, isErr bool) string {
 	if count == 1 && lines[0] == "" {
 		count = 0
 	}
-	// Single-line output is a confirmation MESSAGE (Edit, Write, Memo*, and MCP
-	// tools that return a short status) — show it verbatim. Multi-line output is a
-	// DUMP (Bash, Read, Fetch, …) — summarize as a line count. The [time] tag is
-	// kept in both for consistency across tools.
-	if count == 1 {
-		summary := collapseWhitespace(stripANSI(trimmed))
-		return ansi.Accent("✔") + " " + ansi.Muted(durTag+summary)
+
+	// Multi-line dump (success or error): show the line count. This keeps the
+	// TUI scrollback compact even when a tool returns a huge error body
+	// (build output, test report, fetched HTML/JSON, stack trace, …).
+	if count > 1 {
+		icon := ansi.Accent("✔")
+		if isErr {
+			icon = ansi.Err("✘")
+		}
+		return icon + " " + ansi.Muted(fmt.Sprintf("%s(%d lines)", durTag, count))
 	}
-	return ansi.Accent("✔") + " " + ansi.Muted(fmt.Sprintf("%s(%d lines)", durTag, count))
+
+	// Single-line (or empty) output: show the text verbatim. For success this
+	// is a confirmation message ("File written", "Memo saved"). For error it
+	// is the error itself ("Permission denied", "command not found") — short
+	// and useful, exactly what we want visible.
+	summary := collapseWhitespace(stripANSI(trimmed))
+	if summary == "" {
+		if isErr {
+			summary = "tool failed"
+		} else {
+			summary = ""
+		}
+	}
+	if isErr {
+		return ansi.Err("✘") + " " + ansi.Muted(durTag+summary)
+	}
+	return ansi.Accent("✔") + " " + ansi.Muted(durTag+summary)
 }
 
 // setSpinning toggles the spinner animation.
