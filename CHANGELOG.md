@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.19] - 2026-07-22
+
+### TUI — fix concurrent race in `History.Render` (root cause of long-history flick)
+- `History.Render` walked `blocks` without holding the slice's lock, while
+  the SSE event handler appended to the same slice via `Add`. In long
+  resumed sessions where many streaming chunks land during a render, the
+  render loop could append a block mid-iteration, producing a torn render
+  (the previous frame's characters painted on top of the new one — the
+  faint "old text bleeding through" the user reported). Symptoms were most
+  visible during long histories because the render loop walks more blocks
+  per frame, widening the window for the race.
+- `History` now carries a `sync.Mutex` and every method that touches
+  `blocks` (`Add`, `Render`, `Blocks`, `Len`, `Last`, `Clear`, `Invalidate`)
+  acquires it. The render is atomic w.r.t. concurrent appends.
+
 ### TUI — test helpers moved to `export_test.go`
 - The two `*ForTest` helpers for `userViewportTop` were moved out of
   `render/tui.go` (production code) into `render/export_test.go`, which is

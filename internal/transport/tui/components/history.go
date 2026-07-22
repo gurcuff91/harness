@@ -78,6 +78,13 @@ func (b *RawBlock) Render(width int) []string {
 // out the whole conversation correctly (tables included). Mirrors PI's
 // chatContainer of Markdown/Text blocks.
 type History struct {
+	// mu guards concurrent access to the blocks slice between the render
+	// loop (which iterates it in Render) and the SSE event handler (which
+	// appends in Add). Without this lock, a streaming event can append a new
+	// block mid-iteration, producing a torn/duplicated render that the user
+	// sees as the history being painted on top of itself (the flick reported
+	// with long resumed sessions).
+	mu     sync.Mutex
 	blocks []Block
 }
 
