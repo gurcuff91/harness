@@ -261,6 +261,10 @@ func (t *TUI) renderHistory() {
 				t.addRaw(ansi.Accent("✔") + " " + ansi.Dimmed("(history)"))
 				continue
 			}
+			if isSystemGenerated, _ := meta["is_system_generated"].(bool); isSystemGenerated {
+				t.addSection("notice", ansi.Dimmed("◎ progress summary requested"))
+				continue
+			}
 		}
 		role, _ := msg["role"].(string)
 		parts, _ := msg["parts"].([]any)

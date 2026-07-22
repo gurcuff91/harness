@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.4] - 2026-07-22
+
+### Patch release — TUI max-turns experience + OpenAI-compatible provider cleanup
+- TUI per-turn ReAct cap raised to 50; the headless `serve` command and other
+  transports keep the default 25
+- `EventMaxTurnsReached` is now emitted before the progress-update summary,
+  so the TUI warning reads as a forewarning and the model's streamed summary
+  lands below it in natural reading order
+- Errors from the final progress-update LLM call are no longer discarded;
+  they propagate to `EventError` (with `ProviderAPIError` details lifted)
+  instead of leaving the user with a "summarizing progress" notice and no
+  output
+- The max-turns summary-request message is marked
+  `MessageMeta.IsSystemGenerated` and replayed in the TUI as
+  `◎ progress summary requested` instead of as a `❯` user prompt the human
+  never wrote
+- `types.Message.MarshalJSON` now serializes `Meta`; this also fixes the
+  latent bug where `IsCompaction` markers never reached the TUI over the HTTP
+  API
+- OpenAI-compatible stream parser (`parseOpenAIStream`) now strips leaked
+  reasoning delimiters (`<thinking>`, `</thinking>`, abbreviated
+  `<think>`/`</think>`, and HTML-comment variants) from `reasoning_content`,
+  `reasoning`, and `content` deltas, preventing MiniMax and similar providers
+  from bleeding `</thinking>` into the TUI thinking block and persisted history
+
+## [0.73.3] - 2026-07-22
+
+### TUI — hide system-generated summary request from history replay
+- `requestProgressUpdate` (the max-turns fallback call) now marks its
+  injected user message with `MessageMeta.IsSystemGenerated = true`. The TUI
+  renders such messages as `◎ progress summary requested` instead of as a
+  `❯` user prompt the human never typed, removing the confusing replay where
+  the agent seemed to speak on behalf of the user
+- `types.Message.MarshalJSON` now serializes `Meta` (previously it silently
+  dropped the field). This is required for `IsSystemGenerated` to reach the
+  TUI over the HTTP API, and it also fixes the latent bug where
+  `IsCompaction` markers were never visible on resumed sessions rendered via
+  the API either — the `◎ Compacting` / `✔ (history)` render in
+  `renderHistory()` now works end-to-end
+
 ## [0.73.2] - 2026-07-22
 
 ### TUI — per-turn ReAct cap raised to 50

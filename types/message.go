@@ -14,7 +14,8 @@ const (
 
 // MessageMeta holds optional metadata about a message — invisible to providers.
 type MessageMeta struct {
-	IsCompaction bool `json:"is_compaction,omitempty"`
+	IsCompaction      bool `json:"is_compaction,omitempty"`
+	IsSystemGenerated bool `json:"is_system_generated,omitempty"`
 }
 
 // Message is a single turn in a conversation.
@@ -126,6 +127,7 @@ func (m Message) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		Role  MessageRole   `json:"role"`
 		Parts []ContentPart `json:"parts"`
+		Meta  *MessageMeta  `json:"meta,omitempty"`
 	}
-	return json.Marshal(wire{Role: m.Role, Parts: m.Parts})
+	return json.Marshal(wire{Role: m.Role, Parts: m.Parts, Meta: m.Meta})
 }

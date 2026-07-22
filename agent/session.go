@@ -797,8 +797,12 @@ func (s *Session) updateStats(se types.StreamEvent) {
 // Asks the model to summarize progress and check with the user on next steps.
 // The response IS streamed to the transport via EventStreamTextDelta.
 func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
-	// Inject summary request into history
-	if err := s.store.AddMessage(types.NewUserTextMessage(maxTurnsPrompt)); err != nil {
+	// Inject summary request into history. Mark it as system-generated so
+	// transports that replay history (e.g. the TUI on resume) can render it
+	// as a notice instead of as a user message the human never typed.
+	msg := types.NewUserTextMessage(maxTurnsPrompt)
+	msg.Meta = &types.MessageMeta{IsSystemGenerated: true}
+	if err := s.store.AddMessage(msg); err != nil {
 		return "", err
 	}
 
