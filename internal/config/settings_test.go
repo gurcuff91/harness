@@ -202,3 +202,63 @@ func TestMCPCollection(t *testing.T) {
 		t.Errorf("fs still present after delete")
 	}
 }
+
+// TestMCPCommandShapeCompatibility verifies that MCPServer accepts both the
+// canonical `command: ["uvx", "arg1"]` shape and the Claude Desktop / OpenCode
+// `command: "uvx", args: ["arg1"]` shape. This is what users coming from
+// other MCP clients paste into settings.json.
+func TestMCPCommandShapeCompatibility(t *testing.T) {
+	cases := []struct {
+		name string
+		json string
+		want []string
+	}{
+		{
+			name: "canonical_array",
+			json: `{"type":"local","command":["uvx","minimax-coding-plan-mcp","-y"]}`,
+			want: []string{"uvx", "minimax-coding-plan-mcp", "-y"},
+		},
+		{
+			name: "claude_desktop_string_plus_args",
+			json: `{"type":"local","command":"uvx","args":["minimax-coding-plan-mcp","-y"]}`,
+			want: []string{"uvx", "minimax-coding-plan-mcp", "-y"},
+		},
+		{
+			name: "string_only",
+			json: `{"type":"local","command":"echo"}`,
+			want: []string{"echo"},
+		},
+		{
+			name: "args_only",
+			json: `{"type":"local","args":["x","y","z"]}`,
+			want: []string{"x", "y", "z"},
+		},
+		{
+			name: "array_with_extra_args",
+			json: `{"type":"local","command":["npx"],"args":["-y","server"]}`,
+			want: []string{"npx", "-y", "server"},
+		},
+		{
+			name: "empty",
+			json: `{"type":"remote","url":"https://x"}`,
+			want: nil,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var srv MCPServer
+			if err := json.Unmarshal([]byte(c.json), &srv); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if len(srv.Command) != len(c.want) {
+				t.Errorf("command length: got %d (%v), want %d (%v)", len(srv.Command), srv.Command, len(c.want), c.want)
+				return
+			}
+			for i := range c.want {
+				if srv.Command[i] != c.want[i] {
+					t.Errorf("command[%d]: got %q, want %q", i, srv.Command[i], c.want[i])
+				}
+			}
+		})
+	}
+}

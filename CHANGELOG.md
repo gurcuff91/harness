@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.20] - 2026-07-22
+
+### MCP — accept Claude Desktop / OpenCode `command` + `args` shape
+- `MCPServer.UnmarshalJSON` now accepts both the canonical
+  `command: ["uvx", "arg1"]` shape and the Claude Desktop / OpenCode
+  `command: "uvx", args: ["arg1"]` shape. Without this, copying a config
+  from another MCP client silently dropped the fields and the server
+  failed to connect with an unhelpful "empty command" error swallowed by
+  the manager.
+
+
 ## [0.73.19] - 2026-07-22
 
 ### TUI — fix concurrent race in `History.Render` (root cause of long-history flick)

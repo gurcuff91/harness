@@ -77,6 +77,76 @@ type MCPServer struct {
 	Enabled bool              `json:"enabled"`
 }
 
+// mcpServerRaw mirrors MCPServer but with `command` as json.RawMessage, so the
+// custom UnmarshalJSON can detect whether the user wrote it as a string
+// (Claude Desktop / OpenCode style: "command": "uvx", "args": [...]) or as a
+// flat array (the canonical shape MCPServer.Command expects).
+type mcpServerRaw struct {
+	Type    string            `json:"type"`
+	Command json.RawMessage   `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Cwd     string            `json:"cwd,omitempty"`
+	Timeout int               `json:"timeout,omitempty"`
+	Enabled bool              `json:"enabled"`
+}
+
+// UnmarshalJSON accepts both the canonical `command: ["uvx", "arg1"]` shape
+// AND the Claude Desktop / OpenCode `command: "uvx", "args: ["arg1"]` shape,
+// merging the latter into the former. Without this, users copying a config
+// from Claude Desktop would see "mcp stdio: empty command" with no visible
+// error because the malformed fields would be silently dropped.
+func (s *MCPServer) UnmarshalJSON(data []byte) error {
+	var raw mcpServerRaw
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	s.Type = raw.Type
+	s.URL = raw.URL
+	s.Env = raw.Env
+	s.Headers = raw.Headers
+	s.Cwd = raw.Cwd
+	s.Timeout = raw.Timeout
+	s.Enabled = raw.Enabled
+	s.Command = decodeMCPCommand(raw.Command, raw.Args)
+	return nil
+}
+
+// decodeMCPCommand merges the two accepted command shapes:
+//   - canonical: `command: ["uvx", "arg1", "arg2"]`           → ["uvx", "arg1", "arg2"]
+//   - Claude / OpenCode: `command: "uvx", args: ["arg1"]`     → ["uvx", "arg1"]
+//   - mixed: `command: ["uvx"], args: ["arg1"]`                → ["uvx", "arg1"]
+//   - empty: command absent + args absent                       → nil
+func decodeMCPCommand(cmd json.RawMessage, args []string) []string {
+	if len(cmd) > 0 {
+		// Try array form first.
+		var arr []string
+		if err := json.Unmarshal(cmd, &arr); err == nil {
+			if len(args) > 0 {
+				return append(arr, args...)
+			}
+			return arr
+		}
+		// Fall back to single-string form.
+		var str string
+		if err := json.Unmarshal(cmd, &str); err == nil && str != "" {
+			if len(args) > 0 {
+				out := make([]string, 0, 1+len(args))
+				out = append(out, str)
+				out = append(out, args...)
+				return out
+			}
+			return []string{str}
+		}
+	}
+	if len(args) > 0 {
+		return args
+	}
+	return nil
+}
+
 func newSettingsManager() *SettingsManager {
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".harness")
