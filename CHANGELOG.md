@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.21] - 2026-07-23
+
+### Providers — canonical tool_use IDs (cross-provider session resume)
+- Tool-call IDs returned by each provider (Anthropic `toolu_…`, OpenAI
+  `call_…`, Gemini `functions.<name>:<index>`) are now canonicalized into a
+  single harness format — `toolu_<24 base62 chars>` — at the moment they
+  enter the harness types, before anything is persisted to the session
+  store. The conversion is deterministic: the same native ID always maps
+  to the same canonical ID, so `tool_use` ↔ `tool_result` correlation
+  survives across sessions and providers with no mapping table.
+- `toolu_<base62>` satisfies every provider's ID constraints (Anthropic's
+  `^[a-zA-Z0-9_-]+$` is the strictest), so a session created with one
+  provider can be resumed against any other without a 400 on a foreign
+  ID. Anthropic-native IDs already use this exact shape and round-trip
+  unchanged.
+- New helper `internal/providers/llm/id.go` (`ToolIDFor`, `isCanonicalID`,
+  `base62Encode`). Applied at the Anthropic and OpenAI stream parsers
+  where `ToolCall.ID` and the streaming `ToolID` are assigned; the
+  Claude OAuth path inherits the fix via the shared Anthropic parser.
+- Existing on-disk sessions written before this change hold native IDs
+  and must be migrated by an external script; the code assumes
+  on-disk IDs are already canonical.
+
 ## [0.73.20] - 2026-07-22
 
 ### MCP — accept Claude Desktop / OpenCode `command` + `args` shape

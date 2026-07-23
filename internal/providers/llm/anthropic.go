@@ -217,7 +217,7 @@ func ParseAnthropicStream(body io.Reader, cb types.StreamCallback, unmapTool fun
 			blocks[idx] = bs
 			switch bt {
 			case "tool_use":
-				bs.toolID, _ = cb2["id"].(string)
+				bs.toolID = ToolIDFor(cb2["id"].(string))
 				bs.toolName = unmapTool(jsonStr(cb2, "name"))
 				emit(types.StreamEvent{Type: types.StreamToolStart, ToolID: bs.toolID, ToolName: bs.toolName})
 			case "thinking":
@@ -287,6 +287,12 @@ func ParseAnthropicStream(body io.Reader, cb types.StreamCallback, unmapTool fun
 				if len(input) == 0 {
 					input = json.RawMessage("{}")
 				}
+				// bs.toolID was already canonicalized at block_start (see
+				// the ToolIDFor call there), so the store persists a shape
+				// every provider accepts on resume. Deterministic: same
+				// native ID always maps to the same canonical ID, so
+				// tool_use ↔ tool_result correlation survives across
+				// sessions and providers.
 				resp.ToolCalls = append(resp.ToolCalls, types.ToolCall{
 					ID: bs.toolID, Name: bs.toolName, Input: input,
 				})

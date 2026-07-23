@@ -965,12 +965,12 @@ func (m *MarkdownStream) computeColumnWidths(rr []renderedTableRow, numCols int)
 	}
 
 	// borderOverhead accounts for:
-//   - +3 per column for the per-cell border characters (left pipe + space +
-//     right pipe+space split between adjacent columns).
-//   - +numCols for the 1-column right-side safety margin per cell (the pad
-//     that keeps over-wide emoji glyphs from overwriting the `│` border —
-//     see renderTableRow).
-//   - +1 for the final right edge "│" that closes the table.
+	//   - +3 per column for the per-cell border characters (left pipe + space +
+	//     right pipe+space split between adjacent columns).
+	//   - +numCols for the 1-column right-side safety margin per cell (the pad
+	//     that keeps over-wide emoji glyphs from overwriting the `│` border —
+	//     see renderTableRow).
+	//   - +1 for the final right edge "│" that closes the table.
 	borderOverhead := 4*numCols + 1
 	availableForCells := m.width - borderOverhead
 	if availableForCells < numCols {

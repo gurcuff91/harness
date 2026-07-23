@@ -333,7 +333,12 @@ func parseOpenAIStream(body io.Reader, cb types.StreamCallback) (*types.Response
 					if fn, ok := tcMap["function"].(map[string]any); ok {
 						ts.name, _ = fn["name"].(string)
 					}
-					ts.id, _ = tcMap["id"].(string)
+					// Canonicalize the provider-native tool ID (e.g.
+					// "call_xxx") into the harness "toolu_<22chars>" form
+					// so the store persists a shape every provider accepts
+					// on resume. Deterministic: same native ID always maps
+					// to the same canonical ID.
+					ts.id = ToolIDFor(tcMap["id"].(string))
 					toolsByIdx[idx] = ts
 					emit(types.StreamEvent{Type: types.StreamToolStart, ToolID: ts.id, ToolName: ts.name})
 				}

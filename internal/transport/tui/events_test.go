@@ -17,15 +17,15 @@ type mockTerminal struct {
 
 func (m *mockTerminal) Start(func(string), func()) error { return nil }
 func (m *mockTerminal) Stop()                            {}
-func (m *mockTerminal) Write(string)                      {}
-func (m *mockTerminal) Columns() int                      { return m.cols }
-func (m *mockTerminal) Rows() int                         { return m.rows }
-func (m *mockTerminal) MoveBy(int)                        {}
-func (m *mockTerminal) HideCursor()                       {}
-func (m *mockTerminal) ShowCursor()                       {}
-func (m *mockTerminal) ClearLine()                        {}
-func (m *mockTerminal) ClearFromCursor()                  {}
-func (m *mockTerminal) ClearScreen()                      {}
+func (m *mockTerminal) Write(string)                     {}
+func (m *mockTerminal) Columns() int                     { return m.cols }
+func (m *mockTerminal) Rows() int                        { return m.rows }
+func (m *mockTerminal) MoveBy(int)                       {}
+func (m *mockTerminal) HideCursor()                      {}
+func (m *mockTerminal) ShowCursor()                      {}
+func (m *mockTerminal) ClearLine()                       {}
+func (m *mockTerminal) ClearFromCursor()                 {}
+func (m *mockTerminal) ClearScreen()                     {}
 
 // newTestTUI builds a minimal TUI good enough to drive consumeEvents without
 // the SSE/HTTP server stack. History rendering is exercised through the real

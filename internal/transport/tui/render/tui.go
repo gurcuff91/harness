@@ -20,13 +20,13 @@ type TUI struct {
 	mu sync.Mutex
 
 	// Differential render state (mirrors PI's TUI fields).
-	previousLines       []string
-	previousWidth       int
-	previousHeight      int
-	cursorRow           int // end-of-content row (for viewport math)
-	hardwareCursorRow   int // actual terminal cursor row
-	maxLinesRendered    int
-	previousViewportTop int
+	previousLines        []string
+	previousWidth        int
+	previousHeight       int
+	cursorRow            int // end-of-content row (for viewport math)
+	hardwareCursorRow    int // actual terminal cursor row
+	maxLinesRendered     int
+	previousViewportTop  int
 	previousScrollOffset int // tracks last render's scroll offset
 
 	// userViewportTop freezes the viewport top at the line the user is
@@ -248,4 +248,3 @@ func (t *TUI) handleInput(data string) {
 		}
 	}
 }
-

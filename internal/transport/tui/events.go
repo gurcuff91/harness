@@ -32,7 +32,7 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 	argBufs := make(map[string]string)
 	var thinkBlk *components.RawBlock // live thinking block
 	var thinkBuf string
-	var thinkingFrozen bool               // current block is frozen; a new thinking delta starts a fresh block
+	var thinkingFrozen bool // current block is frozen; a new thinking delta starts a fresh block
 
 	for {
 		select {
