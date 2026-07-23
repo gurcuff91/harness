@@ -6,7 +6,6 @@ import (
 
 	"github.com/gurcuff91/harness/internal/transport/tui/ansi"
 	"github.com/gurcuff91/harness/internal/transport/tui/components"
-	"github.com/gurcuff91/harness/internal/transport/tui/keys"
 	"github.com/gurcuff91/harness/internal/transport/tui/render"
 	"github.com/gurcuff91/harness/internal/transport/tui/term"
 )
@@ -109,11 +108,13 @@ func labeledRule(width int, label string) string {
 }
 
 // globalInput routes input: Ctrl+C/Ctrl+D quit, Ctrl+V pastes a clipboard
-// image, palette consumes when open, PageUp/PageDown scroll the history view.
+// image, palette consumes when open.
 //
-// Note: mouse-wheel scroll was removed because enabling button-event mouse
-// tracking (\x1b[?1002h) intercepts all mouse clicks and breaks the terminal's
-// native text selection. Keyboard scrolling is always available.
+// Note: the TUI does not implement in-app history scrolling. It is an INLINE
+// renderer that always sticks to the bottom (tail-follow) while the agent
+// streams; the terminal's own native scrollback is used to read earlier
+// output once a turn completes. This keeps rendering simple and avoids the
+// fragile cursor math that in-app scrolling required on inline TUIs.
 func (t *TUI) globalInput(data string) bool {
 	// Ctrl+C / Ctrl+D at empty editor → quit.
 	if data == "\x03" || (data == "\x04" && t.editor.Value() == "") {
@@ -130,24 +131,6 @@ func (t *TUI) globalInput(data string) bool {
 	// Palette gets first crack at input when open.
 	if t.palette.IsOpen() {
 		return t.palette.HandleInputConsumed(data)
-	}
-
-	// Scroll the conversation history (keyboard).
-	if k, ok := keys.Lookup(data); ok {
-		switch k {
-		case keys.PgUp:
-			t.scrollBy(max(t.tui.Rows()/2, 1))
-			return true
-		case keys.PgDown:
-			t.scrollBy(-max(t.tui.Rows()/2, 1))
-			return true
-		case keys.Home:
-			t.scrollToTop()
-			return true
-		case keys.End:
-			t.scrollToBottom()
-			return true
-		}
 	}
 
 	return false
@@ -170,35 +153,6 @@ func (t *TUI) pasteClipboardImage() {
 		t.tui.RequestRender(false)
 	}()
 }
-
-// scrollBy shifts the history view up (delta > 0) or down (delta < 0)
-// by |delta| content lines. It is consumed by globalInput for PageUp/PageDown
-// and mouse-wheel events. Scrolling does not move editor focus.
-func (t *TUI) scrollBy(delta int) {
-	if delta == 0 {
-		return
-	}
-	newOffset := t.scrollOffset + delta
-	if newOffset < 0 {
-		newOffset = 0
-	}
-	t.scrollOffset = newOffset
-	t.tui.SetScrollOffset(newOffset)
-}
-
-func (t *TUI) scrollToTop() {
-	t.scrollOffset = 1<<31 - 1 // will be clamped to content top by the renderer
-	t.tui.SetScrollOffset(t.scrollOffset)
-}
-
-func (t *TUI) scrollToBottom() {
-	t.scrollOffset = 0
-	t.tui.SetScrollOffset(0)
-}
-
-// parseMouseWheel was removed — mouse button-event tracking was disabled in
-// Start() because it breaks the terminal's native text selection. Scroll with
-// keyboard via PageUp/PageDown/Home/End.
 
 // onEscape stops an in-flight turn and clears the editor.
 func (t *TUI) onEscape() {

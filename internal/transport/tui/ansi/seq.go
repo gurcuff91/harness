@@ -36,7 +36,8 @@ const (
 	// NOT enabled: the mode captures every mouse click+drag as an ANSI sequence,
 	// which prevents the terminal from performing its native text selection —
 	// users would no longer be able to click+drag to copy the agent's output.
-	// Scroll via PageUp/PageDown/Home/End is always available.
+	// The TUI sticks to the bottom while streaming; the terminal's native
+	// scrollback is used to read earlier output after a turn completes.
 )
 
 // MoveUp returns the sequence to move the cursor up n rows (n>0).

@@ -53,7 +53,6 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				t.liveMD = nil
 				t.mu.Unlock()
 				thinkBlk, thinkBuf, thinkingFrozen = nil, "", false
-				t.scrollToBottom() // new agent work: snap back to the latest output
 				t.setSpinning(true)
 
 			case "thinking":

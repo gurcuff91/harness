@@ -20,28 +20,25 @@ type TUI struct {
 	mu sync.Mutex
 
 	// Differential render state (mirrors PI's TUI fields).
-	previousLines        []string
-	previousWidth        int
-	previousHeight       int
-	cursorRow            int // end-of-content row (for viewport math)
-	hardwareCursorRow    int // actual terminal cursor row
-	maxLinesRendered     int
-	previousViewportTop  int
-	previousScrollOffset int // tracks last render's scroll offset
+	previousLines       []string
+	previousWidth       int
+	previousHeight      int
+	cursorRow           int // end-of-content row (for viewport math)
+	hardwareCursorRow   int // actual terminal cursor row
+	maxLinesRendered    int
+	previousViewportTop int
 
-	// userViewportTop freezes the viewport top at the line the user is
-	// reading while scrollOffset > 0. Without this, the renderer would
-	// recompute the viewport top relative to the end of the buffer on every
-	// stream tick (contentHeight grows as the agent streams) and the user's
-	// reading position would slide down with the new content — a surprising
-	// jump-to-the-bottom behavior. We pin the viewport to userViewportTop
-	// instead so the user can keep reading while the agent streams below.
-	// Cleared (set to -1) when scrollOffset returns to 0.
-	userViewportTop int
-
-	// scrollOffset is the number of content lines the user has scrolled up
-	// from the bottom. 0 means stick to the bottom.
-	scrollOffset int
+	// clearOnShrink controls whether the renderer issues a full (cursor-moving)
+	// repaint when the content shrinks below the working-area high-water mark.
+	// It is OFF by default — matching PI (PI_CLEAR_ON_SHRINK), which only opts
+	// in when explicitly requested. A shrink repaint moves the cursor UP inside
+	// the active region and rewrites, which makes the terminal re-anchor its
+	// viewport to the bottom — kicking a user who scrolled up back to the end
+	// every time streaming content changes height (spinner appears/disappears,
+	// "Executing…" becomes a result, a thinking block collapses, …). With it
+	// off, the renderer relies on per-line ClearLine in the incremental path
+	// and never yanks the viewport, so native terminal scrollback stays put.
+	clearOnShrink bool
 
 	// Scheduling.
 	stopped         bool
@@ -59,7 +56,16 @@ type TUI struct {
 
 // New creates a TUI bound to the given terminal.
 func New(t term.Terminal) *TUI {
-	return &TUI{terminal: t, userViewportTop: -1}
+	return &TUI{terminal: t}
+}
+
+// SetClearOnShrink toggles the full-repaint-on-shrink behavior (default off).
+// Off keeps native terminal scrollback stable during streaming; on issues a
+// cursor-moving full repaint to wipe empty rows when content shrinks.
+func (t *TUI) SetClearOnShrink(enabled bool) {
+	t.mu.Lock()
+	t.clearOnShrink = enabled
+	t.mu.Unlock()
 }
 
 // SetFocus directs keyboard input to component (nil clears focus).
@@ -69,36 +75,6 @@ func (t *TUI) SetFocus(component Component) {
 
 // Focused returns the currently focused component.
 func (t *TUI) Focused() Component { return t.focused }
-
-// SetScrollOffset sets how many lines above the bottom of the content are
-// visible. 0 sticks to the bottom. Negative values are treated as 0; values
-// larger than the content are clamped by doRender.
-func (t *TUI) SetScrollOffset(offset int) {
-	t.mu.Lock()
-	if offset < 0 {
-		offset = 0
-	}
-	if offset == t.scrollOffset {
-		t.mu.Unlock()
-		return
-	}
-	// Returning to bottom: clear any pinned viewport so future renders snap
-	// to the end and a fresh scroll-up can re-pick a (possibly different)
-	// natural viewport top.
-	if offset == 0 {
-		t.userViewportTop = -1
-	}
-	t.scrollOffset = offset
-	t.mu.Unlock()
-	t.RequestRender(false)
-}
-
-// ScrollOffset returns the current scroll offset.
-func (t *TUI) ScrollOffset() int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.scrollOffset
-}
 
 // Width returns the current terminal width in columns.
 func (t *TUI) Width() int { return t.terminal.Columns() }

@@ -207,30 +207,3 @@ func TestThinkingAfterMultipleToolsKeepsChronology(t *testing.T) {
 		t.Errorf("blocks out of chronological order: %v", summary)
 	}
 }
-
-// TestScrollOffsetResetOnResume reproduces the regression where a user who
-// had scrolled up in session A, then ran `/resume B`, kept the manual
-// scroll position from session A. The new session's render would then
-// try to render at an offset that no longer made sense in the new
-// session's shorter/different history.
-//
-// resetForNewSession must clear t.tui's scroll offset so the new session
-// starts at the bottom and the user can scroll up again normally.
-func TestScrollOffsetResetOnResume(t *testing.T) {
-	tui := newTestTUIForEvents()
-	// Simulate: user scrolled up in the previous session.
-	tui.tui.SetScrollOffset(3)
-	if tui.tui.ScrollOffset() != 3 {
-		t.Fatalf("setup: scroll offset got %d want 3", tui.tui.ScrollOffset())
-	}
-
-	// The actual reset path used by resumeInPlace.
-	tui.resetForNewSession()
-
-	// After reset, the renderer scrollOffset must be 0 — otherwise the
-	// new session's render is anchored at a stale offset from the OLD
-	// session.
-	if tui.tui.ScrollOffset() != 0 {
-		t.Errorf("after resetForNewSession, scrollOffset=%d want 0", tui.tui.ScrollOffset())
-	}
-}

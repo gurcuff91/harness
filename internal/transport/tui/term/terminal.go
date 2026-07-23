@@ -91,8 +91,9 @@ func (t *ProcessTerminal) Start(onInput func(string), onResize func()) error {
 	// (\x1b[?1002h) here. That mode captures every mouse click and drag as an
 	// ANSI sequence, which prevents the terminal from doing its NATIVE text
 	// selection — the user would no longer be able to click+drag to copy the
-	// agent's output. Scroll-without-selecting is not worth that cost. Scroll
-	// is still available via keyboard (PageUp/PageDown/Home/End).
+	// agent's output. The TUI is a bottom-sticking inline renderer with no
+	// in-app scrolling; the terminal's own native scrollback (and mouse
+	// selection) is used to read earlier output once a turn completes.
 
 	// stdin sequence buffer: reassembles split escape sequences and
 	// surfaces pastes as a single bracketed blob (matches PI's StdinBuffer).

@@ -48,9 +48,13 @@ func TestStreamingMultilineNoFullRepaint(t *testing.T) {
 	}
 }
 
-// Ensures the table-flush case (change strictly before the last line + append)
-// STILL takes the safe full-repaint path — the fix must not regress it.
-func TestTableFlushStillRepaints(t *testing.T) {
+// The table-flush case (a mid-buffer line changes AND lines are appended in the
+// same render) must NOT trigger a cursor-moving full repaint. PI has no such
+// branch, and the full repaint re-anchored the terminal viewport to the bottom,
+// kicking a scrolled-up reader back to the end on every such tick. The
+// incremental per-line path handles it (a brief in-place rewrite is fine); what
+// matters is that we never emit a scrollback-yanking full clear here.
+func TestTableFlushNoFullRepaint(t *testing.T) {
 	tui, term := newTestTUI(80, 40)
 	comp := &multilineComp{}
 	tui.AddChild(comp)
@@ -61,17 +65,17 @@ func TestTableFlushStillRepaints(t *testing.T) {
 	base := len(term.writes)
 
 	// Table flush: the mid-buffer blank (index 1, BEFORE last line) becomes a
-	// border AND rows are appended — firstChanged=1 < len-1=2 → must repaint.
+	// border AND rows are appended — firstChanged=1 < len-1=2. This used to
+	// force a full repaint; now it must take the incremental path.
 	comp.lines = []string{"intro", "| a | b |", "| 1 | 2 |", "| 3 | 4 |"}
 	tui.doRender()
 
-	repaint := false
 	for _, w := range term.writes[base:] {
-		if strings.Contains(w, ansi.ClearFromCursor) || strings.Contains(w, ansi.FullClear) {
-			repaint = true
+		if strings.Contains(w, ansi.FullClear) {
+			t.Error("table flush must not emit a full clear (yanks terminal scrollback)")
 		}
-	}
-	if !repaint {
-		t.Error("table flush (change before last line) must still full-repaint")
+		if strings.Contains(w, ansi.ClearFromCursor) {
+			t.Error("table flush must not emit a cursor-moving relative full repaint")
+		}
 	}
 }

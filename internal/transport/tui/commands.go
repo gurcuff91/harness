@@ -27,7 +27,6 @@ func (t *TUI) handleSubmit(text string) {
 		return
 	}
 	t.editor.Clear()
-	t.scrollToBottom() // a fresh user prompt brings the view back to the bottom
 
 	if strings.HasPrefix(text, "/") {
 		fields := strings.Fields(text)

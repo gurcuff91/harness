@@ -2,6 +2,53 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.23] - 2026-07-23
+
+### TUI — native scrollback stays put while the agent streams
+- Reading earlier output by scrolling up (with the terminal's own mouse-wheel
+  scrollback) no longer gets yanked back to the bottom every time the agent
+  emits new content — a tool call, a thinking block, streamed text, or a
+  completed markdown table. The view now stays exactly where you left it while
+  new content flows in below, and snaps to the end only when you scroll back
+  down yourself.
+- Root cause: two render branches issued a full repaint that moved the cursor
+  UP inside the active region and rewrote it. That makes the terminal
+  re-anchor its viewport to the bottom, so a scrolled-up reader was kicked to
+  the end on nearly every streaming tick. PI (whose renderer harness is ported
+  from) has neither branch — it always falls through to the incremental
+  per-line path, which only appends with `\r\n` or rewrites visible lines in
+  place and never yanks the viewport. Harness now matches PI:
+  - **clear-on-shrink is now opt-in and off by default** (`SetClearOnShrink`,
+    mirroring PI's `PI_CLEAR_ON_SHRINK`). The shrink repaint fired constantly
+    during streaming because content height oscillates (spinner appears /
+    disappears, "Executing…" becomes a result, a thinking block collapses).
+  - **the "mixed change" table-flush full-repaint branch was removed** (and the
+    now-unused `isPureShift` helper). A mid-buffer line changing while lines are
+    appended (e.g. a markdown table completing) now takes the incremental path.
+- Net effect: streaming is smooth (no flick on table renders) and the terminal
+  scrollback behaves like PI's — scroll up to read anytime, even mid-turn.
+
+## [0.73.22] - 2026-07-23
+
+### TUI — remove in-app history scrolling (revert the scroll pin)
+- Removed all in-app history scrolling: the keyboard scroll bindings
+  (PageUp/PageDown/Home/End), the `scrollOffset`/`userViewportTop` pin, the
+  `renderFromTop` repaint path, the `clearRelativeFromTop` clear mode, and the
+  `SetScrollOffset`/`ScrollOffset` API. This reverts the scroll-pin work from
+  0.73.14–0.73.18.
+- Rationale: the pin was a purely logical scroll simulation layered on an
+  INLINE renderer (no alternate screen). It relied on the hardware cursor row
+  staying perfectly in sync AND the terminal not moving its own scrollback.
+  With content taller than the screen, streaming new text desynced the cursor
+  math and terminals (e.g. Ghostty) followed the output back to the bottom —
+  so the user's reading position was dragged down anyway. The feature caused
+  more glitches than it was worth for a narrow window (reading history *while*
+  the model streams).
+- New behavior: the TUI always sticks to the bottom (tail-follow) while a
+  turn streams. To read earlier output, use the terminal's own native
+  scrollback (and native mouse selection) once the turn completes — the
+  common, reliable path across every terminal.
+
 ## [0.73.21] - 2026-07-23
 
 ### Providers — canonical tool_use IDs (cross-provider session resume)

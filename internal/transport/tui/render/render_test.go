@@ -2,7 +2,6 @@ package render
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -178,46 +177,9 @@ func TestSanitizeOverWideLines(t *testing.T) {
 	}
 }
 
-// TestScrollOffsetRepaintsFromTop verifies that when the user has scrolled
-// up (scrollOffset > 0), doRender uses renderFromTop instead of the
-// bottom-sticking incremental path, preserving the manual viewport.
-func TestScrollOffsetRepaintsFromTop(t *testing.T) {
-	tui, term := newTestTUI(20, 5)
-	// 10 content lines, terminal is 5 rows tall.
-	lines := []string{"L0", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9"}
-	tui.AddChild(&staticComponent{lines: lines})
-
-	// First render: bottom of content visible.
-	tui.doRender()
-	if tui.previousViewportTop != 5 {
-		t.Fatalf("first render viewport top got %d want 5", tui.previousViewportTop)
-	}
-
-	// Scroll up 3 lines.
-	tui.SetScrollOffset(3)
-
-	// The next render must repaint from top=2 (5-3), not from top=5.
-	tui.doRender()
-	if tui.previousViewportTop != 2 {
-		t.Errorf("scrolled render viewport top got %d want 2", tui.previousViewportTop)
-	}
-
-	out := term.lastWrite()
-	// Should contain L2..L6 (topRow 2, height 5).
-	for i := 2; i <= 6; i++ {
-		if !strings.Contains(out, "L"+strconv.Itoa(i)) {
-			t.Errorf("scrolled render missing L%d: %q", i, out)
-		}
-	}
-	// Must NOT contain L9 (still below visible area).
-	if strings.Contains(out, "L9") {
-		t.Errorf("scrolled render should not contain L9: %q", out)
-	}
-}
-
-// TestScrollOffsetZeroSticksToBottom verifies that scrollOffset == 0 keeps
-// the existing bottom-sticking behavior after content grows.
-func TestScrollOffsetZeroSticksToBottom(t *testing.T) {
+// TestSticksToBottom verifies the renderer keeps the bottom-sticking
+// (tail-follow) behavior after content grows past the terminal height.
+func TestSticksToBottom(t *testing.T) {
 	tui, term := newTestTUI(20, 5)
 	tui.AddChild(&staticComponent{lines: []string{"L0", "L1", "L2", "L3", "L4"}})
 
@@ -237,49 +199,6 @@ func TestScrollOffsetZeroSticksToBottom(t *testing.T) {
 	out := term.lastWrite()
 	if strings.Contains(out, "\x1b[2J") {
 		t.Errorf("bottom-stick growth should not full-clear: %q", out)
-	}
-}
-
-// TestScrollReturnToBottomForcesRedraw verifies that the transition from a
-// manual scroll (scrollOffset > 0) back to stick-to-bottom issues a full
-// relative redraw and recomputes the viewport from the end. An earlier version
-// reused the scrolled viewport top and ended up corrupting the input/footer
-// area.
-func TestScrollReturnToBottomForcesRedraw(t *testing.T) {
-	tui, term := newTestTUI(20, 5)
-	lines := []string{"L0", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9"}
-	tui.AddChild(&staticComponent{lines: lines})
-
-	// First render: bottom of content visible (viewport top 5).
-	tui.doRender()
-	if tui.previousViewportTop != 5 {
-		t.Fatalf("first render viewport top got %d want 5", tui.previousViewportTop)
-	}
-
-	// Scroll up 3 lines (viewport top should be 2).
-	tui.SetScrollOffset(3)
-	tui.doRender()
-	if tui.previousViewportTop != 2 {
-		t.Fatalf("scrolled viewport top got %d want 2", tui.previousViewportTop)
-	}
-
-	// Return to bottom. Must force a redraw and re-anchor to the end.
-	tui.SetScrollOffset(0)
-	tui.doRender()
-	if tui.previousViewportTop != 5 {
-		t.Errorf("return-to-bottom viewport top got %d want 5", tui.previousViewportTop)
-	}
-
-	out := term.lastWrite()
-	// A full redraw is required on this transition. We clear the active
-	// screen and repaint from home (preserving shell scrollback), not the
-	// incremental bottom-stick path that would reuse the scrolled viewport.
-	if !strings.Contains(out, "\x1b[2J") {
-		t.Errorf("return-to-bottom render should clear active screen: %q", out)
-	}
-	if strings.Contains(out, "\x1b[3J") {
-		// \x1b[3J erases scrollback; we want to preserve it on this transition.
-		t.Errorf("return-to-bottom render should not erase scrollback: %q", out)
 	}
 }
 
@@ -335,74 +254,6 @@ func TestStreamingNoFlickWhenContentGrowsPastWrap(t *testing.T) {
 	}
 	if relClears > 0 || fullClears > 0 {
 		t.Errorf("FLICK: streaming+growing content triggered %d relative and %d full clears (should be 0)", relClears, fullClears)
-	}
-}
-
-// TestScrollPinnedWhileContentGrows verifies that when the user has scrolled
-// up to read history, the viewport stays pinned at the line they were
-// reading even as the agent streams new content below. Previously, the
-// renderer recomputed the viewport top as contentHeight-height-scrollOffset
-// on every render, which slid the user's view down as new content arrived —
-// effectively kicking them back to the bottom while they were reading.
-func TestScrollPinnedWhileContentGrows(t *testing.T) {
-	tui, _ := newTestTUI(20, 5)
-	// 10 content lines, terminal is 5 rows tall.
-	grow := &growingComponent{text: "L0\nL1\nL2\nL3\nL4\nL5\nL6\nL7\nL8\nL9"}
-	tui.AddChild(grow)
-
-	tui.doRender()
-	if tui.previousViewportTop != 5 {
-		t.Fatalf("first render viewport top got %d want 5", tui.previousViewportTop)
-	}
-
-	// User scrolls up 2 lines. Viewport should now be at row 3.
-	tui.SetScrollOffset(2)
-	tui.doRender()
-	if tui.previousViewportTop != 3 {
-		t.Fatalf("scrolled viewport top got %d want 3", tui.previousViewportTop)
-	}
-	pinned := tui.previousViewportTop
-
-	// Agent streams new content (append 3 lines). The viewport must NOT move.
-	grow.text += "\nL10\nL11\nL12"
-	tui.doRender()
-	if tui.previousViewportTop != pinned {
-		t.Errorf("viewport moved during streaming: top=%d want %d (user was scrolled, content should slide in below)", tui.previousViewportTop, pinned)
-	}
-
-	// Stream more. Still pinned.
-	grow.text += "\nL13\nL14"
-	tui.doRender()
-	if tui.previousViewportTop != pinned {
-		t.Errorf("viewport moved during streaming: top=%d want %d", tui.previousViewportTop, pinned)
-	}
-
-	// Return to bottom: clears the pin, snaps to the new end.
-	tui.SetScrollOffset(0)
-	tui.doRender()
-	want := len(grow.Render(20)) - 5 // stick to bottom
-	if tui.previousViewportTop != want {
-		t.Errorf("after scrollToBottom: top=%d want %d", tui.previousViewportTop, want)
-	}
-}
-
-// TestScrollUpReturnsToSameLine verifies that scrolling up to read history
-// keeps the same absolute content row visible across multiple renders (as
-// long as no new content is added).
-func TestScrollUpReturnsToSameLine(t *testing.T) {
-	tui, _ := newTestTUI(20, 5)
-	grow := &growingComponent{text: "L0\nL1\nL2\nL3\nL4\nL5\nL6\nL7\nL8\nL9"}
-	tui.AddChild(grow)
-	tui.doRender()
-	tui.SetScrollOffset(2)
-	tui.doRender()
-	top := tui.previousViewportTop
-	// Several idle renders (e.g. spinner ticks with no new content) — must stay.
-	for i := 0; i < 5; i++ {
-		tui.doRender()
-	}
-	if tui.previousViewportTop != top {
-		t.Errorf("viewport drifted on idle renders: top=%d want %d", tui.previousViewportTop, top)
 	}
 }
 
