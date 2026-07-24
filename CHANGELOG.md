@@ -2,6 +2,67 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.31] - 2026-07-24
+
+### Server/TUI — SSE control events (turn_end/stop/error) never silently dropped
+- Investigated a second field-reported freeze (spinner stuck, Esc
+  unresponsive) after the earlier provider-stream fix (0.73.26) — this one
+  happened on the already-patched binary, so a different cause was in play.
+  Found it by reading the SSE fan-out path: `SessionProxy.broadcast` sent to
+  each client's channel non-blocking — `select { ch <- line; default: }` —
+  and **silently dropped the event** if the channel was full, with no
+  distinction between a harmless streaming delta and a critical lifecycle
+  event. A `thinking:high` turn with a long response can emit thousands of
+  small delta events (one per token); if the render loop on the other end
+  fell behind a burst for a moment, the buffer filled and whatever event
+  landed at that instant — including `turn_end` or `stop` — was lost. The
+  agent had genuinely finished (or been cancelled), but the TUI never saw the
+  signal: spinner stuck forever, Esc looking like it did nothing (it had
+  already worked server-side).
+- `broadcast` now distinguishes the two: high-volume streaming deltas
+  (`thinking`/`text`/`tool_args` deltas) are still sent non-blocking — losing
+  one is harmless, and s.emit calls broadcast synchronously from the agent's
+  ReAct loop, so this path must never stall a turn. Everything else (new
+  `isControlEvent`, a denylist of just those three droppable types — so an
+  unlisted future event type defaults to protected) gets a bounded blocking
+  retry (`controlBroadcastTimeout` = 500ms) before falling back to a dropped
+  + logged warning as an absolute last resort, instead of a silent drop.
+- Bumped both ends of the SSE pipe's per-client buffer from asymmetric,
+  under-sized values (server 1024, TUI client 64 — the consumer had the
+  *smaller* buffer despite being the actual bottleneck) to a matched 4096 on
+  each side (`sseClientBufferSize` in `internal/server/server.go`,
+  `tuiClientEventBufferSize` in `internal/transport/tui/client.go`). Sized to
+  absorb a multi-thousand-delta burst from a long thinking:high response
+  without either end starving the other; worst-case memory (a few hundred
+  bytes per event × 4096) is a few MB — negligible.
+- **The dropped-event warning is gated by the same `Server.verbose` flag that
+  already gates `requestLogger`** — it does NOT log unconditionally.
+  `SessionProxy` now carries `verbose` (threaded through `newSessionProxy`
+  from `Server.verbose`) specifically because the TUI's in-process server
+  (`internal/transport/tui/server.go`) always runs with `Verbose: false`: it
+  shares stdout/stderr with the raw-mode terminal renderer, and `broadcast`
+  runs on the agent's own event-emitting goroutine — an unconditional
+  `log.Print` there (Go's default logger writes to stderr) would have
+  corrupted the TUI's display. `harness serve` / Telegram run with
+  `Verbose: true` and do want the warning visible.
+- New tests (`internal/server/proxy_test.go`): `TestIsControlEvent` locks in
+  the denylist; `TestBroadcastDropsStreamingDeltaOnFullChannel` verifies
+  deltas never block; `TestBroadcastRetriesControlEventOnFullChannel`
+  verifies a control event waits out a momentarily-full channel and still
+  gets delivered; `TestBroadcastDropsControlEventAfterTimeoutOnDeadClient`
+  verifies a truly dead client can't hang the agent loop forever;
+  `TestBroadcastSilentWhenNotVerbose` / `TestBroadcastLogsWhenVerbose` lock in
+  the verbose gating in both directions. Full suite verified clean under
+  `-race`.
+- Also added a **temporary** diagnostic endpoint mounted at `/debug/pprof/*`
+  on the internal server (`net/http/pprof`, wired explicitly into the chi
+  router since this server doesn't use `http.DefaultServeMux`) — lets a live,
+  possibly-hung harness process be inspected over loopback HTTP
+  (`curl http://127.0.0.1:<port>/debug/pprof/goroutine?debug=2`) with zero
+  risk, unlike attaching a debugger (which killed the hung process outright
+  during this investigation — a known macOS ptrace/Delve hazard). Kept in
+  place for future diagnosis of freezes or leaks, not just this one.
+
 ## [0.73.30] - 2026-07-24
 
 ### TUI — footer shows "(turn/max_turns)" while the agent is working

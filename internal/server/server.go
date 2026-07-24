@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"strconv"
 	"strings"
@@ -23,6 +24,20 @@ import (
 	"github.com/gurcuff91/harness/mcp"
 	"github.com/gurcuff91/harness/types"
 )
+
+// sseClientBufferSize is the per-client SSE event channel capacity
+// (SessionProxy.broadcast's target, and handleEvents' consumer). A turn with
+// thinking:high and a long response can emit thousands of small delta events
+// (one per streamed token/fragment); if the consumer (the render loop on the
+// other end of the connection) falls behind a burst, this is how much
+// slack it gets before a delta is dropped (control events like turn_end/stop
+// get a bounded blocking retry instead — see isControlEvent in proxy.go).
+// 4096 is generous headroom for that burst (each event is at most a few
+// hundred bytes, so worst case this is a few MB — negligible) without being
+// unbounded. Matches tuiClientEventBufferSize on the TUI's consuming side
+// (internal/transport/tui/client.go) — the two ends of the same pipe should
+// have comparable slack, not one starving the other.
+const sseClientBufferSize = 4096
 
 // Server is the HTTP transport for the agent harness.
 type Server struct {
@@ -86,6 +101,19 @@ func (s *Server) handler() http.Handler {
 	r.Post("/api/sessions/{id}/commands", s.handleExecCommand)
 	r.Get("/api/sessions/{id}/messages", s.handleGetMessages)
 	r.Post("/api/sessions/{id}/stop", s.handleStopSession)
+
+	// TEMPORARY diagnostic endpoint (not net/http/pprof's DefaultServeMux
+	// auto-registration — that only wires up on import side effects, and this
+	// server uses chi, not http.DefaultServeMux, so the handlers are mounted
+	// explicitly here). Lets us pull a goroutine dump from a live, hung process
+	// over loopback HTTP (127.0.0.1-only internal server) without attaching a
+	// debugger — safe, doesn't touch the process. Remove once the mid-turn
+	// freeze investigation is done.
+	r.HandleFunc("/debug/pprof/*", pprof.Index)
+	r.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	r.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	r.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	r.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
 	return r
 }
@@ -529,7 +557,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		_ = sess.SwitchThinking(level)
 	}
 
-	proxy := newSessionProxy(sess)
+	proxy := newSessionProxy(sess, s.verbose)
 
 	s.mu.Lock()
 	s.sessions[sess.ID()] = proxy
@@ -647,7 +675,7 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	proxy := newSessionProxy(sess)
+	proxy := newSessionProxy(sess, s.verbose)
 	s.mu.Lock()
 	s.sessions[sess.ID()] = proxy
 	s.mu.Unlock()
@@ -774,7 +802,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	ch := make(chan []byte, 1024)
+	ch := make(chan []byte, sseClientBufferSize)
 	proxy.addClient(ch)
 	defer proxy.removeClient(ch)
 

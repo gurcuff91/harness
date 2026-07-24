@@ -14,6 +14,19 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
+// tuiClientEventBufferSize is the capacity of the local channel StreamEvents
+// hands parsed SSE events through, between the socket-reading goroutine and
+// consumeEvents (the render loop). Matches sseClientBufferSize on the
+// server's side of the same pipe (internal/server/server.go) — sized for the
+// same bursts (thousands of small deltas per turn under thinking:high), so
+// neither end is the bottleneck relative to the other. A too-small buffer
+// here specifically risks this goroutine's `ch <- evt` blocking behind a slow
+// consumeEvents, which delays this goroutine noticing ctx.Done() and cleanly
+// exiting — not fatal (ctx.Done() is still selected on each send), but more
+// slack means fewer render stalls translate into backpressure on the socket
+// read.
+const tuiClientEventBufferSize = 4096
+
 // Client is an HTTP client for the Harness API. Identical contract to the v1
 // TUI client — tui is a pure frontend over the same HTTP/SSE backend.
 type Client struct {
@@ -212,7 +225,7 @@ func (c *Client) StreamEvents(ctx context.Context, sessionID string) (<-chan map
 		return nil, fmt.Errorf("SSE: status %d", resp.StatusCode)
 	}
 
-	ch := make(chan map[string]any, 64)
+	ch := make(chan map[string]any, tuiClientEventBufferSize)
 	go func() {
 		defer resp.Body.Close()
 		defer close(ch)
