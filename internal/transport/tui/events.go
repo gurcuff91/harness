@@ -53,7 +53,9 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				t.liveMD = nil
 				t.mu.Unlock()
 				thinkBlk, thinkBuf, thinkingFrozen = nil, "", false
+				t.currTurn = 0 // new turn — reset the "(turn/max_turns)" footer counter
 				t.setSpinning(true)
+				t.updateInfo()
 
 			case "loop_start":
 				// A new ReAct iteration is starting within the same turn. Normally
@@ -68,6 +70,11 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				// one where a mid-turn event silences it) without needing every
 				// such event to know to turn it back on individually.
 				t.setSpinning(true)
+				// Count iterations for the footer "(turn/max_turns)" indicator —
+				// only meaningful while the agent is working, shown/hidden by
+				// turn_start/turn_end (see updateInfo).
+				t.currTurn++
+				t.updateInfo()
 
 			case "thinking":
 				delta, _ := evt["delta"].(string)
@@ -234,6 +241,9 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				if t.queueCount == 0 {
 					t.setSpinning(false)
 				}
+				// Hide the "(turn/max_turns)" footer indicator now that this turn is
+				// done — updateInfo only shows it while spinning (see its own logic).
+				t.updateInfo()
 
 			case "received_prompt":
 				// The backend received an immediate (non-queued) prompt — echo it with

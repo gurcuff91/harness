@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.30] - 2026-07-24
+
+### TUI — footer shows "(turn/max_turns)" while the agent is working
+- The footer's session-info line (`~/path • session-name`) now shows the
+  current ReAct iteration out of the per-turn cap while the agent is actively
+  working, e.g. `~/path • kaiban-api-v2 (2/50)`. Appears on `turn_start`
+  (reset to 0) and increments on each `loop_start`; hidden again on
+  `turn_end`, per the requested behavior — it's only meaningful while
+  something is in flight. Sits before the existing `[N queued]` badge.
+- New `Session.MaxTurns()` / `Agent.MaxTurns()` getters expose the per-turn
+  ReAct cap (previously private, never surfaced to any client). `GET/POST
+  /api/sessions*` now returns `max_turns` alongside the existing session
+  fields (`sessionInfoDTO` wraps `store.SessionMeta`) — used by
+  `handleCreateSession`, `handleResumeSession`, and `handleGetSession`.
+- Found and fixed a real, pre-existing data race while adding tests for this:
+  `components.TruncatedText` (the type backing the footer's info/stats lines)
+  had no internal synchronization — `SetText` (called from the SSE
+  event-consumer goroutine on every turn/loop/tokens event) and `Render`
+  (called from the render-scheduler goroutine) raced on the same field.
+  `RawBlock`/`History` already guard themselves the same way; `TruncatedText`
+  now does too.
+- New tests `TestTurnCounterShownWhileWorkingOnly` and
+  `TestTurnCounterResetsOnNewTurn` lock in the counter's visibility and
+  reset behavior. Full suite (including `internal/transport/tui`) verified
+  clean under `-race -count=5`.
+
 ## [0.73.29] - 2026-07-24
 
 ### TUI — spinner stays on after a mid-turn auto-compact

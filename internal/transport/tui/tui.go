@@ -59,6 +59,7 @@ type TUI struct {
 	isSubscription bool
 	sessionCmds    []CommandDef
 	lastSessionID  string
+	maxTurns       int // ReAct iteration cap per turn, from the session (footer "(turn/max)")
 
 	// Render engine + components.
 	tui     *render.TUI
@@ -88,6 +89,7 @@ type TUI struct {
 	stats        tokensInfo
 	spinning     bool
 	queueCount   int
+	currTurn     int // ReAct iteration counter, incremented on loop_start; reset on turn_start
 	compactStart time.Time
 	lastTurnText strings.Builder
 

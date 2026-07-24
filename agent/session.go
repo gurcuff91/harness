@@ -593,6 +593,11 @@ func (s *Session) ID() string { return s.id }
 // Name returns the session's display name.
 func (s *Session) Name() string { return s.name }
 
+// MaxTurns returns the max ReAct iterations allowed per turn for this session
+// (AgentOptions.MaxTurns, default 25). Exposed read-only so clients (e.g. the
+// TUI footer) can show progress like "(3/25)" without duplicating the limit.
+func (s *Session) MaxTurns() int { return s.maxTurns }
+
 // Rename sets a friendly display name.
 func (s *Session) Rename(name string) error {
 	s.name = name

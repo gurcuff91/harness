@@ -261,6 +261,12 @@ func (a *Agent) MCPTools() []tools.Tool {
 // own tools use a scoped adapter over the same store.
 func (a *Agent) Memory() *memory.Store { return a.memStore }
 
+// MaxTurns returns the max ReAct iterations per turn this agent creates
+// sessions with (AgentOptions.MaxTurns, default 25). Every session gets the
+// same value at creation, so this is the right fallback for a session that
+// isn't currently active (no live *Session to ask directly).
+func (a *Agent) MaxTurns() int { return a.maxTurns }
+
 // Providers returns a read-only snapshot of every known provider and its state.
 // This is the SDK's window into provider configuration; administration
 // (connecting/disconnecting, entering API keys, OAuth) is done via the `harness`

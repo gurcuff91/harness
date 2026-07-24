@@ -301,3 +301,104 @@ func TestSpinnerOffAfterCompactEndThenTurnEnd(t *testing.T) {
 		t.Error("spinner should be off after turn_end, even though loop_start re-armed it mid-turn")
 	}
 }
+
+// infoText renders the footer's info line (path • session (turn/max) [queued])
+// as a plain string, for assertions.
+func infoText(tui *TUI) string {
+	lines := tui.info.Render(500)
+	if len(lines) == 0 {
+		return ""
+	}
+	return stripANSI(lines[0])
+}
+
+// TestTurnCounterShownWhileWorkingOnly verifies the footer "(turn/max_turns)"
+// indicator: it increments once per loop_start, resets on each new turn_start,
+// and is only visible while the agent is actively working — hidden again once
+// turn_end arrives, per the user's requested behavior.
+func TestTurnCounterShownWhileWorkingOnly(t *testing.T) {
+	tui := newTestTUIForEvents()
+	tui.sessionName = "kaiban-api-v2"
+	tui.maxTurns = 50
+
+	// Before any turn: no counter yet (spinner off).
+	tui.updateInfo()
+	if strings.Contains(infoText(tui), "(") {
+		t.Errorf("counter should not show before any turn starts: %q", infoText(tui))
+	}
+
+	events := []map[string]any{
+		{"type": "turn_start"},
+		{"type": "loop_start"}, // 1st iteration
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := make(chan map[string]any, len(events))
+	for _, e := range events {
+		ch <- e
+	}
+	done := make(chan struct{})
+	go func() { tui.consumeEvents(ctx, ch); close(done) }()
+	for len(ch) > 0 {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(10 * time.Millisecond)
+
+	if got := infoText(tui); !strings.Contains(got, "(1/50)") {
+		t.Errorf("after 1st loop_start, want \"(1/50)\" in info line, got: %q", got)
+	}
+
+	// A second iteration (e.g. after a tool call) increments the counter.
+	ch2 := make(chan map[string]any, 1)
+	ch2 <- map[string]any{"type": "loop_start"}
+	cancel()
+	<-done
+
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	done2 := make(chan struct{})
+	go func() { tui.consumeEvents(ctx2, ch2); close(done2) }()
+	for len(ch2) > 0 {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(10 * time.Millisecond)
+
+	if got := infoText(tui); !strings.Contains(got, "(2/50)") {
+		t.Errorf("after 2nd loop_start, want \"(2/50)\" in info line, got: %q", got)
+	}
+
+	cancel2()
+	<-done2
+
+	// turn_end hides the counter again.
+	ctx3, cancel3 := context.WithTimeout(context.Background(), time.Second)
+	defer cancel3()
+	ch3 := make(chan map[string]any, 1)
+	ch3 <- map[string]any{"type": "turn_end"}
+	close(ch3)
+	tui.consumeEvents(ctx3, ch3)
+
+	if got := infoText(tui); strings.Contains(got, "(2/50)") || strings.Contains(got, "/50)") {
+		t.Errorf("counter should be hidden after turn_end, got: %q", got)
+	}
+}
+
+// TestTurnCounterResetsOnNewTurn verifies a fresh turn_start resets the
+// counter to 0 (so the first loop_start of the new turn shows "(1/max)", not
+// a continuation of the previous turn's count).
+func TestTurnCounterResetsOnNewTurn(t *testing.T) {
+	tui := newTestTUIForEvents()
+	tui.sessionName = "s"
+	tui.maxTurns = 10
+	tui.currTurn = 7 // simulate a previous turn that reached iteration 7
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ch := make(chan map[string]any, 2)
+	ch <- map[string]any{"type": "turn_start"}
+	ch <- map[string]any{"type": "loop_start"}
+	close(ch)
+	tui.consumeEvents(ctx, ch)
+
+	if got := infoText(tui); !strings.Contains(got, "(1/10)") {
+		t.Errorf("new turn's first loop_start should show \"(1/10)\", got: %q", got)
+	}
+}

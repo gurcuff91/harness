@@ -535,7 +535,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	s.sessions[sess.ID()] = proxy
 	s.mu.Unlock()
 
-	writeJSON(w, http.StatusCreated, sess.Meta())
+	writeJSON(w, http.StatusCreated, sessionInfoDTO{SessionMeta: sess.Meta(), MaxTurns: sess.MaxTurns()})
 }
 
 // handleListSessions returns all sessions, optionally filtered by ?cwd=
@@ -652,7 +652,15 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	s.sessions[sess.ID()] = proxy
 	s.mu.Unlock()
 
-	writeJSON(w, http.StatusOK, sess.Meta())
+	writeJSON(w, http.StatusOK, sessionInfoDTO{SessionMeta: sess.Meta(), MaxTurns: sess.MaxTurns()})
+}
+
+// sessionInfoDTO wraps store.SessionMeta with fields that live on the runtime
+// Session (or the Agent as a fallback), not in the persisted meta — currently
+// just MaxTurns, which the TUI footer uses for a "(turn/max_turns)" indicator.
+type sessionInfoDTO struct {
+	store.SessionMeta
+	MaxTurns int `json:"max_turns"`
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
@@ -663,19 +671,27 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	proxy, ok := s.sessions[id]
 	s.mu.RUnlock()
 	if ok {
-		writeJSON(w, http.StatusOK, proxy.session.Meta())
+		writeJSON(w, http.StatusOK, sessionInfoDTO{
+			SessionMeta: proxy.session.Meta(),
+			MaxTurns:    proxy.session.MaxTurns(),
+		})
 		return
 	}
 
-	// Fallback: check store (persisted sessions from previous runs)
+	// Fallback: check store (persisted sessions from previous runs). There's no
+	// live *Session to ask, so MaxTurns comes from the agent's configured
+	// default — every session it creates gets the same value.
 	sessions, err := s.agent.ListAllSessions()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	for _, s := range sessions {
-		if s.ID == id {
-			writeJSON(w, http.StatusOK, s)
+	for _, meta := range sessions {
+		if meta.ID == id {
+			writeJSON(w, http.StatusOK, sessionInfoDTO{
+				SessionMeta: meta,
+				MaxTurns:    s.agent.MaxTurns(),
+			})
 			return
 		}
 	}

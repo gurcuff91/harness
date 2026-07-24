@@ -114,11 +114,19 @@ func (t *TUI) updateInfo() {
 	if name == "" {
 		name = "No session"
 	}
+	// Turn progress: only meaningful while the agent is actively working — shown
+	// from turn_start (reset to 0, then incremented per loop_start) and hidden
+	// again on turn_end. maxTurns > 0 guard covers a session whose info hasn't
+	// loaded max_turns yet (e.g. very first render before autoConnect resolves).
+	turn := ""
+	if t.isSpinning() && t.maxTurns > 0 {
+		turn = fmt.Sprintf(" (%d/%d)", t.currTurn, t.maxTurns)
+	}
 	queue := ""
 	if t.queueCount > 0 {
 		queue = fmt.Sprintf(" [%d queued]", t.queueCount)
 	}
-	t.info.SetText(ansi.Dimmed(fmt.Sprintf("%s • %s%s", loc, name, queue)))
+	t.info.SetText(ansi.Dimmed(fmt.Sprintf("%s • %s%s%s", loc, name, turn, queue)))
 
 	if t.model == "" {
 		t.footer.SetText("")

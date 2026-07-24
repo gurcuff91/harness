@@ -1,11 +1,21 @@
 package components
 
-import "github.com/gurcuff91/harness/internal/transport/tui/ansi"
+import (
+	"sync"
+
+	"github.com/gurcuff91/harness/internal/transport/tui/ansi"
+)
 
 // TruncatedText is a single-line component that truncates to fit the viewport
 // width. Useful for status lines, headers, and footers. Port of PI's
 // TruncatedText.
+//
+// Guarded by mu like RawBlock/History: SetText is called from the SSE
+// event-consumer goroutine (e.g. TUI.updateInfo, on every turn/loop/tokens
+// event) while Render runs from the render-scheduler goroutine — without a
+// lock those race on t.text.
 type TruncatedText struct {
+	mu       sync.Mutex
 	text     string
 	paddingX int
 }
@@ -16,18 +26,26 @@ func NewTruncatedText(text string, paddingX int) *TruncatedText {
 }
 
 // SetText updates the content.
-func (t *TruncatedText) SetText(text string) { t.text = text }
+func (t *TruncatedText) SetText(text string) {
+	t.mu.Lock()
+	t.text = text
+	t.mu.Unlock()
+}
 
 // Render returns exactly one line, truncated (with ellipsis) to width.
 func (t *TruncatedText) Render(width int) []string {
-	if t.text == "" {
+	t.mu.Lock()
+	text := t.text
+	t.mu.Unlock()
+
+	if text == "" {
 		return []string{""}
 	}
 	avail := width - t.paddingX*2
 	if avail < 1 {
 		avail = 1
 	}
-	line := ansi.TruncateToWidth(t.text, avail, "…", false)
+	line := ansi.TruncateToWidth(text, avail, "…", false)
 	if t.paddingX > 0 {
 		pad := spaces(t.paddingX)
 		line = pad + line + pad
