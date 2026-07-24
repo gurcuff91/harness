@@ -38,6 +38,15 @@ type Session struct {
 	thinkingLvl  string
 	tools        *tools.Registry
 	systemPrompt string
+	// hasMemory mirrors Agent.memStore != nil — the same condition that gates
+	// the "## Memory" block in buildSystemPrompt. Used to add a brief,
+	// equally-conditional nudge to the compaction checkpoint (see
+	// generateCompactionSummary): right after compaction the model's nearest
+	// context is a dense summary, not the system prompt, so the memory
+	// reminder is easy to lose track of exactly when "lack context about
+	// earlier work" (the system prompt's own trigger for using MemoSearch) is
+	// most likely to be true.
+	hasMemory bool
 
 	// Stats — accumulated over the session lifetime
 	stats           types.SessionStats
@@ -133,7 +142,8 @@ func newSession(storeInst *store.Session,
 	provider providers.Provider, modelID, thinkingLvl string,
 	toolReg *tools.Registry, systemPrompt string,
 	maxTurns, maxTokens int,
-	skills []resources.SkillInfo, readSkill func(string) (content string, dir string, err error)) *Session {
+	skills []resources.SkillInfo, readSkill func(string) (content string, dir string, err error),
+	hasMemory bool) *Session {
 
 	meta := storeInst.Meta()
 	s := &Session{
@@ -151,6 +161,7 @@ func newSession(storeInst *store.Session,
 		stats:        meta.Stats, // restore accumulated stats
 		skills:       skills,
 		readSkill:    readSkill,
+		hasMemory:    hasMemory,
 	}
 	s.followCond = sync.NewCond(&s.followMu)
 	s.loadModelMeta(modelID)
@@ -520,8 +531,12 @@ func (s *Session) compact(ctx context.Context) error {
 		return fmt.Errorf("compact: %w", err)
 	}
 
-	// Commit checkpoint — append-only, no data lost
-	if err := s.store.AddCompactionSummary(summary); err != nil {
+	// Commit checkpoint — append-only, no data lost. The persisted checkpoint
+	// gets the memory nudge appended (when memory is enabled for this session);
+	// the event below keeps the LLM's summary as-is so the UI shows a clean
+	// summary, not the internal reminder.
+	checkpoint := buildCompactionCheckpoint(summary, s.hasMemory)
+	if err := s.store.AddCompactionSummary(checkpoint); err != nil {
 		s.emit(types.Event{Type: types.EventError, Message: fmt.Sprintf("compact checkpoint failed: %v", err)})
 		return fmt.Errorf("compact: checkpoint: %w", err)
 	}

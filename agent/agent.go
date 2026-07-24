@@ -408,7 +408,8 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 		provider, modelID, a.thinkingLevel,
 		sessionTools, systemPrompt,
 		a.maxTurns, maxTokens,
-		res.Skills, loader.ReadSkill)
+		res.Skills, loader.ReadSkill,
+		a.memStore != nil)
 	sess.agent = a
 	a.registerSession(sess)
 	return sess, nil
@@ -464,7 +465,8 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 		a.buildSessionTools(meta.ID, cwd, meta.Model, res, loader),
 		a.buildSystemPrompt(cwd, res),
 		a.maxTurns, maxTokens,
-		skills, readSkill)
+		skills, readSkill,
+		a.memStore != nil)
 	sess.agent = a
 	a.registerSession(sess)
 	return sess, nil

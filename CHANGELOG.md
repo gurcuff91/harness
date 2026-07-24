@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.28] - 2026-07-24
+
+### Agent — compaction checkpoint nudges the model toward memory (when enabled)
+- After compaction, the working set collapses to a single checkpoint message
+  — the model's nearest context is now a dense summary, not the system
+  prompt further up. That's exactly the kind of "lack context about earlier
+  work" moment the existing `## Memory` system-prompt block already tells the
+  model to use `MemoSearch` for, but a system-prompt instruction is easy to
+  under-weight right after a context reset.
+- The persisted compaction checkpoint now gets a short, suggestive (not
+  imperative) reminder appended — "you have persistent memory, it may be
+  worth searching before assuming context is gone" — **only when the session
+  has memory enabled**, mirroring the exact same condition
+  (`Agent.memStore != nil`) that gates the system-prompt Memory section. A
+  session without memory enabled gets no reminder and no behavior change.
+- The reminder is appended to what's **persisted** (the checkpoint message in
+  the session log), not to what's shown to the user: `EventCompactEnd.Summary`
+  still carries the LLM's clean summary text, so the TUI/CLI compaction output
+  is unaffected.
+- `Session` gained a `hasMemory bool` field, set once at construction (both
+  `NewSession` and `ResumeSession`) from the same `a.memStore != nil` check
+  `buildSystemPrompt` already uses — no new logic, just threading the existing
+  decision one level down. The checkpoint text is built by a new pure
+  function, `buildCompactionCheckpoint(summary, hasMemory)`, kept in
+  `agent/prompts.go` next to the other compaction prompt constants and
+  covered by `agent/prompts_test.go` without needing to stand up a full
+  Session (provider/store/tools mocks).
+
 ## [0.73.27] - 2026-07-24
 
 ### Tools — malformed tool-call input always feeds back to the model, audited

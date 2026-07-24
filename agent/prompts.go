@@ -27,6 +27,27 @@ Respond with ONLY the summary text.`
 // ends on a user turn (required by providers that reject assistant prefill).
 const compactRequestPrompt = "Summarize the conversation so far following the instructions above."
 
+// memoryCompactionReminder is appended to the persisted compaction checkpoint
+// (NOT to the summary shown to the user) when the session has memory enabled
+// (mirrors the "## Memory" block in buildSystemPrompt — same condition,
+// a.memStore != nil). Right after compaction, the model's nearest context is
+// this dense summary, not the system prompt further up — exactly the kind of
+// "lack context about earlier work" moment the Memory section already tells
+// the model to use MemoSearch for. Worded as a nudge, not an instruction to
+// always search, so it doesn't induce needless MemoSearch calls.
+const memoryCompactionReminder = "\n\n---\nReminder: you have persistent, project-scoped memory (MemoSearch/MemoWrite/MemoDelete). If this summary is missing something you need, it may be worth searching memory before assuming the context is gone."
+
+// buildCompactionCheckpoint appends memoryCompactionReminder to summary when
+// hasMemory is true, leaving summary untouched otherwise. Split out from
+// Session.compact as a pure function so the memory-nudge behavior is directly
+// testable without standing up a Session (provider, store, tools, …).
+func buildCompactionCheckpoint(summary string, hasMemory bool) string {
+	if hasMemory {
+		return summary + memoryCompactionReminder
+	}
+	return summary
+}
+
 // maxTurnsPrompt is injected as a user message when the agent hits the max tool-call limit.
 // It asks the model to report progress and check with the user before continuing.
 const maxTurnsPrompt = "You've reached the maximum number of tool calls allowed for this turn. " +
