@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.29] - 2026-07-24
+
+### TUI — spinner stays on after a mid-turn auto-compact
+- Auto-compaction fires *inside* the ReAct loop, between iterations (when
+  `ContextUsage >= 0.98`), not at the end of the turn — the `for` loop in
+  `promptSync` keeps going into another `loop_start` right after, and the
+  model keeps working (e.g. the auto `MemoSearch` call nudged by the new
+  compaction-checkpoint memory reminder). The TUI's `compact_end` handler
+  correctly turns the spinner off (that sub-step finished), but nothing ever
+  turned it back on for the continuing work — the TUI never handled
+  `loop_start` at all, so a mid-turn compact left the agent visibly "frozen"
+  (no spinner) while it kept calling tools and streaming text.
+- `loop_start` now re-asserts the spinner. Covers this case and any future
+  one where a mid-turn event silences it, without every such event needing to
+  know to turn it back on individually.
+- Found and fixed a related data race while adding tests: `TUI.spinning` was
+  read/written without synchronization from multiple goroutines (the SSE
+  event consumer vs. input handling). `setSpinning` now guards the field with
+  the existing `t.mu`, and a new `isSpinning()` getter replaces the two
+  direct reads in `commands.go`/`layout.go`.
+- New tests `TestSpinnerStaysOnAfterMidTurnCompact` and
+  `TestSpinnerOffAfterCompactEndThenTurnEnd` lock in both the fix and the
+  complementary case (compact really is the turn's last step, e.g. a manual
+  `/compact` with no follow-up tool calls) — the spinner must still turn off
+  once `turn_end` arrives, not get stuck on forever.
+
 ## [0.73.28] - 2026-07-24
 
 ### Agent — compaction checkpoint nudges the model toward memory (when enabled)

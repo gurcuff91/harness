@@ -166,7 +166,7 @@ func (t *TUI) onEscape() {
 		t.tui.RequestRender(false)
 		return
 	}
-	if t.spinning && t.sessionID != "" {
+	if t.isSpinning() && t.sessionID != "" {
 		go t.client.StopSession(t.sessionID) //nolint:errcheck
 	}
 	t.editor.Clear()

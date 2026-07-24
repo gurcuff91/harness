@@ -36,6 +36,8 @@ func newTestTUIForEvents() *TUI {
 	t.tui = render.New(term)
 	t.history = components.NewHistory()
 	t.spinner = components.NewSpinner(t.tui, "")
+	t.info = components.NewTruncatedText("", 0)
+	t.footer = components.NewTruncatedText("", 0)
 	return t
 }
 
@@ -205,5 +207,97 @@ func TestThinkingAfterMultipleToolsKeepsChronology(t *testing.T) {
 	}
 	if !(idx["think1"] < idx["read"] && idx["read"] < idx["bash"] && idx["bash"] < idx["edit"] && idx["edit"] < idx["think2"]) {
 		t.Errorf("blocks out of chronological order: %v", summary)
+	}
+}
+
+// TestSpinnerStaysOnAfterMidTurnCompact reproduces the field report: an
+// auto-compact fires between ReAct iterations of the SAME turn (session.go's
+// promptSync triggers it at 98% context usage, then the for loop continues
+// into another loop_start — e.g. the model follows up with a MemoSearch call
+// per the compaction-checkpoint memory reminder). compact_end turns the
+// spinner off (correct — that sub-step finished), but before the loop_start
+// fix nothing turned it back on for the continuing work: the agent kept
+// calling tools with no spinner, looking frozen/idle when it wasn't.
+func TestSpinnerStaysOnAfterMidTurnCompact(t *testing.T) {
+	tui := newTestTUIForEvents()
+	events := []map[string]any{
+		{"type": "turn_start"},
+		{"type": "loop_start"},
+		{"type": "tool_start", "tool_id": "t1", "tool_name": "Bash"},
+		{"type": "tool_call", "tool_id": "t1", "tool_args": `{"command":"ls"}`},
+		{"type": "tool_result", "tool_id": "t1", "output": "x", "is_error": false},
+		{"type": "loop_end"},
+		{"type": "compact_start"},
+		{"type": "compact_end", "summary": "…"},
+		// The for loop in promptSync continues into another iteration of the
+		// SAME turn — this is the event the fix listens for.
+		{"type": "loop_start"},
+	}
+
+	// consumeEvents' exit paths (ctx.Done() / channel closed) unconditionally
+	// turn the spinner off — that's correct for "stream ended", but it would
+	// mask the bug this test targets ("the turn is still going"). So the
+	// channel is left open and ctx isn't cancelled until AFTER the assertion:
+	// consumeEvents runs in the background and isSpinning() (mutex-protected)
+	// is polled from this goroutine once all buffered events are processed.
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := make(chan map[string]any, len(events))
+	for _, e := range events {
+		ch <- e
+	}
+	done := make(chan struct{})
+	go func() {
+		tui.consumeEvents(ctx, ch)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(ch) > 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond) // let the last buffered event finish processing
+
+	spinning := tui.isSpinning()
+
+	// Only now signal consumeEvents to exit, and wait for it to actually
+	// finish before returning — otherwise its goroutine (and the spinner's
+	// own internal goroutine, started via Start()) can outlive the test and
+	// race the NEXT test's TUI instance on package-global state (e.g.
+	// math/rand's default source, used by spinnerLabel()).
+	cancel()
+	<-done
+
+	if !spinning {
+		t.Error("spinner should be back on after loop_start following a mid-turn compact — " +
+			"the turn is still working (e.g. the model's post-compaction MemoSearch), " +
+			"but nothing re-armed the spinner after compact_end turned it off")
+	}
+}
+
+// TestSpinnerOffAfterCompactEndThenTurnEnd verifies the OTHER real case:
+// compact really is the last thing that happens (e.g. a manual /compact, or
+// the model has no more tool calls after compacting) — the spinner must stay
+// off once turn_end arrives, not get stuck on forever.
+func TestSpinnerOffAfterCompactEndThenTurnEnd(t *testing.T) {
+	tui := newTestTUIForEvents()
+	events := []map[string]any{
+		{"type": "turn_start"},
+		{"type": "loop_start"},
+		{"type": "compact_start"},
+		{"type": "compact_end", "summary": "…"},
+		{"type": "turn_end"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ch := make(chan map[string]any, len(events))
+	for _, e := range events {
+		ch <- e
+	}
+	close(ch)
+	tui.consumeEvents(ctx, ch)
+
+	if tui.isSpinning() {
+		t.Error("spinner should be off after turn_end, even though loop_start re-armed it mid-turn")
 	}
 }

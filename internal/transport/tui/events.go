@@ -55,6 +55,20 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				thinkBlk, thinkBuf, thinkingFrozen = nil, "", false
 				t.setSpinning(true)
 
+			case "loop_start":
+				// A new ReAct iteration is starting within the same turn. Normally
+				// this is silent/redundant with turn_start (spinner already on).
+				// But an auto-compact between iterations (session.go's promptSync,
+				// triggered at 98% context usage) turns the spinner OFF in
+				// compact_end — assuming compact is the turn's last step, which
+				// isn't true here: the for loop continues into another loop_start
+				// right after, and the model keeps working (e.g. the auto MemoSearch
+				// nudge from the compaction reminder) with no visual indication.
+				// Re-asserting the spinner here covers that case (and any future
+				// one where a mid-turn event silences it) without needing every
+				// such event to know to turn it back on individually.
+				t.setSpinning(true)
+
 			case "thinking":
 				delta, _ := evt["delta"].(string)
 				if delta == "" {
@@ -350,7 +364,9 @@ func (t *TUI) formatToolResult(output string, dur float64, isErr bool) string {
 
 // setSpinning toggles the spinner animation.
 func (t *TUI) setSpinning(on bool) {
+	t.mu.Lock()
 	t.spinning = on
+	t.mu.Unlock()
 	if on {
 		t.spinner.SetMessage(spinnerLabel())
 		t.spinner.Start()
@@ -358,4 +374,13 @@ func (t *TUI) setSpinning(on bool) {
 		t.spinner.Stop()
 	}
 	t.tui.RequestRender(false)
+}
+
+// isSpinning reports whether the spinner is currently on, safe to call from
+// any goroutine (setSpinning runs on the SSE event-consumer goroutine; this
+// may be called from input handling or tests on a different one).
+func (t *TUI) isSpinning() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.spinning
 }

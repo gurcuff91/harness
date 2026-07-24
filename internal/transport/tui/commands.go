@@ -95,7 +95,7 @@ func (t *TUI) submitPrompt(text string) {
 	// received_prompt (immediate) or follow_up_start (queued) event, then echoes
 	// with the icon matching the prompt's origin. This unifies user and scheduled
 	// prompts through one path (the ~ms round-trip is imperceptible).
-	if t.spinning {
+	if t.isSpinning() {
 		t.queueCount++
 		t.updateInfo()
 	}
