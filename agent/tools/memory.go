@@ -53,10 +53,10 @@ func MemoWrite(store MemoryStore, cwd string) Tool {
 				Global  bool   `json:"global"`
 			}
 			if err := json.Unmarshal(input, &p); err != nil {
-				return "", fmt.Errorf("MemoWrite: invalid input: %w", err)
+				return fmt.Sprintf("Error parsing input: %v", err), err
 			}
 			if p.Slug == "" || p.Content == "" {
-				return "", fmt.Errorf("MemoWrite: slug and content are required")
+				return "MemoWrite: slug and content are required", fmt.Errorf("slug and content are required")
 			}
 			created, err := store.Write(cwd, p.Slug, p.Content, p.Global)
 			if err != nil {
@@ -93,7 +93,7 @@ func MemoSearch(store MemoryStore, cwd string) Tool {
 				Limit          int    `json:"limit"`
 			}
 			if err := json.Unmarshal(input, &p); err != nil {
-				return "", fmt.Errorf("MemoSearch: invalid input: %w", err)
+				return fmt.Sprintf("Error parsing input: %v", err), err
 			}
 			includeContent := true // default
 			if p.IncludeContent != nil {
@@ -126,7 +126,7 @@ func MemoDelete(store MemoryStore, cwd string) Tool {
 				Global bool   `json:"global"`
 			}
 			if err := json.Unmarshal(input, &p); err != nil {
-				return "", fmt.Errorf("MemoDelete: invalid input: %w", err)
+				return fmt.Sprintf("Error parsing input: %v", err), err
 			}
 			ok, err := store.Delete(cwd, p.Slug, p.Global)
 			if err != nil {

@@ -153,7 +153,7 @@ func DoAnthropicStream(ctx context.Context, client *http.Client, apiURL, apiKey 
 	if unmapTool == nil {
 		unmapTool = func(s string) string { return s }
 	}
-	return ParseAnthropicStream(httpResp.Body, cb, unmapTool)
+	return ParseAnthropicStream(ctx, httpResp.Body, cb, unmapTool)
 }
 
 // defaultAnthropicTools converts types.ToolDef slice to AnthropicTool slice.
@@ -167,7 +167,7 @@ func defaultAnthropicTools(defs []types.ToolDef) []AnthropicTool {
 	return tools
 }
 
-func ParseAnthropicStream(body io.Reader, cb types.StreamCallback, unmapTool func(string) string) (*types.Response, error) {
+func ParseAnthropicStream(ctx context.Context, body io.Reader, cb types.StreamCallback, unmapTool func(string) string) (*types.Response, error) {
 	emit := func(e types.StreamEvent) {
 		if cb != nil {
 			cb(e)
@@ -189,7 +189,7 @@ func ParseAnthropicStream(body io.Reader, cb types.StreamCallback, unmapTool fun
 	}
 	blocks := make(map[int]*blockState)
 
-	for sse := range ParseSSE(body) {
+	for sse := range ParseSSE(ctx, body) {
 		if sse.Event == "error" {
 			emit(types.StreamEvent{Type: types.StreamError, Delta: sse.Data})
 			return nil, fmt.Errorf("stream error: %s", sse.Data)

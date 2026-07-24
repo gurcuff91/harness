@@ -49,7 +49,7 @@ func Schedule(store ScheduleStore, owner string) Tool {
 				Prompt string `json:"prompt"`
 			}
 			if err := json.Unmarshal(input, &p); err != nil {
-				return "", fmt.Errorf("Schedule: invalid input: %w", err)
+				return fmt.Sprintf("Error parsing input: %v", err), err
 			}
 			if err := store.Set(p.Slug, p.Cron, p.Prompt, owner); err != nil {
 				return "", err
@@ -96,7 +96,7 @@ func ScheduleDelete(store ScheduleStore, owner string) Tool {
 				Slug string `json:"slug"`
 			}
 			if err := json.Unmarshal(input, &p); err != nil {
-				return "", fmt.Errorf("ScheduleDelete: invalid input: %w", err)
+				return fmt.Sprintf("Error parsing input: %v", err), err
 			}
 			ok, err := store.Delete(p.Slug, owner)
 			if err != nil {

@@ -85,7 +85,7 @@ func DoOpenAIStream(ctx context.Context, client *http.Client, apiURL, apiKey str
 		b, _ := io.ReadAll(httpResp.Body)
 		return nil, types.NewProviderAPIError("openai", httpResp.StatusCode, b)
 	}
-	return parseOpenAIStream(httpResp.Body, cb)
+	return parseOpenAIStream(ctx, httpResp.Body, cb)
 }
 
 // translateMessageToOpenAI converts a types.Message to OpenAI wire format.
@@ -265,7 +265,7 @@ func stripThinkingTags(s string) (cleaned string, stripped bool) {
 	return cleaned, stripped
 }
 
-func parseOpenAIStream(body io.Reader, cb types.StreamCallback) (*types.Response, error) {
+func parseOpenAIStream(ctx context.Context, body io.Reader, cb types.StreamCallback) (*types.Response, error) {
 	emit := func(e types.StreamEvent) {
 		if cb != nil {
 			cb(e)
@@ -281,7 +281,7 @@ func parseOpenAIStream(body io.Reader, cb types.StreamCallback) (*types.Response
 	toolsByIdx := map[int]*toolState{}
 	var textBuf, reasoningBuf string
 
-	for sse := range ParseSSE(body) {
+	for sse := range ParseSSE(ctx, body) {
 		if sse.Data == "[DONE]" {
 			break
 		}

@@ -1,8 +1,10 @@
 package llm
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gurcuff91/harness/types"
 )
@@ -14,7 +16,7 @@ import (
 func feedParseStream(t *testing.T, rawSSE string) (*types.Response, []types.StreamEvent) {
 	t.Helper()
 	var events []types.StreamEvent
-	resp, err := parseOpenAIStream(strings.NewReader(rawSSE), func(e types.StreamEvent) {
+	resp, err := parseOpenAIStream(context.Background(), strings.NewReader(rawSSE), func(e types.StreamEvent) {
 		events = append(events, e)
 	})
 	if err != nil {
@@ -254,5 +256,31 @@ func TestStripThinkingTags_PreservesCodeContainingTags(t *testing.T) {
 	}
 	if strings.Contains(got, "<thinking>") || strings.Contains(got, "</thinking>") {
 		t.Errorf("text stream leaked tags: %q", got)
+	}
+}
+
+// TestParseOpenAIStreamContextCancelUnblocks verifies the fix at the level
+// callers actually use: a real OpenAI-shaped stream that stalls mid-response
+// (the model/connection hangs — same symptom as the field report) must
+// unblock parseOpenAIStream promptly when ctx is cancelled, not hang forever.
+func TestParseOpenAIStreamContextCancelUnblocks(t *testing.T) {
+	r := newBlockingReader()
+	defer r.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := parseOpenAIStream(ctx, r, nil)
+		done <- err
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+		// Unblocked — the exact error doesn't matter here, just that it returned.
+	case <-time.After(2 * time.Second):
+		t.Fatal("parseOpenAIStream did not unblock within 2s of ctx cancellation")
 	}
 }

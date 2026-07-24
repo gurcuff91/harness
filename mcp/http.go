@@ -63,7 +63,7 @@ func (t *HTTPTransport) Send(ctx context.Context, req request) (response, error)
 	ct := body.contentType
 	switch {
 	case strings.HasPrefix(ct, "text/event-stream"):
-		return t.readSSEResponse(body, req.ID)
+		return t.readSSEResponse(ctx, body, req.ID)
 	case strings.HasPrefix(ct, "application/json"):
 		var resp response
 		if err := json.NewDecoder(body).Decode(&resp); err != nil {
@@ -149,7 +149,44 @@ func (t *HTTPTransport) post(ctx context.Context, msg request) (*httpBody, error
 // readSSEResponse parses an SSE stream and returns the JSON-RPC response whose
 // id matches wantID. Intermediate messages (progress notifications, logs, or
 // server→client requests) are ignored — phase 2 consumes only the final result.
-func (t *HTTPTransport) readSSEResponse(r io.Reader, wantID *int64) (response, error) {
+//
+// The blocking scanner loop runs in its own goroutine so it can be raced
+// against ctx.Done(): bufio.Scanner has no context awareness, so the only way
+// to unblock a Scan() that's waiting on a stalled/slow-drip remote stream is
+// to close the underlying body out from under it, which turns Scan() into an
+// I/O error and returns it promptly. Without this, a server that opens an SSE
+// stream and never sends (or delays) the matching response left this call —
+// and the tool-call goroutine waiting on it — blocked forever, immune to
+// Stop()/Esc, which only cancels ctx and has no other way to interrupt a
+// scanner blocked in a read syscall.
+func (t *HTTPTransport) readSSEResponse(ctx context.Context, body *httpBody, wantID *int64) (response, error) {
+	type result struct {
+		resp response
+		err  error
+	}
+	done := make(chan result, 1)
+
+	go func() {
+		resp, err := scanSSEResponse(body, wantID)
+		done <- result{resp, err}
+	}()
+
+	select {
+	case r := <-done:
+		return r.resp, r.err
+	case <-ctx.Done():
+		// Unblock the scanner goroutine by closing the body it's reading from;
+		// its Scan() will return false with an I/O error, and it exits (the
+		// buffered channel keeps that send from leaking the goroutine).
+		body.Close()
+		return response{}, ctx.Err()
+	}
+}
+
+// scanSSEResponse does the actual blocking SSE parse. Split out from
+// readSSEResponse so the latter can run it in a goroutine and race it against
+// ctx.Done() without duplicating the parsing logic.
+func scanSSEResponse(r io.Reader, wantID *int64) (response, error) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20) // up to 1MB per event
 

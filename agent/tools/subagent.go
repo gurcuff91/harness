@@ -32,10 +32,11 @@ func Subagent(executor SubagentExecutor) Tool {
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
 			var req subagentInput
 			if err := json.Unmarshal(input, &req); err != nil {
-				return "", fmt.Errorf("subagent: invalid input: %w", err)
+				return fmt.Sprintf("Error parsing input: %v", err), err
 			}
 			if strings.TrimSpace(req.Prompt) == "" {
-				return "", fmt.Errorf("subagent: prompt is required")
+				err := fmt.Errorf("subagent: prompt is required")
+				return err.Error(), err
 			}
 
 			// Combine caller ctx (Stop cancellation) + 5min timeout

@@ -23,7 +23,7 @@ func Skill(readFn func(name string) (content string, dir string, err error)) Too
 				Name string `json:"name"`
 			}
 			if err := json.Unmarshal(input, &params); err != nil {
-				return "", fmt.Errorf("skill: invalid input: %w", err)
+				return fmt.Sprintf("Error parsing input: %v", err), err
 			}
 			content, dir, err := readFn(params.Name)
 			if err != nil {

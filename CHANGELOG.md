@@ -2,6 +2,104 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.27] - 2026-07-24
+
+### Tools — malformed tool-call input always feeds back to the model, audited
+- Investigated whether a tool-call input JSON error (the model builds a
+  malformed argument, e.g. `{"path":"x","offset":183,200}` — a value where a
+  key was expected) reliably reaches the model as feedback so it can
+  self-correct on the next turn. Confirmed the happy path already works:
+  `runStream` persists a failing tool's `{output, is_error:true}` as the
+  `tool_result` message the model reads back, with a safety-net fallback
+  (`output = execErr.Error()` when a tool returns `("", err)`) because
+  Anthropic 400s on an `is_error` tool_result with empty content.
+- **Found and fixed an inconsistency**: `MemoWrite`, `MemoSearch`,
+  `MemoDelete`, `Schedule`, `ScheduleDelete`, `Skill`, and `Subagent` returned
+  `("", fmt.Errorf(...))` on a bad input — relying entirely on that generic
+  fallback instead of reporting their own message. Aligned all seven to the
+  same explicit pattern every other built-in already used
+  (`fmt.Sprintf("Error parsing input: %v", err), err`), so no tool depends on
+  an implicit safety net for its most common failure.
+- **New schema + behavior audit** (`agent/tools/schema_audit_test.go`),
+  covering every built-in tool:
+  - `TestBuiltinToolSchemasAreWellFormed` — every `InputSchema` sent to the
+    model is valid JSON, declares `"type":"object"`, and every `"required"`
+    name exists in `"properties"` with its own `"type"`. All 13 built-in
+    schemas pass.
+  - `TestBuiltinToolReturnsNonEmptyOutputOnBadInput` — feeds 4 malformed
+    payloads (including the exact field-reported shape) to every built-in
+    tool and asserts the output is never empty alongside an error. 52
+    combinations, all pass.
+  - `TestBuiltinToolNamesAndDescriptionsNonEmpty` — no empty/duplicate names
+    or descriptions (both sent to the model verbatim).
+- **Audited the definitions pipeline** end to end: `Registry.Definitions()` →
+  provider tool builders (`defaultAnthropicTools`, `buildOAuthTools` for Claude
+  Code stealth, the OpenAI-compatible builder) → `json.Marshal` of the wire
+  request. Confirmed `InputSchema` is forwarded byte-for-byte everywhere; only
+  `Name` is ever rewritten (Claude Code's Fetch→WebFetch / mcp__ext__
+  stealth mapping), and there is no size limit or truncation on the marshaled
+  request that could silently corrupt a schema in transit.
+
+## [0.73.26] - 2026-07-24
+
+### Providers — root-caused: LLM stream parser now respects Stop()/ctx everywhere
+- Found the real cause of the field-reported freeze (spinner stuck on, Esc
+  unresponsive, whole turn hung) after the prior MCP-only fix (0.73.25) didn't
+  explain a repro where the only tool involved was the built-in `Read`
+  (instant parse-error return, not a hang). Root cause was one level up: the
+  **shared SSE parser every LLM provider streams through**,
+  `internal/providers/llm.ParseSSE`, had the identical bug — a `bufio.Scanner`
+  loop with no `ctx` awareness.
+- In a long session (68+ turns, hundreds of MB of cache, `thinking: high`), if
+  the model's response stream stalls mid-generation — connection stays open,
+  keep-alives, but no more real content — `Scan()` blocks in a read syscall
+  forever. Nothing observed `ctx.Done()`, so Stop()/Esc had no effect: the
+  whole ReAct iteration (`runStream`'s `wg.Wait()`) waited on a stream that
+  would never finish. This affects **every provider** — Anthropic, Claude
+  OAuth, OpenAI, MiniMax, Ollama, Ollama Cloud, OpenCode Go — since they all
+  funnel through the same `ParseSSE`.
+- `ParseSSE` now takes a `ctx`: the scan runs in its own goroutine, raced
+  against `ctx.Done()`. On cancellation, if the reader is an `io.Closer` (true
+  for HTTP response bodies — the only real-world caller), it's closed, which
+  turns the blocked `Scan()` into an I/O error and unblocks everything
+  downstream. `ParseAnthropicStream` and `parseOpenAIStream` (and therefore
+  `DoAnthropicStream`/`DoOpenAIStream`) now thread `ctx` through to it.
+- New tests: `TestParseSSEContextCancelUnblocks`,
+  `TestParseAnthropicStreamContextCancelUnblocks`,
+  `TestParseOpenAIStreamContextCancelUnblocks` — each simulates a stalled
+  stream (a reader that blocks forever until closed) and asserts cancellation
+  unblocks the call within ~20ms instead of hanging.
+- Still investigating the malformed-JSON `Read` tool call seen alongside the
+  freeze in the field report — the input error itself returns instantly and
+  is not the hang; it's a red herring / concurrent symptom of the same
+  session's model output, not the frozen path. This fix addresses the
+  confirmed, reproducible root cause (a stalled provider stream ignoring
+  cancellation); Stop()/Esc should now reliably recover from it.
+
+## [0.73.25] - 2026-07-24
+
+### MCP — remote (HTTP/SSE) transport now respects Stop()/ctx cancellation
+- `HTTPTransport.readSSEResponse` parsed the SSE stream with a plain
+  `bufio.Scanner` loop that never checked `ctx.Done()`. A remote MCP server
+  that opens an SSE stream and stalls (or never sends the matching response)
+  left `Scan()` blocked in a read syscall forever — Stop()/Esc cancels the
+  turn's `ctx`, but nothing was watching it, so the tool-call goroutine (and
+  the `wg.Wait()` in `runStream` waiting on it) hung indefinitely. Symptom:
+  the whole turn froze — spinner stuck on, TUI unresponsive to Esc — with a
+  parallel tool call to a remote MCP server anywhere in the batch.
+- The scan now runs in its own goroutine, raced against `ctx.Done()` via
+  `select`. On cancellation the response body is closed, which turns the
+  blocked `Scan()` into an I/O error and lets the goroutine exit — Stop()
+  now actually unblocks a stalled remote MCP call. New test
+  `TestHTTPSSEContextCancelUnblocks` simulates a server that opens SSE and
+  never answers, and asserts the call returns near the ctx deadline instead
+  of hanging.
+- Investigated after a field report of a fully frozen TUI (spinner stuck,
+  Esc unresponsive, tool JSON rendered raw because the model produced a
+  malformed argument). That specific session used only local/stdio MCP
+  servers, so this fix addresses a confirmed real bug but not necessarily
+  that exact incident — root-causing the local-only case continues.
+
 ## [0.73.24] - 2026-07-23
 
 ### CLI — `mcp` command: inferred transport + enable/disable

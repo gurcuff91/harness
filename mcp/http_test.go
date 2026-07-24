@@ -156,6 +156,74 @@ func TestHTTPSessionIDEcho(t *testing.T) {
 	}
 }
 
+// TestHTTPSSEContextCancelUnblocks reproduces the freeze reported in the field:
+// a remote MCP server opens an SSE stream and never sends the matching
+// response (e.g. it stalls, or drip-feeds keepalives forever). Before the fix,
+// readSSEResponse's bufio.Scanner blocked in a read syscall with no way to
+// observe ctx cancellation, so Stop()/Esc had no effect and the tool-call
+// goroutine — and the wg.Wait() in runStream waiting on it — hung forever.
+// This verifies that cancelling ctx unblocks the call promptly instead of
+// waiting for the (never-sent) server response.
+func TestHTTPSSEContextCancelUnblocks(t *testing.T) {
+	// blockUntil is closed by the test after observing the cancellation was
+	// honored, purely so the handler goroutine doesn't leak past the test.
+	blockUntil := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req request
+		json.Unmarshal(body, &req)
+		if req.ID == nil {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		if req.Method == "initialize" {
+			resp := response{JSONRPC: jsonrpcVersion, ID: req.ID}
+			resp.Result, _ = json.Marshal(initializeResult{ProtocolVersion: protocolVersion, ServerInfo: implementation{Name: "x", Version: "1"}})
+			b, _ := json.Marshal(resp)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(b)
+			return
+		}
+		// tools/call: open an SSE stream and never send the matching response —
+		// simulates a stalled/misbehaving remote server. Flush so the client sees
+		// headers immediately (Content-Type triggers the SSE path) then block.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+		<-blockUntil // hang until the test tells us to stop (request ctx will cancel first)
+	}))
+	defer srv.Close()
+	defer close(blockUntil)
+
+	tr, err := NewHTTPTransport(HTTPConfig{URL: srv.URL, Timeout: 30 * time.Second})
+	if err != nil {
+		t.Fatalf("new transport: %v", err)
+	}
+	c := NewClient(tr)
+	defer c.Close()
+	if err := c.Initialize(context.Background()); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err = c.CallTool(ctx, "anything", json.RawMessage(`{}`))
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error from the cancelled call, got nil")
+	}
+	// Must return close to the ctx deadline (300ms), NOT hang for the transport's
+	// 30s HTTP timeout or forever. Generous upper bound to absorb CI jitter.
+	if elapsed > 2*time.Second {
+		t.Errorf("CallTool did not respect ctx cancellation: took %v (want ~300ms)", elapsed)
+	}
+}
+
 func TestHTTPErrorStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

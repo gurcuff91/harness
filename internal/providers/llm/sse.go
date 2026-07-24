@@ -2,6 +2,7 @@ package llm
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"strings"
 )
@@ -12,13 +13,26 @@ type SSEEvent struct {
 	Data  string
 }
 
-// ParseSSE reads an SSE stream and yields events on a channel.
-// Blocks until the reader is exhausted or an error occurs.
-func ParseSSE(r io.Reader) <-chan SSEEvent {
+// ParseSSE reads an SSE stream and yields events on a channel, closing the
+// channel when the reader is exhausted, an error occurs, or ctx is cancelled.
+//
+// bufio.Scanner has no context awareness: a Scan() waiting on a stalled or
+// slow-drip HTTP body (the model stops sending real content but the
+// connection stays open — degraded network, a mid-stream provider hiccup,
+// etc.) blocks in a read syscall indefinitely. Cancelling ctx alone does not
+// unblock it. To make Stop()/Esc actually interrupt a stuck stream, the scan
+// runs in its own goroutine and a second goroutine races ctx.Done() against
+// it: on cancellation, if r is an io.Closer (true for HTTP response bodies,
+// the only real-world caller), it is closed — which turns the blocked Scan()
+// into an I/O error and lets the scan goroutine exit. The output channel is
+// closed exactly once, by whichever goroutine finishes the scan.
+func ParseSSE(ctx context.Context, r io.Reader) <-chan SSEEvent {
 	ch := make(chan SSEEvent, 32)
+	scanDone := make(chan struct{})
 
 	go func() {
 		defer close(ch)
+		defer close(scanDone)
 
 		scanner := bufio.NewScanner(r)
 		// Increase buffer for large SSE payloads
@@ -70,6 +84,22 @@ func ParseSSE(r io.Reader) <-chan SSEEvent {
 			}
 		}
 	}()
+
+	// Watchdog: if ctx is cancelled before the scan finishes on its own, close
+	// the reader to force the blocked Scan() to unblock with an I/O error.
+	if ctx != nil {
+		go func() {
+			select {
+			case <-scanDone:
+				// Scan finished on its own — nothing to do.
+			case <-ctx.Done():
+				if closer, ok := r.(io.Closer); ok {
+					closer.Close()
+				}
+				<-scanDone // wait for the scan goroutine to actually exit
+			}
+		}()
+	}
 
 	return ch
 }
