@@ -64,87 +64,39 @@ type ProviderConfig struct {
 }
 
 // MCPServer is the configuration of one MCP (Model Context Protocol) server.
-// Mirrors the shape used by other agents (e.g. OpenCode): a "local" server runs
-// a command with an Env map; a "remote" server dials a URL with custom Headers.
+// The transport is INFERRED, not declared: a server with a Command is local
+// (spawns a process); a server with a URL is remote (dials HTTP). Declaring
+// both is invalid. Servers are enabled by default — set Disabled to turn one
+// off without deleting it.
+//
+// On-disk shape (settings.json):
+//
+//	local:  { "command": "npx", "args": ["-y", "@mcp/fs"], "env": {...} }
+//	remote: { "url": "https://…/mcp", "headers": {...} }
+//	off:    add "disabled": true to either
 type MCPServer struct {
-	Type    string            `json:"type"`              // "local" | "remote"
-	Command []string          `json:"command,omitempty"` // local: command + args
-	URL     string            `json:"url,omitempty"`     // remote: server URL
-	Env     map[string]string `json:"env,omitempty"`     // local: process env vars
-	Headers map[string]string `json:"headers,omitempty"` // remote: custom HTTP headers
-	Cwd     string            `json:"cwd,omitempty"`     // local: working directory (optional)
-	Timeout int               `json:"timeout,omitempty"` // ms for connect (initialize+tools/list); 0 = default 5000
-	Enabled bool              `json:"enabled"`
+	Command  string            `json:"command,omitempty"`  // local: executable
+	Args     []string          `json:"args,omitempty"`     // local: arguments
+	URL      string            `json:"url,omitempty"`      // remote: server URL
+	Env      map[string]string `json:"env,omitempty"`      // local: process env vars
+	Headers  map[string]string `json:"headers,omitempty"`  // remote: custom HTTP headers
+	Cwd      string            `json:"cwd,omitempty"`      // local: working directory (optional)
+	Timeout  int               `json:"timeout,omitempty"`  // ms for connect (initialize+tools/list); 0 = default 5000
+	Disabled bool              `json:"disabled,omitempty"` // enabled by default; set true to skip
 }
 
-// mcpServerRaw mirrors MCPServer but with `command` as json.RawMessage, so the
-// custom UnmarshalJSON can detect whether the user wrote it as a string
-// (Claude Desktop / OpenCode style: "command": "uvx", "args": [...]) or as a
-// flat array (the canonical shape MCPServer.Command expects).
-type mcpServerRaw struct {
-	Type    string            `json:"type"`
-	Command json.RawMessage   `json:"command,omitempty"`
-	Args    []string          `json:"args,omitempty"`
-	URL     string            `json:"url,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
-	Cwd     string            `json:"cwd,omitempty"`
-	Timeout int               `json:"timeout,omitempty"`
-	Enabled bool              `json:"enabled"`
-}
+// IsRemote reports whether the server is a remote (HTTP) transport. A server is
+// remote when it has a URL; otherwise it is local (stdio). Validation
+// guarantees exactly one of Command/URL is set before this is consulted.
+func (s MCPServer) IsRemote() bool { return s.URL != "" }
 
-// UnmarshalJSON accepts both the canonical `command: ["uvx", "arg1"]` shape
-// AND the Claude Desktop / OpenCode `command: "uvx", "args: ["arg1"]` shape,
-// merging the latter into the former. Without this, users copying a config
-// from Claude Desktop would see "mcp stdio: empty command" with no visible
-// error because the malformed fields would be silently dropped.
-func (s *MCPServer) UnmarshalJSON(data []byte) error {
-	var raw mcpServerRaw
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
+// Argv returns the full local command line (executable + args) for the stdio
+// transport. Empty when Command is unset.
+func (s MCPServer) Argv() []string {
+	if s.Command == "" {
+		return nil
 	}
-	s.Type = raw.Type
-	s.URL = raw.URL
-	s.Env = raw.Env
-	s.Headers = raw.Headers
-	s.Cwd = raw.Cwd
-	s.Timeout = raw.Timeout
-	s.Enabled = raw.Enabled
-	s.Command = decodeMCPCommand(raw.Command, raw.Args)
-	return nil
-}
-
-// decodeMCPCommand merges the two accepted command shapes:
-//   - canonical: `command: ["uvx", "arg1", "arg2"]`           → ["uvx", "arg1", "arg2"]
-//   - Claude / OpenCode: `command: "uvx", args: ["arg1"]`     → ["uvx", "arg1"]
-//   - mixed: `command: ["uvx"], args: ["arg1"]`                → ["uvx", "arg1"]
-//   - empty: command absent + args absent                       → nil
-func decodeMCPCommand(cmd json.RawMessage, args []string) []string {
-	if len(cmd) > 0 {
-		// Try array form first.
-		var arr []string
-		if err := json.Unmarshal(cmd, &arr); err == nil {
-			if len(args) > 0 {
-				return append(arr, args...)
-			}
-			return arr
-		}
-		// Fall back to single-string form.
-		var str string
-		if err := json.Unmarshal(cmd, &str); err == nil && str != "" {
-			if len(args) > 0 {
-				out := make([]string, 0, 1+len(args))
-				out = append(out, str)
-				out = append(out, args...)
-				return out
-			}
-			return []string{str}
-		}
-	}
-	if len(args) > 0 {
-		return args
-	}
-	return nil
+	return append([]string{s.Command}, s.Args...)
 }
 
 func newSettingsManager() *SettingsManager {
@@ -261,43 +213,25 @@ func (m *SettingsManager) MCPServers() map[string]MCPServer {
 	return out
 }
 
-// canonicalMCPType maps friendly transport aliases to the canonical values the
-// rest of the code expects: "http"/"sse" → "remote", "stdio" → "local". This
-// lets users write the more intuitive "http" in settings.json.
-func canonicalMCPType(t string) string {
-	switch t {
-	case "http", "sse", "streamable-http":
-		return "remote"
-	case "stdio":
-		return "local"
-	default:
-		return t
-	}
-}
-
-// validateMCPServer enforces the minimal shape of an MCP server: type must be
-// "local" or "remote"; a local server needs a command; a remote server needs a
-// URL. Living here (not in the API) means EVERY caller gets the same guarantee.
+// validateMCPServer enforces the inferred-transport rule: EXACTLY one of
+// Command (local) or URL (remote) must be set. Declaring both is ambiguous;
+// declaring neither is empty. Living here (not in the API) means EVERY caller
+// gets the same guarantee.
 func validateMCPServer(srv MCPServer) error {
-	switch srv.Type {
-	case "local":
-		if len(srv.Command) == 0 {
-			return fmt.Errorf("%w: local server requires a command", ErrInvalidMCPServer)
-		}
-	case "remote":
-		if srv.URL == "" {
-			return fmt.Errorf("%w: remote server requires a url", ErrInvalidMCPServer)
-		}
-	default:
-		return fmt.Errorf("%w: type must be \"local\" or \"remote\", got %q", ErrInvalidMCPServer, srv.Type)
+	hasCmd := srv.Command != ""
+	hasURL := srv.URL != ""
+	switch {
+	case hasCmd && hasURL:
+		return fmt.Errorf("%w: set either \"command\" (local) or \"url\" (remote), not both", ErrInvalidMCPServer)
+	case !hasCmd && !hasURL:
+		return fmt.Errorf("%w: requires \"command\" (local) or \"url\" (remote)", ErrInvalidMCPServer)
 	}
 	return nil
 }
 
 // SetMCPServer validates and stores (or replaces) an MCP server's config. The
-// transport type is canonicalized (http→remote, stdio→local) before validation.
+// transport is inferred from which of command/url is set.
 func (m *SettingsManager) SetMCPServer(name string, srv MCPServer) error {
-	srv.Type = canonicalMCPType(srv.Type)
 	if err := validateMCPServer(srv); err != nil {
 		return err
 	}
@@ -326,14 +260,6 @@ func (m *SettingsManager) load() {
 		return
 	}
 	json.Unmarshal(data, &m.data)
-	// Canonicalize MCP transport aliases from hand-edited files (http→remote,
-	// stdio→local) so the manager always sees canonical types.
-	for name, srv := range m.data.MCP {
-		if c := canonicalMCPType(srv.Type); c != srv.Type {
-			srv.Type = c
-			m.data.MCP[name] = srv
-		}
-	}
 }
 
 func (m *SettingsManager) save() error {

@@ -32,7 +32,8 @@ func (f *kvFlag) result() map[string]string {
 	return f.m
 }
 
-// cmdMCP dispatches `harness mcp [list | add <name> ... | rm <name>]`.
+// cmdMCP dispatches `harness mcp [list | add <name> ... | rm <name> |
+// enable <name> | disable <name>]`.
 func cmdMCP(args []string) error {
 	a := newAgent()
 	defer a.Close()
@@ -45,7 +46,7 @@ func cmdMCP(args []string) error {
 	switch args[0] {
 	case "add":
 		if len(args) < 2 {
-			return errUsage("mcp add <name> [--local|--remote] [flags]")
+			return errUsage("mcp add <name> (--command … | --url …) [flags]")
 		}
 		name, opts, err := parseMCPAdd(args[1:])
 		if err != nil {
@@ -57,8 +58,18 @@ func cmdMCP(args []string) error {
 			return errUsage("mcp rm <name>")
 		}
 		return RunMCPRemove(ctx, a, args[1], "text")
+	case "enable":
+		if len(args) < 2 {
+			return errUsage("mcp enable <name>")
+		}
+		return RunMCPSetEnabled(ctx, a, args[1], true, "text")
+	case "disable":
+		if len(args) < 2 {
+			return errUsage("mcp disable <name>")
+		}
+		return RunMCPSetEnabled(ctx, a, args[1], false, "text")
 	default:
-		return errf("unknown mcp subcommand: %s\nusage: harness mcp [list | add <name> ... | rm <name>]", args[0])
+		return errf("unknown mcp subcommand: %s\nusage: harness mcp [list | add <name> ... | rm <name> | enable <name> | disable <name>]", args[0])
 	}
 }
 
@@ -74,11 +85,9 @@ func parseMCPAdd(args []string) (string, MCPAddOpts, error) {
 	env := &kvFlag{sep: "="}
 	headers := &kvFlag{sep: ":"}
 	var opts MCPAddOpts
-	fs.BoolVar(&opts.Local, "local", false, "local server (spawns a command)")
-	fs.BoolVar(&opts.Remote, "remote", false, "remote server (dials a URL)")
 	fs.BoolVar(&opts.Disabled, "disabled", false, "add the server disabled")
-	fs.StringVar(&opts.Command, "command", "", "local: command + args")
-	fs.StringVar(&opts.URL, "url", "", "remote: server URL")
+	fs.StringVar(&opts.Command, "command", "", "local: command + args (implies local)")
+	fs.StringVar(&opts.URL, "url", "", "remote: server URL (implies remote)")
 	fs.StringVar(&opts.Bearer, "bearer", "", "remote: Authorization Bearer token")
 	fs.Var(env, "env", "local: env var KEY=VAL (repeatable)")
 	fs.Var(headers, "header", "remote: HTTP header KEY:VAL (repeatable)")

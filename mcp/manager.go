@@ -61,7 +61,7 @@ func (m *Manager) Start(ctx context.Context) []tools.Tool {
 
 	for _, name := range names {
 		cfg := servers[name]
-		if !cfg.Enabled {
+		if cfg.Disabled {
 			continue
 		}
 
@@ -92,11 +92,10 @@ func connectServer(ctx context.Context, cfg config.MCPServer) (*Client, []Tool, 
 
 	var tr Transport
 	var err error
-	switch cfg.Type {
-	case "remote":
+	if cfg.IsRemote() {
 		tr, err = NewHTTPTransport(HTTPConfig{URL: cfg.URL, Headers: cfg.Headers, Timeout: timeout})
-	default: // "local"
-		tr, err = NewStdioTransport(StdioConfig{Command: cfg.Command, Env: cfg.Env, Cwd: cfg.Cwd})
+	} else {
+		tr, err = NewStdioTransport(StdioConfig{Command: cfg.Argv(), Env: cfg.Env, Cwd: cfg.Cwd})
 	}
 	if err != nil {
 		return nil, nil, err

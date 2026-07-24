@@ -29,6 +29,8 @@ Settings:
   harness mcp [list]                 List MCP servers
   harness mcp add <name> [flags]     Add MCP server (see 'mcp add' flags)
   harness mcp rm <name>              Remove MCP server
+  harness mcp enable <name>          Enable a server
+  harness mcp disable <name>         Disable a server (keeps its config)
 
 Memory (read-only — the agent writes memories via its tools):
   harness memo                       List memories (this project + globals)
@@ -50,14 +52,13 @@ Flags (CLI / TUI):
   --help, -h           Show this help
 
 Flags ('mcp add'):
-  --local              Local server (spawns a command)
-  --remote             Remote server (dials a URL)
-  --command <cmd>      Local: command + args, e.g. "npx -y @mcp/fs"
-  --url <url>          Remote: server URL
+  --command <cmd>      Local server: command + args, e.g. "npx -y @mcp/fs"
+  --url <url>          Remote server: server URL
   --bearer <token>     Remote: sugar for --header "Authorization: Bearer <token>"
   --env KEY=VAL        Local: env var (repeatable)
   --header KEY:VAL     Remote: HTTP header (repeatable)
   --disabled           Add the server disabled (default: enabled)
+  (transport is inferred: --command → local, --url → remote)
 
 Flags ('memo'):
   --all                Include memories from ALL projects (not just this one)
@@ -82,8 +83,9 @@ Examples:
   harness providers
   harness connect anthropic
   harness settings set thinking high
-  harness mcp add fs --local --command "npx -y @mcp/fs"
-  harness mcp add api --remote --url https://mcp.x --header "Authorization: Bearer t"
+  harness mcp add fs --command "npx -y @mcp/fs"
+  harness mcp add api --url https://mcp.x --header "Authorization: Bearer t"
+  harness mcp disable everything
   harness memo
   harness memo "deploy process" --content
   harness memo kubernetes --all

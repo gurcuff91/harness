@@ -116,39 +116,46 @@ func TestThinkingLevelValidation(t *testing.T) {
 	}
 }
 
-// TestMCPValidation verifies SetMCPServer rejects malformed configs and accepts
-// valid local/remote shapes.
-// TestMCPTypeAliases verifies friendly transport aliases are canonicalized.
-func TestMCPTypeAliases(t *testing.T) {
+// TestMCPTransportInference verifies the transport is inferred from which of
+// command/url is set, and that a disabled server round-trips.
+func TestMCPTransportInference(t *testing.T) {
 	m := newTestSettings(t, "")
-	// "http" alias for a remote server should be accepted and stored as "remote".
-	if err := m.SetMCPServer("api", MCPServer{Type: "http", URL: "https://x"}); err != nil {
-		t.Fatalf("http alias rejected: %v", err)
+	// A command → local (IsRemote false).
+	if err := m.SetMCPServer("fs", MCPServer{Command: "npx", Args: []string{"-y", "srv"}}); err != nil {
+		t.Fatalf("local rejected: %v", err)
 	}
-	if srv, _ := m.MCPServer("api"); srv.Type != "remote" {
-		t.Errorf("http not canonicalized: got %q", srv.Type)
+	if srv, _ := m.MCPServer("fs"); srv.IsRemote() {
+		t.Errorf("command server should be local, got remote")
 	}
-	// "stdio" alias for a local server → "local".
-	if err := m.SetMCPServer("fs", MCPServer{Type: "stdio", Command: []string{"x"}}); err != nil {
-		t.Fatalf("stdio alias rejected: %v", err)
+	// A url → remote (IsRemote true).
+	if err := m.SetMCPServer("api", MCPServer{URL: "https://x"}); err != nil {
+		t.Fatalf("remote rejected: %v", err)
 	}
-	if srv, _ := m.MCPServer("fs"); srv.Type != "local" {
-		t.Errorf("stdio not canonicalized: got %q", srv.Type)
+	if srv, _ := m.MCPServer("api"); !srv.IsRemote() {
+		t.Errorf("url server should be remote, got local")
 	}
-	// load() must canonicalize hand-edited files too.
-	m2 := newTestSettings(t, `{"mcp":{"k":{"type":"http","url":"https://y","enabled":true}}}`)
-	if srv, _ := m2.MCPServer("k"); srv.Type != "remote" {
-		t.Errorf("load did not canonicalize: got %q", srv.Type)
+	// Hand-edited file with the canonical shape + disabled loads correctly.
+	m2 := newTestSettings(t, `{"mcp":{"k":{"command":"npx","args":["-y","srv"],"disabled":true}}}`)
+	srv, ok := m2.MCPServer("k")
+	if !ok {
+		t.Fatal("server did not load")
+	}
+	if srv.IsRemote() {
+		t.Errorf("command server should be local")
+	}
+	if srv.Command != "npx" || len(srv.Args) != 2 || srv.Args[0] != "-y" || srv.Args[1] != "srv" {
+		t.Errorf("command/args not decoded: cmd=%q args=%v", srv.Command, srv.Args)
+	}
+	if !srv.Disabled {
+		t.Errorf("disabled:true should load as Disabled=true")
 	}
 }
 
 func TestMCPValidation(t *testing.T) {
 	m := newTestSettings(t, "")
 	bad := map[string]MCPServer{
-		"unknown-type":  {Type: "bogus"},
-		"empty-type":    {Type: ""},
-		"local-no-cmd":  {Type: "local"},
-		"remote-no-url": {Type: "remote"},
+		"empty": {},                                 // neither command nor url
+		"both":  {Command: "npx", URL: "https://x"}, // ambiguous
 	}
 	for name, srv := range bad {
 		if err := m.SetMCPServer(name, srv); err == nil {
@@ -161,8 +168,8 @@ func TestMCPValidation(t *testing.T) {
 		}
 	}
 	good := map[string]MCPServer{
-		"local":  {Type: "local", Command: []string{"npx"}},
-		"remote": {Type: "remote", URL: "https://x"},
+		"local":  {Command: "npx"},
+		"remote": {URL: "https://x"},
 	}
 	for name, srv := range good {
 		if err := m.SetMCPServer(name, srv); err != nil {
@@ -175,8 +182,8 @@ func TestMCPValidation(t *testing.T) {
 // remote (Headers) shapes, and delete.
 func TestMCPCollection(t *testing.T) {
 	m := newTestSettings(t, "")
-	local := MCPServer{Type: "local", Command: []string{"npx", "-y", "@mcp/fs"}, Env: map[string]string{"K": "V"}, Enabled: true}
-	remote := MCPServer{Type: "remote", URL: "https://mcp.example", Headers: map[string]string{"Authorization": "Bearer t"}, Enabled: true}
+	local := MCPServer{Command: "npx", Args: []string{"-y", "@mcp/fs"}, Env: map[string]string{"K": "V"}}
+	remote := MCPServer{URL: "https://mcp.example", Headers: map[string]string{"Authorization": "Bearer t"}}
 	if err := m.SetMCPServer("fs", local); err != nil {
 		t.Fatalf("set local: %v", err)
 	}
@@ -188,11 +195,14 @@ func TestMCPCollection(t *testing.T) {
 	m2.path = m.path
 	m2.load()
 	gotLocal, ok := m2.MCPServer("fs")
-	if !ok || gotLocal.Type != "local" || len(gotLocal.Command) != 3 || gotLocal.Env["K"] != "V" {
+	if !ok || gotLocal.IsRemote() || gotLocal.Command != "npx" || len(gotLocal.Args) != 2 || gotLocal.Env["K"] != "V" {
 		t.Errorf("local mcp not persisted: %+v ok=%v", gotLocal, ok)
 	}
+	if argv := gotLocal.Argv(); len(argv) != 3 || argv[0] != "npx" || argv[2] != "@mcp/fs" {
+		t.Errorf("Argv() wrong: %v", argv)
+	}
 	gotRemote, ok := m2.MCPServer("api")
-	if !ok || gotRemote.Type != "remote" || gotRemote.URL != "https://mcp.example" || gotRemote.Headers["Authorization"] != "Bearer t" {
+	if !ok || !gotRemote.IsRemote() || gotRemote.URL != "https://mcp.example" || gotRemote.Headers["Authorization"] != "Bearer t" {
 		t.Errorf("remote mcp not persisted: %+v ok=%v", gotRemote, ok)
 	}
 	if err := m2.DeleteMCPServer("fs"); err != nil {
@@ -203,44 +213,27 @@ func TestMCPCollection(t *testing.T) {
 	}
 }
 
-// TestMCPCommandShapeCompatibility verifies that MCPServer accepts both the
-// canonical `command: ["uvx", "arg1"]` shape and the Claude Desktop / OpenCode
-// `command: "uvx", args: ["arg1"]` shape. This is what users coming from
-// other MCP clients paste into settings.json.
-func TestMCPCommandShapeCompatibility(t *testing.T) {
+// TestMCPArgv verifies the canonical `command` string + `args` array shape
+// flattens to the full argv (executable + args) via Argv().
+func TestMCPArgv(t *testing.T) {
 	cases := []struct {
 		name string
 		json string
 		want []string
 	}{
 		{
-			name: "canonical_array",
-			json: `{"type":"local","command":["uvx","minimax-coding-plan-mcp","-y"]}`,
+			name: "command_plus_args",
+			json: `{"command":"uvx","args":["minimax-coding-plan-mcp","-y"]}`,
 			want: []string{"uvx", "minimax-coding-plan-mcp", "-y"},
 		},
 		{
-			name: "claude_desktop_string_plus_args",
-			json: `{"type":"local","command":"uvx","args":["minimax-coding-plan-mcp","-y"]}`,
-			want: []string{"uvx", "minimax-coding-plan-mcp", "-y"},
-		},
-		{
-			name: "string_only",
-			json: `{"type":"local","command":"echo"}`,
+			name: "command_only",
+			json: `{"command":"echo"}`,
 			want: []string{"echo"},
 		},
 		{
-			name: "args_only",
-			json: `{"type":"local","args":["x","y","z"]}`,
-			want: []string{"x", "y", "z"},
-		},
-		{
-			name: "array_with_extra_args",
-			json: `{"type":"local","command":["npx"],"args":["-y","server"]}`,
-			want: []string{"npx", "-y", "server"},
-		},
-		{
-			name: "empty",
-			json: `{"type":"remote","url":"https://x"}`,
+			name: "remote_no_command",
+			json: `{"url":"https://x"}`,
 			want: nil,
 		},
 	}
@@ -250,13 +243,14 @@ func TestMCPCommandShapeCompatibility(t *testing.T) {
 			if err := json.Unmarshal([]byte(c.json), &srv); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
-			if len(srv.Command) != len(c.want) {
-				t.Errorf("command length: got %d (%v), want %d (%v)", len(srv.Command), srv.Command, len(c.want), c.want)
+			got := srv.Argv()
+			if len(got) != len(c.want) {
+				t.Errorf("argv length: got %d (%v), want %d (%v)", len(got), got, len(c.want), c.want)
 				return
 			}
 			for i := range c.want {
-				if srv.Command[i] != c.want[i] {
-					t.Errorf("command[%d]: got %q, want %q", i, srv.Command[i], c.want[i])
+				if got[i] != c.want[i] {
+					t.Errorf("argv[%d]: got %q, want %q", i, got[i], c.want[i])
 				}
 			}
 		})

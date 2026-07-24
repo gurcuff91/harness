@@ -2,6 +2,51 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.24] - 2026-07-23
+
+### CLI — `mcp` command: inferred transport + enable/disable
+- **`--local` / `--remote` flags removed.** `harness mcp add` now infers the
+  transport from which of `--command` (local) or `--url` (remote) you pass —
+  exactly one is required. Matches the settings.json inference.
+- **New `harness mcp enable <name>` / `harness mcp disable <name>`.** Toggle a
+  server's `disabled` flag without editing JSON or losing its config
+  (command/url/env/headers are preserved). `disable` keeps the entry; `enable`
+  drops the `disabled` field (enabled is the default).
+
+  ```
+  harness mcp add fs --command "npx -y @mcp/fs"
+  harness mcp add api --url https://mcp.x --bearer TOKEN
+  harness mcp disable everything
+  harness mcp enable everything
+  ```
+
+### Config — simpler, inferred MCP server shape in settings.json
+- **`type` is gone — the transport is inferred.** A server with a `command`
+  is local (stdio); a server with a `url` is remote (HTTP). Setting both is
+  rejected as ambiguous; setting neither is rejected as empty. No more writing
+  `"type": "local"` / `"remote"` by hand.
+- **`enabled` → `disabled` (opt-out).** Servers are enabled by default; add
+  `"disabled": true` to turn one off without deleting it. No more tagging every
+  server with `"enabled": true`.
+- **Command shape is `command` (string) + `args` (array)** — the standard used
+  by Claude Desktop / MCP clients: `{"command":"npx","args":["-y","@mcp/fs"]}`.
+- New helpers `MCPServer.IsRemote()` and `MCPServer.Argv()` centralize the
+  inference and the local command line. `harness mcp add` and `mcp list` emit
+  and read this shape; `--local/--remote` and `--disabled` flags unchanged.
+- **Breaking:** only this shape is accepted — no compatibility with the old
+  `type` / `enabled` / command-as-array format. The struct uses plain JSON
+  decoding (no custom `UnmarshalJSON`), keeping the config code minimal.
+  Existing `~/.harness/settings.json` files must be migrated to the new shape.
+
+  Before:
+  ```json
+  "fs": { "type": "local", "command": ["npx","-y","@mcp/fs"], "enabled": true }
+  ```
+  After:
+  ```json
+  "fs": { "command": "npx", "args": ["-y","@mcp/fs"] }
+  ```
+
 ## [0.73.23] - 2026-07-23
 
 ### TUI — native scrollback stays put while the agent streams

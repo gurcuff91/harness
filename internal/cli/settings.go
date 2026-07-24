@@ -128,24 +128,32 @@ func RunMCPList(ctx context.Context, a *agent.Agent, output string) error {
 		sort.Strings(names)
 		for _, n := range names {
 			srv := servers[n]
-			typ, _ := srv["type"].(string)
-			enabled, _ := srv["enabled"].(bool)
+			url, _ := srv["url"].(string)
+			disabled, _ := srv["disabled"].(bool)
+			// Transport is inferred: a url is remote, otherwise local.
+			typ := "local"
 			detail := ""
-			switch typ {
-			case "local":
-				if cmd, ok := srv["command"].([]any); ok {
-					parts := make([]string, len(cmd))
-					for i, p := range cmd {
-						parts[i], _ = p.(string)
-					}
-					detail = strings.Join(parts, " ")
+			if url != "" {
+				typ = "remote"
+				detail = url
+			} else {
+				cmd, _ := srv["command"].(string)
+				parts := []string{}
+				if cmd != "" {
+					parts = append(parts, cmd)
 				}
-			case "remote":
-				detail, _ = srv["url"].(string)
+				if args, ok := srv["args"].([]any); ok {
+					for _, p := range args {
+						if s, ok := p.(string); ok {
+							parts = append(parts, s)
+						}
+					}
+				}
+				detail = strings.Join(parts, " ")
 			}
 			// State column reflects real connection when enabled.
 			state := "disabled"
-			if enabled {
+			if !disabled {
 				if st, ok := statusByName[n]; ok {
 					if st.Connected {
 						state = fmt.Sprintf("\u2713 connected (%d tools)", st.ToolCount)
@@ -175,12 +183,11 @@ func truncateError(s string) string {
 	return s
 }
 
-// MCPAddOpts carries the parsed flags for `harness mcp add`.
+// MCPAddOpts carries the parsed flags for `harness mcp add`. The transport is
+// inferred: --command makes it local, --url makes it remote.
 type MCPAddOpts struct {
-	Local    bool
-	Remote   bool
 	Command  string            // local: full command string ("npx -y @mcp/fs")
-	URL      string            // remote
+	URL      string            // remote: server URL
 	Env      map[string]string // local
 	Headers  map[string]string // remote
 	Bearer   string            // remote: sugar — expands to Authorization: Bearer <token>
@@ -188,30 +195,34 @@ type MCPAddOpts struct {
 }
 
 // RunMCPAdd creates (or replaces) an MCP server. The name is positional; the
-// shape is driven by --local/--remote. Content validation (type/command/url)
-// happens server-side (422 surfaced verbatim).
+// transport is inferred from which of --command / --url is given (exactly one).
+// Content validation happens server-side (422 surfaced verbatim).
 func RunMCPAdd(ctx context.Context, a *agent.Agent, name string, opts MCPAddOpts, output string) error {
 	if name == "" {
-		return fmt.Errorf("server name required: harness mcp add <name> [--local|--remote] ...")
+		return fmt.Errorf("server name required: harness mcp add <name> (--command … | --url …)")
 	}
-	if opts.Local == opts.Remote { // both false or both true
-		return fmt.Errorf("specify exactly one of --local or --remote")
+	hasCmd := strings.TrimSpace(opts.Command) != ""
+	hasURL := strings.TrimSpace(opts.URL) != ""
+	if hasCmd == hasURL { // both or neither
+		return fmt.Errorf("specify exactly one of --command (local) or --url (remote)")
 	}
 
-	srv := map[string]any{"enabled": !opts.Disabled}
-	if opts.Local {
-		srv["type"] = "local"
-		if opts.Command != "" {
-			srv["command"] = strings.Fields(opts.Command)
+	srv := map[string]any{}
+	if opts.Disabled {
+		srv["disabled"] = true
+	}
+	if hasCmd {
+		// Split the command string into executable + args (canonical shape).
+		fields := strings.Fields(opts.Command)
+		srv["command"] = fields[0]
+		if len(fields) > 1 {
+			srv["args"] = fields[1:]
 		}
 		if len(opts.Env) > 0 {
 			srv["env"] = opts.Env
 		}
 	} else {
-		srv["type"] = "remote"
-		if opts.URL != "" {
-			srv["url"] = opts.URL
-		}
+		srv["url"] = opts.URL
 		headers := opts.Headers
 		// --bearer sugar: set Authorization unless the user already provided one.
 		if opts.Bearer != "" {
@@ -242,6 +253,59 @@ func RunMCPAdd(ctx context.Context, a *agent.Agent, name string, opts MCPAddOpts
 		fmt.Println(string(data))
 	} else {
 		fmt.Printf("MCP server added: %s\n", name)
+	}
+	return nil
+}
+
+// RunMCPSetEnabled toggles a server's disabled flag by name. It reads the
+// current config (so it preserves command/url/env/headers), flips disabled,
+// and writes it back. A missing server is a clean error.
+func RunMCPSetEnabled(ctx context.Context, a *agent.Agent, name string, enabled bool, output string) error {
+	if name == "" {
+		verb := "enable"
+		if !enabled {
+			verb = "disable"
+		}
+		return fmt.Errorf("server name required: harness mcp %s <name>", verb)
+	}
+
+	server, addr, err := startInternalServer(a)
+	if err != nil {
+		return err
+	}
+	defer server.Close()
+	c := newClient(addr)
+
+	// Load the whole collection and pick out the target so the round-trip
+	// preserves every other field.
+	data, err := c.GetMCPServers()
+	if err != nil {
+		return fmt.Errorf("list mcp: %w", err)
+	}
+	var servers map[string]map[string]any
+	json.Unmarshal(data, &servers)
+	srv, ok := servers[name]
+	if !ok {
+		return fmt.Errorf("mcp server %q not found", name)
+	}
+
+	if enabled {
+		delete(srv, "disabled") // enabled is the default → omit the field
+	} else {
+		srv["disabled"] = true
+	}
+
+	if _, err := c.PutMCPServer(name, srv); err != nil {
+		return fmt.Errorf("update mcp %q: %w", name, err)
+	}
+	state := "enabled"
+	if !enabled {
+		state = "disabled"
+	}
+	if output == "json" {
+		fmt.Printf("{\"name\":%q,\"disabled\":%t}\n", name, !enabled)
+	} else {
+		fmt.Printf("MCP server %s: %s\n", state, name)
 	}
 	return nil
 }
