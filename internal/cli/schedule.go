@@ -22,7 +22,7 @@ func RunSchedules(ctx context.Context, a *agent.Agent, output string) error {
 	defer server.Close()
 	c := newClient(addr)
 
-	data, err := c.GetSchedules()
+	data, err := c.GetSchedules("")
 	if err != nil {
 		return fmt.Errorf("schedules: %w", err)
 	}

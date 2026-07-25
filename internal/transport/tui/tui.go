@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/internal/client"
 	"github.com/gurcuff91/harness/internal/transport/tui/ansi"
 	"github.com/gurcuff91/harness/internal/transport/tui/components"
 	"github.com/gurcuff91/harness/internal/transport/tui/render"
@@ -38,7 +39,7 @@ type tokensInfo struct {
 // TUI is the top-level frontend controller.
 type TUI struct {
 	agent  *agent.Agent
-	client *Client
+	client *client.Client
 	addr   string
 
 	// Flags.
@@ -154,7 +155,7 @@ func (t *TUI) Run(ctx context.Context) error {
 	}
 	t.addr = addr
 	defer srv.Close()
-	t.client = NewClient(addr)
+	t.client = client.New(addr)
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

@@ -197,8 +197,12 @@ func (t *TUI) loadSessionCommands() {
 		return
 	}
 	t.refreshBadges() // footer status counts (MCP connected, schedule jobs)
-	cmds, err := t.client.ListCommands(t.sessionID)
+	data, err := t.client.ListCommands(t.sessionID)
 	if err != nil {
+		return
+	}
+	var cmds []CommandDef
+	if json.Unmarshal(data, &cmds) != nil {
 		return
 	}
 	t.sessionCmds = cmds

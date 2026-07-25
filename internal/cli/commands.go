@@ -171,13 +171,11 @@ func RunSessions(ctx context.Context, a *agent.Agent, all bool, output string) e
 	defer server.Close()
 	c := newClient(addr)
 
-	var data []byte
-	if all {
-		data, err = c.do("GET", "/api/sessions", nil)
-	} else {
-		cwd, _ := os.Getwd()
-		data, err = c.do("GET", "/api/sessions?cwd="+cwd, nil)
+	cwd := ""
+	if !all {
+		cwd, _ = os.Getwd()
 	}
+	data, err := c.ListSessions(cwd)
 	if err != nil {
 		return fmt.Errorf("list sessions: %w", err)
 	}
@@ -220,7 +218,7 @@ func RunDelete(ctx context.Context, a *agent.Agent, id, output string) error {
 
 	// Validate session exists by checking all CWDs
 	found := false
-	if data, err := c.do("GET", "/api/sessions", nil); err == nil {
+	if data, err := c.ListSessions(""); err == nil {
 		var sessions []map[string]any
 		json.Unmarshal(data, &sessions)
 		for _, s := range sessions {

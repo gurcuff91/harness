@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.39] - 2026-07-25
+
+### Internal — unified the three near-identical HTTP/SSE clients into `internal/client`
+- Three transports (`internal/transport/tui`, `internal/transport/telegram`,
+  `internal/cli`) each talked to the same `internal/server` backend through
+  their own hand-rolled client: `tui.Client` (~27 methods, raw `[]byte`),
+  `telegram.apiClient` (~15 methods, pre-decoded into `map[string]any`/
+  `string`/`bool`/`int`), and `cli.httpClient` (~22 methods, raw `[]byte`).
+  All three duplicated the same `do()` (marshal → POST → read → parse
+  harness's `{"error":{"message","details"}}` shape) and the same
+  `StreamEvents` SSE scanner.
+- New `internal/client` (package `client`) is the one client all three now
+  use. It returns raw `[]byte` for every endpoint — no opinion about how a
+  caller wants to decode the response, matching what the TUI and CLI clients
+  already did; `telegram.apiClient` is kept as a thin wrapper over it purely
+  to decode into the specific Go values its call sites (`commands.go`,
+  `pump.go`, `images.go`, `telegram.go`) were already written against, so
+  those files needed no changes beyond the error type swap below.
+- `internal/cli/client.go` shrank to a one-line `newClient()` alias;
+  `internal/transport/tui/client.go` was deleted entirely (the TUI now holds
+  a `*client.Client` directly); `CommandDef`/`ParamDef` (decoded from
+  `ListCommands`'s raw bytes) moved to the TUI's own new `commanddef.go`
+  since they no longer have a client type to live next to.
+- `telegram`'s local `harnessError` type was replaced by `client.Error`
+  (`pump.go`'s `replyError` now type-asserts `*client.Error` and reads
+  `.Message`/`.Details` instead of the lower-case fields the local type had).
+- **Real bug fixed by the unification**: `internal/cli/client.go`'s SSE
+  reader had no `scanner.Buffer(...)` call at all (bare `bufio.Scanner`
+  default: 64KB line cap), unlike the TUI and Telegram clients which both
+  set a larger buffer. A single SSE event line over 64KB (e.g. a big
+  `tool_result`) would have silently truncated the scan — `bufio.ErrTooLong`
+  swallowed, not surfaced — only on the CLI's `-p` streaming path. The
+  unified client's `streamEvents` (in `internal/client/stream.go`) sizes the
+  buffer to 64KB initial / 4MB max on every transport now.
+- `eventBufferSize` (channel capacity between the SSE-reading goroutine and
+  the consumer) is a single constant (4096) instead of three independently
+  drifted literals.
+- No behavior change for any transport beyond the fixed SSE buffer bug —
+  `go build ./...`, `go vet ./...`, and `go test ./... -race` all clean.
+
 ## [0.73.38] - 2026-07-25
 
 ### CLI — `harness -p <prompt>` no longer litters disk with unresumable sessions

@@ -379,7 +379,7 @@ func (t *TUI) providersByActive(active bool) []components.SelectItem {
 // the active one) for resume/delete sub-palettes.
 func (t *TUI) sessionsForCWD(excludeActive bool) []components.SelectItem {
 	cwd, _ := os.Getwd()
-	data, err := t.client.ListSessionsByCWD(cwd)
+	data, err := t.client.ListSessions(cwd)
 	if err != nil {
 		return nil
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/gurcuff91/harness/internal/client"
 	"github.com/gurcuff91/harness/internal/logx"
 	"strings"
 	"sync"
@@ -236,9 +237,9 @@ func (t *Transport) reply(ctx context.Context, chatID int64, text string) {
 // message on top, the details pretty-printed in a code fence. Plain errors get
 // the standard ⚠️ prefix.
 func (t *Transport) replyError(ctx context.Context, chatID int64, err error) {
-	var ae *harnessError
+	var ae *client.Error
 	if errors.As(err, &ae) {
-		t.reply(ctx, chatID, formatError(ae.message, ae.details))
+		t.reply(ctx, chatID, formatError(ae.Message, ae.Details))
 		return
 	}
 	t.reply(ctx, chatID, "⚠️ "+err.Error())
