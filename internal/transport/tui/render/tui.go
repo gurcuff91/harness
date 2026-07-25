@@ -128,9 +128,23 @@ func (t *TUI) Stop() {
 	hwRow := t.hardwareCursorRow
 	t.mu.Unlock()
 
-	// Move cursor to the line after the content to avoid clobbering it.
+	// Park the cursor on the line right after the content, at column 0, so
+	// whatever the caller prints next (e.g. the TUI's farewell) lands cleanly
+	// below the last rendered line.
+	//
+	// Two steps, and the order matters: first move to the LAST line of content
+	// (index prevLen-1), then emit one CRLF to step onto the line after it.
+	// The CRLF — not a MoveDown — is what actually gets us there, because this
+	// renderer is inline: when the content fills the screen the cursor is
+	// already on the last physical row, where CSI B (MoveDown) saturates and
+	// does nothing, while a CRLF scrolls the terminal to make the new line.
+	//
+	// Targeting prevLen-1 (not prevLen) is the fix for an off-by-one: with
+	// prevLen as the target, the MoveDown already landed one line past the
+	// content and the CRLF then added a second, so callers got two blank lines
+	// where their comments (and the intent) assumed one.
 	if prevLen > 0 {
-		lineDiff := prevLen - hwRow
+		lineDiff := (prevLen - 1) - hwRow
 		if lineDiff > 0 {
 			t.terminal.Write(ansi.MoveDown(lineDiff))
 		} else if lineDiff < 0 {

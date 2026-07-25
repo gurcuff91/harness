@@ -190,10 +190,13 @@ func (t *TUI) Run(ctx context.Context) error {
 	// lines land cleanly with no extra blank rows injected by Stop().
 	t.tui.Stop()
 
-	// Stop() already emitted one CRLF below the TUI content, so a single \r\n
-	// here yields exactly one blank line above the farewell. The trailing \r\n
-	// terminates the output cleanly so zsh doesn't print its "no final newline"
-	// marker (%) and the shell prompt lands on its own line.
+	// Stop() parks the cursor exactly one line below the TUI content, so the
+	// single leading \r\n here yields exactly one blank line above the
+	// farewell. (Stop() used to overshoot by one — a MoveDown to just past the
+	// content plus its CRLF — which made this render with two blank lines
+	// instead; see render.TUI.Stop.) The trailing \r\n terminates the output
+	// cleanly so zsh doesn't print its "no final newline" marker (%) and the
+	// shell prompt lands on its own line.
 	if t.lastSessionID != "" {
 		fmt.Printf("\r\n%s %s\r\n  %s harness --resume %s\r\n\r\n",
 			ansi.Primary("👋"),

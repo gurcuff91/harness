@@ -2,6 +2,60 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.33] - 2026-07-24
+
+### TUI — fix off-by-one in Stop()'s cursor parking (extra blank line on exit)
+- `render.TUI.Stop()` is supposed to park the cursor on the line immediately
+  after the last rendered line, so whatever prints next (the TUI's
+  "👋 Goodbye!" farewell) is separated by exactly one blank line — which is
+  what its caller's comment in `internal/transport/tui/tui.go` assumed.
+- It overshot by one: the last content line is at index `prevLen-1`, but the
+  move targeted `prevLen` (already one row past the content) and *then* wrote
+  a CRLF, landing two rows below. Confirmed in a pty capture as a literal
+  `\x1b[1B\r\n` right before the farewell. Result: the goodbye block rendered
+  one line lower than intended.
+- Fixed by targeting `prevLen-1` and letting the single CRLF do the final
+  step. The CRLF (not a `MoveDown`) has to be what advances the line: this
+  renderer is inline, so when content fills the screen the cursor is already
+  on the last physical row, where `CSI B` saturates and does nothing while a
+  CRLF scrolls the terminal to create the new line.
+- New tests `TestStopParksCursorOneLineBelowContent` and
+  `TestStopMovesUpWhenCursorIsBelowLastLine` (in
+  `internal/transport/tui/render/stop_test.go`) assert the emitted sequence in
+  both directions; both were verified to fail against the pre-fix code.
+- Investigated alongside this: the blank row that stays below the footer
+  *during normal use* is **not** a bug. Verified via a pty capture and a
+  component-tree dump that both the render tree and each frame end exactly on
+  the footer line, with no trailing blank emitted — that row is where the
+  cursor lives, and an inline renderer can't write the last physical row
+  without a subsequent CRLF scrolling the view and desyncing the diff math.
+  PI behaves the same way for the same reason.
+
+## [0.73.32] - 2026-07-24
+
+### TUI — fix the extra blank line below the welcome banner
+- The startup banner rendered with one blank line too many below it — visible
+  as an unexpected gap above the input separator (and, by extension, in the
+  spacing around the footer/goodbye output).
+- `welcomeBanner` builds its text with an `add` helper that appends `'\n'`
+  after every line, so its final `add("")` — meant to leave "one blank line
+  below the tip so the editor doesn't sit flush against it" — left the string
+  ending in `"\n\n"`: one newline closing the tip's line, one from `add("")`
+  itself. `RawBlock.Render` wraps that through `ansi.WrapTextWithAnsi`, which
+  does `strings.Split(text, "\n")`, and a trailing newline yields a final
+  empty element (Go semantics: `"a\n".Split("\n") == ["a", ""]`). Two trailing
+  newlines therefore produced **two** blank lines; combined with the idle
+  spinner's own blank line (`components.Spinner.Render` returns `[""]` while
+  stopped), the gap was three blank lines instead of the intended two.
+- Fixed by trimming exactly one trailing newline in `welcomeBanner`. The
+  remaining newline still closes the tip line and still splits into the single
+  blank line the banner is supposed to leave; the blank lines built above it
+  are real content and untouched. Verified in a pty: the separator moved from
+  content row 10 to row 9, with two blank lines above it instead of three.
+- New test `TestWelcomeBannerEndsWithExactlyOneBlankLine` asserts both the
+  rendered output (last line blank, second-to-last not blank) and the root
+  cause at the source (the string must not end in a double newline).
+
 ## [0.73.31] - 2026-07-24
 
 ### Server/TUI — SSE control events (turn_end/stop/error) never silently dropped

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"math/rand"
+	"strings"
 
 	"github.com/gurcuff91/harness/internal/transport/tui/ansi"
 	"github.com/gurcuff91/harness/internal/version"
@@ -48,5 +49,19 @@ func (t *TUI) welcomeBanner() string {
 	add("  " + ansi.Dimmed("· ") + ansi.Muted(tip))
 	// One blank line below the tip so the editor doesn't sit flush against it.
 	add("")
-	return string(b)
+
+	// `add` appends '\n' after EVERY line, so the add("") above leaves the
+	// string ending in "\n\n": one '\n' closing the tip's line, one from
+	// add("") itself. RawBlock.Render wraps this through
+	// ansi.WrapTextWithAnsi, which does strings.Split(text, "\n") — where a
+	// trailing '\n' yields a final empty element (Go semantics:
+	// "a\n".Split("\n") == ["a", ""]). Two trailing newlines therefore became
+	// TWO blank lines, and combined with the idle spinner's own blank line
+	// (components/spinner.go returns [""] while stopped) the gap above the
+	// input separator was three blank lines instead of the intended two.
+	//
+	// Trim exactly one: the remaining single '\n' still closes the tip line
+	// and still splits into the one blank line this banner is supposed to
+	// leave. The blank lines built above are real content and are untouched.
+	return strings.TrimSuffix(string(b), "\n")
 }
