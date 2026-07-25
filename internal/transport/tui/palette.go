@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"encoding/json"
 	"os"
 	"strings"
 
@@ -345,32 +344,26 @@ func (t *TUI) getSubItems(cmd string) []components.SelectItem {
 // true it returns connected providers (for disconnect) and tags subscriptions;
 // when false it returns inactive providers (for connect).
 func (t *TUI) providersByActive(active bool) []components.SelectItem {
-	data, err := t.client.GetProviders()
+	providers, err := t.client.GetProviders()
 	if err != nil {
 		return nil
 	}
-	var providers []map[string]any
-	json.Unmarshal(data, &providers)
 	var items []components.SelectItem
 	for _, p := range providers {
-		isActive, _ := p["active"].(bool)
-		if isActive != active {
+		if p.Active != active {
 			continue
 		}
-		name, _ := p["name"].(string)
 		// Prefer the human-friendly display name for the label; fall back to the
 		// slug. The dynamic description ("API key · 12 models", ...) comes straight
 		// from the core, uniform across providers. Value stays the slug — that's
 		// what /connect needs. Flag marks subscriptions so connect can branch
 		// (OAuth = execute directly; API key = prompt for a key) without parsing
 		// the human-readable description.
-		label, _ := p["display_name"].(string)
+		label := p.DisplayName
 		if label == "" {
-			label = name
+			label = p.Name
 		}
-		desc, _ := p["description"].(string)
-		isSub, _ := p["is_subscription"].(bool)
-		items = append(items, components.SelectItem{Value: name, Label: label, Description: desc, Flag: isSub})
+		items = append(items, components.SelectItem{Value: p.Name, Label: label, Description: p.Description, Flag: p.IsSubscription})
 	}
 	return items
 }
@@ -379,35 +372,30 @@ func (t *TUI) providersByActive(active bool) []components.SelectItem {
 // the active one) for resume/delete sub-palettes.
 func (t *TUI) sessionsForCWD(excludeActive bool) []components.SelectItem {
 	cwd, _ := os.Getwd()
-	data, err := t.client.ListSessions(cwd)
+	sessions, err := t.client.ListSessions(cwd)
 	if err != nil {
 		return nil
 	}
-	var sessions []map[string]any
-	json.Unmarshal(data, &sessions)
 	var items []components.SelectItem
 	for _, s := range sessions {
-		id, _ := s["id"].(string)
+		id := s.ID
 		if excludeActive && id == t.sessionID {
 			continue
 		}
-		name, _ := s["name"].(string)
+		name := s.Name
 		if name == "" && len(id) >= 8 {
 			name = id[:8]
 		}
 		// Description: "<relative time> · <short model> · <cwd>" — the most
 		// distinguishing signals when picking a session to resume.
-		sessCWD, _ := s["cwd"].(string)
-		model, _ := s["model"].(string)
-		lastActive, _ := s["last_active_at"].(string)
 		var segs []string
-		if rel := relativeTime(lastActive); rel != "" {
+		if rel := relativeTime(s.LastActiveAt); rel != "" {
 			segs = append(segs, rel)
 		}
-		if sm := shortModel(model); sm != "" {
+		if sm := shortModel(s.Model); sm != "" {
 			segs = append(segs, sm)
 		}
-		segs = append(segs, shortenPath(sessCWD))
+		segs = append(segs, shortenPath(s.CWD))
 		items = append(items, components.SelectItem{
 			Value:       name,
 			Label:       name,

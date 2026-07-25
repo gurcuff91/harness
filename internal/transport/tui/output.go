@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -68,15 +67,10 @@ func (t *TUI) refreshBadges() {
 	}
 	// MCP: count connected servers.
 	t.mcpConnected = 0
-	if data, err := t.client.GetMCPStatus(); err == nil {
-		var statuses []struct {
-			Connected bool `json:"connected"`
-		}
-		if json.Unmarshal(data, &statuses) == nil {
-			for _, s := range statuses {
-				if s.Connected {
-					t.mcpConnected++
-				}
+	if statuses, err := t.client.GetMCPStatus(); err == nil {
+		for _, s := range statuses {
+			if s.Connected {
+				t.mcpConnected++
 			}
 		}
 	}
@@ -95,11 +89,8 @@ func (t *TUI) refreshScheduleBadge() {
 	// Count only the schedules owned by this session — the ones that will actually
 	// fire here. A schedule only ever runs in its owner session, so a global count
 	// would be dishonest for this session's footer.
-	if data, err := t.client.GetSchedules(t.sessionID); err == nil {
-		var jobs []json.RawMessage
-		if json.Unmarshal(data, &jobs) == nil {
-			t.scheduleJobs = len(jobs)
-		}
+	if jobs, err := t.client.GetSchedules(t.sessionID); err == nil {
+		t.scheduleJobs = len(jobs)
 	}
 }
 
@@ -332,20 +323,12 @@ func shortModel(model string) string {
 	return model
 }
 
-// relativeTime renders an RFC3339 timestamp as a compact "time ago" string:
-// "just now", "5m ago", "2h ago", "3d ago", or a short date ("Jun 20") beyond a
-// week. Returns "" if the timestamp can't be parsed.
-func relativeTime(ts string) string {
-	if ts == "" {
+// relativeTime renders a timestamp as a compact "time ago" string: "just now",
+// "5m ago", "2h ago", "3d ago", or a short date ("Jun 20") beyond a week.
+// Returns "" for the zero time (e.g. a session that never recorded activity).
+func relativeTime(t time.Time) string {
+	if t.IsZero() {
 		return ""
-	}
-	t, err := time.Parse(time.RFC3339, ts)
-	if err != nil {
-		// Some encoders include sub-second precision / timezone offsets; try the
-		// nano variant before giving up.
-		if t, err = time.Parse(time.RFC3339Nano, ts); err != nil {
-			return ""
-		}
 	}
 	d := time.Since(t)
 	switch {
@@ -360,29 +343,4 @@ func relativeTime(ts string) string {
 	default:
 		return t.Format("Jan 2")
 	}
-}
-
-func intFromMap(m map[string]any, key string) (int, bool) {
-	v, ok := m[key]
-	if !ok {
-		return 0, false
-	}
-	switch n := v.(type) {
-	case float64:
-		return int(n), true
-	case int:
-		return n, true
-	}
-	return 0, false
-}
-
-func floatFromMap(m map[string]any, key string) (float64, bool) {
-	v, ok := m[key]
-	if !ok {
-		return 0, false
-	}
-	if f, ok := v.(float64); ok {
-		return f, true
-	}
-	return 0, false
 }

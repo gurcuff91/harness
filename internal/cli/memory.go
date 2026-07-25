@@ -63,28 +63,14 @@ func RunMemo(ctx context.Context, a *agent.Agent, opts MemoOpts, output string) 
 		q.Set("skip", strconv.Itoa(opts.Skip))
 	}
 
-	data, err := c.GetMemories(q.Encode())
+	res, err := c.GetMemories(q.Encode())
 	if err != nil {
 		return fmt.Errorf("memo: %w", err)
 	}
 
-	var res struct {
-		Total    int `json:"total"`
-		Returned int `json:"returned"`
-		Skip     int `json:"skip"`
-		Limit    int `json:"limit"`
-		Results  []struct {
-			Slug      string  `json:"slug"`
-			CWD       string  `json:"cwd"`
-			Content   string  `json:"content"`
-			Score     float64 `json:"score"`
-			UpdatedAt int64   `json:"updated_at"`
-		} `json:"results"`
-	}
-	json.Unmarshal(data, &res)
-
 	if output == "json" {
-		fmt.Println(string(data))
+		b, _ := json.MarshalIndent(res, "", "  ")
+		fmt.Println(string(b))
 		return nil
 	}
 

@@ -36,8 +36,7 @@ func TestStreamEventsDecodesEvents(t *testing.T) {
 
 	var got []string
 	for e := range events {
-		typ, _ := e["type"].(string)
-		got = append(got, typ)
+		got = append(got, e.Type)
 	}
 	if len(got) != 2 || got[0] != "turn_start" || got[1] != "turn_end" {
 		t.Errorf("got %v, want [turn_start turn_end]", got)
@@ -77,9 +76,8 @@ func TestStreamEventsHandlesLargeLine(t *testing.T) {
 		if !ok {
 			t.Fatal("channel closed with no event — the large line was likely dropped (the bug this test guards against)")
 		}
-		out, _ := e["output"].(string)
-		if len(out) != len(bigOutput) {
-			t.Errorf("output length = %d, want %d (truncated?)", len(out), len(bigOutput))
+		if len(e.Output) != len(bigOutput) {
+			t.Errorf("output length = %d, want %d (truncated?)", len(e.Output), len(bigOutput))
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for the large event")

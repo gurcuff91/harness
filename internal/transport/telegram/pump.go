@@ -93,7 +93,7 @@ func (t *Transport) pumpFor(ctx context.Context, chatID int64) (*chatPump, error
 	// Record the session's actual model (it may differ from the bot default when
 	// a resumed session kept its own) so logs report what's really running.
 	if meta, err := t.api.GetSession(sessionID); err == nil {
-		p.model, _ = meta["model"].(string)
+		p.model = meta.Model
 	}
 	t.mu.Lock()
 	t.pumps[chatID] = p
@@ -114,7 +114,7 @@ func (t *Transport) pumpFor(ctx context.Context, chatID int64) (*chatPump, error
 // still exists, otherwise create a fresh session and persist the mapping.
 func (t *Transport) acquireSession(chatID int64) (string, error) {
 	if id, ok := t.store.sessionFor(chatID); ok {
-		if resumed, err := t.api.ResumeSession(id); err == nil && resumed {
+		if _, err := t.api.ResumeSession(id); err == nil {
 			// A resumed session keeps its own model, exactly like the TUI — unless
 			// the bot was launched with an explicit --model, which overrides it.
 			if t.opts.Model != "" {
@@ -126,14 +126,14 @@ func (t *Transport) acquireSession(chatID int64) (string, error) {
 		}
 		// Stored session is gone or failed to resume — fall through to create.
 	}
-	id, err := t.api.CreateSession(t.model, t.cwd)
+	sess, err := t.api.CreateSession(t.model, t.cwd)
 	if err != nil {
 		return "", err
 	}
-	if err := t.store.bind(chatID, id); err != nil {
+	if err := t.store.bind(chatID, sess.ID); err != nil {
 		logx.Error("telegram", "persist_mapping", "chat", chatID, "error", err.Error())
 	}
-	return id, nil
+	return sess.ID, nil
 }
 
 // resetChat closes the chat's current session and clears its mapping, so the
@@ -144,7 +144,7 @@ func (t *Transport) resetChat(ctx context.Context, chatID int64) {
 	delete(t.pumps, chatID)
 	t.mu.Unlock()
 	if p != nil {
-		_ = t.api.CloseSession(p.sessionID)
+		_, _ = t.api.CloseSession(p.sessionID)
 	}
 	_ = t.store.unbind(chatID)
 }
@@ -155,22 +155,20 @@ func (t *Transport) resetChat(ctx context.Context, chatID int64) {
 // and at turn end. A "typing" indicator is kept alive with a heartbeat while the
 // agent is working, since Telegram clears it after ~5s. The pump exits when the
 // stream closes (ctx cancelled or server ended it).
-func (t *Transport) drain(ctx context.Context, p *chatPump, events <-chan map[string]any) {
+func (t *Transport) drain(ctx context.Context, p *chatPump, events <-chan client.Event) {
 	for evt := range events {
-		typ, _ := evt["type"].(string)
-		switch typ {
+		switch evt.Type {
 		case "turn_start":
 			p.startTyping(ctx, t.bot)
 		case "text":
-			if d, _ := evt["delta"].(string); d != "" {
-				p.buf.WriteString(d)
+			if evt.Delta != "" {
+				p.buf.WriteString(evt.Delta)
 			}
 		case "received_prompt":
 			// A prompt the transport didn't send — i.e. a scheduled one fired by the
 			// engine into this session. Log it, and keep typing alive for it too.
-			if origin, _ := evt["origin"].(string); origin == "scheduled" {
-				text, _ := evt["text"].(string)
-				logx.Info("telegram", "scheduled_prompt", "chat", p.chatID, "text", oneLine(text, 200))
+			if evt.Origin == "scheduled" {
+				logx.Info("telegram", "scheduled_prompt", "chat", p.chatID, "text", oneLine(evt.Text, 200))
 				p.startTyping(ctx, t.bot)
 			}
 		case "text_end":
@@ -179,8 +177,7 @@ func (t *Transport) drain(ctx context.Context, p *chatPump, events <-chan map[st
 			// rather than bundled at the end.
 			t.flush(ctx, p)
 		case "tool_call":
-			name, _ := evt["tool_name"].(string)
-			logx.Info("telegram", "tool", "chat", p.chatID, "name", name)
+			logx.Info("telegram", "tool", "chat", p.chatID, "name", evt.ToolName)
 		case "turn_end":
 			t.flush(ctx, p)
 			p.stopTyping()
@@ -195,10 +192,8 @@ func (t *Transport) drain(ctx context.Context, p *chatPump, events <-chan map[st
 		case "error":
 			p.buf.Reset()
 			p.stopTyping()
-			msg, _ := evt["message"].(string)
-			details, _ := evt["details"].(map[string]any)
-			if msg != "" || len(details) > 0 {
-				t.reply(ctx, p.chatID, formatError(msg, details))
+			if evt.Message != "" || len(evt.Details) > 0 {
+				t.reply(ctx, p.chatID, formatError(evt.Message, evt.Details))
 			}
 		case "max_iterations_reached":
 			t.flush(ctx, p)

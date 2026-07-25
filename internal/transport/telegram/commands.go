@@ -58,7 +58,7 @@ func (t *Transport) cmdStop(ctx context.Context, chatID int64) {
 		t.reply(ctx, chatID, "Nothing is running.")
 		return
 	}
-	if err := t.api.StopSession(p.sessionID); err != nil {
+	if _, err := t.api.StopSession(p.sessionID); err != nil {
 		t.replyError(ctx, chatID, err)
 		return
 	}
@@ -101,61 +101,69 @@ func (t *Transport) cmdInfo(ctx context.Context, chatID int64) {
 	var b strings.Builder
 	b.WriteString("📊 *Session info*\n\n")
 
-	if info, err := t.api.GetServerInfo(); err == nil {
-		if v, _ := info["version"].(string); v != "" {
-			fmt.Fprintf(&b, "harness %s\n", v)
-		}
+	if info, err := t.api.GetServerInfo(); err == nil && info.Version != "" {
+		fmt.Fprintf(&b, "harness %s\n", info.Version)
 	}
 	if meta, err := t.api.GetSession(p.sessionID); err == nil {
-		if name, _ := meta["name"].(string); name != "" {
-			fmt.Fprintf(&b, "Session: %s\n", name)
+		if meta.Name != "" {
+			fmt.Fprintf(&b, "Session: %s\n", meta.Name)
 		}
 		b.WriteByte('\n')
-		if m, _ := meta["model"].(string); m != "" {
-			fmt.Fprintf(&b, "Model: %s\n", m)
+		if meta.Model != "" {
+			fmt.Fprintf(&b, "Model: %s\n", meta.Model)
 		}
-		if stats, ok := meta["stats"].(map[string]any); ok {
-			win := numField(stats, "context_window")
-			pct, _ := stats["context_usage"].(float64)
-			if win > 0 {
-				fmt.Fprintf(&b, "Context: %s window · %.1f%% used\n", compactNum(win), pct*100)
-			}
+		stats := meta.Stats
+		if stats.ContextWindow > 0 {
+			fmt.Fprintf(&b, "Context: %s window · %.1f%% used\n",
+				compactNum(int64(stats.ContextWindow)), stats.ContextUsage*100)
 		}
-		if th, _ := meta["thinking"].(string); th != "" {
-			fmt.Fprintf(&b, "Thinking: %s\n", th)
+		if meta.Thinking != "" {
+			fmt.Fprintf(&b, "Thinking: %s\n", meta.Thinking)
 		}
-		if stats, ok := meta["stats"].(map[string]any); ok {
-			b.WriteByte('\n')
-			fmt.Fprintf(&b, "Tokens: ↑%s ↓%s\n",
-				compactNum(numField(stats, "input_tokens")), compactNum(numField(stats, "output_tokens")))
-			cr, cw := numField(stats, "cache_read"), numField(stats, "cache_write")
-			if cr > 0 || cw > 0 {
-				fmt.Fprintf(&b, "Cache: R%s W%s\n", compactNum(cr), compactNum(cw))
-			}
-			if c, ok := stats["cost_usd"].(float64); ok {
-				fmt.Fprintf(&b, "Cost: $%.3f\n", c)
-			}
+		b.WriteByte('\n')
+		fmt.Fprintf(&b, "Tokens: ↑%s ↓%s\n",
+			compactNum(int64(stats.InputTokens)), compactNum(int64(stats.OutputTokens)))
+		if stats.CacheRead > 0 || stats.CacheWrite > 0 {
+			fmt.Fprintf(&b, "Cache: R%s W%s\n",
+				compactNum(int64(stats.CacheRead)), compactNum(int64(stats.CacheWrite)))
 		}
+		fmt.Fprintf(&b, "Cost: $%.3f\n", stats.CostUSD)
 	}
 
 	b.WriteByte('\n')
-	fmt.Fprintf(&b, "MCPs: %d connected\n", t.api.CountConnectedMCPs())
+	fmt.Fprintf(&b, "MCPs: %d connected\n", t.countConnectedMCPs())
 	// Schedules only fire when this bot runs the engine (--scheduler); without it,
 	// reporting a count would be misleading (they'd never run).
 	if t.opts.Scheduler {
-		fmt.Fprintf(&b, "Schedules: %d\n", t.api.CountSchedules(p.sessionID))
+		fmt.Fprintf(&b, "Schedules: %d\n", t.countSchedules(p.sessionID))
 	}
 
 	t.reply(ctx, chatID, strings.TrimRight(b.String(), "\n"))
 }
 
-// numField reads an integer-ish JSON number from a map (JSON numbers decode as
-// float64).
-func numField(m map[string]any, key string) int64 {
-	if f, ok := m[key].(float64); ok {
-		return int64(f)
+// countConnectedMCPs returns how many configured MCP servers are connected.
+func (t *Transport) countConnectedMCPs() int {
+	statuses, err := t.api.GetMCPStatus()
+	if err != nil {
+		return 0
 	}
-	return 0
+	n := 0
+	for _, s := range statuses {
+		if s.Connected {
+			n++
+		}
+	}
+	return n
+}
+
+// countSchedules returns how many schedules are owned by (fire into) the given
+// session.
+func (t *Transport) countSchedules(owner string) int {
+	jobs, err := t.api.GetSchedules(owner)
+	if err != nil {
+		return 0
+	}
+	return len(jobs)
 }
 
 // compactNum renders a token count compactly (1300 -> 1.3k, 406600 -> 406.6k,

@@ -101,7 +101,7 @@ func (t *Transport) dispatchImages(ctx context.Context, chatID int64, caption st
 	}
 	logx.Info("telegram", "images",
 		"chat", chatID, "count", len(images), "caption", oneLine(caption, 120))
-	if err := t.api.SendPromptWithImages(pump.sessionID, caption, images); err != nil {
+	if _, err := t.api.SendPromptWithImages(pump.sessionID, caption, images); err != nil {
 		t.replyError(ctx, chatID, err)
 	}
 }

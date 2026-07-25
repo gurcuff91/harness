@@ -22,24 +22,16 @@ func RunSchedules(ctx context.Context, a *agent.Agent, output string) error {
 	defer server.Close()
 	c := newClient(addr)
 
-	data, err := c.GetSchedules("")
+	list, err := c.GetSchedules("")
 	if err != nil {
 		return fmt.Errorf("schedules: %w", err)
 	}
 
 	if output == "json" {
-		fmt.Println(string(data))
+		b, _ := json.MarshalIndent(list, "", "  ")
+		fmt.Println(string(b))
 		return nil
 	}
-
-	var list []struct {
-		Slug    string `json:"slug"`
-		Cron    string `json:"cron"`
-		Prompt  string `json:"prompt"`
-		Runs    int    `json:"runs"`
-		LastRun int64  `json:"last_run"`
-	}
-	json.Unmarshal(data, &list)
 
 	if len(list) == 0 {
 		fmt.Println("No schedules.")

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/internal/client"
 )
 
 // RunSettings prints the current core settings (active_model, thinking_level).
@@ -19,20 +20,18 @@ func RunSettings(ctx context.Context, a *agent.Agent, output string) error {
 	defer server.Close()
 	c := newClient(addr)
 
-	data, err := c.GetSettings()
+	s, err := c.GetSettings()
 	if err != nil {
 		return fmt.Errorf("get settings: %w", err)
 	}
-	var s map[string]any
-	json.Unmarshal(data, &s)
 
 	switch output {
 	case "json":
 		b, _ := json.MarshalIndent(s, "", "  ")
 		fmt.Println(string(b))
 	default:
-		model, _ := s["active_model"].(string)
-		thinking, _ := s["thinking_level"].(string)
+		model := s.ActiveModel
+		thinking := s.ThinkingLevel
 		if model == "" {
 			model = "(none)"
 		}
@@ -89,24 +88,14 @@ func RunMCPList(ctx context.Context, a *agent.Agent, output string) error {
 	defer server.Close()
 	c := newClient(addr)
 
-	data, err := c.GetMCPServers()
+	servers, err := c.GetMCPServers()
 	if err != nil {
 		return fmt.Errorf("list mcp: %w", err)
 	}
-	var servers map[string]map[string]any
-	json.Unmarshal(data, &servers)
 
 	// Cross-reference live connection status (connected? tool count? error?).
-	type mcpStatus struct {
-		Name      string `json:"name"`
-		Connected bool   `json:"connected"`
-		ToolCount int    `json:"tool_count"`
-		Error     string `json:"error"`
-	}
-	statusByName := map[string]mcpStatus{}
-	if sd, err := c.GetMCPStatus(); err == nil {
-		var sts []mcpStatus
-		json.Unmarshal(sd, &sts)
+	statusByName := map[string]client.MCPStatus{}
+	if sts, err := c.GetMCPStatus(); err == nil {
 		for _, st := range sts {
 			statusByName[st.Name] = st
 		}
@@ -128,32 +117,16 @@ func RunMCPList(ctx context.Context, a *agent.Agent, output string) error {
 		sort.Strings(names)
 		for _, n := range names {
 			srv := servers[n]
-			url, _ := srv["url"].(string)
-			disabled, _ := srv["disabled"].(bool)
 			// Transport is inferred: a url is remote, otherwise local.
 			typ := "local"
-			detail := ""
-			if url != "" {
+			detail := strings.Join(srv.Argv(), " ")
+			if srv.IsRemote() {
 				typ = "remote"
-				detail = url
-			} else {
-				cmd, _ := srv["command"].(string)
-				parts := []string{}
-				if cmd != "" {
-					parts = append(parts, cmd)
-				}
-				if args, ok := srv["args"].([]any); ok {
-					for _, p := range args {
-						if s, ok := p.(string); ok {
-							parts = append(parts, s)
-						}
-					}
-				}
-				detail = strings.Join(parts, " ")
+				detail = srv.URL
 			}
 			// State column reflects real connection when enabled.
 			state := "disabled"
-			if !disabled {
+			if !srv.Disabled {
 				if st, ok := statusByName[n]; ok {
 					if st.Connected {
 						state = fmt.Sprintf("\u2713 connected (%d tools)", st.ToolCount)
@@ -207,22 +180,18 @@ func RunMCPAdd(ctx context.Context, a *agent.Agent, name string, opts MCPAddOpts
 		return fmt.Errorf("specify exactly one of --command (local) or --url (remote)")
 	}
 
-	srv := map[string]any{}
-	if opts.Disabled {
-		srv["disabled"] = true
-	}
+	var srv client.MCPServer
+	srv.Disabled = opts.Disabled
 	if hasCmd {
 		// Split the command string into executable + args (canonical shape).
 		fields := strings.Fields(opts.Command)
-		srv["command"] = fields[0]
+		srv.Command = fields[0]
 		if len(fields) > 1 {
-			srv["args"] = fields[1:]
+			srv.Args = fields[1:]
 		}
-		if len(opts.Env) > 0 {
-			srv["env"] = opts.Env
-		}
+		srv.Env = opts.Env
 	} else {
-		srv["url"] = opts.URL
+		srv.URL = opts.URL
 		headers := opts.Headers
 		// --bearer sugar: set Authorization unless the user already provided one.
 		if opts.Bearer != "" {
@@ -233,9 +202,7 @@ func RunMCPAdd(ctx context.Context, a *agent.Agent, name string, opts MCPAddOpts
 				headers["Authorization"] = "Bearer " + opts.Bearer
 			}
 		}
-		if len(headers) > 0 {
-			srv["headers"] = headers
-		}
+		srv.Headers = headers
 	}
 
 	server, addr, err := startInternalServer(a)
@@ -245,12 +212,13 @@ func RunMCPAdd(ctx context.Context, a *agent.Agent, name string, opts MCPAddOpts
 	defer server.Close()
 	c := newClient(addr)
 
-	data, err := c.PutMCPServer(name, srv)
+	saved, err := c.PutMCPServer(name, srv)
 	if err != nil {
 		return fmt.Errorf("add mcp %q: %w", name, err)
 	}
 	if output == "json" {
-		fmt.Println(string(data))
+		b, _ := json.Marshal(saved)
+		fmt.Println(string(b))
 	} else {
 		fmt.Printf("MCP server added: %s\n", name)
 	}
@@ -278,22 +246,18 @@ func RunMCPSetEnabled(ctx context.Context, a *agent.Agent, name string, enabled 
 
 	// Load the whole collection and pick out the target so the round-trip
 	// preserves every other field.
-	data, err := c.GetMCPServers()
+	servers, err := c.GetMCPServers()
 	if err != nil {
 		return fmt.Errorf("list mcp: %w", err)
 	}
-	var servers map[string]map[string]any
-	json.Unmarshal(data, &servers)
 	srv, ok := servers[name]
 	if !ok {
 		return fmt.Errorf("mcp server %q not found", name)
 	}
 
-	if enabled {
-		delete(srv, "disabled") // enabled is the default → omit the field
-	} else {
-		srv["disabled"] = true
-	}
+	// enabled is the default (Disabled omitempty) → toggle the single field; the
+	// rest of the struct round-trips untouched.
+	srv.Disabled = !enabled
 
 	if _, err := c.PutMCPServer(name, srv); err != nil {
 		return fmt.Errorf("update mcp %q: %w", name, err)

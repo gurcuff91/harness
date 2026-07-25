@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/internal/client"
 )
 
 // Opts configures the CLI transport.
@@ -43,65 +44,58 @@ func Run(ctx context.Context, a *agent.Agent, prompt string, opts Opts) error {
 		return fmt.Errorf("start server: %w", err)
 	}
 	defer server.Close()
-	client := newClient(addr)
+	c := newClient(addr)
 
 	// Resolve model from settings if not provided
 	model := opts.Model
 	thinking := opts.Thinking
 	if model == "" || thinking == "" {
-		data, err := client.GetSettings()
-		if err == nil {
-			var settings map[string]string
-			json.Unmarshal(data, &settings)
+		if settings, err := c.GetSettings(); err == nil {
 			if model == "" {
-				model = settings["active_model"]
+				model = settings.ActiveModel
 			}
 			if thinking == "" {
-				thinking = settings["thinking_level"]
+				thinking = settings.ThinkingLevel
 			}
 		}
 	}
 	if model == "" {
 		// Fallback: first available model
-		data, err := client.ListModels()
+		models, err := c.ListModels()
 		if err != nil {
 			return fmt.Errorf("no model configured and cannot list models: %w", err)
 		}
-		var models []map[string]any
-		json.Unmarshal(data, &models)
 		if len(models) == 0 {
 			return fmt.Errorf("no models available — connect a provider first")
 		}
-		model, _ = models[0]["model"].(string)
+		model = models[0].Model
 	}
 
 	// Create session
 	cwd, _ := os.Getwd()
-	data, err := client.CreateSession(model, cwd)
+	sess, err := c.CreateSession(model, cwd)
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
-	var sess map[string]any
-	json.Unmarshal(data, &sess)
-	sessionID, _ := sess["id"].(string)
-	defer client.CloseSession(sessionID) //nolint
+	sessionID := sess.ID
+	defer c.CloseSession(sessionID) //nolint
 
 	// Open SSE connection BEFORE any commands that trigger events
 	ctx2, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	events, err := client.StreamEvents(ctx2, sessionID)
+	events, err := c.StreamEvents(ctx2, sessionID)
 	if err != nil {
 		return fmt.Errorf("stream events: %w", err)
 	}
 
 	// Apply thinking level (doesn't emit events, safe to do after SSE open)
 	if thinking != "" && thinking != "off" {
-		client.ExecCommand(sessionID, "thinking", map[string]any{"level": thinking}) //nolint
+		c.ExecCommand(sessionID, "thinking", map[string]any{"level": thinking}) //nolint
 	}
 
 	// Send prompt — session starts processing, events arrive via SSE
-	_, err = client.SendPrompt(sessionID, prompt)
+	_, err = c.SendPrompt(sessionID, prompt)
 	if err != nil {
 		return fmt.Errorf("send prompt: %w", err)
 	}
@@ -110,35 +104,33 @@ func Run(ctx context.Context, a *agent.Agent, prompt string, opts Opts) error {
 }
 
 // renderEvents reads SSE events and renders them according to the output mode.
-func renderEvents(events <-chan map[string]any, mode string) error {
-	var collected []map[string]any
+// The json / json-stream modes emit each event's Raw payload verbatim (exactly
+// what the server sent — see client.Event.Raw), so machine consumers see the
+// canonical wire shape, not a lossy re-encode of the typed struct.
+func renderEvents(events <-chan client.Event, mode string) error {
+	var collected []json.RawMessage
 	var textBuf strings.Builder
 
 	for evt := range events {
-		typ, _ := evt["type"].(string)
-
 		// Always collect text deltas for text mode
-		if typ == "text" && mode == "text" {
-			delta, _ := evt["delta"].(string)
-			textBuf.WriteString(delta)
+		if evt.Type == "text" && mode == "text" {
+			textBuf.WriteString(evt.Delta)
 		}
 
 		// Error handling for all modes
-		if typ == "error" {
-			msg, _ := evt["message"].(string)
-			fmt.Fprintln(os.Stderr, "Error:", msg)
-			return fmt.Errorf("%s", msg)
+		if evt.Type == "error" {
+			fmt.Fprintln(os.Stderr, "Error:", evt.Message)
+			return fmt.Errorf("%s", evt.Message)
 		}
 
 		switch mode {
 		case "json-stream":
-			b, _ := json.Marshal(evt)
-			fmt.Println(string(b))
+			fmt.Println(string(evt.Raw))
 		case "json":
-			collected = append(collected, evt)
+			collected = append(collected, evt.Raw)
 		}
 
-		if typ == "turn_end" {
+		if evt.Type == "turn_end" {
 			goto finalize
 		}
 	}
@@ -149,12 +141,11 @@ finalize:
 		fmt.Println(strings.TrimSpace(textBuf.String()))
 	case "json":
 		fmt.Println("[")
-		for i, evt := range collected {
-			b, _ := json.Marshal(evt)
+		for i, raw := range collected {
 			if i < len(collected)-1 {
-				fmt.Println(string(b) + ",")
+				fmt.Println(string(raw) + ",")
 			} else {
-				fmt.Println(string(b))
+				fmt.Println(string(raw))
 			}
 		}
 		fmt.Println("]")

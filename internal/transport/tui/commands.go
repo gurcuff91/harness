@@ -1,10 +1,10 @@
 package tui
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
+	"github.com/gurcuff91/harness/internal/client"
 	"github.com/gurcuff91/harness/internal/providers/authflow"
 	"github.com/gurcuff91/harness/internal/transport/tui/ansi"
 )
@@ -170,7 +170,7 @@ func (t *TUI) runCommand(cmd string, args []string) {
 			return
 		}
 		go func() {
-			if _, err := t.client.DeleteSession(args[0]); err != nil {
+			if err := t.client.DeleteSession(args[0]); err != nil {
 				t.showWarn(err.Error())
 				return
 			}
@@ -235,16 +235,13 @@ func (t *TUI) cmdConnect(args []string) {
 // providerIsSubscription reports whether a provider authenticates via OAuth /
 // subscription (and so connects without a typed API key).
 func (t *TUI) providerIsSubscription(name string) bool {
-	data, err := t.client.GetProviders()
+	providers, err := t.client.GetProviders()
 	if err != nil {
 		return false
 	}
-	var providers []map[string]any
-	json.Unmarshal(data, &providers)
 	for _, p := range providers {
-		if n, _ := p["name"].(string); n == name {
-			sub, _ := p["is_subscription"].(bool)
-			return sub
+		if p.Name == name {
+			return p.IsSubscription
 		}
 	}
 	return false
@@ -253,15 +250,13 @@ func (t *TUI) providerIsSubscription(name string) bool {
 // refreshSubscriptionFlag updates t.isSubscription for the current model so the
 // footer's "(sub)" tag stays accurate after a /model change.
 func (t *TUI) refreshSubscriptionFlag() {
-	data, err := t.client.ListModels()
+	models, err := t.client.ListModels()
 	if err != nil {
 		return
 	}
-	var models []map[string]any
-	json.Unmarshal(data, &models)
 	for _, m := range models {
-		if id, _ := m["model"].(string); id == t.model {
-			t.isSubscription, _ = m["is_subscription"].(bool)
+		if m.Model == t.model {
+			t.isSubscription = m.IsSubscription
 			return
 		}
 	}
@@ -292,53 +287,39 @@ func (t *TUI) execSessionCommand(cmd string, args []string) {
 	}
 
 	go func() {
-		data, err := t.client.ExecCommand(t.sessionID, cmd, params)
+		status, err := t.client.ExecCommand(t.sessionID, cmd, params)
 		if err != nil {
 			t.showWarn(err.Error())
 			return
 		}
-		t.applyCommandResult(cmd, args, data)
+		t.applyCommandResult(cmd, args, status)
 	}()
 }
 
 // applyCommandResult refreshes local state after a command (e.g. model change)
-// and prints a confirmation line so the user sees the command took effect.
-func (t *TUI) applyCommandResult(cmd string, args []string, data []byte) {
-	var resp map[string]any
-	json.Unmarshal(data, &resp)
-
-	// Prefer the value echoed back by the API; fall back to the typed arg so
-	// the footer always reflects the change even if the response omits it.
+// and prints a confirmation line so the user sees the command took effect. The
+// exec endpoint returns only a {"status": {code, message}} envelope (never the
+// changed value), so the new value is taken from the typed arg — which is what
+// the user just supplied, and what the server applied.
+func (t *TUI) applyCommandResult(cmd string, args []string, status *client.Status) {
 	argVal := strings.Join(args, " ")
 	confirm := ""
 	switch cmd {
 	case "model":
-		m, _ := resp["model"].(string)
-		if m == "" {
-			m = argVal
-		}
-		if m != "" {
-			t.model = m
+		if argVal != "" {
+			t.model = argVal
 			t.refreshSubscriptionFlag()
-			confirm = "model → " + m
+			confirm = "model → " + argVal
 		}
 	case "thinking":
-		l, _ := resp["level"].(string)
-		if l == "" {
-			l = argVal
-		}
-		if l != "" {
-			t.thinking = l
-			confirm = "thinking → " + l
+		if argVal != "" {
+			t.thinking = argVal
+			confirm = "thinking → " + argVal
 		}
 	case "rename":
-		n, _ := resp["name"].(string)
-		if n == "" {
-			n = argVal
-		}
-		if n != "" {
-			t.sessionName = n
-			confirm = "renamed → " + n
+		if argVal != "" {
+			t.sessionName = argVal
+			confirm = "renamed → " + argVal
 		}
 	}
 	// Commands that trigger agent streaming show the spinner instead of a
@@ -348,11 +329,11 @@ func (t *TUI) applyCommandResult(cmd string, args []string, data []byte) {
 		t.updateInfo()
 		return
 	}
-	// Fallback: echo the command + args when the response carries no field we
-	// recognize (e.g. a custom session command), so there's always feedback.
+	// Fallback: echo the status message, or the command + args, when the
+	// command isn't one we specially confirm — so there's always feedback.
 	if confirm == "" {
-		if msg, _ := resp["message"].(string); msg != "" {
-			confirm = msg
+		if status != nil && status.Message != "" {
+			confirm = status.Message
 		} else {
 			confirm = "/" + cmd
 			if len(args) > 0 {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/internal/client"
 	"github.com/gurcuff91/harness/internal/server"
 )
 
@@ -28,7 +29,7 @@ type Options struct {
 type Transport struct {
 	opts  Options
 	agent *agent.Agent
-	api   *apiClient
+	api   *client.Client
 	bot   *Bot
 	store *store
 	model string
@@ -66,7 +67,7 @@ func Run(ctx context.Context, a *agent.Agent, opts Options) error {
 	t := &Transport{
 		opts:          opts,
 		agent:         a,
-		api:           newAPIClient(listener.Addr().String()),
+		api:           client.New(listener.Addr().String()),
 		bot:           NewBot(opts.Token),
 		store:         st,
 		cwd:           cwd,
@@ -114,10 +115,10 @@ func (t *Transport) resolveModel() error {
 	active := map[string]bool{}
 	first := ""
 	for _, m := range models {
-		if id, _ := m["model"].(string); id != "" {
-			active[id] = true
+		if m.Model != "" {
+			active[m.Model] = true
 			if first == "" {
-				first = id
+				first = m.Model
 			}
 		}
 	}
@@ -126,8 +127,8 @@ func (t *Transport) resolveModel() error {
 		return nil
 	}
 	if s, err := t.api.GetSettings(); err == nil {
-		if def, _ := s["active_model"].(string); def != "" && active[def] {
-			t.model = def
+		if s.ActiveModel != "" && active[s.ActiveModel] {
+			t.model = s.ActiveModel
 			return nil
 		}
 	}
@@ -197,7 +198,7 @@ func (t *Transport) handleMessage(ctx context.Context, msg *Message) {
 	logx.Info("telegram", "prompt", "chat", chatID, "text", oneLine(text, 200))
 	// The typing indicator is driven by the SSE drain (turn_start→turn_end) so it
 	// stays alive for the whole turn, not just Telegram's ~5s window.
-	if err := t.api.SendPrompt(pump.sessionID, text); err != nil {
+	if _, err := t.api.SendPrompt(pump.sessionID, text); err != nil {
 		t.replyError(ctx, chatID, err)
 	}
 }

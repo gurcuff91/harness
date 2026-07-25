@@ -6,9 +6,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gurcuff91/harness/internal/client"
 	"github.com/gurcuff91/harness/internal/transport/tui/components"
 	"github.com/gurcuff91/harness/internal/transport/tui/render"
 )
+
+// feed loads a slice of events into a buffered channel and returns it (closed
+// or open per caller need). Kept as a helper so each test reads as a list of
+// typed client.Event values, mirroring the SSE stream the TUI consumes.
+func feed(events []client.Event) chan client.Event {
+	ch := make(chan client.Event, len(events))
+	for _, e := range events {
+		ch <- e
+	}
+	return ch
+}
 
 // mockTerminal captures writes and reports a fixed size.
 type mockTerminal struct {
@@ -76,27 +88,24 @@ func blockSummary(t *TUI) []string {
 // tool calls.
 func TestThinkingAfterToolCreatesNewBlock(t *testing.T) {
 	tui := newTestTUIForEvents()
-	events := []map[string]any{
-		{"type": "turn_start"},
-		{"type": "thinking", "delta": "First reasoning "},
-		{"type": "thinking", "delta": "block."},
-		{"type": "thinking_end"},
-		{"type": "tool_start", "tool_id": "t1", "tool_name": "Bash"},
-		{"type": "tool_args", "tool_id": "t1", "delta": `{"command":"ls"}`},
-		{"type": "tool_call", "tool_id": "t1", "tool_args": `{"command":"ls"}`},
-		{"type": "tool_result", "tool_id": "t1", "output": "file.txt", "is_error": false},
-		{"type": "thinking", "delta": "Second reasoning "},
-		{"type": "thinking", "delta": "after tool."},
-		{"type": "thinking_end"},
+	events := []client.Event{
+		{Type: "turn_start"},
+		{Type: "thinking", Delta: "First reasoning "},
+		{Type: "thinking", Delta: "block."},
+		{Type: "thinking_end"},
+		{Type: "tool_start", ToolID: "t1", ToolName: "Bash"},
+		{Type: "tool_args", ToolID: "t1", Delta: `{"command":"ls"}`},
+		{Type: "tool_call", ToolID: "t1", ToolArgs: `{"command":"ls"}`},
+		{Type: "tool_result", ToolID: "t1", Output: "file.txt", IsError: false},
+		{Type: "thinking", Delta: "Second reasoning "},
+		{Type: "thinking", Delta: "after tool."},
+		{Type: "thinking_end"},
 	}
 
 	// Drain via consumeEvents on its own goroutine and close the channel when done.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	ch := make(chan map[string]any, len(events))
-	for _, e := range events {
-		ch <- e
-	}
+	ch := feed(events)
 	close(ch)
 	tui.consumeEvents(ctx, ch)
 
@@ -151,30 +160,27 @@ func TestThinkingAfterToolCreatesNewBlock(t *testing.T) {
 // block at the very end of the history.
 func TestThinkingAfterMultipleToolsKeepsChronology(t *testing.T) {
 	tui := newTestTUIForEvents()
-	events := []map[string]any{
-		{"type": "turn_start"},
-		{"type": "thinking", "delta": "Plan "},
-		{"type": "thinking", "delta": "before tools."},
-		{"type": "thinking_end"},
-		{"type": "tool_start", "tool_id": "t1", "tool_name": "Read"},
-		{"type": "tool_call", "tool_id": "t1", "tool_args": `{"path":"/tmp/a"}`},
-		{"type": "tool_result", "tool_id": "t1", "output": "a", "is_error": false},
-		{"type": "tool_start", "tool_id": "t2", "tool_name": "Bash"},
-		{"type": "tool_call", "tool_id": "t2", "tool_args": `{"command":"ls"}`},
-		{"type": "tool_result", "tool_id": "t2", "output": "x", "is_error": false},
-		{"type": "tool_start", "tool_id": "t3", "tool_name": "Edit"},
-		{"type": "tool_call", "tool_id": "t3", "tool_args": `{"path":"/tmp/b"}`},
-		{"type": "tool_result", "tool_id": "t3", "output": "ok", "is_error": false},
-		{"type": "thinking", "delta": "After tools, "},
-		{"type": "thinking", "delta": "more reasoning."},
+	events := []client.Event{
+		{Type: "turn_start"},
+		{Type: "thinking", Delta: "Plan "},
+		{Type: "thinking", Delta: "before tools."},
+		{Type: "thinking_end"},
+		{Type: "tool_start", ToolID: "t1", ToolName: "Read"},
+		{Type: "tool_call", ToolID: "t1", ToolArgs: `{"path":"/tmp/a"}`},
+		{Type: "tool_result", ToolID: "t1", Output: "a", IsError: false},
+		{Type: "tool_start", ToolID: "t2", ToolName: "Bash"},
+		{Type: "tool_call", ToolID: "t2", ToolArgs: `{"command":"ls"}`},
+		{Type: "tool_result", ToolID: "t2", Output: "x", IsError: false},
+		{Type: "tool_start", ToolID: "t3", ToolName: "Edit"},
+		{Type: "tool_call", ToolID: "t3", ToolArgs: `{"path":"/tmp/b"}`},
+		{Type: "tool_result", ToolID: "t3", Output: "ok", IsError: false},
+		{Type: "thinking", Delta: "After tools, "},
+		{Type: "thinking", Delta: "more reasoning."},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	ch := make(chan map[string]any, len(events))
-	for _, e := range events {
-		ch <- e
-	}
+	ch := feed(events)
 	close(ch)
 	tui.consumeEvents(ctx, ch)
 
@@ -220,18 +226,18 @@ func TestThinkingAfterMultipleToolsKeepsChronology(t *testing.T) {
 // calling tools with no spinner, looking frozen/idle when it wasn't.
 func TestSpinnerStaysOnAfterMidTurnCompact(t *testing.T) {
 	tui := newTestTUIForEvents()
-	events := []map[string]any{
-		{"type": "turn_start"},
-		{"type": "loop_start"},
-		{"type": "tool_start", "tool_id": "t1", "tool_name": "Bash"},
-		{"type": "tool_call", "tool_id": "t1", "tool_args": `{"command":"ls"}`},
-		{"type": "tool_result", "tool_id": "t1", "output": "x", "is_error": false},
-		{"type": "loop_end"},
-		{"type": "compact_start"},
-		{"type": "compact_end", "summary": "…"},
+	events := []client.Event{
+		{Type: "turn_start"},
+		{Type: "loop_start"},
+		{Type: "tool_start", ToolID: "t1", ToolName: "Bash"},
+		{Type: "tool_call", ToolID: "t1", ToolArgs: `{"command":"ls"}`},
+		{Type: "tool_result", ToolID: "t1", Output: "x", IsError: false},
+		{Type: "loop_end"},
+		{Type: "compact_start"},
+		{Type: "compact_end", Summary: "…"},
 		// The for loop in promptSync continues into another iteration of the
 		// SAME turn — this is the event the fix listens for.
-		{"type": "loop_start"},
+		{Type: "loop_start"},
 	}
 
 	// consumeEvents' exit paths (ctx.Done() / channel closed) unconditionally
@@ -241,10 +247,7 @@ func TestSpinnerStaysOnAfterMidTurnCompact(t *testing.T) {
 	// consumeEvents runs in the background and isSpinning() (mutex-protected)
 	// is polled from this goroutine once all buffered events are processed.
 	ctx, cancel := context.WithCancel(context.Background())
-	ch := make(chan map[string]any, len(events))
-	for _, e := range events {
-		ch <- e
-	}
+	ch := feed(events)
 	done := make(chan struct{})
 	go func() {
 		tui.consumeEvents(ctx, ch)
@@ -280,20 +283,17 @@ func TestSpinnerStaysOnAfterMidTurnCompact(t *testing.T) {
 // off once turn_end arrives, not get stuck on forever.
 func TestSpinnerOffAfterCompactEndThenTurnEnd(t *testing.T) {
 	tui := newTestTUIForEvents()
-	events := []map[string]any{
-		{"type": "turn_start"},
-		{"type": "loop_start"},
-		{"type": "compact_start"},
-		{"type": "compact_end", "summary": "…"},
-		{"type": "turn_end"},
+	events := []client.Event{
+		{Type: "turn_start"},
+		{Type: "loop_start"},
+		{Type: "compact_start"},
+		{Type: "compact_end", Summary: "…"},
+		{Type: "turn_end"},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	ch := make(chan map[string]any, len(events))
-	for _, e := range events {
-		ch <- e
-	}
+	ch := feed(events)
 	close(ch)
 	tui.consumeEvents(ctx, ch)
 
@@ -327,15 +327,11 @@ func TestTurnCounterShownWhileWorkingOnly(t *testing.T) {
 		t.Errorf("counter should not show before any turn starts: %q", infoText(tui))
 	}
 
-	events := []map[string]any{
-		{"type": "turn_start"},
-		{"type": "loop_start"}, // 1st iteration
-	}
 	ctx, cancel := context.WithCancel(context.Background())
-	ch := make(chan map[string]any, len(events))
-	for _, e := range events {
-		ch <- e
-	}
+	ch := feed([]client.Event{
+		{Type: "turn_start"},
+		{Type: "loop_start"}, // 1st iteration
+	})
 	done := make(chan struct{})
 	go func() { tui.consumeEvents(ctx, ch); close(done) }()
 	for len(ch) > 0 {
@@ -348,8 +344,8 @@ func TestTurnCounterShownWhileWorkingOnly(t *testing.T) {
 	}
 
 	// A second iteration (e.g. after a tool call) increments the counter.
-	ch2 := make(chan map[string]any, 1)
-	ch2 <- map[string]any{"type": "loop_start"}
+	ch2 := make(chan client.Event, 1)
+	ch2 <- client.Event{Type: "loop_start"}
 	cancel()
 	<-done
 
@@ -371,8 +367,8 @@ func TestTurnCounterShownWhileWorkingOnly(t *testing.T) {
 	// turn_end hides the counter again.
 	ctx3, cancel3 := context.WithTimeout(context.Background(), time.Second)
 	defer cancel3()
-	ch3 := make(chan map[string]any, 1)
-	ch3 <- map[string]any{"type": "turn_end"}
+	ch3 := make(chan client.Event, 1)
+	ch3 <- client.Event{Type: "turn_end"}
 	close(ch3)
 	tui.consumeEvents(ctx3, ch3)
 
@@ -392,9 +388,10 @@ func TestTurnCounterResetsOnNewTurn(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	ch := make(chan map[string]any, 2)
-	ch <- map[string]any{"type": "turn_start"}
-	ch <- map[string]any{"type": "loop_start"}
+	ch := feed([]client.Event{
+		{Type: "turn_start"},
+		{Type: "loop_start"},
+	})
 	close(ch)
 	tui.consumeEvents(ctx, ch)
 

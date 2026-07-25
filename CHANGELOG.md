@@ -2,6 +2,56 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.40] - 2026-07-25
+
+### Internal — `internal/client` is now a typed SDK over the API (no more `[]byte`)
+- The previous step (0.73.39) unified the three transports onto one client,
+  but that client still returned raw `[]byte` for every endpoint — so each
+  caller re-decoded the same shapes by hand (the TUI and CLI with
+  `json.Unmarshal` into ad-hoc structs, Telegram behind its own wrapper that
+  decoded into `map[string]any`). Three places still owned the wire contract,
+  and Telegram still needed a wrapper client on top of the shared one.
+- `internal/client` now decodes every response into a typed Go value. New
+  `types.go` defines the response shapes (`ServerInfo`, `Settings`,
+  `Provider`, `Model`, `Session`, `Schedule`, `Status`, `CommandDef`/
+  `ParamDef`) and reuses the owner's own wire type where it's lightweight
+  (`config.ProviderConfig`/`MCPServer`, `store.SessionMeta` embedded in
+  `Session`, `types.Message` for history) or mirrors it where reusing would
+  drag a heavy dependency into an HTTP client (`MCPStatus` vs the mcp→tools
+  graph; `Memory`/`MemorySearchResult` vs the SQLite driver). Every method
+  now returns e.g. `[]Session`, `*Status`, `map[string]MCPServer` — decoding
+  happens once, here, against types that match the server's.
+- SSE events are now a typed, flat `client.Event` (new `event.go`): a single
+  struct with every field any event kind can carry, a discriminated union on
+  `Type` — exactly how consumers already treated the events (switch on the
+  type, read the relevant fields), only typed instead of `map[string]any`
+  lookups. It carries a `Raw json.RawMessage` (the verbatim `data:` payload)
+  so the CLI's `--output json`/`json-stream` modes pass events through
+  byte-for-byte instead of a lossy `omitempty` re-encode (a re-marshal would
+  drop zero-valued fields like `is_error:false`; a regression test locks
+  this in).
+- **The Telegram wrapper is gone entirely.** `telegram.apiClient` is deleted;
+  `Transport.api` is now a `*client.Client` used directly, like the TUI and
+  CLI. The per-call decoding it used to do (`GetSession`→`map`, `ListModels`
+  →`[]map`, the `CountConnectedMCPs`/`CountSchedules` helpers) is now either
+  a typed field read at the call site or a tiny transport-local helper over
+  the typed client. `harnessError` was already `client.Error`; nothing in the
+  transport re-implements request/decode/stream anymore.
+- TUI: `consumeEvents` and the SSE drain consume `<-chan client.Event`;
+  `renderHistory` walks typed `types.Message`/`ContentPart` instead of nested
+  `map[string]any`; `CommandDef`/`ParamDef` are aliases of the client types;
+  the dead `intFromMap`/`floatFromMap` helpers were removed and `relativeTime`
+  now takes a `time.Time`. CLI: `settings`/`mcp`/`memo`/`schedule`/`sessions`/
+  `providers` read typed structs; `RunMCPAdd`/`RunMCPSetEnabled` build a typed
+  `client.MCPServer` (using its `IsRemote()`/`Argv()` helpers) instead of
+  assembling `map[string]any`.
+- New tests in `internal/client` cover the typed paths: typed list decode,
+  the `{"status":{…}}` envelope unwrap, `DeleteSession`'s 204 handling, the
+  reused `config.MCPServer` transport inference, and `Event` field population
+  + `Raw` byte-exactness. `go build ./...`, `go vet ./...`, and
+  `go test ./... -race` are clean; `-p` was smoke-tested end to end in text,
+  `json`, and `json-stream` modes, plus every read CLI command.
+
 ## [0.73.39] - 2026-07-25
 
 ### Internal — unified the three near-identical HTTP/SSE clients into `internal/client`

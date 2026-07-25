@@ -27,6 +27,15 @@ import (
 	"github.com/gurcuff91/harness/internal/transport/tui/render"
 )
 
+// CommandDef and ParamDef are the session command shapes the palette and
+// command dispatch drive off of. They alias the client's decoded types (from
+// GET /api/sessions/{id}/commands) so this package's existing references keep
+// working while the decoding lives in internal/client.
+type (
+	CommandDef = client.CommandDef
+	ParamDef   = client.ParamDef
+)
+
 // tokensInfo holds the footer stats.
 type tokensInfo struct {
 	input, output         int

@@ -139,7 +139,9 @@ func TestListSessionsCWDFilter(t *testing.T) {
 	if _, err := c.ListSessions("/tmp/proj"); err != nil {
 		t.Fatalf("ListSessions(cwd): %v", err)
 	}
-	if gotQuery != "cwd=/tmp/proj" {
-		t.Errorf("query = %q, want cwd=/tmp/proj", gotQuery)
+	// cwd is URL-escaped (so a path with reserved chars round-trips correctly);
+	// the server decodes it back to /tmp/proj via r.URL.Query().Get.
+	if gotQuery != "cwd=%2Ftmp%2Fproj" {
+		t.Errorf("query = %q, want cwd=%%2Ftmp%%2Fproj", gotQuery)
 	}
 }

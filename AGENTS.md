@@ -57,6 +57,8 @@ cmd/harness/main.go             ← executable entry point (package main) — ju
     ├── version/                ← build version (ldflags target)
     ├── server/                 ← HTTP/SSE backend (Serve(listener), handler()) — the API all clients talk to
     │   ├── server.go / sse.go / proxy.go
+    ├── client/                 ← the ONE typed SDK over the server API — every transport uses *client.Client directly (no per-transport wrappers)
+    │   ├── client.go / types.go / event.go / error.go / stream.go
     ├── cli/                    ← CLI app: app.go router + cmd_*.go handlers (one flag.FlagSet each), agent.go builders, Run* command bodies
     └── transport/              ← interactive session frontends (each opens a session over server)
         ├── tui/                ← pure-Go terminal UI (zero external TUI libs)
@@ -245,7 +247,7 @@ Universal levels mapped per-provider:
 - **Error handling:** Return errors up, don't panic. Log to stderr only for fatal.
 - **Streaming callback:** `StreamCallback = func(StreamEvent)` — events fire inline during HTTP read.
 - **Tool execution after stream:** the stream accumulates `pendingCalls`; once it closes, all tool calls run **concurrently** (one goroutine each, joined by `sync.WaitGroup`) and the loop waits for every result before the next iteration.
-- **Goroutines are the exception, not the rule.** The ReAct loop itself is sequential. Deliberate uses: parallel tool execution (`agent/session.go`), TUI spinner (`internal/transport/tui/components/spinner.go`), SSE readers (`internal/providers/llm/sse.go`, `internal/cli/client.go`), `bash` timeout wait, MCP HTTP transport, and the Telegram pump. Don't add new ones without a reason.
+- **Goroutines are the exception, not the rule.** The ReAct loop itself is sequential. Deliberate uses: parallel tool execution (`agent/session.go`), TUI spinner (`internal/transport/tui/components/spinner.go`), SSE readers (`internal/providers/llm/sse.go`, `internal/client/stream.go`), `bash` timeout wait, MCP HTTP transport, and the Telegram pump. Don't add new ones without a reason.
 - **`bufio.Writer` for output.** All terminal output goes through the buffered writer with explicit `flush()`. Never use `fmt.Println` directly.
 
 ## Anti-Patterns to Avoid

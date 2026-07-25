@@ -18,13 +18,10 @@ func RunProviders(ctx context.Context, a *agent.Agent, output string) error {
 	defer server.Close()
 	c := newClient(addr)
 
-	data, err := c.GetProviders()
+	providers, err := c.GetProviders()
 	if err != nil {
 		return fmt.Errorf("list providers: %w", err)
 	}
-
-	var providers []map[string]any
-	json.Unmarshal(data, &providers)
 
 	switch output {
 	case "json":
@@ -32,25 +29,20 @@ func RunProviders(ctx context.Context, a *agent.Agent, output string) error {
 		fmt.Println(string(b))
 	default:
 		for _, p := range providers {
-			name, _ := p["name"].(string)
-			active, _ := p["active"].(bool)
-			isSub, _ := p["is_subscription"].(bool)
-			activation, _ := p["activation"].(string)
-			modelCount, _ := p["model_count"].(float64)
 			status := "inactive"
 			cred := ""
-			if active {
+			if p.Active {
 				status = "active"
 				switch {
-				case isSub:
+				case p.IsSubscription:
 					cred = " subscription"
-				case activation == "auto":
+				case p.Activation == "auto":
 					cred = " auto"
 				default:
 					cred = " api_key"
 				}
 			}
-			fmt.Printf("%-20s %-8s %s (%d models)\n", name, status, cred, int(modelCount))
+			fmt.Printf("%-20s %-8s %s (%d models)\n", p.Name, status, cred, p.ModelCount)
 		}
 	}
 	return nil
@@ -72,13 +64,11 @@ func RunConnect(ctx context.Context, a *agent.Agent, name, apiKey, output string
 	// Validate provider exists and read its authoritative credential type.
 	provExists := false
 	credType := ""
-	if data, err := c.GetProviders(); err == nil {
-		var providers []map[string]any
-		json.Unmarshal(data, &providers)
+	if providers, err := c.GetProviders(); err == nil {
 		for _, p := range providers {
-			if n, _ := p["name"].(string); n == name {
+			if p.Name == name {
 				provExists = true
-				credType, _ = p["credential_type"].(string)
+				credType = p.CredentialType
 				break
 			}
 		}
@@ -139,11 +129,9 @@ func RunDisconnect(ctx context.Context, a *agent.Agent, name, output string) err
 
 	// Validate provider exists
 	provExists := false
-	if data, err := c.GetProviders(); err == nil {
-		var providers []map[string]any
-		json.Unmarshal(data, &providers)
+	if providers, err := c.GetProviders(); err == nil {
 		for _, p := range providers {
-			if n, _ := p["name"].(string); n == name {
+			if p.Name == name {
 				provExists = true
 				break
 			}
@@ -175,13 +163,10 @@ func RunSessions(ctx context.Context, a *agent.Agent, all bool, output string) e
 	if !all {
 		cwd, _ = os.Getwd()
 	}
-	data, err := c.ListSessions(cwd)
+	sessions, err := c.ListSessions(cwd)
 	if err != nil {
 		return fmt.Errorf("list sessions: %w", err)
 	}
-
-	var sessions []map[string]any
-	json.Unmarshal(data, &sessions)
 
 	switch output {
 	case "json":
@@ -189,15 +174,11 @@ func RunSessions(ctx context.Context, a *agent.Agent, all bool, output string) e
 		fmt.Println(string(b))
 	default:
 		for _, s := range sessions {
-			id, _ := s["id"].(string)
-			name, _ := s["name"].(string)
-			cwd, _ := s["cwd"].(string)
-			model, _ := s["model"].(string)
+			name := s.Name
 			if name == "" {
-				name = id[:8]
+				name = s.ID[:8]
 			}
-			shortCwd := shortenPath(cwd)
-			fmt.Printf("%-12s %-20s %s  %s\n", id[:12], name, shortCwd, model)
+			fmt.Printf("%-12s %-20s %s  %s\n", s.ID[:12], name, shortenPath(s.CWD), s.Model)
 		}
 	}
 	return nil
@@ -218,11 +199,9 @@ func RunDelete(ctx context.Context, a *agent.Agent, id, output string) error {
 
 	// Validate session exists by checking all CWDs
 	found := false
-	if data, err := c.ListSessions(""); err == nil {
-		var sessions []map[string]any
-		json.Unmarshal(data, &sessions)
+	if sessions, err := c.ListSessions(""); err == nil {
 		for _, s := range sessions {
-			if sid, _ := s["id"].(string); sid == id {
+			if s.ID == id {
 				found = true
 				break
 			}
@@ -232,8 +211,7 @@ func RunDelete(ctx context.Context, a *agent.Agent, id, output string) error {
 		return fmt.Errorf("session not found: %s\nRun 'harness sessions --all' to see all sessions.", id)
 	}
 
-	_, err = c.DeleteSession(id)
-	if err != nil {
+	if err := c.DeleteSession(id); err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
 

@@ -36,11 +36,12 @@ const (
 	sseScanMaxLine    = 4 * 1024 * 1024
 )
 
-// streamEvents opens an SSE connection and returns a channel of decoded
-// events. The reader uses a large buffer (see sseScanBufferSize/sseScanMaxLine)
+// streamEvents opens an SSE connection and returns a channel of decoded, typed
+// Events. The reader uses a large buffer (see sseScanBufferSize/sseScanMaxLine)
 // to tolerate big single-line deltas, and eventBufferSize slack downstream so
-// a momentarily slow consumer doesn't stall the socket read.
-func (c *Client) streamEvents(ctx context.Context, sessionID string) (<-chan map[string]any, error) {
+// a momentarily slow consumer doesn't stall the socket read. Each event's Raw
+// field carries the original JSON payload verbatim for byte-exact passthrough.
+func (c *Client) streamEvents(ctx context.Context, sessionID string) (<-chan Event, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/api/sessions/"+sessionID+"/events", nil)
 	if err != nil {
 		return nil, err
@@ -55,7 +56,7 @@ func (c *Client) streamEvents(ctx context.Context, sessionID string) (<-chan map
 		return nil, fmt.Errorf("SSE: status %d", resp.StatusCode)
 	}
 
-	ch := make(chan map[string]any, eventBufferSize)
+	ch := make(chan Event, eventBufferSize)
 	go func() {
 		defer resp.Body.Close()
 		defer close(ch)
@@ -66,10 +67,15 @@ func (c *Client) streamEvents(ctx context.Context, sessionID string) (<-chan map
 			if !strings.HasPrefix(line, "data: ") {
 				continue
 			}
-			var evt map[string]any
-			if err := json.Unmarshal([]byte(line[6:]), &evt); err != nil {
+			payload := []byte(line[6:])
+			var evt Event
+			if err := json.Unmarshal(payload, &evt); err != nil {
 				continue
 			}
+			// Keep the raw payload (a private copy — scanner reuses its buffer)
+			// so consumers that need byte-exact passthrough (CLI json modes) get
+			// exactly what the server sent, not an omitempty-lossy re-encode.
+			evt.Raw = append(json.RawMessage(nil), payload...)
 			select {
 			case ch <- evt:
 			case <-ctx.Done():

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gurcuff91/harness/internal/client"
 	"github.com/gurcuff91/harness/internal/transport/tui/ansi"
 	"github.com/gurcuff91/harness/internal/transport/tui/components"
 )
@@ -26,7 +27,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 // consumeEvents is streamEvents without the client connection step, exposed so
 // tests can drive the event loop with a synthetic channel of events without
 // needing an HTTP/SSE server.
-func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
+func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 
 	toolNames := make(map[string]string)
 	argBufs := make(map[string]string)
@@ -44,8 +45,7 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				t.setSpinning(false)
 				return
 			}
-			typ, _ := evt["type"].(string)
-			switch typ {
+			switch evt.Type {
 
 			case "turn_start":
 				t.lastTurnText.Reset()
@@ -77,7 +77,7 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				t.updateInfo()
 
 			case "thinking":
-				delta, _ := evt["delta"].(string)
+				delta := evt.Delta
 				if delta == "" {
 					break
 				}
@@ -110,7 +110,7 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				thinkingFrozen = true
 
 			case "text":
-				delta, _ := evt["delta"].(string)
+				delta := evt.Delta
 				t.lastTurnText.WriteString(delta)
 				thinkingFrozen = true // freeze current thinking block; text flows below
 				t.mu.Lock()
@@ -124,8 +124,8 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				t.tui.RequestRender(false)
 
 			case "tool_start":
-				name, _ := evt["tool_name"].(string)
-				toolID, _ := evt["tool_id"].(string)
+				name := evt.ToolName
+				toolID := evt.ToolID
 				toolNames[toolID] = name
 				argBufs[toolID] = ""
 				thinkingFrozen = true // freeze current thinking block; tool renders below
@@ -149,11 +149,11 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				t.tui.RequestRender(false)
 
 			case "tool_args":
-				delta, _ := evt["delta"].(string)
+				delta := evt.Delta
 				if delta == "" {
 					break
 				}
-				toolID, _ := evt["tool_id"].(string)
+				toolID := evt.ToolID
 				argBufs[toolID] += delta
 				// Args are still partial JSON here — can't parse to key=value yet, so
 				// keep the streaming placeholder. The full render happens on tool_call.
@@ -163,12 +163,12 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				}
 
 			case "tool_call":
-				toolID, _ := evt["tool_id"].(string)
+				toolID := evt.ToolID
 				name := toolNames[toolID]
 				if name == "" {
-					name, _ = evt["tool_name"].(string)
+					name = evt.ToolName
 				}
-				toolArgs, _ := evt["tool_args"].(string)
+				toolArgs := evt.ToolArgs
 				// Complete JSON now — parse and render the human-readable header.
 				if b := t.toolArgs[toolID]; b != nil {
 					b.SetText(t.toolHeader(name, toolArgs))
@@ -180,10 +180,10 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				t.tui.RequestRender(false)
 
 			case "tool_result":
-				toolID, _ := evt["tool_id"].(string)
-				output, _ := evt["output"].(string)
-				dur, _ := floatFromMap(evt, "duration")
-				isErr, _ := evt["is_error"].(bool)
+				toolID := evt.ToolID
+				output := evt.Output
+				dur := evt.Duration
+				isErr := evt.IsError
 				result := t.formatToolResult(output, dur, isErr)
 				if b := t.toolBlk[toolID]; b != nil {
 					b.SetText(result)
@@ -196,7 +196,7 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				// refresh the footer badge. Done off the SSE goroutine (it makes an
 				// HTTP call) so event processing isn't blocked.
 				if !isErr {
-					if tn, _ := evt["tool_name"].(string); tn == "Schedule" || tn == "ScheduleDelete" {
+					if tn := evt.ToolName; tn == "Schedule" || tn == "ScheduleDelete" {
 						go func() {
 							t.refreshScheduleBadge()
 							t.updateInfo()
@@ -219,13 +219,13 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				t.setSpinning(false)
 
 			case "tokens":
-				t.stats.input, _ = intFromMap(evt, "input")
-				t.stats.output, _ = intFromMap(evt, "total_output")
-				t.stats.cacheRead, _ = intFromMap(evt, "cache_read")
-				t.stats.cacheWrite, _ = intFromMap(evt, "cache_write")
-				t.stats.cost, _ = floatFromMap(evt, "cost_usd")
-				t.stats.contextPct, _ = floatFromMap(evt, "context_usage")
-				t.stats.contextWin, _ = intFromMap(evt, "context_window")
+				t.stats.input = evt.Input
+				t.stats.output = evt.TotalOutput
+				t.stats.cacheRead = evt.CacheRead
+				t.stats.cacheWrite = evt.CacheWrite
+				t.stats.cost = evt.CostUSD
+				t.stats.contextPct = evt.ContextUsage
+				t.stats.contextWin = evt.ContextWindow
 				t.updateInfo()
 
 			case "turn_end":
@@ -249,8 +249,8 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				// The backend received an immediate (non-queued) prompt — echo it with
 				// the icon for its origin. This is the single echo path for prompts
 				// the TUI didn't originate (e.g. scheduled) and for user prompts too.
-				msg, _ := evt["text"].(string)
-				origin, _ := evt["origin"].(string)
+				msg := evt.Text
+				origin := evt.Origin
 				if msg != "" {
 					t.addRaw(ansi.Primary(promptIcon(origin) + " " + msg))
 				}
@@ -259,8 +259,8 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 			case "follow_up_start":
 				// Backend dequeued a follow-up and is starting its turn. Echo the
 				// prompt now (single source of truth for queued prompts).
-				msg, _ := evt["text"].(string)
-				origin, _ := evt["origin"].(string)
+				msg := evt.Text
+				origin := evt.Origin
 				if t.queueCount > 0 {
 					t.queueCount--
 				}
@@ -273,13 +273,12 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 			case "max_iterations_reached":
 				// The agent hit its per-turn ReAct cap while still working. Tell the
 				// user so the (summarized) result isn't mistaken for a normal finish.
-				n, _ := evt["max_iterations"].(float64)
-				t.addRaw(ansi.Dimmed(fmt.Sprintf("⚠ reached the %d-iteration limit — summarizing progress", int(n))))
+				t.addRaw(ansi.Dimmed(fmt.Sprintf("⚠ reached the %d-iteration limit — summarizing progress", evt.MaxIterations)))
 
 			case "error":
-				msg, _ := evt["message"].(string)
+				msg := evt.Message
 				t.addRaw(ansi.Err("✘ " + msg))
-				if details, ok := evt["details"].(map[string]any); ok && len(details) > 0 {
+				if details := evt.Details; len(details) > 0 {
 					if pretty, err := json.MarshalIndent(details, "", "  "); err == nil {
 						const maxErrorDetailLines = 20
 						out := string(pretty)
