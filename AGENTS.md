@@ -9,7 +9,7 @@
 - **Module:** `github.com/gurcuff91/harness`
 - **Binary:** Single binary, ~9MB — entry point in `cmd/harness/main.go` (module root free for an SDK facade)
 - **Version:** single source of truth in package `version` (`version.Version`), injected via ldflags from the `Makefile` (`VERSION=`); falls back to `"dev"` for a plain `go build`.
-- **Dependencies (direct):** `golang.org/x/term` (raw mode), `github.com/rivo/uniseg` (grapheme/width), `github.com/go-chi/chi/v5` (HTTP router), `modernc.org/sqlite` (pure-Go SQLite for the memory store), `golang.design/x/clipboard` (clipboard image paste in the TUI). Keep the set minimal — no new deps without approval.
+- **Dependencies (direct):** `golang.org/x/term` (raw mode), `github.com/rivo/uniseg` (grapheme/width), `github.com/go-chi/chi/v5` (HTTP router), `modernc.org/sqlite` (pure-Go SQLite for the memory store), `golang.design/x/clipboard` (clipboard image paste in the TUI), `github.com/google/uuid` (IDs), `github.com/robfig/cron/v3` (schedule parsing). Keep the set minimal — no new deps without approval.
 
 ## Golden Rules
 
@@ -85,25 +85,36 @@ type Provider interface {
 }
 ```
 
-### Agent Events (`agent/event.go`)
+### Agent Events (`types/event.go`)
 
-The agent emits events — the transport subscribes. This is the ONLY coupling:
+The agent emits events — the transport subscribes. This is the ONLY coupling.
+`agent/event.go` only holds aliases (`Event`, `Handler`, `EventType`) to `types.*`;
+the canonical `EventType` list lives in `types/event.go`:
 
 ```
 EventTurnStart              → User submitted input, agent working
+EventTurnEnd                → Agent done, ready for next input
 EventLoopStart              → ReAct iteration starting
-EventStreamThinkingDelta    → Thinking text fragment (stream)
-EventStreamThinkingEnd      → Thinking block finished
+EventLoopEnd                → ReAct iteration finished
 EventStreamTextDelta        → Response text fragment (stream)
 EventStreamTextEnd          → Response text finished
-EventStreamToolBuilding     → Model generating tool args (spinner)
-EventToolCall               → Tool about to execute
-EventToolResult             → Tool finished (output + duration)
+EventStreamThinkingDelta    → Thinking text fragment (stream)
+EventStreamThinkingEnd      → Thinking block finished
+EventToolStart              → Tool announced (name + ID known, args not yet — spinner)
+EventToolArgsDelta          → Tool arguments arriving in fragments
+EventToolCall               → Args complete, tool about to execute
+EventToolResult             → Tool finished (output + duration + IsError)
 EventTokens                 → Token usage update
-EventLoopEnd                → ReAct iteration finished
-EventTurnEnd                → Agent done, ready for next input
 EventError                  → Something broke
+EventMaxIterationsReached   → Iteration budget exhausted (LLM summarized progress)
+EventFollowUpStart          → Queued follow-up prompt about to process
+EventReceivedPrompt         → Immediate (non-queued) prompt received
+EventCompactStart           → Session compaction started
+EventCompactEnd             → Session compaction finished (Summary set)
+EventStop                   → Turn stopped by user (not an error)
 ```
+
+> `ToolID` correlates `ToolStart → ToolArgsDelta → ToolCall → ToolResult`.
 
 ### Tool (`tools/registry.go`)
 
@@ -119,32 +130,34 @@ type Tool struct {
 ```
 User Input
     ↓
-agent.Chat(userID, text, images)
+session.Prompt(ctx, text, opts…)   → queues into followUps (returns PromptStatus)
+    ↓  drainFollowUps() processes the queue serially → promptSync()
     ↓  emit(EventTurnStart)
     ↓
-┌── ReAct Loop (max 25 iterations) ──────────────────┐
-│   emit(EventLoopStart)                              │
-│       ↓                                             │
-│   provider.CompleteStream(req, callback)             │
-│       ↓ callback fires events:                      │
-│       ├── EventStreamThinkingDelta (thinking text)   │
-│       ├── EventStreamThinkingEnd                     │
-│       ├── EventStreamToolBuilding (tool args coming) │
-│       ├── EventStreamTextDelta (response text)       │
-│       └── EventStreamTextEnd                         │
-│       ↓                                             │
-│   if no tool calls → return response (break)         │
-│       ↓                                             │
-│   for each tool call:                                │
-│       emit(EventToolCall)                            │
-│       tools.Run(name, args) → output                 │
-│       emit(EventToolResult)                          │
-│       ↓                                             │
-│   append tool results to history                     │
-│   emit(EventLoopEnd)                                │
-│   continue loop                                      │
-└─────────────────────────────────────────────────────┘
-    ↓  emit(EventTurnEnd)
+┌── ReAct Loop (default max 50 iterations, 1 reserved) ─┐
+│   emit(EventLoopStart)                                 │
+│       ↓                                                │
+│   runStream() → provider.CompleteStream(req, callback)  │
+│       ↓ callback fires events:                         │
+│       ├── EventStreamThinkingDelta / ThinkingEnd        │
+│       ├── EventToolStart → EventToolArgsDelta           │
+│       └── EventStreamTextDelta / TextEnd                │
+│       ↓                                                │
+│   if no tool calls → return response (break)            │
+│       ↓                                                │
+│   execute ALL pending tool calls in PARALLEL            │
+│   (goroutine each + sync.WaitGroup, ApplyTruncation):    │
+│       emit(EventToolCall) → run → emit(EventToolResult) │
+│       ↓ wait for all before next iteration              │
+│   append tool results to history                        │
+│   if ContextUsage >= 0.98 → auto-compact mid-turn        │
+│   emit(EventLoopEnd)                                    │
+│   continue loop                                         │
+└────────────────────────────────────────────────────────┘
+    ↓  budget exhausted → emit(EventMaxIterationsReached)
+    ↓                     then requestProgressUpdate()
+    ↓  ctx cancelled → emit(EventStop) (never EventError)
+    ↓  emit(EventTurnEnd)   [LoopEnd/TurnEnd always balanced]
     ↓
 Transport renders everything via event handler
 ```
@@ -231,8 +244,8 @@ Universal levels mapped per-provider:
 
 - **Error handling:** Return errors up, don't panic. Log to stderr only for fatal.
 - **Streaming callback:** `StreamCallback = func(StreamEvent)` — events fire inline during HTTP read.
-- **Tool execution during stream:** Tools execute in `StreamToolEnd` callback, not batched after stream ends.
-- **No goroutines in core.** Only the TUI spinner (`internal/transport/tui/components/spinner.go`) uses a goroutine. Agent loop is synchronous.
+- **Tool execution after stream:** the stream accumulates `pendingCalls`; once it closes, all tool calls run **concurrently** (one goroutine each, joined by `sync.WaitGroup`) and the loop waits for every result before the next iteration.
+- **Goroutines are the exception, not the rule.** The ReAct loop itself is sequential. Deliberate uses: parallel tool execution (`agent/session.go`), TUI spinner (`internal/transport/tui/components/spinner.go`), SSE readers (`internal/providers/llm/sse.go`, `internal/cli/client.go`), `bash` timeout wait, MCP HTTP transport, and the Telegram pump. Don't add new ones without a reason.
 - **`bufio.Writer` for output.** All terminal output goes through the buffered writer with explicit `flush()`. Never use `fmt.Println` directly.
 
 ## Anti-Patterns to Avoid
@@ -252,11 +265,12 @@ Keep files focused. Current largest files for reference:
 
 | File | Lines | Role |
 |------|-------|------|
-| `transport/tui/components/markdown.go` | ~1100 | Faithful streaming markdown renderer (complex by nature) |
-| `internal/server/server.go` | ~960 | HTTP/SSE routes + handlers |
-| `agent/session.go` | ~680 | Session lifecycle, history, tool pairing |
+| `transport/tui/components/markdown.go` | ~1130 | Faithful streaming markdown renderer (complex by nature) |
+| `internal/server/server.go` | ~1080 | HTTP/SSE routes + handlers |
+| `agent/session.go` | ~865 | Session lifecycle, ReAct loop, history, tool pairing |
+| `agent/agent.go` | ~695 | Agent factory, MCP/memory/scheduler wiring, prompt assembly |
 | `internal/providers/claude_oauth.go` | ~610 | OAuth token management + streaming |
+| `internal/providers/llm/anthropic.go` | ~505 | Anthropic request/response types |
 | `internal/cli/app.go` | ~85 | CLI router + dispatch |
-| `internal/providers/llm/anthropic.go` | ~500 | Anthropic request/response types |
 
 If a file grows past ~500 lines, consider splitting — but only along real boundaries.
