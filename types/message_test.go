@@ -8,7 +8,7 @@ import (
 
 // TestMessageMeta_IsSystemGenerated_JSON verifies the new metadata field
 // serializes with the expected snake_case key so transports can detect
-// system-injected user messages (e.g. the max-turns summary request).
+// system-injected user messages (e.g. the max-iterations summary request).
 func TestMessageMeta_IsSystemGenerated_JSON(t *testing.T) {
 	m := NewUserTextMessage("system prompt")
 	m.Meta = &MessageMeta{IsSystemGenerated: true}

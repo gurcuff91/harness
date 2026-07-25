@@ -60,9 +60,9 @@ type Session struct {
 	skills    []resources.SkillInfo
 	readSkill func(string) (content string, dir string, err error)
 
-	mu        sync.Mutex
-	maxTurns  int
-	maxTokens int
+	mu            sync.Mutex
+	maxIterations int
+	maxTokens     int
 
 	// Follow-up prompts — separate mutex to avoid deadlock with mu
 	followMu      sync.Mutex
@@ -141,27 +141,27 @@ type modelPricing struct {
 func newSession(storeInst *store.Session,
 	provider providers.Provider, modelID, thinkingLvl string,
 	toolReg *tools.Registry, systemPrompt string,
-	maxTurns, maxTokens int,
+	maxIterations, maxTokens int,
 	skills []resources.SkillInfo, readSkill func(string) (content string, dir string, err error),
 	hasMemory bool) *Session {
 
 	meta := storeInst.Meta()
 	s := &Session{
-		id:           meta.ID,
-		cwd:          meta.CWD,
-		name:         meta.Name,
-		store:        storeInst,
-		provider:     provider,
-		modelID:      modelID,
-		thinkingLvl:  thinkingLvl,
-		tools:        toolReg,
-		systemPrompt: systemPrompt,
-		maxTurns:     maxTurns,
-		maxTokens:    maxTokens,
-		stats:        meta.Stats, // restore accumulated stats
-		skills:       skills,
-		readSkill:    readSkill,
-		hasMemory:    hasMemory,
+		id:            meta.ID,
+		cwd:           meta.CWD,
+		name:          meta.Name,
+		store:         storeInst,
+		provider:      provider,
+		modelID:       modelID,
+		thinkingLvl:   thinkingLvl,
+		tools:         toolReg,
+		systemPrompt:  systemPrompt,
+		maxIterations: maxIterations,
+		maxTokens:     maxTokens,
+		stats:         meta.Stats, // restore accumulated stats
+		skills:        skills,
+		readSkill:     readSkill,
+		hasMemory:     hasMemory,
 	}
 	s.followCond = sync.NewCond(&s.followMu)
 	s.loadModelMeta(modelID)
@@ -382,8 +382,8 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 
 	s.emit(types.Event{Type: types.EventTurnStart})
 
-	// Reserve one turn for the summary call if max turns is reached mid-task.
-	for i := range s.maxTurns - 1 {
+	// Reserve one iteration for the summary call if max iterations is reached mid-task.
+	for i := range s.maxIterations - 1 {
 		if ctx.Err() != nil {
 			s.emit(types.Event{Type: types.EventStop})
 			s.emit(types.Event{Type: types.EventTurnEnd})
@@ -446,14 +446,14 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 		}
 	}
 
-	// Max turns reached while still executing tools.
+	// Max iterations reached while still executing tools.
 	// Ask the LLM to summarize progress and let the user decide what to do next.
-	// EventMaxTurnsReached fires BEFORE the summary request so the TUI's
-	// "⚠ reached the N-turn limit — summarizing progress" arrives as a
+	// EventMaxIterationsReached fires BEFORE the summary request so the TUI's
+	// "⚠ reached the N-iteration limit — summarizing progress" arrives as a
 	// forewarning, not an afterword. The error, if any, is propagated up
 	// so drainFollowUps emits an EventError (we don't double-emit here).
 	s.emit(types.Event{Type: types.EventLoopEnd})
-	s.emit(types.Event{Type: types.EventMaxTurnsReached, MaxTurns: s.maxTurns})
+	s.emit(types.Event{Type: types.EventMaxIterationsReached, MaxIterations: s.maxIterations})
 	summary, err := s.requestProgressUpdate(ctx)
 	s.emit(types.Event{Type: types.EventTurnEnd})
 	return summary, err
@@ -593,10 +593,11 @@ func (s *Session) ID() string { return s.id }
 // Name returns the session's display name.
 func (s *Session) Name() string { return s.name }
 
-// MaxTurns returns the max ReAct iterations allowed per turn for this session
-// (AgentOptions.MaxTurns, default 25). Exposed read-only so clients (e.g. the
-// TUI footer) can show progress like "(3/25)" without duplicating the limit.
-func (s *Session) MaxTurns() int { return s.maxTurns }
+// MaxIterations returns the max ReAct iterations allowed per turn for this
+// session (AgentOptions.MaxIterations, default 50). Exposed read-only so
+// clients (e.g. the TUI footer) can show progress like "(3/25)" without
+// duplicating the limit.
+func (s *Session) MaxIterations() int { return s.maxIterations }
 
 // Rename sets a friendly display name.
 func (s *Session) Rename(name string) error {
@@ -813,14 +814,14 @@ func (s *Session) updateStats(se types.StreamEvent) {
 	})
 }
 
-// requestProgressUpdate makes a final LLM call when max turns is reached.
+// requestProgressUpdate makes a final LLM call when max iterations is reached.
 // Asks the model to summarize progress and check with the user on next steps.
 // The response IS streamed to the transport via EventStreamTextDelta.
 func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 	// Inject summary request into history. Mark it as system-generated so
 	// transports that replay history (e.g. the TUI on resume) can render it
 	// as a notice instead of as a user message the human never typed.
-	msg := types.NewUserTextMessage(maxTurnsPrompt)
+	msg := types.NewUserTextMessage(maxIterationsPrompt)
 	msg.Meta = &types.MessageMeta{IsSystemGenerated: true}
 	if err := s.store.AddMessage(msg); err != nil {
 		return "", err
@@ -849,7 +850,7 @@ func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 	// or fail to emit content deltas). Returning an error lets drainFollowUps
 	// emit EventError so the user sees something instead of a silent stop.
 	if resp.Text == "" {
-		return "", fmt.Errorf("model returned an empty summary; conversation capped at %d turns", s.maxTurns)
+		return "", fmt.Errorf("model returned an empty summary; conversation capped at %d iterations", s.maxIterations)
 	}
 
 	return resp.Text, nil

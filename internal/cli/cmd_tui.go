@@ -19,7 +19,7 @@ func cmdTUI(args []string) error {
 		return err
 	}
 
-	a := newInteractiveAgent(*scheduler, 50)
+	a := newInteractiveAgent(*scheduler)
 	defer a.Close()
 	ctx, cancel := signalContext()
 	defer cancel()

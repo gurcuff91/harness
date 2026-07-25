@@ -59,7 +59,7 @@ type TUI struct {
 	isSubscription bool
 	sessionCmds    []CommandDef
 	lastSessionID  string
-	maxTurns       int // ReAct iteration cap per turn, from the session (footer "(turn/max)")
+	maxIterations  int // ReAct iteration cap per turn, from the session (footer "(turn/max)")
 
 	// Render engine + components.
 	tui     *render.TUI

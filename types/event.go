@@ -37,9 +37,9 @@ const (
 	EventError // error occurred in the agent loop
 
 	// ── Limits ─────────────────────────────────────────────────────────────
-	EventMaxTurnsReached // agent reached max turns limit (LLM summarized progress)
-	EventFollowUpStart   // follow-up prompt about to process (Output = text, Origin = source)
-	EventReceivedPrompt  // an immediate (non-queued) prompt was received (Output = text, Origin = source)
+	EventMaxIterationsReached // agent reached max ReAct iterations limit (LLM summarized progress)
+	EventFollowUpStart        // follow-up prompt about to process (Output = text, Origin = source)
+	EventReceivedPrompt       // an immediate (non-queued) prompt was received (Output = text, Origin = source)
 
 	// ── Compaction ─────────────────────────────────────────────────────────
 	EventCompactStart // session compaction started
@@ -66,21 +66,21 @@ type TokenUsage struct {
 
 // Event carries information about what's happening in the agent loop.
 type Event struct {
-	Type     EventType
-	Loop     int
-	MaxTurns int    // configured max turns (populated on EventMaxTurnsReached)
-	ToolID   string // unique tool call ID (from LLM) — correlates Start/ArgsDelta/Call/Result
-	ToolName string
-	ToolArgs string
-	Output   string         // generic output (tool results, turn text)
-	Message  string         // error messages (EventError)
-	Details  map[string]any // structured error details, if any (EventError)
-	Summary  string         // compaction summary (EventCompactEnd)
-	Origin   string         // prompt source for EventReceivedPrompt/EventFollowUpStart ("user", "scheduled", …)
-	Delta    string
-	Tokens   TokenUsage
-	Duration time.Duration
-	IsError  bool
+	Type          EventType
+	Loop          int
+	MaxIterations int    // configured max ReAct iterations (populated on EventMaxIterationsReached)
+	ToolID        string // unique tool call ID (from LLM) — correlates Start/ArgsDelta/Call/Result
+	ToolName      string
+	ToolArgs      string
+	Output        string         // generic output (tool results, turn text)
+	Message       string         // error messages (EventError)
+	Details       map[string]any // structured error details, if any (EventError)
+	Summary       string         // compaction summary (EventCompactEnd)
+	Origin        string         // prompt source for EventReceivedPrompt/EventFollowUpStart ("user", "scheduled", …)
+	Delta         string
+	Tokens        TokenUsage
+	Duration      time.Duration
+	IsError       bool
 }
 
 // Handler receives events from the agent loop for rendering.

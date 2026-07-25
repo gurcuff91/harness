@@ -47,7 +47,7 @@ func cmdTelegram(args []string) error {
 		return err
 	}
 
-	a := newTelegramAgent(*scheduler)
+	a := newInteractiveAgent(*scheduler, telegram.Directive)
 	defer a.Close()
 	ctx, cancel := signalContext()
 	defer cancel()

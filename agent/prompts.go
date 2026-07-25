@@ -48,8 +48,9 @@ func buildCompactionCheckpoint(summary string, hasMemory bool) string {
 	return summary
 }
 
-// maxTurnsPrompt is injected as a user message when the agent hits the max tool-call limit.
-// It asks the model to report progress and check with the user before continuing.
-const maxTurnsPrompt = "You've reached the maximum number of tool calls allowed for this turn. " +
+// maxIterationsPrompt is injected as a user message when the agent hits the
+// max ReAct iterations limit. It asks the model to report progress and check
+// with the user before continuing.
+const maxIterationsPrompt = "You've reached the maximum number of tool calls allowed for this turn. " +
 	"Please summarize: (1) what you have completed so far, (2) what still needs to be done, " +
 	"and (3) ask the user if they want you to continue or if they'd like to change direction."

@@ -130,7 +130,7 @@ fmt.Println(answer)
 secrets) out of embedded code.
 
 The agent is configured with functional options: `WithThinking`, `WithMCPs`,
-`WithMaxTurns`, `WithMaxTokens`, `WithSystemPrompt`, `WithTools`,
+`WithMaxIterations`, `WithMaxTokens`, `WithSystemPrompt`, `WithTools`,
 `WithDisallowedTools`, `WithStore`, `WithResourceLoader`, `WithMemory` (and
 `WithOptions` to apply a pre-built config). `New()` with no options returns a
 sensible default agent.

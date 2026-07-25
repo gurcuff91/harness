@@ -52,7 +52,7 @@ func TestIsControlEvent(t *testing.T) {
 		types.EventStreamThinkingDelta, types.EventStreamThinkingEnd,
 		types.EventToolStart, types.EventToolArgsDelta, types.EventToolCall, types.EventToolResult,
 		types.EventTokens, types.EventError,
-		types.EventMaxTurnsReached, types.EventFollowUpStart, types.EventReceivedPrompt,
+		types.EventMaxIterationsReached, types.EventFollowUpStart, types.EventReceivedPrompt,
 		types.EventCompactStart, types.EventCompactEnd, types.EventStop,
 	}
 	for _, et := range all {

@@ -80,8 +80,8 @@ func (t *TUI) autoConnect(ctx context.Context) {
 			if th, _ := sess["thinking"].(string); th != "" {
 				t.thinking = th
 			}
-			if mt, ok := intFromMap(sess, "max_turns"); ok {
-				t.maxTurns = mt
+			if mt, ok := intFromMap(sess, "max_iterations"); ok {
+				t.maxIterations = mt
 			}
 			if t.overrideModel != "" && t.overrideModel != t.model {
 				t.client.ExecCommand(t.sessionID, "model", map[string]any{"model": t.overrideModel}) //nolint:errcheck
@@ -116,8 +116,8 @@ func (t *TUI) autoConnect(ctx context.Context) {
 	if th, _ := sess["thinking"].(string); th != "" {
 		t.thinking = th
 	}
-	if mt, ok := intFromMap(sess, "max_turns"); ok {
-		t.maxTurns = mt
+	if mt, ok := intFromMap(sess, "max_iterations"); ok {
+		t.maxIterations = mt
 	}
 	t.loadStatsFromSession(sess)
 	t.loadSessionCommands()
@@ -157,8 +157,8 @@ func (t *TUI) resumeInPlace(sessID string) {
 	if th, _ := sess["thinking"].(string); th != "" {
 		t.thinking = th
 	}
-	if mt, ok := intFromMap(sess, "max_turns"); ok {
-		t.maxTurns = mt
+	if mt, ok := intFromMap(sess, "max_iterations"); ok {
+		t.maxIterations = mt
 	}
 	t.refreshSubscriptionFlag()
 	t.loadStatsFromSession(sess)

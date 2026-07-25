@@ -312,14 +312,14 @@ func infoText(tui *TUI) string {
 	return stripANSI(lines[0])
 }
 
-// TestTurnCounterShownWhileWorkingOnly verifies the footer "(turn/max_turns)"
+// TestTurnCounterShownWhileWorkingOnly verifies the footer "(turn/max_iterations)"
 // indicator: it increments once per loop_start, resets on each new turn_start,
 // and is only visible while the agent is actively working — hidden again once
 // turn_end arrives, per the user's requested behavior.
 func TestTurnCounterShownWhileWorkingOnly(t *testing.T) {
 	tui := newTestTUIForEvents()
 	tui.sessionName = "kaiban-api-v2"
-	tui.maxTurns = 50
+	tui.maxIterations = 50
 
 	// Before any turn: no counter yet (spinner off).
 	tui.updateInfo()
@@ -387,7 +387,7 @@ func TestTurnCounterShownWhileWorkingOnly(t *testing.T) {
 func TestTurnCounterResetsOnNewTurn(t *testing.T) {
 	tui := newTestTUIForEvents()
 	tui.sessionName = "s"
-	tui.maxTurns = 10
+	tui.maxIterations = 10
 	tui.currTurn = 7 // simulate a previous turn that reached iteration 7
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

@@ -199,7 +199,7 @@ func (t *Transport) drain(ctx context.Context, p *chatPump, events <-chan map[st
 			if msg != "" || len(details) > 0 {
 				t.reply(ctx, p.chatID, formatError(msg, details))
 			}
-		case "max_turns_reached":
+		case "max_iterations_reached":
 			t.flush(ctx, p)
 			p.stopTyping()
 		}

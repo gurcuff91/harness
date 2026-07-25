@@ -44,7 +44,7 @@ func cmdPrompt(args []string) error {
 		return err
 	}
 
-	a := newAgent()
+	a := newOneShotAgent()
 	defer a.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
@@ -54,7 +54,7 @@ func cmdPrompt(args []string) error {
 // ── providers ──────────────────────────────────────────────────────────────
 
 func cmdProviders(args []string) error {
-	a := newAgent()
+	a := newConfigAgent()
 	defer a.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
@@ -69,7 +69,7 @@ func cmdConnect(args []string) error {
 	if len(args) > 1 {
 		apiKey = args[1]
 	}
-	a := newAgent()
+	a := newConfigAgent()
 	defer a.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
@@ -80,7 +80,7 @@ func cmdDisconnect(args []string) error {
 	if len(args) == 0 {
 		return errUsage("disconnect <provider>")
 	}
-	a := newAgent()
+	a := newConfigAgent()
 	defer a.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
@@ -95,7 +95,7 @@ func cmdSessions(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	a := newAgent()
+	a := newConfigAgent()
 	defer a.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
@@ -106,7 +106,7 @@ func cmdDelete(args []string) error {
 	if len(args) == 0 {
 		return errUsage("delete <session_id>")
 	}
-	a := newAgent()
+	a := newConfigAgent()
 	defer a.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
@@ -144,7 +144,7 @@ func cmdSchedules(args []string) error {
 	if *asJSON {
 		output = "json"
 	}
-	a := newAgent()
+	a := newConfigAgent()
 	defer a.Close()
 	ctx, cancel := signalContext()
 	defer cancel()

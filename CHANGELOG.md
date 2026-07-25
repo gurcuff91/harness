@@ -2,6 +2,139 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.38] - 2026-07-25
+
+### CLI — `harness -p <prompt>` no longer litters disk with unresumable sessions
+- `-p` runs a single turn and returns — there's no `-p --resume`, so the
+  session it created had no way to ever be revisited. But `cmdPrompt` used
+  `newAgent()`, which (via `agent.New`'s default) persists every session to
+  `~/.harness/agent/sessions/` with a `FileStore`. Every `-p` invocation left
+  a small, never-to-be-read "New Session"-named session file behind — an
+  audit of an existing installation found the majority of persisted sessions
+  matched exactly this shape.
+- New `newOneShotAgent()` (in `internal/cli/agent.go`) matches `newAgent` but
+  sets `Store: store.NewInMemoryStore()`, so the session lives only for the
+  process's lifetime — the turn's reply still goes to stdout exactly as
+  before, there's just nothing left on disk afterward. `cmdPrompt` now uses
+  it instead of `newAgent`.
+- `newAgent` itself is unchanged (still `FileStore`) — it's still correct for
+  `harness mcp` / `harness memo`, which don't create sessions at all (so the
+  store choice was always moot for them), and its doc comment now points to
+  `newOneShotAgent` for the `-p` case.
+- New test `TestNewOneShotAgentDoesNotPersistToDisk` (isolates `$HOME` to a
+  temp dir, creates+closes a real session through `newOneShotAgent`, asserts
+  nothing was written under `~/.harness/agent/sessions/`) — verified to fail
+  against the pre-fix wiring.
+
+## [0.73.37] - 2026-07-25
+
+### CLI — commands that never touch tools now use the lighter config agent
+- `newAgent()` spawns MCP subprocesses and opens the memory DB
+  (`EnableMCPs`/`EnableMemory`) — necessary for `-p` prompts, `harness mcp`
+  (its `list` shows live connection status from the manager it spawns), and
+  `harness memo` (reads the memory store it opens). But `cmdProviders`,
+  `cmdConnect`, `cmdDisconnect`, `cmdSessions`, `cmdDelete`, and
+  `cmdSchedules` only shuffle JSON over the local HTTP API
+  (`/api/providers`, `/api/sessions`, `/api/schedules`) — they never create a
+  session or execute a tool, so the MCP subprocesses and memory DB `newAgent`
+  set up for them were pure waste. Verified: `mcp list` (real work, spawns 3
+  MCP servers) burns ~0.73s of CPU; `providers` (JSON-only) now burns ~0.04s
+  with `newConfigAgent`.
+- All six switched from `newAgent()` to the already-existing `newConfigAgent()`
+  (previously only used by `settings`) — same behavior, same output, just
+  without paying for tools/MCP/memory setup they never use. No new
+  function — `newAgent` and `newConfigAgent` stay separate on purpose (see
+  their updated doc comments): merging them would force every config-only
+  command to pay MCP-spawn/memory-DB cost that a same-process,
+  interactive-transport-style agent needs but a JSON-shuffling one-shot
+  command does not.
+
+## [0.73.36] - 2026-07-25
+
+### CLI — merged newTelegramAgent into newInteractiveAgent
+- After the previous MaxIterations change, both call sites of
+  `newInteractiveAgent` (`cmd_serve.go`, `cmd_tui.go`) passed `0` for its
+  `maxIterations` parameter, making the parameter dead in practice — nothing
+  ever overrode `interactiveMaxIterations`. Meanwhile `newTelegramAgent` was a
+  near-duplicate of `newInteractiveAgent`, differing only by always passing
+  `interactiveMaxIterations` and adding `telegram.Directive`.
+- `newInteractiveAgent` now takes `directives ...string` instead of
+  `maxIterations int` — it always builds at `interactiveMaxIterations`, and
+  `directives` supplies whatever extra system-prompt blocks a transport needs
+  (empty for TUI/serve, `telegram.Directive` for Telegram). `newTelegramAgent`
+  is gone; `cmd_telegram.go` calls `newInteractiveAgent(*scheduler,
+  telegram.Directive)`. No behavior change — same agents, same iteration cap,
+  same directive wiring — just one function instead of two near-duplicates.
+
+## [0.73.35] - 2026-07-25
+
+### Agent — raised MaxIterations defaults; subagents get their own cap
+- The 25/50 split felt tight for genuinely complex, multi-step work (explore
+  code across files, edit several, run verification, iterate on failures) —
+  easily 15-20+ iterations before real work even starts.
+- Hitting the cap is non-destructive (the session reserves one iteration for
+  a progress-summary call and tells the user via
+  `EventMaxIterationsReached`/"⚠ reached the N-iteration limit"), so a higher
+  ceiling has no safety cost — it only avoids interrupting real work
+  needlessly. Context growth is independently guarded by auto-compaction at
+  98% usage, so this isn't competing with that safeguard.
+- New values:
+  - **SDK / one-shot commands default: 25 → 50**
+    (`agent.defaultMaxIterations`, used when `AgentOptions.MaxIterations` is
+    unset — `mcp`/`memo`/`settings`/etc. commands, and any SDK caller that
+    doesn't set it explicitly).
+  - **Interactive transports (TUI, `harness serve`, Telegram): 50 → 120**
+    (new `interactiveMaxIterations` in `internal/cli/agent.go`) — this is
+    where real complex work actually happens.
+  - **Subagents: now capped at 50** (new `agent.subagentMaxIterations`),
+    regardless of the parent's own limit. Previously a subagent inherited the
+    parent's `MaxIterations` outright, so a subagent spawned from an
+    interactive session (120) had as much room as the parent driving the
+    whole task — a subagent is a focused, delegated task
+    (`subagentSystemPrompt`), not the primary agent, and shouldn't be able to
+    silently burn through a comparable budget before the parent even knows
+    it's still working. Wired as `min(parentA.maxIterations,
+    subagentMaxIterations)`, so a parent configured lower (e.g. the SDK
+    default 50) is never overridden upward either.
+- New tests (`agent/agent_iterations_test.go`): `TestDefaultMaxIterations`,
+  `TestExplicitMaxIterationsOverridesDefault`,
+  `TestSubagentMaxIterationsIsCapped` pin all three values so a future change
+  is a deliberate edit, not an accidental drift.
+
+## [0.73.34] - 2026-07-24
+
+### Breaking — renamed `MaxTurns` → `MaxIterations` everywhere
+- The name was a misnomer: the value has always been the cap on ReAct
+  iterations WITHIN a single turn (`for i := range s.maxIterations-1` in
+  `Session.promptSync`), not a count of user↔agent turns. `MaxIterations`
+  names the actual concept. (History note: an earlier release had renamed
+  the opposite direction, `MaxLoops` → `MaxTurns` — this reverts that
+  decision in favor of the more precise term.)
+- **Public API (breaking for SDK/API consumers):**
+  - `agent.AgentOptions.MaxTurns` → `AgentOptions.MaxIterations`
+  - `harness.WithMaxTurns(n)` → `WithMaxIterations(n)`
+  - `Agent.MaxTurns()` → `Agent.MaxIterations()`, `Session.MaxTurns()` →
+    `Session.MaxIterations()`
+  - `types.EventMaxTurnsReached` → `EventMaxIterationsReached`;
+    `types.Event.MaxTurns` → `Event.MaxIterations`
+  - HTTP/SSE wire format: the session JSON field `max_turns` → `max_iterations`
+    (`GET/POST /api/sessions*`); the SSE event `"type":"max_turns_reached"`
+    → `"max_iterations_reached"` with payload key `max_turns` → `max_iterations`.
+    Any external client speaking harness's HTTP/SSE API directly (not just the
+    in-repo TUI/Telegram transports, which were updated alongside) must adopt
+    the new field/event names.
+- **Internal-only (no compatibility impact):** every private field, comment,
+  log/error string, and test referencing turns-as-iterations was renamed to
+  match — `agent/session.go`, `agent/agent.go`, `agent/prompts.go`
+  (`maxTurnsPrompt` → `maxIterationsPrompt`; the prompt TEXT shown to the model
+  is unchanged, only the Go constant name), `internal/cli/agent.go`,
+  `internal/transport/tui/*.go`, `internal/transport/telegram/pump.go`,
+  `internal/server/proxy_test.go`, `README.md`.
+- No behavior change: still defaults to 25, still reserves one iteration for
+  the progress-summary call, still the same `EventMaxIterationsReached` →
+  progress-summary → `EventTurnEnd` sequence. Full suite (including `-race`)
+  verified clean after the rename.
+
 ## [0.73.33] - 2026-07-24
 
 ### TUI — fix off-by-one in Stop()'s cursor parking (extra blank line on exit)

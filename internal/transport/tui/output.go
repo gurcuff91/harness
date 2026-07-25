@@ -116,11 +116,12 @@ func (t *TUI) updateInfo() {
 	}
 	// Turn progress: only meaningful while the agent is actively working — shown
 	// from turn_start (reset to 0, then incremented per loop_start) and hidden
-	// again on turn_end. maxTurns > 0 guard covers a session whose info hasn't
-	// loaded max_turns yet (e.g. very first render before autoConnect resolves).
+	// again on turn_end. maxIterations > 0 guard covers a session whose info
+	// hasn't loaded max_iterations yet (e.g. very first render before
+	// autoConnect resolves).
 	turn := ""
-	if t.isSpinning() && t.maxTurns > 0 {
-		turn = fmt.Sprintf(" (%d/%d)", t.currTurn, t.maxTurns)
+	if t.isSpinning() && t.maxIterations > 0 {
+		turn = fmt.Sprintf(" (%d/%d)", t.currTurn, t.maxIterations)
 	}
 	queue := ""
 	if t.queueCount > 0 {

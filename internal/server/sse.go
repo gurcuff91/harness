@@ -72,8 +72,8 @@ func formatEvent(e types.Event) []byte {
 			p["details"] = e.Details
 		}
 		payload = p
-	case types.EventMaxTurnsReached:
-		payload = map[string]any{"type": "max_turns_reached", "max_turns": e.MaxTurns}
+	case types.EventMaxIterationsReached:
+		payload = map[string]any{"type": "max_iterations_reached", "max_iterations": e.MaxIterations}
 	case types.EventCompactStart:
 		payload = map[string]any{"type": "compact_start"}
 	case types.EventCompactEnd:

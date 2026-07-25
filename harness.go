@@ -128,9 +128,9 @@ func WithDirectives(directives ...string) Option {
 	return func(o *Options) { o.Directives = append(o.Directives, directives...) }
 }
 
-// WithMaxTurns caps the ReAct iterations per turn (default 25).
-func WithMaxTurns(n int) Option {
-	return func(o *Options) { o.MaxTurns = n }
+// WithMaxIterations caps the ReAct iterations per turn (default 50).
+func WithMaxIterations(n int) Option {
+	return func(o *Options) { o.MaxIterations = n }
 }
 
 // WithMaxTokens caps output tokens per turn (default: the model's max).

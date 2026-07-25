@@ -563,7 +563,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	s.sessions[sess.ID()] = proxy
 	s.mu.Unlock()
 
-	writeJSON(w, http.StatusCreated, sessionInfoDTO{SessionMeta: sess.Meta(), MaxTurns: sess.MaxTurns()})
+	writeJSON(w, http.StatusCreated, sessionInfoDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations()})
 }
 
 // handleListSessions returns all sessions, optionally filtered by ?cwd=
@@ -680,15 +680,16 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	s.sessions[sess.ID()] = proxy
 	s.mu.Unlock()
 
-	writeJSON(w, http.StatusOK, sessionInfoDTO{SessionMeta: sess.Meta(), MaxTurns: sess.MaxTurns()})
+	writeJSON(w, http.StatusOK, sessionInfoDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations()})
 }
 
 // sessionInfoDTO wraps store.SessionMeta with fields that live on the runtime
 // Session (or the Agent as a fallback), not in the persisted meta — currently
-// just MaxTurns, which the TUI footer uses for a "(turn/max_turns)" indicator.
+// just MaxIterations, which the TUI footer uses for a "(turn/max_iterations)"
+// indicator.
 type sessionInfoDTO struct {
 	store.SessionMeta
-	MaxTurns int `json:"max_turns"`
+	MaxIterations int `json:"max_iterations"`
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
@@ -700,14 +701,14 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 	if ok {
 		writeJSON(w, http.StatusOK, sessionInfoDTO{
-			SessionMeta: proxy.session.Meta(),
-			MaxTurns:    proxy.session.MaxTurns(),
+			SessionMeta:   proxy.session.Meta(),
+			MaxIterations: proxy.session.MaxIterations(),
 		})
 		return
 	}
 
 	// Fallback: check store (persisted sessions from previous runs). There's no
-	// live *Session to ask, so MaxTurns comes from the agent's configured
+	// live *Session to ask, so MaxIterations comes from the agent's configured
 	// default — every session it creates gets the same value.
 	sessions, err := s.agent.ListAllSessions()
 	if err != nil {
@@ -717,8 +718,8 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	for _, meta := range sessions {
 		if meta.ID == id {
 			writeJSON(w, http.StatusOK, sessionInfoDTO{
-				SessionMeta: meta,
-				MaxTurns:    s.agent.MaxTurns(),
+				SessionMeta:   meta,
+				MaxIterations: s.agent.MaxIterations(),
 			})
 			return
 		}

@@ -34,7 +34,7 @@ type Agent struct {
 	resourceLoader  resources.ResourceLoader // nil = FileResourceLoader(cwd) per session
 	thinkingLevel   string
 	systemPrompt    string
-	maxTurns        int
+	maxIterations   int
 	maxTokens       int          // 0 = resolved from ModelMeta in NewSession
 	mcpManager      *mcp.Manager // non-nil only when EnableMCPs; owns MCP subprocesses
 
@@ -63,10 +63,10 @@ type AgentOptions struct {
 	ThinkingLevel string // "disable"|"low"|"medium"|"high"|"xhigh"
 
 	// ── Behavior ─────────────────────────────────────────────────────────
-	SystemPrompt string   // base system prompt for all sessions
-	Directives   []string // extra instruction blocks appended to the system prompt (e.g. transport-specific capabilities)
-	MaxTurns     int      // max ReAct iterations per turn — default: 25
-	MaxTokens    int      // max output tokens — default: model's MaxTokens from ModelMeta
+	SystemPrompt  string   // base system prompt for all sessions
+	Directives    []string // extra instruction blocks appended to the system prompt (e.g. transport-specific capabilities)
+	MaxIterations int      // max ReAct iterations per turn — default: 50 (defaultMaxIterations)
+	MaxTokens     int      // max output tokens — default: model's MaxTokens from ModelMeta
 
 	// ── Tools ────────────────────────────────────────────────────────────
 	Tools           []tools.Tool // additional tools (defaults always included)
@@ -93,10 +93,28 @@ type AgentOptions struct {
 	EnableScheduler bool
 }
 
+// defaultMaxIterations is the fallback used when AgentOptions.MaxIterations
+// isn't set. It's the SDK/one-shot-command default — generous enough for a
+// real multi-step task without being unbounded; interactive transports (TUI,
+// serve, Telegram) that expect longer, more complex work override it higher
+// (see internal/cli/agent.go), and subagents cap it lower via
+// subagentMaxIterations (see the Subagent tool wiring below).
+const defaultMaxIterations = 50
+
+// subagentMaxIterations caps a subagent's ReAct iterations regardless of the
+// parent's own limit. A subagent is a focused, delegated task (see
+// subagentSystemPrompt), not the primary agent driving a long, multi-part
+// session — it shouldn't need as much room as a parent running with
+// interactiveMaxIterations (120), and capping it means a runaway subagent
+// gets cut off (with the usual progress-summary fallback) well before it
+// burns through a comparable budget without the parent knowing until it
+// finally returns.
+const subagentMaxIterations = 50
+
 // New creates a new Agent. Never fails — provider is resolved per session.
 func New(opts AgentOptions) *Agent {
-	if opts.MaxTurns <= 0 {
-		opts.MaxTurns = 25
+	if opts.MaxIterations <= 0 {
+		opts.MaxIterations = defaultMaxIterations
 	}
 	if opts.SystemPrompt == "" {
 		opts.SystemPrompt = defaultSystemPrompt
@@ -150,7 +168,7 @@ func New(opts AgentOptions) *Agent {
 		resourceLoader:  opts.ResourceLoader,
 		thinkingLevel:   opts.ThinkingLevel,
 		systemPrompt:    opts.SystemPrompt,
-		maxTurns:        opts.MaxTurns,
+		maxIterations:   opts.MaxIterations,
 		maxTokens:       opts.MaxTokens,
 		mcpManager:      mcpMgr,
 		activeSessions:  make(map[string]*Session),
@@ -261,11 +279,11 @@ func (a *Agent) MCPTools() []tools.Tool {
 // own tools use a scoped adapter over the same store.
 func (a *Agent) Memory() *memory.Store { return a.memStore }
 
-// MaxTurns returns the max ReAct iterations per turn this agent creates
-// sessions with (AgentOptions.MaxTurns, default 25). Every session gets the
-// same value at creation, so this is the right fallback for a session that
-// isn't currently active (no live *Session to ask directly).
-func (a *Agent) MaxTurns() int { return a.maxTurns }
+// MaxIterations returns the max ReAct iterations per turn this agent creates
+// sessions with (AgentOptions.MaxIterations, default 50). Every session gets
+// the same value at creation, so this is the right fallback for a session
+// that isn't currently active (no live *Session to ask directly).
+func (a *Agent) MaxIterations() int { return a.maxIterations }
 
 // Providers returns a read-only snapshot of every known provider and its state.
 // This is the SDK's window into provider configuration; administration
@@ -413,7 +431,7 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 	sess := newSession(storeInst,
 		provider, modelID, a.thinkingLevel,
 		sessionTools, systemPrompt,
-		a.maxTurns, maxTokens,
+		a.maxIterations, maxTokens,
 		res.Skills, loader.ReadSkill,
 		a.memStore != nil)
 	sess.agent = a
@@ -470,7 +488,7 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 		provider, modelID, thinkingLvl,
 		a.buildSessionTools(meta.ID, cwd, meta.Model, res, loader),
 		a.buildSystemPrompt(cwd, res),
-		a.maxTurns, maxTokens,
+		a.maxIterations, maxTokens,
 		skills, readSkill,
 		a.memStore != nil)
 	sess.agent = a
@@ -551,7 +569,7 @@ func (a *Agent) buildSessionTools(sessionID, cwd, model string, res *resources.R
 			subAgent := New(AgentOptions{
 				ThinkingLevel: parentA.thinkingLevel,
 				SystemPrompt:  subagentSystemPrompt,
-				MaxTurns:      parentA.maxTurns,
+				MaxIterations: min(parentA.maxIterations, subagentMaxIterations),
 				MaxTokens:     parentA.maxTokens,
 				Store:         store.NewInMemoryStore(),
 				// Each subagent gets its OWN loader instance — FileResourceLoader is not goroutine-safe

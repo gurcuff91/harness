@@ -53,7 +53,7 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				t.liveMD = nil
 				t.mu.Unlock()
 				thinkBlk, thinkBuf, thinkingFrozen = nil, "", false
-				t.currTurn = 0 // new turn — reset the "(turn/max_turns)" footer counter
+				t.currTurn = 0 // new turn — reset the "(turn/max_iterations)" footer counter
 				t.setSpinning(true)
 				t.updateInfo()
 
@@ -70,7 +70,7 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				// one where a mid-turn event silences it) without needing every
 				// such event to know to turn it back on individually.
 				t.setSpinning(true)
-				// Count iterations for the footer "(turn/max_turns)" indicator —
+				// Count iterations for the footer "(turn/max_iterations)" indicator —
 				// only meaningful while the agent is working, shown/hidden by
 				// turn_start/turn_end (see updateInfo).
 				t.currTurn++
@@ -241,7 +241,7 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				if t.queueCount == 0 {
 					t.setSpinning(false)
 				}
-				// Hide the "(turn/max_turns)" footer indicator now that this turn is
+				// Hide the "(turn/max_iterations)" footer indicator now that this turn is
 				// done — updateInfo only shows it while spinning (see its own logic).
 				t.updateInfo()
 
@@ -270,11 +270,11 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan map[string]any) {
 				t.setSpinning(true)
 				t.updateInfo()
 
-			case "max_turns_reached":
+			case "max_iterations_reached":
 				// The agent hit its per-turn ReAct cap while still working. Tell the
 				// user so the (summarized) result isn't mistaken for a normal finish.
-				n, _ := evt["max_turns"].(float64)
-				t.addRaw(ansi.Dimmed(fmt.Sprintf("⚠ reached the %d-turn limit — summarizing progress", int(n))))
+				n, _ := evt["max_iterations"].(float64)
+				t.addRaw(ansi.Dimmed(fmt.Sprintf("⚠ reached the %d-iteration limit — summarizing progress", int(n))))
 
 			case "error":
 				msg, _ := evt["message"].(string)
