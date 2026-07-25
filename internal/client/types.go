@@ -111,6 +111,25 @@ type ParamDef struct {
 	Values   []string `json:"values,omitempty"`
 }
 
+// SessionInfo is GET /api/sessions/{id}/info — a consolidated, read-only
+// snapshot of everything the TUI footer, Telegram /info, and any future
+// transport needs in a single round-trip. Only valid for active sessions.
+type SessionInfo struct {
+	// Version is the harness binary version (e.g. "v0.73.40").
+	Version string `json:"version"`
+	// Session is the full session metadata plus runtime max_iterations.
+	Session Session `json:"session"`
+	// Busy is true while the agent is actively processing a turn.
+	Busy bool `json:"busy"`
+	// QueueDepth is the number of prompts waiting behind the current turn.
+	QueueDepth int `json:"queue_depth"`
+	// MCPConnected is the number of MCP servers currently connected.
+	MCPConnected int `json:"mcp_connected"`
+	// ScheduleCount is the number of cron schedules owned by this session
+	// (i.e. the schedules that will fire into it).
+	ScheduleCount int `json:"schedule_count"`
+}
+
 // ProviderConfig and MCPServer are the settings-collection payloads. They reuse
 // config's own types (stdlib-only) verbatim: the endpoints pass them straight
 // through the SettingsManager, so this is the same struct end to end.

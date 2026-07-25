@@ -92,78 +92,88 @@ func (t *Transport) cmdCompact(ctx context.Context, chatID int64) {
 // name, the model with its context window/usage and thinking level, token/cache/
 // cost usage, and the connected MCPs + schedules owned by THIS session (a
 // schedule only fires in its owner session, so that's the honest count).
+// Uses a single GET /api/sessions/{id}/info call instead of the four separate
+// API calls the old implementation required.
 func (t *Transport) cmdInfo(ctx context.Context, chatID int64) {
 	p, err := t.pumpFor(ctx, chatID)
 	if err != nil {
 		t.replyError(ctx, chatID, err)
 		return
 	}
+	info, err := t.api.GetSessionInfo(p.sessionID)
+	if err != nil {
+		t.replyError(ctx, chatID, err)
+		return
+	}
+
+	sess := info.Session
+	stats := sess.Stats
+
+	// row pads the label to 10 chars. The entire data block is wrapped in a
+	// Telegram code fence (monospace) so spacing aligns visually — Telegram's
+	// default font is proportional, making space-based padding useless outside
+	// a code block.
+	row := func(label, value string) string {
+		return fmt.Sprintf("%-10s%s\n", label, value)
+	}
+
+	// Build the monospace data block.
+	var data strings.Builder
+
+	// Identity
+	data.WriteString(row("harness", info.Version))
+	name := sess.Name
+	if name == "" {
+		name = sess.ID[:8]
+	}
+	data.WriteString(row("session", name))
+
+	// Model + runtime config
+	data.WriteByte('\n')
+	data.WriteString(row("model", sess.Model))
+	thinking := sess.Thinking
+	if thinking == "" {
+		thinking = "off"
+	}
+	data.WriteString(row("thinking", thinking))
+	data.WriteString(row("iters", fmt.Sprintf("max %d", sess.MaxIterations)))
+	if stats.ContextWindow > 0 {
+		data.WriteString(row("context",
+			fmt.Sprintf("%.1f%% of %s tokens", stats.ContextUsage*100, compactNum(int64(stats.ContextWindow)))))
+	}
+
+	// Token / cache / cost
+	data.WriteByte('\n')
+	data.WriteString(row("tokens",
+		fmt.Sprintf("↑%s ↓%s", compactNum(int64(stats.InputTokens)), compactNum(int64(stats.OutputTokens)))))
+	if stats.CacheRead > 0 || stats.CacheWrite > 0 {
+		data.WriteString(row("cache",
+			fmt.Sprintf("R%s W%s", compactNum(int64(stats.CacheRead)), compactNum(int64(stats.CacheWrite)))))
+	}
+	data.WriteString(row("cost", fmt.Sprintf("$%.4f", stats.CostUSD)))
+
+	// Environment
+	data.WriteByte('\n')
+	data.WriteString(row("mcps", fmt.Sprintf("%d connected", info.MCPConnected)))
+	data.WriteString(row("schedules", fmt.Sprintf("%d", info.ScheduleCount)))
+
+	// Runtime state (busy / queued)
+	if info.Busy {
+		queued := ""
+		if info.QueueDepth > 0 {
+			queued = fmt.Sprintf(" (%d queued)", info.QueueDepth)
+		}
+		data.WriteString(fmt.Sprintf("\n⚙ busy%s\n", queued))
+	}
+
+	// Assemble: title (bold) + code block (monospace, aligned).
 	var b strings.Builder
 	b.WriteString("📊 *Session info*\n\n")
+	b.WriteString("```\n")
+	b.WriteString(strings.TrimRight(data.String(), "\n"))
+	b.WriteString("\n```")
 
-	if info, err := t.api.GetServerInfo(); err == nil && info.Version != "" {
-		fmt.Fprintf(&b, "harness %s\n", info.Version)
-	}
-	if meta, err := t.api.GetSession(p.sessionID); err == nil {
-		if meta.Name != "" {
-			fmt.Fprintf(&b, "Session: %s\n", meta.Name)
-		}
-		b.WriteByte('\n')
-		if meta.Model != "" {
-			fmt.Fprintf(&b, "Model: %s\n", meta.Model)
-		}
-		stats := meta.Stats
-		if stats.ContextWindow > 0 {
-			fmt.Fprintf(&b, "Context: %s window · %.1f%% used\n",
-				compactNum(int64(stats.ContextWindow)), stats.ContextUsage*100)
-		}
-		if meta.Thinking != "" {
-			fmt.Fprintf(&b, "Thinking: %s\n", meta.Thinking)
-		}
-		b.WriteByte('\n')
-		fmt.Fprintf(&b, "Tokens: ↑%s ↓%s\n",
-			compactNum(int64(stats.InputTokens)), compactNum(int64(stats.OutputTokens)))
-		if stats.CacheRead > 0 || stats.CacheWrite > 0 {
-			fmt.Fprintf(&b, "Cache: R%s W%s\n",
-				compactNum(int64(stats.CacheRead)), compactNum(int64(stats.CacheWrite)))
-		}
-		fmt.Fprintf(&b, "Cost: $%.3f\n", stats.CostUSD)
-	}
-
-	b.WriteByte('\n')
-	fmt.Fprintf(&b, "MCPs: %d connected\n", t.countConnectedMCPs())
-	// Schedules only fire when this bot runs the engine (--scheduler); without it,
-	// reporting a count would be misleading (they'd never run).
-	if t.opts.Scheduler {
-		fmt.Fprintf(&b, "Schedules: %d\n", t.countSchedules(p.sessionID))
-	}
-
-	t.reply(ctx, chatID, strings.TrimRight(b.String(), "\n"))
-}
-
-// countConnectedMCPs returns how many configured MCP servers are connected.
-func (t *Transport) countConnectedMCPs() int {
-	statuses, err := t.api.GetMCPStatus()
-	if err != nil {
-		return 0
-	}
-	n := 0
-	for _, s := range statuses {
-		if s.Connected {
-			n++
-		}
-	}
-	return n
-}
-
-// countSchedules returns how many schedules are owned by (fire into) the given
-// session.
-func (t *Transport) countSchedules(owner string) int {
-	jobs, err := t.api.GetSchedules(owner)
-	if err != nil {
-		return 0
-	}
-	return len(jobs)
+	t.reply(ctx, chatID, b.String())
 }
 
 // compactNum renders a token count compactly (1300 -> 1.3k, 406600 -> 406.6k,

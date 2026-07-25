@@ -101,6 +101,7 @@ func (s *Server) handler() http.Handler {
 	r.Post("/api/sessions/{id}/commands", s.handleExecCommand)
 	r.Get("/api/sessions/{id}/messages", s.handleGetMessages)
 	r.Post("/api/sessions/{id}/stop", s.handleStopSession)
+	r.Get("/api/sessions/{id}/info", s.handleSessionInfo)
 
 	// TEMPORARY diagnostic endpoint (not net/http/pprof's DefaultServeMux
 	// auto-registration — that only wires up on import side effects, and this
@@ -563,7 +564,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	s.sessions[sess.ID()] = proxy
 	s.mu.Unlock()
 
-	writeJSON(w, http.StatusCreated, sessionInfoDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations()})
+	writeJSON(w, http.StatusCreated, sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations()})
 }
 
 // handleListSessions returns all sessions, optionally filtered by ?cwd=
@@ -680,14 +681,14 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	s.sessions[sess.ID()] = proxy
 	s.mu.Unlock()
 
-	writeJSON(w, http.StatusOK, sessionInfoDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations()})
+	writeJSON(w, http.StatusOK, sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations()})
 }
 
-// sessionInfoDTO wraps store.SessionMeta with fields that live on the runtime
+// sessionDetailDTO wraps store.SessionMeta with fields that live on the runtime
 // Session (or the Agent as a fallback), not in the persisted meta — currently
 // just MaxIterations, which the TUI footer uses for a "(turn/max_iterations)"
-// indicator.
-type sessionInfoDTO struct {
+// indicator. Also embedded in sessionInfoDTO for the /info endpoint.
+type sessionDetailDTO struct {
 	store.SessionMeta
 	MaxIterations int `json:"max_iterations"`
 }
@@ -700,7 +701,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	proxy, ok := s.sessions[id]
 	s.mu.RUnlock()
 	if ok {
-		writeJSON(w, http.StatusOK, sessionInfoDTO{
+		writeJSON(w, http.StatusOK, sessionDetailDTO{
 			SessionMeta:   proxy.session.Meta(),
 			MaxIterations: proxy.session.MaxIterations(),
 		})
@@ -717,7 +718,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, meta := range sessions {
 		if meta.ID == id {
-			writeJSON(w, http.StatusOK, sessionInfoDTO{
+			writeJSON(w, http.StatusOK, sessionDetailDTO{
 				SessionMeta:   meta,
 				MaxIterations: s.agent.MaxIterations(),
 			})
@@ -820,6 +821,71 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// sessionInfoDTO is the response shape for GET /api/sessions/{id}/info.
+// It consolidates everything the TUI footer, Telegram /info, and any future
+// transport needs into one round-trip: server version, full session meta,
+// live runtime state (busy, queue depth), and environment counts (MCPs,
+// schedules). Read-only — no side effects.
+type sessionInfoDTO struct {
+	// Harness version string (e.g. "v0.73.40") from the running binary.
+	Version string `json:"version"`
+	// Full session metadata + max_iterations (same as GET /api/sessions/{id}).
+	Session sessionDetailDTO `json:"session"`
+	// Runtime state — only meaningful while the session is active.
+	Busy       bool `json:"busy"`
+	QueueDepth int  `json:"queue_depth"`
+	// Environment counts for this session.
+	MCPConnected  int `json:"mcp_connected"`
+	ScheduleCount int `json:"schedule_count"`
+}
+
+// handleSessionInfo handles GET /api/sessions/{id}/info. The session must be
+// active (in s.sessions). Returns 400 if it isn't — the endpoint is designed
+// for live interactive use, not querying historical sessions.
+func (s *Server) handleSessionInfo(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	s.mu.RLock()
+	proxy, ok := s.sessions[id]
+	s.mu.RUnlock()
+	if !ok {
+		writeError(w, http.StatusBadRequest, "session is not active", nil)
+		return
+	}
+
+	sess := proxy.session
+
+	// MCP: count connected servers.
+	mcpConnected := 0
+	for _, st := range s.agent.MCPStatuses() {
+		if st.Connected {
+			mcpConnected++
+		}
+	}
+
+	// Schedules: count only those owned by this session (they're the ones that
+	// will actually fire into it — the honest count from this session's view).
+	scheduleCount := 0
+	if store := s.agent.Schedules(); store != nil {
+		for _, sc := range store.List() {
+			if sc.Owner == id {
+				scheduleCount++
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, sessionInfoDTO{
+		Version: version.Version,
+		Session: sessionDetailDTO{
+			SessionMeta:   sess.Meta(),
+			MaxIterations: sess.MaxIterations(),
+		},
+		Busy:          sess.IsBusy(),
+		QueueDepth:    sess.FollowUpCount(),
+		MCPConnected:  mcpConnected,
+		ScheduleCount: scheduleCount,
+	})
 }
 
 // --- Commands ---

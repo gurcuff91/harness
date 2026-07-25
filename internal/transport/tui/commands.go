@@ -132,6 +132,10 @@ func (t *TUI) runCommand(cmd string, args []string) {
 		t.quit() // closes the session (flush to disk) + exits
 		return
 
+	case "info":
+		go t.showInfo()
+		return
+
 	case "connect":
 		if len(args) < 1 {
 			t.showWarn("Usage: /connect <provider> [api_key]")
@@ -343,4 +347,84 @@ func (t *TUI) applyCommandResult(cmd string, args []string, status *client.Statu
 	}
 	t.addRaw(ansi.Accent("✔") + " " + ansi.Dimmed(confirm))
 	t.updateInfo()
+}
+
+// showInfo fetches the session info snapshot and renders it in the scrollback.
+// Matches the same data the TUI footer shows live, but as a readable panel —
+// useful when the footer is too compressed to read, or to capture a snapshot.
+func (t *TUI) showInfo() {
+	if t.sessionID == "" {
+		t.showWarn("No active session.")
+		return
+	}
+	info, err := t.client.GetSessionInfo(t.sessionID)
+	if err != nil {
+		t.showWarn("info: " + err.Error())
+		return
+	}
+
+	sess := info.Session
+	stats := sess.Stats
+
+	var b strings.Builder
+
+	// label helpers — all labels padded to 10 chars so values align perfectly.
+	// The longest label is "schedules" (9 chars); 10 = 9 + 1 minimum separator.
+	dim := func(label, value string) string {
+		return ansi.Dimmed(fmt.Sprintf("%-10s", label)) + value + "\n"
+	}
+	mut := func(label, value string) string {
+		return ansi.Muted(fmt.Sprintf("%-10s", label)) + value + "\n"
+	}
+
+	// Header
+	b.WriteString(ansi.Accent(ansi.Bold+"◉ Session info") + "\n")
+
+	// Identity
+	b.WriteString(dim("harness", info.Version))
+	name := sess.Name
+	if name == "" {
+		name = sess.ID[:8]
+	}
+	b.WriteString(dim("session", name))
+
+	// Model + runtime config
+	b.WriteString("\n")
+	b.WriteString(mut("model", sess.Model))
+	thinking := sess.Thinking
+	if thinking == "" {
+		thinking = "off"
+	}
+	b.WriteString(mut("thinking", thinking))
+	b.WriteString(mut("iters", fmt.Sprintf("max %d", sess.MaxIterations)))
+	if stats.ContextWindow > 0 {
+		b.WriteString(mut("context",
+			fmt.Sprintf("%.1f%% of %s tokens", stats.ContextUsage*100, compactNum(stats.ContextWindow))))
+	}
+
+	// Token / cache / cost
+	b.WriteString("\n")
+	b.WriteString(mut("tokens",
+		fmt.Sprintf("↑%s ↓%s", compactNum(stats.InputTokens), compactNum(stats.OutputTokens))))
+	if stats.CacheRead > 0 || stats.CacheWrite > 0 {
+		b.WriteString(mut("cache",
+			fmt.Sprintf("R%s W%s", compactNum(stats.CacheRead), compactNum(stats.CacheWrite))))
+	}
+	b.WriteString(mut("cost", fmt.Sprintf("$%.4f", stats.CostUSD)))
+
+	// Environment
+	b.WriteString("\n")
+	b.WriteString(mut("mcps", fmt.Sprintf("%d connected", info.MCPConnected)))
+	b.WriteString(mut("schedules", fmt.Sprintf("%d", info.ScheduleCount)))
+
+	// Runtime state
+	if info.Busy {
+		queued := ""
+		if info.QueueDepth > 0 {
+			queued = fmt.Sprintf(" (%d queued)", info.QueueDepth)
+		}
+		b.WriteString("\n" + ansi.Warn("⚙ busy"+queued) + "\n")
+	}
+
+	t.addRaw(strings.TrimRight(b.String(), "\n"))
 }

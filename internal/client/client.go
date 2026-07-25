@@ -288,6 +288,15 @@ func (c *Client) SendPromptWithImages(sessionID, text string, images []types.Ima
 	})
 }
 
+// GetSessionInfo returns the consolidated session-info snapshot for an active
+// session: server version, full session metadata, runtime state (busy, queue
+// depth), and environment counts (MCP connected, schedule count). Single
+// round-trip replacing the three-to-four calls each transport previously made
+// to assemble the same picture.
+func (c *Client) GetSessionInfo(sessionID string) (*SessionInfo, error) {
+	return ptr(decode[SessionInfo](c, "GET", "/api/sessions/"+sessionID+"/info", nil))
+}
+
 // GetMessages returns a session's full message history in the neutral
 // types.Message format (the same shape the live stream produces).
 func (c *Client) GetMessages(sessionID string) ([]types.Message, error) {

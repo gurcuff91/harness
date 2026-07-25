@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.41] - 2026-07-25
+
+### Feature — `GET /api/sessions/{id}/info` + `/info` command in TUI and Telegram
+- New endpoint `GET /api/sessions/{id}/info` consolidates into one round-trip
+  everything that was previously assembled by each transport from three or four
+  separate calls (`GetServerInfo` + `GetSession` + `GetMCPStatus` +
+  `GetSchedules`). Returns a single typed document:
+  - `version` — running harness binary version
+  - `session` — full `SessionMeta` (id, name, cwd, model, thinking, stats,
+    timestamps) + `max_iterations`
+  - `busy` — whether the agent is actively processing a turn right now
+  - `queue_depth` — prompts queued behind the current turn
+  - `mcp_connected` — number of MCP servers currently connected
+  - `schedule_count` — cron schedules owned by this session (the ones that
+    fire into it, not a global total)
+  - Returns 400 (not 404) when the session is not in the active set — the
+    endpoint is designed for live interactive use, not querying historical
+    sessions.
+- `internal/client.SessionInfo` — new typed response struct; `GetSessionInfo`
+  method on `*client.Client` — one call, one typed value, no boilerplate.
+- **Telegram** `/info` command: migrated from 4 independent API calls to one
+  `GetSessionInfo` call. Rendered output is identical to before.
+- **TUI** `/info` command (new): available in the palette and as a typed
+  slash-command (`/info`). Renders a compact panel in the scrollback with the
+  same data the footer shows live, formatted for readability when the footer is
+  too compressed: version, session name/id, model, thinking, max iterations,
+  context usage, token/cache/cost counters, MCPs connected, schedule count, and
+  a busy/queued badge when the session is active. No params, executes
+  immediately (`"none"` type in the palette flow — same as `/compact`).
+- `sessionInfoDTO` (the pre-existing GET /api/sessions/{id} simple wrapper)
+  renamed to `sessionDetailDTO` to avoid collision with the richer new DTO —
+  no wire-format change (the `session` field in the new endpoint embeds the
+  same shape).
+
 ## [0.73.40] - 2026-07-25
 
 ### Internal — `internal/client` is now a typed SDK over the API (no more `[]byte`)
