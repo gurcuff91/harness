@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 
 	"github.com/gurcuff91/harness/internal/client"
@@ -374,19 +373,19 @@ func (t *TUI) showInfo() {
 
 	var b strings.Builder
 
-	// label helpers — all labels padded to 10 chars so values align perfectly.
-	// The longest label is "schedules" (9 chars); 10 = 9 + 1 minimum separator.
+	// label helpers — 2-space indent aligns labels with the "S" of "◉ Session info".
+	// Labels padded to 10 chars so values align in one column.
 	dim := func(label, value string) string {
-		return ansi.Dimmed(fmt.Sprintf("%-10s", label)) + value + "\n"
+		return "  " + ansi.Dimmed(fmt.Sprintf("%-10s", label)) + value + "\n"
 	}
 	mut := func(label, value string) string {
-		return ansi.Muted(fmt.Sprintf("%-10s", label)) + value + "\n"
+		return "  " + ansi.Muted(fmt.Sprintf("%-10s", label)) + value + "\n"
 	}
 
-	// Header
-	b.WriteString(ansi.Accent(ansi.Bold+"◉ Session info") + "\n")
+	// Header + blank line
+	b.WriteString(ansi.Accent(ansi.Bold+"◉ Session info") + "\n\n")
 
-	// Identity
+	// Identity — same 10-char label padding as the rest of the panel
 	b.WriteString(dim("harness", info.Version))
 	name := sess.Name
 	if name == "" {
@@ -429,10 +428,11 @@ func (t *TUI) showInfo() {
 		if info.QueueDepth > 0 {
 			queued = fmt.Sprintf(" (%d queued)", info.QueueDepth)
 		}
-		b.WriteString("\n" + ansi.Warn("⚙ busy"+queued) + "\n")
+		b.WriteString("\n  " + ansi.Warn("⚙ busy"+queued) + "\n")
 	}
 
-	t.addRaw(strings.TrimRight(b.String(), "\n"))
+	// Trailing blank line so the next message in the scrollback has breathing room.
+	t.addRaw(strings.TrimRight(b.String(), "\n") + "\n")
 }
 
 // showContext fetches the context breakdown and renders it in the scrollback
@@ -458,76 +458,34 @@ func (t *TUI) showContext() {
 	}
 
 	const gridCells = 64 // 8×8
+	cellSize := float64(win) / gridCells // tokens per cell (15625 for 1M window)
 
-	// Step 1: used_cells = round(actual/window * 64) — derived from the real
-	// provider-reported token count, so free_cells is always honest regardless
-	// of how accurate the per-component estimates are.
-	// Fallback: use EstimatedTotal when no turn has happened yet.
-	realUsed := bd.LastRealTotal
-	if realUsed == 0 {
-		realUsed = bd.EstimatedTotal
-	}
-	usedCells := int(math.Round(float64(realUsed) / float64(win) * gridCells))
-	if usedCells > gridCells {
-		usedCells = gridCells
-	}
-	fC := gridCells - usedCells
-
-	// Step 2: distribute usedCells among S/T/C proportionally, using
-	// floor + largest-remainder so they always sum to exactly usedCells.
-	// The estimates (sys, tools, conv) only decide the internal split —
-	// they don't affect the total used or free count.
-	alloc := func(parts []int, total int) []int {
-		n := len(parts)
-		result := make([]int, n)
-		if total == 0 {
-			return result
+	// Each component gets ceil(tokens/cellSize) cells — minimum 1 if tokens > 0.
+	// S and T are static (their token counts don't change turn-to-turn), so
+	// their cell counts are always fixed. C grows as the conversation grows.
+	// free = 64 - sC - tC - cC (may differ from 64-round(actual/win*64),
+	// but the actual bar below is always the honest representation of window%).
+	cellsFor := func(n int) int {
+		if n <= 0 {
+			return 0
 		}
-		// Step 1: guarantee at least 1 cell to every non-zero component.
-		reserved := 0
-		for i, p := range parts {
-			if p > 0 {
-				result[i] = 1
-				reserved++
-			}
+		c := int(math.Round(float64(n)/cellSize))
+		if c < 1 {
+			c = 1
 		}
-		remaining := total - reserved
-		if remaining <= 0 {
-			return result
+		if c > gridCells {
+			c = gridCells
 		}
-		// Step 2: distribute the rest proportionally (floor + largest-remainder).
-		sum := 0
-		for _, p := range parts {
-			sum += p
-		}
-		floors := make([]float64, n)
-		for i, p := range parts {
-			floors[i] = float64(p) / float64(sum) * float64(remaining)
-		}
-		leftover := remaining
-		for i := range result {
-			add := int(math.Floor(floors[i]))
-			result[i] += add
-			leftover -= add
-		}
-		// Give leftover cells to the components with the largest remainders.
-		order := make([]int, n)
-		for i := range order {
-			order[i] = i
-		}
-		sort.Slice(order, func(a, b int) bool {
-			ra := floors[order[a]] - math.Floor(floors[order[a]])
-			rb := floors[order[b]] - math.Floor(floors[order[b]])
-			return ra > rb
-		})
-		for i := 0; i < leftover; i++ {
-			result[order[i]]++
-		}
-		return result
+		return c
 	}
 
-	cells := alloc([]int{bd.System, bd.Tools, bd.Conversation}, usedCells)
-	sC, tC, cC := cells[0], cells[1], cells[2]
+	sC := cellsFor(bd.System)
+	tC := cellsFor(bd.Tools)
+	cC := cellsFor(bd.Conversation)
+	fC := gridCells - sC - tC - cC
+	if fC < 0 {
+		fC = 0
+	}
 
 	// Build the 64-char sequence: S T C ░
 	seq := strings.Repeat("S", sC) +
@@ -597,8 +555,8 @@ func (t *TUI) showContext() {
 		b.WriteByte('\n')
 	}
 
-	// Separator + actual bar.
-	b.WriteString("\n" + ansi.Dimmed(strings.Repeat("─", 52)) + "\n")
+	// Separator + actual bar — same 2-space indent as the grid.
+	b.WriteString("\n  " + ansi.Dimmed(strings.Repeat("─", 52)) + "\n")
 
 	if bd.LastRealTotal > 0 && win > 0 {
 		usedPct := float64(bd.LastRealTotal) / float64(win) * 100
@@ -607,17 +565,17 @@ func (t *TUI) showContext() {
 			uf = 1
 		}
 		bigBar := ansi.Primary(strings.Repeat("█", uf)) + ansi.Dimmed(strings.Repeat("░", 36-uf))
-		b.WriteString(ansi.Muted("actual") + fmt.Sprintf("  [%s]  ", bigBar) +
+		b.WriteString("  " + ansi.Muted("actual") + fmt.Sprintf("  [%s]  ", bigBar) +
 			ansi.Primary(fmt.Sprintf("%.1f%%", usedPct)) + " used\n")
-		b.WriteString(fmt.Sprintf("        %s used · %s free · %s total\n",
+		b.WriteString(fmt.Sprintf("          %s used · %s free · %s total\n",
 			ansi.Primary(compactNum(bd.LastRealTotal)),
 			ansi.Dimmed(compactNum(bd.FreeSpace)),
 			ansi.Dimmed(compactNum(win))))
 	} else {
-		b.WriteString(ansi.Muted("estimated") + "  ~" +
+		b.WriteString("  " + ansi.Muted("estimated") + "  ~" +
 			ansi.Primary(compactNum(bd.EstimatedTotal)) + " tokens\n")
 		b.WriteString(ansi.Dimmed("  (no turn yet — actual count unavailable)\n"))
 	}
 
-	t.addRaw(strings.TrimRight(b.String(), "\n"))
+	t.addRaw(strings.TrimRight(b.String(), "\n") + "\n")
 }

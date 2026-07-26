@@ -653,21 +653,19 @@ type ContextBreakdown struct {
 	FreeSpace      int `json:"free_space"`      // ContextWindow − LastRealTotal (0 if none yet)
 }
 
-// ContextBreakdown estimates how the context window is used by this session,
-// broken down by component.
+// ContextBreakdown returns how the model's context window is used.
 //
-// Estimation strategy:
-//   - The tokenizer family (Anthropic SentencePiece vs OpenAI cl100k) is
-//     derived from the current provider name — it updates automatically when
-//     SwitchModel changes s.provider.
-//   - System prompt and tool schemas use EstimateTokens(text, family) with the
-//     family-specific chars/token divisor (Anthropic=6, OpenAI=4).
-//   - Conversation uses EstimateMessages — it translates each message to the
-//     provider's actual wire format first (the bytes the model really receives),
-//     then applies the divisor. This is much more accurate than marshalling our
-//     internal JSON representation.
-//   - LastRealTotal and ContextWindow come from the actual provider response
-//     and are the only guaranteed-accurate values.
+// S (System) and T (Tools) are estimated from stored byte lengths using the
+// provider's chars-per-token divisor (Anthropic=6, OpenAI=4) — computed once
+// at session creation from the actual text/JSON, never re-measured.
+//
+// C (Conversation) is derived as (actual - S - T) from the provider-reported
+// token count, not estimated from local messages. This makes it exact by
+// definition and naturally accounts for everything the model received that we
+// cannot enumerate locally: cached thinking blocks, pre-compaction history,
+// protocol overhead.
+//
+// LastRealTotal and ContextWindow come directly from the provider response.
 func (s *Session) ContextBreakdown() ContextBreakdown {
 	// Derive tokenizer family from the current provider — always reflects the
 	// active model even after SwitchModel, no extra stored field needed.
@@ -686,8 +684,19 @@ func (s *Session) ContextBreakdown() ContextBreakdown {
 	// T — tools: all tool schemas (built-in + MCP) stored as total JSON bytes.
 	tools := s.toolsLen / cpt
 
-	// C — conversation: translate to provider wire format, then divide.
-	conv := llm.EstimateMessages(s.store.Messages(), family)
+	// C — conversation: derived from the actual provider-reported total rather
+	// than estimated locally. This is intentional: the model's actual token
+	// count includes cached context (thinking blocks, pre-compaction history)
+	// that we cannot enumerate from the local working set. Deriving C as
+	// (actual - S - T) makes it exact by definition and absorbs all cache.
+	// Falls back to 0 if no turn has happened yet (lastReal == 0).
+	conv := 0
+	if lastReal > 0 {
+		conv = lastReal - system - tools
+		if conv < 0 {
+			conv = 0
+		}
+	}
 
 	estimated := system + tools + conv
 

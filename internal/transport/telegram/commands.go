@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 
 	"github.com/gurcuff91/harness/internal/logx"
@@ -204,66 +203,29 @@ func (t *Transport) cmdContext(ctx context.Context, chatID int64) {
 
 	cn := func(n int) string { return compactNum(int64(n)) }
 
-	realUsed := bd.LastRealTotal
-	if realUsed == 0 {
-		realUsed = bd.EstimatedTotal
-	}
-	usedCells := int(math.Round(float64(realUsed) / float64(win) * gridCells))
-	if usedCells > gridCells {
-		usedCells = gridCells
-	}
-	fC := gridCells - usedCells
+	cellSize := float64(win) / gridCells
 
-	allocCells := func(parts []int, total int) []int {
-		n := len(parts)
-		result := make([]int, n)
-		if total == 0 {
-			return result
+	cellsFor := func(n int) int {
+		if n <= 0 {
+			return 0
 		}
-		// Guarantee at least 1 cell per non-zero component, then distribute
-		// the rest proportionally with floor + largest-remainder.
-		reserved := 0
-		for i, p := range parts {
-			if p > 0 {
-				result[i] = 1
-				reserved++
-			}
+		c := int(math.Floor(float64(n) / cellSize))
+		if c < 1 {
+			c = 1
 		}
-		remaining := total - reserved
-		if remaining <= 0 {
-			return result
+		if c > gridCells {
+			c = gridCells
 		}
-		sum := 0
-		for _, p := range parts {
-			sum += p
-		}
-		floors := make([]float64, n)
-		for i, p := range parts {
-			floors[i] = float64(p) / float64(sum) * float64(remaining)
-		}
-		leftover := remaining
-		for i := range result {
-			add := int(math.Floor(floors[i]))
-			result[i] += add
-			leftover -= add
-		}
-		order := make([]int, n)
-		for i := range order {
-			order[i] = i
-		}
-		sort.Slice(order, func(a, b int) bool {
-			ra := floors[order[a]] - math.Floor(floors[order[a]])
-			rb := floors[order[b]] - math.Floor(floors[order[b]])
-			return ra > rb
-		})
-		for i := 0; i < leftover; i++ {
-			result[order[i]]++
-		}
-		return result
+		return c
 	}
 
-	cells := allocCells([]int{bd.System, bd.Tools, bd.Conversation}, usedCells)
-	sC, tC, cC := cells[0], cells[1], cells[2]
+	sC := cellsFor(bd.System)
+	tC := cellsFor(bd.Tools)
+	cC := cellsFor(bd.Conversation)
+	fC := gridCells - sC - tC - cC
+	if fC < 0 {
+		fC = 0
+	}
 
 	seq := strings.Repeat("S", sC) + strings.Repeat("T", tC) +
 		strings.Repeat("C", cC) + strings.Repeat(".", fC)
