@@ -57,6 +57,16 @@ type Message struct {
 	Caption      string      `json:"caption"`        // text sent with a photo/media
 	Photo        []PhotoSize `json:"photo"`          // present when the message is a photo (multiple sizes)
 	MediaGroupID string      `json:"media_group_id"` // same for all messages in one album
+	Document     *Document   `json:"document"`       // any file sent as a document
+}
+
+// Document is a file sent as a Telegram document (any type except photos).
+// Telegram delivers text files, PDFs, ZIPs, etc. as documents.
+type Document struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name"`
+	MimeType string `json:"mime_type"`
+	FileSize int    `json:"file_size"`
 }
 
 // PhotoSize is one size variant of a photo. Telegram sends several; the last
@@ -202,6 +212,36 @@ func (b *Bot) DownloadPhoto(ctx context.Context, sizes []PhotoSize) ([]byte, err
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("telegram: download file: status %d", resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
+}
+
+// DownloadDocument fetches any document file by file_id and returns its raw bytes.
+// Uses the same getFile → download URL path as DownloadPhoto.
+func (b *Bot) DownloadDocument(ctx context.Context, fileID string) ([]byte, error) {
+	raw, err := b.call(ctx, "getFile", map[string]any{"file_id": fileID})
+	if err != nil {
+		return nil, err
+	}
+	var f tgFile
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return nil, err
+	}
+	if f.FilePath == "" {
+		return nil, fmt.Errorf("telegram: getFile returned no file_path")
+	}
+	url := "https://api.telegram.org/file/bot" + b.token + "/" + f.FilePath
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := b.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("telegram: download document: status %d", resp.StatusCode)
 	}
 	return io.ReadAll(resp.Body)
 }

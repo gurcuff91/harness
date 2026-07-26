@@ -161,8 +161,10 @@ func (t *Transport) pollLoop(ctx context.Context) error {
 		}
 		for _, u := range updates {
 			offset = u.UpdateID + 1
-			// Skip updates with nothing we handle (no text and no photo).
-			if u.Message == nil || (u.Message.Text == "" && len(u.Message.Photo) == 0) {
+			// Skip updates with nothing we handle.
+			if u.Message == nil || (u.Message.Text == "" &&
+				len(u.Message.Photo) == 0 &&
+				u.Message.Document == nil) {
 				continue
 			}
 			t.handleMessage(ctx, u.Message)
@@ -179,6 +181,13 @@ func (t *Transport) handleMessage(ctx context.Context, msg *Message) {
 	// Photos (single or album) — downloaded and sent as image prompts.
 	if len(msg.Photo) > 0 {
 		t.handlePhotoMessage(ctx, msg)
+		return
+	}
+
+	// Document — text files become <tel:attach> tags; others silently ignored.
+	if msg.Document != nil {
+		caption := strings.TrimSpace(msg.Caption)
+		t.handleDocument(ctx, msg.Chat.ID, caption, msg.Document)
 		return
 	}
 

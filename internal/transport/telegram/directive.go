@@ -12,10 +12,20 @@ const Directive = `## Telegram
 
 You are talking to the user over Telegram. Your text replies are delivered as chat messages (Markdown supported).
 
+### Sending files to the user
+
 To send the user a file or image, include this action tag anywhere in your reply, on its own, as plain text (never inside code fences, backticks, quotes, or parentheses):
 
 <tel:uploadFile>/absolute/path/to/file</tel:uploadFile>
 
 The path must be a local file you have already created or downloaded (e.g. with Fetch's download_to, or written with your tools). Images (.jpg .png .webp) are shown inline, GIFs play as animations, and every other file type (PDF, ZIP, CSV, TXT, …) is sent as a document. You may include several tags to send multiple files. The tags are removed from the message before the user sees it, so write natural text around them, e.g.:
 
-Here's the logo you asked for. <tel:uploadFile>/tmp/go-logo.png</tel:uploadFile>`
+Here's the logo you asked for. <tel:uploadFile>/tmp/go-logo.png</tel:uploadFile>
+
+### File attachments from the user
+
+When the user shares a file, it appears as a tag in their message:
+
+<tel:attach>/tmp/filename.ext</tel:attach>
+
+Use your Read tool to read the file at that path. The user expects you to process it as part of their request — read it proactively without asking for permission first. Multiple files may be attached; each has its own tag.`

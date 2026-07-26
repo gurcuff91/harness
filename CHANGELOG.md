@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.43] - 2026-07-26
+
+### Feature — Slack transport (`harness slack`)
+- New transport `internal/transport/slack` — same architecture as Telegram:
+  in-process server + HTTP/SSE client + one harness session per Slack
+  channel or DM. Driven by browser session tokens (`xoxc-` + `xoxd-`), no
+  Slack app or bot token required.
+- **One session per channel/DM** — `~/.harness/slack.json` maps Slack channel
+  IDs (`D…` DMs, `C…` channels) to harness session IDs, exactly like
+  Telegram's chat→session store. Sessions are resumed on restart; a missing
+  or deleted session triggers a fresh one automatically.
+- **RTM WebSocket** for real-time events — calls `rtm.connect` to get the
+  `wss://` URL, then dials with `Authorization: Bearer xoxc-...` and
+  `Cookie: d=xoxd-...` headers (required since Sep 2023 per slack-go #1230).
+  Reconnects automatically on disconnect with a 5s backoff.
+- **Listens to**: direct messages to the authenticated user and explicit
+  `@mentions` in any channel the user is a member of. Own messages, bot
+  messages, and sub-typed events are skipped.
+- **Commands** (typed as `/new`, `/stop`, `/compact`, `/info` after
+  `@mentioning` the user or directly in a DM): same set as Telegram.
+- **`gorilla/websocket`** added as the only new dependency — needed for
+  custom upgrade headers on the RTM WebSocket; stdlib `net/http` cannot
+  inject headers into a WebSocket upgrade.
+- **CLI**: `harness slack --workspace <url> --xoxc <token> --xoxd <token>`
+  (all three required; also readable from `SLACK_WORKSPACE` / `SLACK_XOXC` /
+  `SLACK_XOXD` env vars for convenience). Optional: `--model`, `--thinking`,
+  `--scheduler`.
+
 ## [0.73.42] - 2026-07-25
 
 ### Feature — `GET /api/sessions/{id}/context` + `/context` command in TUI and Telegram

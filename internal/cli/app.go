@@ -35,6 +35,8 @@ func Main(args []string) int {
 		return run(cmdServe(rest))
 	case "telegram":
 		return run(cmdTelegram(rest))
+	case "slack":
+		return run(cmdSlack(rest))
 	case "providers":
 		return run(cmdProviders(rest))
 	case "connect":

@@ -3,10 +3,14 @@ package telegram
 import (
 	"context"
 	"encoding/base64"
-	"github.com/gurcuff91/harness/internal/logx"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/gurcuff91/harness/internal/logx"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -72,6 +76,130 @@ func (t *Transport) handlePhotoMessage(ctx context.Context, msg *Message) {
 	t.pendingAlbums.add(msg.MediaGroupID, chatID, msg.Caption, msg.Photo, func(buf *albumBuffer) {
 		t.dispatchImages(ctx, buf.chatID, buf.caption, buf.photos)
 	})
+}
+
+// ── Document (text file) handling ─────────────────────────────────────────
+
+// isTextMIME reports whether a mimetype should be treated as plain text and
+// downloaded to a temp file for the agent to read via its Read tool.
+func isTextMIME(mime string) bool {
+	if strings.HasPrefix(mime, "text/") {
+		return true
+	}
+	switch mime {
+	case "application/json", "application/xml", "application/javascript",
+		"application/typescript", "application/x-yaml", "application/toml",
+		"application/x-sh":
+		return true
+	}
+	return false
+}
+
+// mimeByExtension returns a best-guess mimetype for a file extension.
+func mimeByExtension(ext string) string {
+	switch strings.ToLower(ext) {
+	case ".go":
+		return "text/x-go"
+	case ".py":
+		return "text/x-python"
+	case ".js", ".mjs":
+		return "text/javascript"
+	case ".ts", ".tsx":
+		return "text/typescript"
+	case ".java":
+		return "text/x-java-source"
+	case ".json":
+		return "application/json"
+	case ".yaml", ".yml":
+		return "application/x-yaml"
+	case ".toml":
+		return "application/toml"
+	case ".xml":
+		return "application/xml"
+	case ".html", ".htm":
+		return "text/html"
+	case ".css":
+		return "text/css"
+	case ".sh", ".bash":
+		return "text/x-sh"
+	case ".rb":
+		return "text/x-ruby"
+	case ".rs":
+		return "text/x-rust"
+	case ".c", ".h":
+		return "text/x-c"
+	case ".cpp", ".cc", ".cxx":
+		return "text/x-c++"
+	case ".md", ".txt", ".csv":
+		return "text/plain"
+	case ".swift":
+		return "text/x-swift"
+	case ".kt", ".kts":
+		return "text/x-kotlin"
+	}
+	return ""
+}
+
+// handleDocument processes a document message. Text files (source code, JSON,
+// YAML, etc.) are downloaded to a temp file and injected as a <tel:attach> tag
+// in the prompt. Non-text documents (PDF, video, audio, zip, …) are silently
+// ignored — TODO: support them via future analysis tools.
+func (t *Transport) handleDocument(ctx context.Context, chatID int64, caption string, doc *Document) {
+	mime := doc.MimeType
+	if mime == "" || mime == "application/octet-stream" {
+		mime = mimeByExtension(filepath.Ext(doc.FileName))
+	}
+
+	if !isTextMIME(mime) {
+		// TODO: handle PDF, video, audio, and other binary types via future
+		// analysis tools (e.g. a PDF parser tool, a video transcription tool).
+		logx.Info("telegram", "document_ignored",
+			"chat", chatID, "file", doc.FileName, "mime", doc.MimeType)
+		return
+	}
+
+	data, err := t.bot.DownloadDocument(ctx, doc.FileID)
+	if err != nil {
+		logx.Error("telegram", "download_document", "chat", chatID,
+			"file", doc.FileName, "error", err.Error())
+		t.reply(ctx, chatID, "⚠️ Couldn't download the file.")
+		return
+	}
+
+	ext := filepath.Ext(doc.FileName)
+	if ext == "" {
+		ext = ".txt"
+	}
+	tmp, err := os.CreateTemp("", "harness-telegram-*"+ext)
+	if err != nil {
+		logx.Error("telegram", "create_temp", "chat", chatID, "error", err.Error())
+		return
+	}
+	defer tmp.Close()
+	if _, err := tmp.Write(data); err != nil {
+		logx.Error("telegram", "write_temp", "chat", chatID, "error", err.Error())
+		return
+	}
+	tmpPath := tmp.Name()
+	logx.Info("telegram", "document_attached",
+		"chat", chatID, "file", doc.FileName, "path", tmpPath)
+
+	pump, err := t.pumpFor(ctx, chatID)
+	if err != nil {
+		t.replyError(ctx, chatID, err)
+		return
+	}
+
+	var b strings.Builder
+	if caption != "" {
+		b.WriteString(caption)
+		b.WriteString("\n\n")
+	}
+	b.WriteString(fmt.Sprintf("<tel:attach>%s</tel:attach>", tmpPath))
+
+	if _, err := t.api.SendPrompt(pump.sessionID, b.String()); err != nil {
+		t.replyError(ctx, chatID, err)
+	}
 }
 
 // dispatchImages downloads each photo, encodes it, and sends one prompt carrying

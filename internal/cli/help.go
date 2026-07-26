@@ -14,6 +14,7 @@ Usage:
   harness telegram pair <chat_id>    Allow a chat to use the bot
   harness telegram unpair <chat_id>  Revoke a chat (also drops its session)
   harness telegram list              List paired chats
+  harness slack [flags]              Run as a Slack user bot (one session per channel/DM)
   harness --resume <id> [flags]      Resume session in TUI
 
 Management:
@@ -91,5 +92,6 @@ Examples:
   harness memo kubernetes --all
   harness serve :8080
   harness telegram pair 456789
-  harness telegram --token 123:ABC --scheduler`)
+  harness telegram --token 123:ABC --scheduler
+  harness slack --workspace https://myco.slack.com --xoxc xoxc-... --xoxd xoxd-...`)
 }
