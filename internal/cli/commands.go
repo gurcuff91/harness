@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/gurcuff91/harness/agent"
 )
@@ -168,20 +169,56 @@ func RunSessions(ctx context.Context, a *agent.Agent, all bool, output string) e
 		return fmt.Errorf("list sessions: %w", err)
 	}
 
+	// Sort by LastActiveAt descending — most recently active first.
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].LastActiveAt.After(sessions[j].LastActiveAt)
+	})
+
 	switch output {
 	case "json":
 		b, _ := json.MarshalIndent(sessions, "", "  ")
 		fmt.Println(string(b))
 	default:
-		for _, s := range sessions {
+		// Resolve display names and measure the longest one so all columns align.
+		type row struct {
+			id, name, ago, cwd, model string
+		}
+		rows := make([]row, len(sessions))
+		maxName := 0
+		for i, s := range sessions {
 			name := s.Name
 			if name == "" {
 				name = s.ID[:8]
 			}
-			fmt.Printf("%-12s %-20s %s  %s\n", s.ID[:12], name, shortenPath(s.CWD), s.Model)
+			if len(name) > maxName {
+				maxName = len(name)
+			}
+			rows[i] = row{
+				id:    s.ID,
+				name:  name,
+				ago:   relTime(s.LastActiveAt.UnixMilli()),
+				cwd:   shortenPath(s.CWD),
+				model: s.Model,
+			}
+		}
+		nameFmt := fmt.Sprintf("%%-%ds", maxName)
+		for _, r := range rows {
+			fmt.Printf("%s  "+nameFmt+"  %-12s  %s\n",
+				r.id, r.name, r.ago, r.cwd)
+			fmt.Printf("%s  %s\n\n", spaces(len(r.id)), r.model)
 		}
 	}
 	return nil
+}
+
+// spaces returns a string of n spaces — used to align the model line under the
+// session line without repeating the ID.
+func spaces(n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = ' '
+	}
+	return string(b)
 }
 
 // RunDelete deletes a session.
