@@ -3,6 +3,8 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 
 	"github.com/gurcuff91/harness/internal/logx"
@@ -15,6 +17,7 @@ var botCommands = []BotCommand{
 	{Command: "stop", Description: "🛑 Stop the current work"},
 	{Command: "compact", Description: "🗜 Summarize & compact the conversation"},
 	{Command: "info", Description: "📊 Session & model info"},
+	{Command: "context", Description: "📐 Context window breakdown"},
 }
 
 // handleCommand routes a /command to its handler. Unknown commands get a short
@@ -36,6 +39,8 @@ func (t *Transport) handleCommand(ctx context.Context, chatID int64, text string
 		t.cmdCompact(ctx, chatID)
 	case "info":
 		t.cmdInfo(ctx, chatID)
+	case "context":
+		t.cmdContext(ctx, chatID)
 	default:
 		t.reply(ctx, chatID, "Unknown command. Try /new, /stop, /compact or /info.")
 	}
@@ -169,6 +174,155 @@ func (t *Transport) cmdInfo(ctx context.Context, chatID int64) {
 	// Assemble: title (bold) + code block (monospace, aligned).
 	var b strings.Builder
 	b.WriteString("📊 *Session info*\n\n")
+	b.WriteString("```\n")
+	b.WriteString(strings.TrimRight(data.String(), "\n"))
+	b.WriteString("\n```")
+
+	t.reply(ctx, chatID, b.String())
+}
+
+// cmdContext reports the context window breakdown for the chat's session.
+func (t *Transport) cmdContext(ctx context.Context, chatID int64) {
+	p, err := t.pumpFor(ctx, chatID)
+	if err != nil {
+		t.replyError(ctx, chatID, err)
+		return
+	}
+	bd, err := t.api.GetSessionContext(p.sessionID)
+	if err != nil {
+		t.replyError(ctx, chatID, err)
+		return
+	}
+
+	win := bd.ContextWindow
+	if win == 0 {
+		t.reply(ctx, chatID, "⚠️ context window size unknown (no model metadata yet).")
+		return
+	}
+
+	const gridCells = 64
+
+	cn := func(n int) string { return compactNum(int64(n)) }
+
+	realUsed := bd.LastRealTotal
+	if realUsed == 0 {
+		realUsed = bd.EstimatedTotal
+	}
+	usedCells := int(math.Round(float64(realUsed) / float64(win) * gridCells))
+	if usedCells > gridCells {
+		usedCells = gridCells
+	}
+	fC := gridCells - usedCells
+
+	allocCells := func(parts []int, total int) []int {
+		n := len(parts)
+		result := make([]int, n)
+		if total == 0 {
+			return result
+		}
+		// Guarantee at least 1 cell per non-zero component, then distribute
+		// the rest proportionally with floor + largest-remainder.
+		reserved := 0
+		for i, p := range parts {
+			if p > 0 {
+				result[i] = 1
+				reserved++
+			}
+		}
+		remaining := total - reserved
+		if remaining <= 0 {
+			return result
+		}
+		sum := 0
+		for _, p := range parts {
+			sum += p
+		}
+		floors := make([]float64, n)
+		for i, p := range parts {
+			floors[i] = float64(p) / float64(sum) * float64(remaining)
+		}
+		leftover := remaining
+		for i := range result {
+			add := int(math.Floor(floors[i]))
+			result[i] += add
+			leftover -= add
+		}
+		order := make([]int, n)
+		for i := range order {
+			order[i] = i
+		}
+		sort.Slice(order, func(a, b int) bool {
+			ra := floors[order[a]] - math.Floor(floors[order[a]])
+			rb := floors[order[b]] - math.Floor(floors[order[b]])
+			return ra > rb
+		})
+		for i := 0; i < leftover; i++ {
+			result[order[i]]++
+		}
+		return result
+	}
+
+	cells := allocCells([]int{bd.System, bd.Tools, bd.Conversation}, usedCells)
+	sC, tC, cC := cells[0], cells[1], cells[2]
+
+	seq := strings.Repeat("S", sC) + strings.Repeat("T", tC) +
+		strings.Repeat("C", cC) + strings.Repeat(".", fC)
+	for len(seq) < gridCells {
+		seq += "."
+	}
+	seq = seq[:gridCells]
+
+	legend := []string{
+		fmt.Sprintf("S system  %6s", cn(bd.System)),
+		fmt.Sprintf("T tools   %6s", cn(bd.Tools)),
+		fmt.Sprintf("C conv    %6s", cn(bd.Conversation)),
+		fmt.Sprintf(". free    %6s", cn(bd.FreeSpace)),
+		"",
+		fmt.Sprintf("cell ≈ %.1fk", float64(win)/gridCells/1000),
+	}
+
+	var data strings.Builder
+
+	data.WriteString("+-+-+-+-+-+-+-+-+\n")
+	for row := 0; row < 8; row++ {
+		// Cell row
+		data.WriteString("|")
+		for col := 0; col < 8; col++ {
+			data.WriteByte(seq[row*8+col])
+			if col < 7 {
+				data.WriteString("|")
+			}
+		}
+		data.WriteString("|")
+		if row < len(legend) {
+			data.WriteString("   " + legend[row])
+		}
+		data.WriteByte('\n')
+		if row < 7 {
+			data.WriteString("+-+-+-+-+-+-+-+-+\n")
+		}
+	}
+	data.WriteString("+-+-+-+-+-+-+-+-+\n")
+	data.WriteString("\n" + strings.Repeat("-", 36) + "\n")
+
+	if bd.LastRealTotal > 0 && win > 0 {
+		usedPct := float64(bd.LastRealTotal) / float64(win) * 100
+		uf := int(usedPct / 100 * 28)
+		if uf < 1 {
+			uf = 1
+		}
+		bigBar := strings.Repeat("#", uf) + strings.Repeat(".", 28-uf)
+		data.WriteString(fmt.Sprintf("actual  [%s]\n", bigBar))
+		data.WriteString(fmt.Sprintf("        %.1f%% used\n", usedPct))
+		data.WriteString(fmt.Sprintf("        %s used · %s free · %s\n",
+			cn(bd.LastRealTotal), cn(bd.FreeSpace), cn(win)))
+	} else {
+		data.WriteString(fmt.Sprintf("estimated  ~%s tokens\n", cn(bd.EstimatedTotal)))
+		data.WriteString("(no turn yet)\n")
+	}
+
+	var b strings.Builder
+	b.WriteString("📐 *Context breakdown*\n\n")
 	b.WriteString("```\n")
 	b.WriteString(strings.TrimRight(data.String(), "\n"))
 	b.WriteString("\n```")

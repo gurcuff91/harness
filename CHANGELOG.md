@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.42] - 2026-07-25
+
+### Feature — `GET /api/sessions/{id}/context` + `/context` command in TUI and Telegram
+- New endpoint `GET /api/sessions/{id}/context` returns a token-usage breakdown
+  of the context window, estimated per component using the chars/4 approximation.
+  The response splits the context into three top-level buckets — system prompt,
+  tools, and conversation — with sub-breakdowns inside each:
+  - **System prompt**: `sys_base` (base prompt + mem/sched/cwd/directives blocks),
+    `sys_agents_md` (AGENTS.md / Project Context block), `sys_skills`
+    (Available Skills listing block), `sys_total`.
+  - **Tools**: `tools_built_in` (the 13 known built-in schemas: Bash, Read,
+    Write, Edit, Fetch, Skill, Subagent, Memo*, Schedule*), `tools_mcp`
+    (everything else — MCP tools), `tools_total`.
+  - **Conversation**: `conversation` — working-set messages only (post-compaction,
+    exactly what the model sees each turn), marshalled to JSON then divided by 4.
+  - **Totals**: `estimated_total` (sum of the three buckets), `last_real_total`
+    (actual input tokens from the last provider response — 0 before any turn),
+    `context_window`, `free_space` (`context_window − last_real_total`).
+- Lens fields computed **once at session creation**, never recomputed per request.
+  `buildSystemPrompt` measures each variable block while writing it (before vs
+  after each `b.WriteString`) and returns `promptLens{base, agentsMD, skills}`
+  alongside the string. `buildSessionTools` marshals each `ToolDef` at the end
+  and accumulates into `toolLens{builtIn, mcp}`, distinguishing built-ins by the
+  known-name set from `tools/names.go`. `newSession` stores all five values as
+  private fields (`sysBaseLen`, `sysAgentsMDLen`, `sysSkillsLen`,
+  `toolsBuiltInTk`, `toolsMCPTk`). `ContextBreakdown()` is pure arithmetic on
+  those fields plus a one-shot marshal of the current working-set messages.
+- `agent.ContextBreakdown` struct with explicit snake_case json tags (the wire
+  contract). `internal/client.ContextBreakdown` mirrors it; `GetSessionContext`
+  method on `*client.Client`.
+- **TUI** `/context` command: palette entry + `showContext()` renders a panel
+  in the scrollback with labelled rows (14-char padding), sub-items indented,
+  and a separator line before the totals. Shows `(no turn yet)` when
+  `last_real_total` is 0.
+- **Telegram** `/context` command: same data in a monospace code block
+  (same alignment trick as `/info`).
+
 ## [0.73.41] - 2026-07-25
 
 ### Feature — `GET /api/sessions/{id}/info` + `/info` command in TUI and Telegram

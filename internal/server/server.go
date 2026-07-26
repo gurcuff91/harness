@@ -102,6 +102,7 @@ func (s *Server) handler() http.Handler {
 	r.Get("/api/sessions/{id}/messages", s.handleGetMessages)
 	r.Post("/api/sessions/{id}/stop", s.handleStopSession)
 	r.Get("/api/sessions/{id}/info", s.handleSessionInfo)
+	r.Get("/api/sessions/{id}/context", s.handleSessionContext)
 
 	// TEMPORARY diagnostic endpoint (not net/http/pprof's DefaultServeMux
 	// auto-registration — that only wires up on import side effects, and this
@@ -886,6 +887,21 @@ func (s *Server) handleSessionInfo(w http.ResponseWriter, r *http.Request) {
 		MCPConnected:  mcpConnected,
 		ScheduleCount: scheduleCount,
 	})
+}
+
+// handleSessionContext handles GET /api/sessions/{id}/context. Returns a
+// token-usage breakdown of the session's context window, estimated per
+// component. Only valid for active sessions.
+func (s *Server) handleSessionContext(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	s.mu.RLock()
+	proxy, ok := s.sessions[id]
+	s.mu.RUnlock()
+	if !ok {
+		writeError(w, http.StatusBadRequest, "session is not active", nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, proxy.session.ContextBreakdown())
 }
 
 // --- Commands ---

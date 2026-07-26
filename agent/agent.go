@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -411,8 +412,8 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 	// The id is generated first so the session's Schedule tool can capture it as
 	// the owner for any schedules it creates.
 	sessionID := uuid.New().String()
-	sessionTools := a.buildSessionTools(sessionID, cwd, model, res, loader)
-	systemPrompt := a.buildSystemPrompt(cwd, res)
+	sessionTools, tl := a.buildSessionTools(sessionID, cwd, model, res, loader)
+	systemPrompt, pl := a.buildSystemPrompt(cwd, res)
 
 	meta := store.SessionMeta{
 		ID:           sessionID,
@@ -430,7 +431,7 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 
 	sess := newSession(storeInst,
 		provider, modelID, a.thinkingLevel,
-		sessionTools, systemPrompt,
+		sessionTools, tl, systemPrompt, pl,
 		a.maxIterations, maxTokens,
 		res.Skills, loader.ReadSkill,
 		a.memStore != nil)
@@ -484,10 +485,11 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 		readSkill = loader.ReadSkill
 	}
 
+	resumeTools, tl := a.buildSessionTools(meta.ID, cwd, meta.Model, res, loader)
+	resumePrompt, pl := a.buildSystemPrompt(cwd, res)
 	sess := newSession(storeInst,
 		provider, modelID, thinkingLvl,
-		a.buildSessionTools(meta.ID, cwd, meta.Model, res, loader),
-		a.buildSystemPrompt(cwd, res),
+		resumeTools, tl, resumePrompt, pl,
 		a.maxIterations, maxTokens,
 		skills, readSkill,
 		a.memStore != nil)
@@ -516,7 +518,14 @@ func (a *Agent) RenameSession(sessionID, name string) error {
 
 // ── Internal helpers ─────────────────────────────────────────────────────
 
-func (a *Agent) buildSessionTools(sessionID, cwd, model string, res *resources.Resources, loader resources.ResourceLoader) *tools.Registry {
+// toolLens holds the total raw byte size of all tool schema JSON sent to the
+// model. Stored as bytes so ContextBreakdown() can apply the correct
+// chars-per-token divisor for the active provider family at query time.
+type toolLens struct {
+	totalBytes int // JSON byte length of all tool schemas (built-in + MCP)
+}
+
+func (a *Agent) buildSessionTools(sessionID, cwd, model string, res *resources.Resources, loader resources.ResourceLoader) (*tools.Registry, toolLens) {
 	reg := tools.NewRegistry()
 	for _, def := range a.toolReg.Definitions() {
 		if a.isToolAllowed(def.Name) {
@@ -616,7 +625,16 @@ func (a *Agent) buildSessionTools(sessionID, cwd, model string, res *resources.R
 		}
 		reg.Register(tools.Subagent(executor))
 	}
-	return reg
+
+	// Measure the total raw byte size of all tool schema JSON. Stored as bytes
+	// so ContextBreakdown() can apply the correct chars-per-token divisor for
+	// the active provider at query time (Anthropic=6, OpenAI=4).
+	var tl toolLens
+	for _, def := range reg.Definitions() {
+		b, _ := json.Marshal(def)
+		tl.totalBytes += len(b)
+	}
+	return reg, tl
 }
 
 // isToolAllowed reports whether a tool may be used. A tool is allowed unless it
@@ -631,7 +649,14 @@ func (a *Agent) isToolAllowed(name string) bool {
 	return true
 }
 
-func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) string {
+// promptLens holds the total byte length of the system prompt. Computed once
+// inside buildSystemPrompt so ContextBreakdown() can estimate token counts
+// without recomputing anything.
+type promptLens struct {
+	total int // full system prompt byte length
+}
+
+func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) (string, promptLens) {
 	var b strings.Builder
 
 	if res.SystemMD != "" {
@@ -671,7 +696,8 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) string {
 		}
 	}
 
-	return b.String()
+	full := b.String()
+	return full, promptLens{total: len(full)}
 }
 
 // defaultSessionName generates the initial session name — date + time.

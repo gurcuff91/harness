@@ -266,7 +266,7 @@ func (t *TUI) cmdType(cmd string) string {
 		return "list-free"
 	case "disconnect", "resume", "delete":
 		return "list"
-	case "info":
+	case "info", "context":
 		return "none"
 	}
 	for _, c := range t.sessionCmds {

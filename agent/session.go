@@ -12,6 +12,7 @@ import (
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/internal/providers"
+	"github.com/gurcuff91/harness/internal/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -53,6 +54,12 @@ type Session struct {
 	lastInputTokens int // last turn input tokens — used to compute ContextUsage
 	contextWindow   int // from model meta, updated on SwitchModel
 	pricing         modelPricing
+
+	// Context breakdown lens — set once at construction, never mutated.
+	// Byte lengths; ContextBreakdown() divides by the active provider's
+	// chars-per-token at query time (Anthropic=6, OpenAI=4).
+	sysPromptLen int // full system prompt byte length
+	toolsLen     int // total JSON byte length of all tool schemas
 
 	handler Handler
 
@@ -140,7 +147,7 @@ type modelPricing struct {
 
 func newSession(storeInst *store.Session,
 	provider providers.Provider, modelID, thinkingLvl string,
-	toolReg *tools.Registry, systemPrompt string,
+	toolReg *tools.Registry, tl toolLens, systemPrompt string, pl promptLens,
 	maxIterations, maxTokens int,
 	skills []resources.SkillInfo, readSkill func(string) (content string, dir string, err error),
 	hasMemory bool) *Session {
@@ -162,9 +169,21 @@ func newSession(storeInst *store.Session,
 		skills:        skills,
 		readSkill:     readSkill,
 		hasMemory:     hasMemory,
+		// Context breakdown lens — write-once, from builder functions.
+		sysPromptLen: pl.total,
+		toolsLen:     tl.totalBytes,
 	}
 	s.followCond = sync.NewCond(&s.followMu)
 	s.loadModelMeta(modelID)
+
+	// Restore lastInputTokens from persisted stats so ContextBreakdown() shows
+	// meaningful "actual" + "free space" values immediately on resume, without
+	// requiring a new turn. lastInputTokens is not persisted directly, but
+	// ContextUsage × ContextWindow gives back the same value that was stored.
+	if meta.Stats.ContextUsage > 0 && s.contextWindow > 0 {
+		s.lastInputTokens = int(meta.Stats.ContextUsage * float64(s.contextWindow))
+	}
+
 	return s
 }
 
@@ -612,6 +631,80 @@ func (s *Session) Stats() types.SessionStats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.stats
+}
+
+// ContextBreakdown is a token-count estimate of how the model's context window
+// is used by this session, broken into three components (S/T/C):
+//   - System: the full system prompt (base + skills + agents.md + directives)
+//   - Tools: all tool schemas sent to the model (built-in + MCP)
+//   - Conversation: the working-set messages (post-compaction checkpoint)
+//
+// Estimates use the provider's wire format and the correct chars-per-token
+// divisor for the active tokenizer family (Anthropic=6, OpenAI=4).
+// Only LastRealTotal and ContextWindow come from the actual provider response.
+type ContextBreakdown struct {
+	System       int `json:"system"`       // estimated tokens for the full system prompt
+	Tools        int `json:"tools"`        // estimated tokens for all tool schemas
+	Conversation int `json:"conversation"` // estimated tokens for the working-set messages
+
+	EstimatedTotal int `json:"estimated_total"` // System + Tools + Conversation
+	LastRealTotal  int `json:"last_real_total"` // actual input tokens from last model turn (0 if none yet)
+	ContextWindow  int `json:"context_window"`  // model context window (tokens)
+	FreeSpace      int `json:"free_space"`      // ContextWindow − LastRealTotal (0 if none yet)
+}
+
+// ContextBreakdown estimates how the context window is used by this session,
+// broken down by component.
+//
+// Estimation strategy:
+//   - The tokenizer family (Anthropic SentencePiece vs OpenAI cl100k) is
+//     derived from the current provider name — it updates automatically when
+//     SwitchModel changes s.provider.
+//   - System prompt and tool schemas use EstimateTokens(text, family) with the
+//     family-specific chars/token divisor (Anthropic=6, OpenAI=4).
+//   - Conversation uses EstimateMessages — it translates each message to the
+//     provider's actual wire format first (the bytes the model really receives),
+//     then applies the divisor. This is much more accurate than marshalling our
+//     internal JSON representation.
+//   - LastRealTotal and ContextWindow come from the actual provider response
+//     and are the only guaranteed-accurate values.
+func (s *Session) ContextBreakdown() ContextBreakdown {
+	// Derive tokenizer family from the current provider — always reflects the
+	// active model even after SwitchModel, no extra stored field needed.
+	s.mu.Lock()
+	provName := s.provider.Name()
+	lastReal := s.lastInputTokens
+	ctxWin := s.contextWindow
+	s.mu.Unlock()
+
+	family := llm.FamilyForProvider(provName)
+	cpt := family.CharsPerToken()
+
+	// S — system prompt: stored as total bytes, divide by family divisor.
+	system := s.sysPromptLen / cpt
+
+	// T — tools: all tool schemas (built-in + MCP) stored as total JSON bytes.
+	tools := s.toolsLen / cpt
+
+	// C — conversation: translate to provider wire format, then divide.
+	conv := llm.EstimateMessages(s.store.Messages(), family)
+
+	estimated := system + tools + conv
+
+	free := 0
+	if ctxWin > 0 && lastReal > 0 {
+		free = ctxWin - lastReal
+	}
+
+	return ContextBreakdown{
+		System:         system,
+		Tools:          tools,
+		Conversation:   conv,
+		EstimatedTotal: estimated,
+		LastRealTotal:  lastReal,
+		ContextWindow:  ctxWin,
+		FreeSpace:      free,
+	}
 }
 
 // AllMessages returns the complete conversation history including pre-compaction messages.

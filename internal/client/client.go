@@ -288,6 +288,12 @@ func (c *Client) SendPromptWithImages(sessionID, text string, images []types.Ima
 	})
 }
 
+// GetSessionContext returns the token-usage breakdown for an active session's
+// context window, estimated per component (system prompt, tools, conversation).
+func (c *Client) GetSessionContext(sessionID string) (*ContextBreakdown, error) {
+	return ptr(decode[ContextBreakdown](c, "GET", "/api/sessions/"+sessionID+"/context", nil))
+}
+
 // GetSessionInfo returns the consolidated session-info snapshot for an active
 // session: server version, full session metadata, runtime state (busy, queue
 // depth), and environment counts (MCP connected, schedule count). Single

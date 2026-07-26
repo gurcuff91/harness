@@ -111,6 +111,19 @@ type ParamDef struct {
 	Values   []string `json:"values,omitempty"`
 }
 
+// ContextBreakdown is GET /api/sessions/{id}/context — estimated token usage
+// for the three context components (S/T/C). JSON tags match agent.ContextBreakdown.
+type ContextBreakdown struct {
+	System       int `json:"system"`       // S: full system prompt
+	Tools        int `json:"tools"`        // T: all tool schemas (built-in + MCP)
+	Conversation int `json:"conversation"` // C: working-set messages
+
+	EstimatedTotal int `json:"estimated_total"`
+	LastRealTotal  int `json:"last_real_total"`
+	ContextWindow  int `json:"context_window"`
+	FreeSpace      int `json:"free_space"`
+}
+
 // SessionInfo is GET /api/sessions/{id}/info — a consolidated, read-only
 // snapshot of everything the TUI footer, Telegram /info, and any future
 // transport needs in a single round-trip. Only valid for active sessions.

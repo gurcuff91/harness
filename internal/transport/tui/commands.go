@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 
 	"github.com/gurcuff91/harness/internal/client"
@@ -134,6 +136,10 @@ func (t *TUI) runCommand(cmd string, args []string) {
 
 	case "info":
 		go t.showInfo()
+		return
+
+	case "context":
+		go t.showContext()
 		return
 
 	case "connect":
@@ -424,6 +430,193 @@ func (t *TUI) showInfo() {
 			queued = fmt.Sprintf(" (%d queued)", info.QueueDepth)
 		}
 		b.WriteString("\n" + ansi.Warn("⚙ busy"+queued) + "\n")
+	}
+
+	t.addRaw(strings.TrimRight(b.String(), "\n"))
+}
+
+// showContext fetches the context breakdown and renders it in the scrollback
+// as an 8×8 grid where each cell represents 1/64th of the model's context
+// window. Components fill cells using ceiling division (any fraction of a cell
+// counts as a full cell), so even a tiny component always shows at least 1 cell.
+// Order: system prompt → tools → conversation → free.
+func (t *TUI) showContext() {
+	if t.sessionID == "" {
+		t.showWarn("No active session.")
+		return
+	}
+	bd, err := t.client.GetSessionContext(t.sessionID)
+	if err != nil {
+		t.showWarn("context: " + err.Error())
+		return
+	}
+
+	win := bd.ContextWindow
+	if win == 0 {
+		t.showWarn("context: context window size unknown (no model metadata yet).")
+		return
+	}
+
+	const gridCells = 64 // 8×8
+
+	// Step 1: used_cells = round(actual/window * 64) — derived from the real
+	// provider-reported token count, so free_cells is always honest regardless
+	// of how accurate the per-component estimates are.
+	// Fallback: use EstimatedTotal when no turn has happened yet.
+	realUsed := bd.LastRealTotal
+	if realUsed == 0 {
+		realUsed = bd.EstimatedTotal
+	}
+	usedCells := int(math.Round(float64(realUsed) / float64(win) * gridCells))
+	if usedCells > gridCells {
+		usedCells = gridCells
+	}
+	fC := gridCells - usedCells
+
+	// Step 2: distribute usedCells among S/T/C proportionally, using
+	// floor + largest-remainder so they always sum to exactly usedCells.
+	// The estimates (sys, tools, conv) only decide the internal split —
+	// they don't affect the total used or free count.
+	alloc := func(parts []int, total int) []int {
+		n := len(parts)
+		result := make([]int, n)
+		if total == 0 {
+			return result
+		}
+		// Step 1: guarantee at least 1 cell to every non-zero component.
+		reserved := 0
+		for i, p := range parts {
+			if p > 0 {
+				result[i] = 1
+				reserved++
+			}
+		}
+		remaining := total - reserved
+		if remaining <= 0 {
+			return result
+		}
+		// Step 2: distribute the rest proportionally (floor + largest-remainder).
+		sum := 0
+		for _, p := range parts {
+			sum += p
+		}
+		floors := make([]float64, n)
+		for i, p := range parts {
+			floors[i] = float64(p) / float64(sum) * float64(remaining)
+		}
+		leftover := remaining
+		for i := range result {
+			add := int(math.Floor(floors[i]))
+			result[i] += add
+			leftover -= add
+		}
+		// Give leftover cells to the components with the largest remainders.
+		order := make([]int, n)
+		for i := range order {
+			order[i] = i
+		}
+		sort.Slice(order, func(a, b int) bool {
+			ra := floors[order[a]] - math.Floor(floors[order[a]])
+			rb := floors[order[b]] - math.Floor(floors[order[b]])
+			return ra > rb
+		})
+		for i := 0; i < leftover; i++ {
+			result[order[i]]++
+		}
+		return result
+	}
+
+	cells := alloc([]int{bd.System, bd.Tools, bd.Conversation}, usedCells)
+	sC, tC, cC := cells[0], cells[1], cells[2]
+
+	// Build the 64-char sequence: S T C ░
+	seq := strings.Repeat("S", sC) +
+		strings.Repeat("T", tC) +
+		strings.Repeat("C", cC) +
+		strings.Repeat("░", fC)
+	// Pad to exactly 64 in case of rounding edge cases.
+	for len(seq) < gridCells {
+		seq += "░"
+	}
+	seq = seq[:gridCells]
+
+	// Build all grid lines first (17 lines: header + 8×(cell+sep) - last sep + footer).
+	var gridLines []string
+	gridLines = append(gridLines, ansi.Dimmed("  ┌─┬─┬─┬─┬─┬─┬─┬─┐"))
+	for row := 0; row < 8; row++ {
+		// Cell row.
+		var cellLine strings.Builder
+		cellLine.WriteString(ansi.Dimmed("  │"))
+		for col := 0; col < 8; col++ {
+			ch := string(seq[row*8+col])
+			switch ch {
+			case "S":
+				cellLine.WriteString(ansi.Primary("S"))
+			case "T":
+				cellLine.WriteString(ansi.Warn("T"))
+			case "C":
+				cellLine.WriteString(ansi.Accent("C"))
+			default:
+				cellLine.WriteString(ansi.Dimmed("░"))
+			}
+			if col < 7 {
+				cellLine.WriteString(ansi.Dimmed("│"))
+			}
+		}
+		cellLine.WriteString(ansi.Dimmed("│"))
+		gridLines = append(gridLines, cellLine.String())
+		// Separator (not after last row).
+		if row < 7 {
+			gridLines = append(gridLines, ansi.Dimmed("  ├─┼─┼─┼─┼─┼─┼─┼─┤"))
+		}
+	}
+	gridLines = append(gridLines, ansi.Dimmed("  └─┴─┴─┴─┴─┴─┴─┴─┘"))
+
+	// Legend lines — dense (no gaps between items), one blank before cell note.
+	// Labels padded to 6 chars, values right-aligned to 6 chars → columns align.
+	cellK := float64(win) / gridCells / 1000
+	legendLines := []string{
+		ansi.Primary("S") + ansi.Muted(fmt.Sprintf(" %-6s  %6s", "system", compactNum(bd.System))),
+		ansi.Warn("T") + ansi.Muted(fmt.Sprintf(" %-6s  %6s", "tools", compactNum(bd.Tools))),
+		ansi.Accent("C") + ansi.Muted(fmt.Sprintf(" %-6s  %6s", "conv", compactNum(bd.Conversation))),
+		ansi.Dimmed(fmt.Sprintf("░ %-6s  %6s", "free", compactNum(bd.FreeSpace))),
+		"",
+		ansi.Dimmed(fmt.Sprintf("cell ≈ %.1fk tokens", cellK)),
+	}
+
+	// Zip grid lines + legend lines — legend items appear on consecutive lines
+	// (including separator lines) so no visual gaps between them.
+	var b strings.Builder
+	b.WriteString(ansi.Accent(ansi.Bold+"◉ Context breakdown") + "\n\n")
+
+	for i, gl := range gridLines {
+		b.WriteString(gl)
+		if i < len(legendLines) {
+			b.WriteString("   " + legendLines[i])
+		}
+		b.WriteByte('\n')
+	}
+
+	// Separator + actual bar.
+	b.WriteString("\n" + ansi.Dimmed(strings.Repeat("─", 52)) + "\n")
+
+	if bd.LastRealTotal > 0 && win > 0 {
+		usedPct := float64(bd.LastRealTotal) / float64(win) * 100
+		uf := int(usedPct / 100 * 36)
+		if uf < 1 {
+			uf = 1
+		}
+		bigBar := ansi.Primary(strings.Repeat("█", uf)) + ansi.Dimmed(strings.Repeat("░", 36-uf))
+		b.WriteString(ansi.Muted("actual") + fmt.Sprintf("  [%s]  ", bigBar) +
+			ansi.Primary(fmt.Sprintf("%.1f%%", usedPct)) + " used\n")
+		b.WriteString(fmt.Sprintf("        %s used · %s free · %s total\n",
+			ansi.Primary(compactNum(bd.LastRealTotal)),
+			ansi.Dimmed(compactNum(bd.FreeSpace)),
+			ansi.Dimmed(compactNum(win))))
+	} else {
+		b.WriteString(ansi.Muted("estimated") + "  ~" +
+			ansi.Primary(compactNum(bd.EstimatedTotal)) + " tokens\n")
+		b.WriteString(ansi.Dimmed("  (no turn yet — actual count unavailable)\n"))
 	}
 
 	t.addRaw(strings.TrimRight(b.String(), "\n"))
