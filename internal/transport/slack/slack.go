@@ -45,8 +45,8 @@ type Transport struct {
 	// Active RTM WebSocket connection. Set/cleared by rtmLoop under connMu.
 	// Used by SendTyping to write typing events without blocking the read goroutine.
 	// gorilla/websocket requires that concurrent reads and writes use separate locks.
-	connMu sync.Mutex
-	conn   *websocket.Conn
+	connMu    sync.Mutex
+	conn      *websocket.Conn
 	typingSeq int64 // monotonic id for RTM messages
 }
 

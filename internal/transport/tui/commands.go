@@ -457,7 +457,7 @@ func (t *TUI) showContext() {
 		return
 	}
 
-	const gridCells = 64 // 8×8
+	const gridCells = 64                 // 8×8
 	cellSize := float64(win) / gridCells // tokens per cell (15625 for 1M window)
 
 	// Each component gets ceil(tokens/cellSize) cells — minimum 1 if tokens > 0.
@@ -469,7 +469,7 @@ func (t *TUI) showContext() {
 		if n <= 0 {
 			return 0
 		}
-		c := int(math.Round(float64(n)/cellSize))
+		c := int(math.Round(float64(n) / cellSize))
 		if c < 1 {
 			c = 1
 		}

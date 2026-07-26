@@ -74,13 +74,13 @@ type postMessageResponse struct {
 // RTMEvent is one event received from the RTM WebSocket.
 type RTMEvent struct {
 	Type    string      `json:"type"`
-	Channel string      `json:"channel"`  // channel or DM id
-	User    string      `json:"user"`     // sender user id
-	Text    string      `json:"text"`     // message text
-	TS      string      `json:"ts"`       // message timestamp (Slack unique id)
-	BotID   string      `json:"bot_id"`   // non-empty if sent by a bot
-	SubType string      `json:"subtype"`  // "message_changed", "bot_message", etc.
-	Files   []SlackFile `json:"files"`    // file attachments (images, text files, etc.)
+	Channel string      `json:"channel"` // channel or DM id
+	User    string      `json:"user"`    // sender user id
+	Text    string      `json:"text"`    // message text
+	TS      string      `json:"ts"`      // message timestamp (Slack unique id)
+	BotID   string      `json:"bot_id"`  // non-empty if sent by a bot
+	SubType string      `json:"subtype"` // "message_changed", "bot_message", etc.
+	Files   []SlackFile `json:"files"`   // file attachments (images, text files, etc.)
 }
 
 // ── API calls ─────────────────────────────────────────────────────────────
