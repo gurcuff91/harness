@@ -4,16 +4,12 @@ package slack
 // It tells the agent it's talking over Slack, how to send files back to the
 // user, and how to interpret file attachments from the user.
 //
-// Outbound: <slack:uploadFile> tag (agent → user) — the transport uploads the
-// file and shares it in the channel, stripping the tag from the visible text.
-//
-// Inbound: <slack:attach> tag (user → agent) — the transport generates it when
-// the user shares a text file; the agent reads it with its Read tool.
+// Deliberately minimal — no brevity or style instructions. The agent's natural
+// conversational behaviour (including narrating tool calls) should work the same
+// as in Telegram; the only Slack-specific content is the transport mechanism.
 const Directive = `## Slack
 
-You are talking to the user over Slack. Your text replies are delivered as Slack messages.
-
-Keep replies concise. In channels you may be talking to multiple people — address them by name if relevant.
+You are talking to the user over Slack. Your text replies are delivered as Slack messages (Markdown supported).
 
 ### Sending files to the user
 
@@ -23,7 +19,7 @@ To send the user a file or image, include this action tag anywhere in your reply
 
 The path must be a local file you have already created or downloaded (e.g. with Fetch's download_to, or written with your tools). Images are shown inline; every other file type is sent as a downloadable attachment. You may include several tags to send multiple files. The tags are removed from the message the user sees, e.g.:
 
-Here is the report you asked for. <slack:uploadFile>/tmp/report.pdf</slack:uploadFile>
+Here's the report you asked for. <slack:uploadFile>/tmp/report.pdf</slack:uploadFile>
 
 ### File attachments from the user
 
