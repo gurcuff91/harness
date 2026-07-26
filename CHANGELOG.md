@@ -2,6 +2,51 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.44] - 2026-07-27
+
+### Feature — Slack transport: render, file upload, file attach, typing, observability
+- **`toMrkdwn` renderer** (`render.go`) — converts the agent's CommonMark output
+  to Slack mrkdwn before sending: `**bold**` → `*bold*`, `---` stripped (with
+  multi-blank-line collapse), `# headings` → `*bold line*`, `- lists` → `• lists`,
+  inline code and fenced code blocks passed through verbatim.
+- **Table support** (`tables.go`) — pipe tables rewritten to aligned monospace
+  code blocks (same `tablesToCodeBlocks` approach as Telegram, copied locally).
+- **Typing indicator** — `startTyping`/`stopTyping` goroutine sends
+  `{"type":"typing"}` over the RTM WebSocket every 4 s while the agent works;
+  fires on `turn_start` and `received_prompt` (scheduled), stops on `turn_end`,
+  `compact_end`, `stop`, and `error`. `SendTyping` acquires `connMu` separately
+  from the read goroutine — gorilla/websocket serialises writes internally.
+- **Mid-turn text flush** — `tool_call` events now trigger `flushReason` so
+  agent commentary written before a tool executes reaches the user in real time
+  (same pattern as Telegram).
+- **File upload `<slack:uploadFile>`** (`upload.go`, `bot.go`) — 3-step Slack
+  API (getUploadURLExternal → PUT bytes → completeUploadExternal). The agent
+  emits `<slack:uploadFile>/path</slack:uploadFile>` tags; the transport strips
+  them, uploads each file, and sends the accompanying text as `initial_comment`
+  on the first file.
+- **File attach `<slack:attach>`** (`files.go`) — when the user shares a file
+  Slack delivers `files[]` in the RTM event; `image/*` → `SendPromptWithImages`
+  (base64); `text/*` / `application/json` etc. → downloaded to
+  `os.CreateTemp("", "*-originalname")` and injected as `<slack:attach>` tag
+  for the agent's Read tool; other types silently ignored with TODO.
+- **Reply logging with trigger** — every `flush` carries a `reason` string
+  (`text_end`, `tool_call`, `turn_end`, …); the `reply` log entry includes
+  `trigger=<reason>` so mid-turn texts are distinguishable from end-of-turn
+  replies. Upload replies log `files=N` alongside the text.
+- **`files.go` rename in Telegram** — `images.go` / `images_test.go` renamed
+  to `files.go` / `files_test.go` to reflect that the file now handles all
+  file types (images, text documents), not just photos.
+- **Temp file naming** — both Telegram and Slack now use
+  `os.CreateTemp("", "*-originalname")` so the OS-assigned unique prefix
+  precedes the original filename (e.g. `/tmp/1234567890-script.py`), preserving
+  the extension and semantic name the model uses to infer language/context.
+  Previously both used invented names (`harness-telegram-*.ext`,
+  `harness-slack-*.ext`).
+- **Directive updated** — Slack directive now includes the `<slack:uploadFile>`
+  section (mirroring `<tel:uploadFile>` in Telegram) plus the `<slack:attach>`
+  inbound section. Removed the mrkdwn syntax cheat-sheet (formatting is the
+  transport's job, not the model's).
+
 ## [0.73.43] - 2026-07-26
 
 ### Feature — Slack transport (`harness slack`)

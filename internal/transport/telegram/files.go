@@ -166,11 +166,11 @@ func (t *Transport) handleDocument(ctx context.Context, chatID int64, caption st
 		return
 	}
 
-	ext := filepath.Ext(doc.FileName)
-	if ext == "" {
-		ext = ".txt"
+	name := filepath.Base(doc.FileName)
+	if name == "" || name == "." {
+		name = doc.FileID + ".txt"
 	}
-	tmp, err := os.CreateTemp("", "harness-telegram-*"+ext)
+	tmp, err := os.CreateTemp("", "*-"+name)
 	if err != nil {
 		logx.Error("telegram", "create_temp", "chat", chatID, "error", err.Error())
 		return

@@ -183,20 +183,23 @@ func (t *Transport) handleFiles(ctx context.Context, channelID string, files []S
 }
 
 // downloadToTemp downloads a text file to a unique OS temp path using
-// os.CreateTemp to avoid filename collisions. The pattern follows the same
-// convention as harness's truncate tool: "harness-slack-*.ext".
+// os.CreateTemp for safe atomic creation. The pattern is "*-originalname"
+// so the resulting path ends with the original filename — the agent's Read
+// tool and the model can infer language/context from it (e.g. …-script.py).
 func downloadToTemp(ctx context.Context, bot *Bot, f SlackFile) (string, error) {
 	data, err := bot.DownloadFile(ctx, f.URLPrivate)
 	if err != nil {
 		return "", err
 	}
-	// Preserve the original extension so the agent's Read tool (and the model)
-	// can infer the language from the filename (e.g. *.go, *.py, *.json).
-	ext := filepath.Ext(f.Name)
-	if ext == "" {
-		ext = ".txt"
+
+	name := filepath.Base(f.Name)
+	if name == "" || name == "." {
+		name = f.ID + ".txt"
 	}
-	tmp, err := os.CreateTemp("", "harness-slack-*"+ext)
+
+	// Pattern "*-name" → /tmp/1234567890-script.py
+	// The OS picks the unique prefix; the suffix is always the original name.
+	tmp, err := os.CreateTemp("", "*-"+name)
 	if err != nil {
 		return "", fmt.Errorf("create temp file: %w", err)
 	}

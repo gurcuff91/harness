@@ -155,11 +155,17 @@ func (t *Transport) drain(ctx context.Context, p *channelPump, events <-chan cli
 				p.buf.WriteString(evt.Delta)
 			}
 		case "text_end":
-			t.flush(ctx, p)
+			// Text block finished streaming — flush immediately so the user sees
+			// the agent's commentary before the tool executes.
+			t.flushReason(ctx, p, "text_end")
 		case "tool_call":
+			// Flush any accumulated text before executing the tool, so
+			// mid-turn commentary ("Let me check that…") reaches the user
+			// in real time rather than being held until turn_end.
+			t.flushReason(ctx, p, "tool_call")
 			logx.Info("slack", "tool", "channel", p.channelID, "name", evt.ToolName)
 		case "turn_end":
-			t.flush(ctx, p)
+			t.flushReason(ctx, p, "turn_end")
 			t.stopTyping(p)
 		case "compact_start":
 			if !p.compactExpected.Swap(false) {
@@ -177,7 +183,7 @@ func (t *Transport) drain(ctx context.Context, p *channelPump, events <-chan cli
 				t.send(ctx, p.channelID, formatError(evt.Message, evt.Details))
 			}
 		case "max_iterations_reached":
-			t.flush(ctx, p)
+			t.flushReason(ctx, p, "max_iterations_reached")
 		case "received_prompt":
 			if evt.Origin == "scheduled" {
 				logx.Info("slack", "scheduled_prompt",
@@ -189,18 +195,27 @@ func (t *Transport) drain(ctx context.Context, p *channelPump, events <-chan cli
 	t.stopTyping(p)
 }
 
-// flush sends the buffered text (if any) to the channel and resets the buffer.
-func (t *Transport) flush(ctx context.Context, p *channelPump) {
+// flushReason sends the buffered text (if any) to the channel and resets the
+// buffer. reason is the SSE event that triggered the flush — it is passed to
+// sendWithUploads so the reply log can record why this flush happened, giving
+// visibility into mid-turn text (flushed on tool_call) vs end-of-turn text.
+func (t *Transport) flushReason(ctx context.Context, p *channelPump, reason string) {
 	text := strings.TrimSpace(p.buf.String())
 	p.buf.Reset()
 	if text != "" {
-		t.send(ctx, p.channelID, text)
+		t.sendWithUploads(ctx, p.channelID, text, reason)
 	}
 }
 
-// send delivers text to a Slack channel. The agent's CommonMark output is
-// converted to Slack mrkdwn first, then split if needed.
+// send delivers text to a Slack channel without a trigger reason.
+// Used for system messages (errors, compact notices, command replies).
 func (t *Transport) send(ctx context.Context, channelID, text string) {
+	t.sendLogged(ctx, channelID, text, "")
+}
+
+// sendLogged delivers text to a Slack channel, converting CommonMark to mrkdwn,
+// splitting if needed, and logging the reply with an optional trigger reason.
+func (t *Transport) sendLogged(ctx context.Context, channelID, text, reason string) {
 	text = toMrkdwn(text)
 	chunks := splitMessage(text)
 	for _, chunk := range chunks {
@@ -218,6 +233,9 @@ func (t *Transport) send(ctx context.Context, channelID, text string) {
 		kv = append(kv, "text", oneLine(text, 200))
 		if n > 1 {
 			kv = append(kv, "messages", n)
+		}
+		if reason != "" {
+			kv = append(kv, "trigger", reason)
 		}
 		logx.Info("slack", "reply", kv...)
 	}

@@ -14,6 +14,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -150,6 +152,91 @@ func (b *Bot) DialRTM(ctx context.Context, wsURL string) (*websocket.Conn, error
 		return nil, fmt.Errorf("slack RTM dial: %w", err)
 	}
 	return conn, nil
+}
+
+// ── File upload (3-step API) ──────────────────────────────────────────────
+
+// uploadURLResponse is the response from files.getUploadURLExternal.
+type uploadURLResponse struct {
+	OK        bool   `json:"ok"`
+	Error     string `json:"error,omitempty"`
+	UploadURL string `json:"upload_url"`
+	FileID    string `json:"file_id"`
+}
+
+// completeUploadResponse is the response from files.completeUploadExternal.
+type completeUploadResponse struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+// UploadFile uploads a local file to Slack and shares it in the given channel
+// using the current 3-step API (files.upload was deprecated Nov 2025):
+//
+//  1. files.getUploadURLExternal — get a pre-signed upload URL + file ID
+//  2. PUT file bytes to the upload URL (no auth headers needed)
+//  3. files.completeUploadExternal — finalize and share in channel
+//
+// initialComment is the text that accompanies the file in the channel
+// (stripped of the <slack:uploadFile> tags by the caller).
+func (b *Bot) UploadFile(ctx context.Context, channelID, filePath, initialComment string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("slack upload: read file: %w", err)
+	}
+	filename := filepath.Base(filePath)
+
+	// Step 1 — get upload URL.
+	raw, err := b.apiCall(ctx, "files.getUploadURLExternal", map[string]string{
+		"filename": filename,
+		"length":   fmt.Sprintf("%d", len(data)),
+	})
+	if err != nil {
+		return fmt.Errorf("slack upload: getUploadURLExternal: %w", err)
+	}
+	var urlResp uploadURLResponse
+	if err := json.Unmarshal(raw, &urlResp); err != nil {
+		return fmt.Errorf("slack upload: decode url response: %w", err)
+	}
+	if !urlResp.OK {
+		return fmt.Errorf("slack upload: getUploadURLExternal: %s", urlResp.Error)
+	}
+
+	// Step 2 — PUT file bytes to the pre-signed URL (no auth required).
+	req, err := http.NewRequestWithContext(ctx, "POST", urlResp.UploadURL,
+		bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("slack upload: build PUT: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := b.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("slack upload: PUT file: %w", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("slack upload: PUT returned %d", resp.StatusCode)
+	}
+
+	// Step 3 — complete upload and share in channel.
+	filesJSON := fmt.Sprintf(`[{"id":%q,"title":%q}]`, urlResp.FileID, filename)
+	completeParams := map[string]string{
+		"files":           filesJSON,
+		"channel_id":      channelID,
+		"initial_comment": initialComment,
+	}
+	raw, err = b.apiCall(ctx, "files.completeUploadExternal", completeParams)
+	if err != nil {
+		return fmt.Errorf("slack upload: completeUploadExternal: %w", err)
+	}
+	var completeResp completeUploadResponse
+	if err := json.Unmarshal(raw, &completeResp); err != nil {
+		return fmt.Errorf("slack upload: decode complete response: %w", err)
+	}
+	if !completeResp.OK {
+		return fmt.Errorf("slack upload: completeUploadExternal: %s", completeResp.Error)
+	}
+	return nil
 }
 
 // ── Internal HTTP helper ──────────────────────────────────────────────────
