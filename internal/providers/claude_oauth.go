@@ -28,7 +28,7 @@ const (
 
 	// Claude Code stealth identity
 	billingSalt   = "59cf53e54c78"
-	toolExtPrefix = "mcp__ext__" // prefix for harness tools exposed as CC extension tools (short = fewer tokens)
+	toolExtPrefix = "mcp__x__" // prefix for harness tools exposed as CC extension tools (short = fewer tokens)
 	mcpToolPrefix = "mcp__"      // any already-namespaced MCP tool (mcp__server__tool)
 )
 
