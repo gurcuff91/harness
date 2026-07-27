@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.53] - 2026-07-27
+
+### Feature — Telegram: session scoped by CWD + named "Telegram <date>"
+- **Session mapping now keyed by `(cwd, chatID)`** — `telegram.json` sessions
+  field changed from flat `chatID → sessionID` to nested
+  `cwd → { chatID → sessionID }`, mirroring the same change made to the Slack
+  transport in v0.73.49. Running `harness telegram` from different working
+  directories now creates independent sessions per chat, each with the correct
+  project context (AGENTS.md, skills, working directory). Old flat keys are
+  silently ignored — new sessions are created under the current CWD.
+- **Sessions named `"Telegram <date>"`** — sessions created by the Telegram
+  transport are named `"Telegram 2026-07-27 16:30"` instead of the generic
+  `"New Session <date>"`, making them immediately identifiable in
+  `harness sessions` alongside TUI and Slack sessions.
+- **`unpair` updated** — removes the chat's session mapping across ALL CWD
+  buckets (not just the current one) so a full unpair is truly complete.
+
 ## [0.73.52] - 2026-07-27
 
 ### Feature — Slack commands: /context, /thinking, /model, /help + admin system

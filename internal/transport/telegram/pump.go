@@ -137,7 +137,7 @@ func (t *Transport) acquireSession(chatID int64) (string, error) {
 		}
 		// Stored session is gone or failed to resume — fall through to create.
 	}
-	sess, err := t.api.CreateSession(t.model, t.cwd, "")
+	sess, err := t.api.CreateSession(t.model, t.cwd, telegramSessionName())
 	if err != nil {
 		return "", err
 	}
