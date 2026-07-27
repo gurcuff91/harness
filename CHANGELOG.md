@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.56] - 2026-07-27
+
+### Fix — Strip inline images before compact request (Anthropic many-image 400)
+- **Root cause** (`agent/session.go`) — `generateCompactionSummary` was sending
+  the full message history verbatim to the compaction LLM call, including all
+  inline base64 images accumulated during the session. Anthropic rejects requests
+  where multiple images exceed 2000px in any dimension
+  (`messages.N.content.M.image_source.base64.data: At least one of the image
+  dimensions exceed max allowed size for many-image requests`), causing compact
+  to fail with a 400 error and leaving the session unrecoverable.
+- **Fix** — new `stripImages()` helper strips image content before building the
+  compact request: top-level image parts (`ContentPart.Image`) are replaced with
+  `[image omitted for compaction]`; `ToolResult` parts with inline images have
+  their `Images` slice dropped while the text output is preserved. The LLM
+  produces an equally good summary from text alone — it never needed the images.
+
 ## [0.73.55] - 2026-07-27
 
 ### Fix — Slack @mention delegated to agent + 5 inviolable communication rules
