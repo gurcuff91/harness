@@ -329,13 +329,6 @@ func (t *Transport) handleEvent(ctx context.Context, evt *RTMEvent) {
 		t.replyError(ctx, evt.Channel, err)
 		return
 	}
-	// In channels (not DMs), store sender so replies can @mention them.
-	if strings.HasPrefix(evt.Channel, "C") && evt.User != "" {
-		pump.mu.Lock()
-		pump.lastUser = evt.User
-		pump.mu.Unlock()
-	}
-
 	var sendErr error
 	if len(images) > 0 {
 		_, sendErr = t.api.SendPromptWithImages(pump.sessionID, prompt, images)

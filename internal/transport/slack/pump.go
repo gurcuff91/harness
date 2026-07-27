@@ -21,7 +21,6 @@ type channelPump struct {
 	sessionID string
 	model     string          // the session's actual model (for logs)
 	buf       strings.Builder // accumulates the current turn's text
-	lastUser  string          // Slack user ID of the last message sender (for @mention in channels)
 
 	mu              sync.Mutex
 	typingCancel    context.CancelFunc // stops the current typing heartbeat, if any
@@ -222,20 +221,10 @@ func (t *Transport) sendLogged(ctx context.Context, channelID, text, reason stri
 	text = toMrkdwn(text)
 	chunks := splitMessage(text)
 
-	// Prepend @mention on the first chunk for channel messages.
-	if strings.HasPrefix(channelID, "C") && len(chunks) > 0 {
-		t.mu.Lock()
-		p := t.pumps[channelID]
-		t.mu.Unlock()
-		if p != nil {
-			p.mu.Lock()
-			user := p.lastUser
-			p.mu.Unlock()
-			if user != "" {
-				chunks[0] = "<@" + user + "> " + chunks[0]
-			}
-		}
-	}
+	// @mentions in channels are handled by the agent itself — it knows the
+	// sender's user ID via the <slack:user> tag in every prompt and can decide
+	// contextually whether to mention them. Doing it mechanically here would
+	// confuse multi-person channels and remove that judgment from the agent.
 
 	for _, chunk := range chunks {
 		if err := t.bot.PostMessage(ctx, channelID, chunk); err != nil {
