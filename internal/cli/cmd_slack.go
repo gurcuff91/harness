@@ -13,12 +13,18 @@ import (
 
 // cmdSlack routes slack subcommands.
 //
-//	harness slack login           interactive login: asks workspace + xoxd, derives xoxc, saves
-//	harness slack login --status  verify saved credentials
-//	harness slack [flags]         run the transport
+//	harness slack login              interactive login
+//	harness slack login --status     verify saved credentials
+//	harness slack admin <userID>     add admin
+//	harness slack admin remove <id>  remove admin
+//	harness slack admin list         list admins
+//	harness slack [flags]            run the transport
 func cmdSlack(args []string) error {
 	if len(args) > 0 && args[0] == "login" {
 		return cmdSlackLogin(args[1:])
+	}
+	if len(args) > 0 && args[0] == "admin" {
+		return cmdSlackAdmin(args[1:])
 	}
 
 	fs := flag.NewFlagSet("slack", flag.ContinueOnError)
@@ -45,6 +51,45 @@ func cmdSlack(args []string) error {
 		Thinking:  *thinking,
 		Scheduler: *scheduler,
 	})
+}
+
+// cmdSlackAdmin handles `harness slack admin <userID|list|remove>`.
+func cmdSlackAdmin(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: harness slack admin <userID>  |  harness slack admin list  |  harness slack admin remove <userID>")
+	}
+	switch args[0] {
+	case "list":
+		admins, err := slack.ListAdmins()
+		if err != nil {
+			return err
+		}
+		if len(admins) == 0 {
+			fmt.Println("No admins configured.")
+			return nil
+		}
+		fmt.Printf("%d admin(s):\n", len(admins))
+		for _, a := range admins {
+			fmt.Printf("  %s\n", a)
+		}
+	case "remove":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: harness slack admin remove <userID>")
+		}
+		if err := slack.RemoveAdmin(args[1]); err != nil {
+			return err
+		}
+		fmt.Printf("Removed admin: %s\n", args[1])
+	default:
+		// Treat the argument as a userID to add.
+		userID := args[0]
+		if err := slack.AddAdmin(userID); err != nil {
+			return err
+		}
+		fmt.Printf("Added admin: %s\n", userID)
+		fmt.Println("This user can now run /new /stop /compact /thinking /model in Slack.")
+	}
+	return nil
 }
 
 // cmdSlackLogin handles `harness slack login [--status]`.

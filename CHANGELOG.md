@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.52] - 2026-07-27
+
+### Feature — Slack commands: /context, /thinking, /model, /help + admin system
+- **`/context`** — context window breakdown (same data as the TUI `/context`
+  command), rendered as a monospace code block matching `/info` style.
+- **`/thinking [level]`** — without args: shows current level and lists all
+  valid values (`off · low · medium · high · xhigh`) with current highlighted
+  in bold. With `<level>`: sets it and confirms. Strips backticks so the user
+  can copy-paste the formatted value directly from the list.
+- **`/model [model]`** — without args: lists available models grouped by
+  provider, showing full `provider/model` string ready to copy-paste, with `✓`
+  on the current model. With `<model>`: switches and confirms. Strips backticks
+  on the argument for the same reason.
+- **`/help`** — shows the command list with descriptions (same content as the
+  "unknown command" error, without the error prefix).
+- **`/info` redesigned** — now renders as a monospace code block (consistent
+  with `/context`), with aligned columns and includes `iters`, `cache`,
+  `schedules`, and `⚙ busy` badge when the agent is working.
+- **Admin system** — state-changing commands (`/new`, `/stop`, `/compact`,
+  `/thinking`, `/model`) now require the sender to be in the admin list.
+  Read-only commands (`/help`, `/info`, `/context`) are always public. Prompts
+  to the agent are unrestricted.
+  - `adminOnlyCommands` map in `slack.go` — checked before dispatch.
+  - Non-admins receive: `⛔ You don't have permission... Ask an admin to run: harness slack admin <your_id>`.
+  - `Admins []string` field added to `slackJSON` (persisted in `slack.json`).
+  - `IsAdmin`, `AddAdmin`, `RemoveAdmin`, `ListAdmins` functions in `creds.go`.
+  - CLI: `harness slack admin <userID>` (add), `harness slack admin list`,
+    `harness slack admin remove <userID>`.
+
 ## [0.73.51] - 2026-07-27
 
 ### Feature — Slack sender/channel context tags in every prompt

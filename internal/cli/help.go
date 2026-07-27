@@ -17,6 +17,9 @@ Usage:
   harness slack [flags]              Run as a Slack user bot (one session per channel/DM)
   harness slack login                Authenticate interactively (saves to ~/.harness/slack.json)
   harness slack login --status       Verify saved credentials
+  harness slack admin <userID>       Add a Slack user as admin (can run /new /stop /compact /thinking /model)
+  harness slack admin list           List current admins
+  harness slack admin remove <id>    Remove an admin
   harness --resume <id> [flags]      Resume session in TUI
 
 Management:

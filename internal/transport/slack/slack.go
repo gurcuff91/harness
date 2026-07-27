@@ -299,7 +299,7 @@ func (t *Transport) handleEvent(ctx context.Context, evt *RTMEvent) {
 
 	// Handle /commands (typed as "@harness /compact", "@harness /new", etc.)
 	if strings.HasPrefix(text, "/") {
-		t.handleCommand(ctx, evt.Channel, text)
+		t.handleCommand(ctx, evt.Channel, evt.User, text)
 		return
 	}
 
@@ -347,11 +347,33 @@ func (t *Transport) handleEvent(ctx context.Context, evt *RTMEvent) {
 	}
 }
 
+// adminOnlyCommands are the commands that require the caller to be in the admin
+// list. Read-only commands (/help, /info, /context) are always public.
+var adminOnlyCommands = map[string]bool{
+	"new":      true,
+	"stop":     true,
+	"compact":  true,
+	"thinking": true,
+	"model":    true,
+}
+
 // handleCommand routes slash commands sent to the bot via Slack.
-func (t *Transport) handleCommand(ctx context.Context, channelID, text string) {
+func (t *Transport) handleCommand(ctx context.Context, channelID, senderID, text string) {
 	fields := strings.Fields(text)
 	cmd := strings.TrimPrefix(fields[0], "/")
-	logx.Info("slack", "command", "channel", channelID, "name", cmd)
+	logx.Info("slack", "command", "channel", channelID, "user", senderID, "name", cmd)
+
+	// Admin-only commands require the sender to be in the admin list.
+	if adminOnlyCommands[cmd] {
+		ok, err := IsAdmin(senderID)
+		if err != nil || !ok {
+			t.send(ctx, channelID, fmt.Sprintf(
+				"⛔ You don't have permission to run `/%s`.\n"+
+					"Ask an admin to run: `harness slack admin %s`",
+				cmd, senderID))
+			return
+		}
+	}
 
 	switch cmd {
 	case "new":
@@ -403,9 +425,30 @@ func (t *Transport) handleCommand(ctx context.Context, channelID, text string) {
 		}
 		t.send(ctx, channelID, formatInfo(info))
 
+	case "help":
+		t.send(ctx, channelID, slackHelp(""))
+
+	case "thinking":
+		t.cmdThinking(ctx, channelID, fields)
+
+	case "model":
+		t.cmdModel(ctx, channelID, fields)
+
+	case "context":
+		p, err := t.pumpFor(ctx, channelID)
+		if err != nil {
+			t.replyError(ctx, channelID, err)
+			return
+		}
+		bd, err := t.api.GetSessionContext(p.sessionID)
+		if err != nil {
+			t.replyError(ctx, channelID, err)
+			return
+		}
+		t.send(ctx, channelID, formatContext(bd))
+
 	default:
-		t.send(ctx, channelID,
-			fmt.Sprintf("Unknown command `/%s`. Available: /new /stop /compact /info", cmd))
+		t.send(ctx, channelID, slackHelp(cmd)) // cmd is already the clean name without "/"
 	}
 }
 
@@ -413,26 +456,56 @@ func (t *Transport) handleCommand(ctx context.Context, channelID, text string) {
 func formatInfo(info *client.SessionInfo) string {
 	sess := info.Session
 	stats := sess.Stats
-	var b strings.Builder
-	fmt.Fprintf(&b, "*📊 Session info*\n")
-	fmt.Fprintf(&b, "harness %s\n", info.Version)
-	if sess.Name != "" {
-		fmt.Fprintf(&b, "session: %s\n", sess.Name)
+
+	row := func(label, value string) string {
+		return fmt.Sprintf("%-10s%s\n", label, value)
 	}
-	fmt.Fprintf(&b, "model: %s\n", sess.Model)
-	if sess.Thinking != "" {
-		fmt.Fprintf(&b, "thinking: %s\n", sess.Thinking)
+
+	var data strings.Builder
+	data.WriteString(row("harness", info.Version))
+	name := sess.Name
+	if name == "" {
+		name = sess.ID[:8]
 	}
+	data.WriteString(row("session", name))
+	data.WriteByte('\n')
+	data.WriteString(row("model", sess.Model))
+	thinking := sess.Thinking
+	if thinking == "" {
+		thinking = "off"
+	}
+	data.WriteString(row("thinking", thinking))
+	data.WriteString(row("iters", fmt.Sprintf("max %d", sess.MaxIterations)))
 	if stats.ContextWindow > 0 {
-		fmt.Fprintf(&b, "context: %.1f%% of %s tokens\n",
-			stats.ContextUsage*100, compactNum(int64(stats.ContextWindow)))
+		data.WriteString(row("context", fmt.Sprintf("%.1f%% of %s tokens",
+			stats.ContextUsage*100, compactNum(int64(stats.ContextWindow)))))
 	}
-	fmt.Fprintf(&b, "tokens: ↑%s ↓%s  cost: $%.4f\n",
-		compactNum(int64(stats.InputTokens)),
-		compactNum(int64(stats.OutputTokens)),
-		stats.CostUSD)
-	fmt.Fprintf(&b, "mcps: %d connected", info.MCPConnected)
-	return strings.TrimRight(b.String(), "\n")
+	data.WriteByte('\n')
+	data.WriteString(row("tokens", fmt.Sprintf("↑%s ↓%s",
+		compactNum(int64(stats.InputTokens)), compactNum(int64(stats.OutputTokens)))))
+	if stats.CacheRead > 0 || stats.CacheWrite > 0 {
+		data.WriteString(row("cache", fmt.Sprintf("R%s W%s",
+			compactNum(int64(stats.CacheRead)), compactNum(int64(stats.CacheWrite)))))
+	}
+	data.WriteString(row("cost", fmt.Sprintf("$%.4f", stats.CostUSD)))
+	data.WriteByte('\n')
+	data.WriteString(row("mcps", fmt.Sprintf("%d connected", info.MCPConnected)))
+	if info.ScheduleCount > 0 {
+		data.WriteString(row("schedules", fmt.Sprintf("%d", info.ScheduleCount)))
+	}
+	if info.Busy {
+		queued := ""
+		if info.QueueDepth > 0 {
+			queued = fmt.Sprintf(" (%d queued)", info.QueueDepth)
+		}
+		data.WriteString("\n⚙ busy" + queued + "\n")
+	}
+
+	var b strings.Builder
+	b.WriteString("📊 *Session info*\n```\n")
+	b.WriteString(strings.TrimRight(data.String(), "\n"))
+	b.WriteString("\n```")
+	return b.String()
 }
 
 // slackSessionName returns the default name for new sessions created via the
@@ -440,6 +513,197 @@ func formatInfo(info *client.SessionInfo) string {
 // identifiable in `harness sessions` vs TUI or Telegram sessions.
 func slackSessionName() string {
 	return "Slack " + time.Now().Format("2006-01-02 15:04")
+}
+
+// slackHelp returns the help message shown on /help or an unknown command.
+func slackHelp(unknown string) string {
+	var b strings.Builder
+	if unknown != "" {
+		fmt.Fprintf(&b, "Unknown command `/%s`.\n\n", unknown)
+	}
+	b.WriteString("*Available commands:*\n")
+	b.WriteString("• `/new` — start a fresh session (clears conversation history)\n")
+	b.WriteString("• `/stop` — interrupt the current work mid-turn\n")
+	b.WriteString("• `/compact` — summarize and compact the conversation to free context space\n")
+	b.WriteString("• `/info` — show session info (model, thinking, tokens, cost, MCPs)\n")
+	b.WriteString("• `/context` — show context window breakdown (system, tools, conversation, free space)\n")
+	b.WriteString("• `/thinking [level]` — show current thinking level or set it (off/low/medium/high/xhigh)\n")
+	b.WriteString("• `/model [model]` — show current model or switch to a new one\n")
+	b.WriteString("• `/help` — show this help")
+	return b.String()
+}
+
+// thinkingLevels are the valid thinking levels in order.
+var thinkingLevels = []string{"off", "low", "medium", "high", "xhigh"}
+
+// cmdThinking handles /thinking and /thinking <level>.
+func (t *Transport) cmdThinking(ctx context.Context, channelID string, fields []string) {
+	p, err := t.pumpFor(ctx, channelID)
+	if err != nil {
+		t.replyError(ctx, channelID, err)
+		return
+	}
+
+	// No argument → list levels + show current.
+	if len(fields) < 2 {
+		info, err := t.api.GetSessionInfo(p.sessionID)
+		if err != nil {
+			t.replyError(ctx, channelID, err)
+			return
+		}
+		current := info.Session.Thinking
+		if current == "" {
+			current = "off"
+		}
+		var b strings.Builder
+		b.WriteString("🧠 *Thinking level*\n")
+		b.WriteString(fmt.Sprintf("Current: `%s`\n\n", current))
+		b.WriteString("Available levels: ")
+		for i, l := range thinkingLevels {
+			if i > 0 {
+				b.WriteString(" · ")
+			}
+			if l == current {
+				b.WriteString("*" + l + "*")
+			} else {
+				b.WriteString(l)
+			}
+		}
+		b.WriteString("\n\nUsage: `/thinking <level>`")
+		t.send(ctx, channelID, b.String())
+		return
+	}
+
+	// With argument → set the level. Strip backticks for the same reason as /model.
+	level := strings.ToLower(strings.ReplaceAll(fields[1], "`", ""))
+	valid := false
+	for _, l := range thinkingLevels {
+		if l == level {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		t.send(ctx, channelID, fmt.Sprintf(
+			"⚠️ Invalid thinking level `%s`. Valid values: %s",
+			level, strings.Join(thinkingLevels, " · ")))
+		return
+	}
+
+	_, err = t.api.ExecCommand(p.sessionID, "thinking", map[string]any{"level": level})
+	if err != nil {
+		t.replyError(ctx, channelID, err)
+		return
+	}
+	t.send(ctx, channelID, fmt.Sprintf("✓ Thinking set to `%s`", level))
+}
+
+// cmdModel handles /model and /model <provider/model>.
+func (t *Transport) cmdModel(ctx context.Context, channelID string, fields []string) {
+	p, err := t.pumpFor(ctx, channelID)
+	if err != nil {
+		t.replyError(ctx, channelID, err)
+		return
+	}
+
+	// No argument → list available models + show current.
+	if len(fields) < 2 {
+		info, err := t.api.GetSessionInfo(p.sessionID)
+		if err != nil {
+			t.replyError(ctx, channelID, err)
+			return
+		}
+		models, err := t.api.ListModels()
+		if err != nil {
+			t.replyError(ctx, channelID, err)
+			return
+		}
+		current := info.Session.Model
+
+		var b strings.Builder
+		b.WriteString("🤖 *Model*\n")
+		b.WriteString(fmt.Sprintf("Current: `%s`\n\n", current))
+		b.WriteString("*Available models:*\n")
+
+		// Group by provider.
+		type entry struct{ provider, model string }
+		var entries []entry
+		providerSeen := map[string]bool{}
+		var providerOrder []string
+		providerModels := map[string][]string{}
+		for _, m := range models {
+			if !providerSeen[m.Provider] {
+				providerSeen[m.Provider] = true
+				providerOrder = append(providerOrder, m.Provider)
+			}
+			providerModels[m.Provider] = append(providerModels[m.Provider], m.Model)
+			_ = entries
+		}
+		for _, prov := range providerOrder {
+			b.WriteString(fmt.Sprintf("*%s:*\n", prov))
+			for _, model := range providerModels[prov] {
+				marker := ""
+				if model == current {
+					marker = " ✓"
+				}
+				b.WriteString(fmt.Sprintf("  • `%s`%s\n", model, marker))
+			}
+		}
+		b.WriteString("\nUsage: `/model <provider/model>`")
+		t.send(ctx, channelID, b.String())
+		return
+	}
+
+	// With argument → switch model.
+	// Strip backticks in case the user copied the model from the code-formatted
+	// list (Slack renders `model` with backticks that get included on copy).
+	model := strings.ReplaceAll(strings.Join(fields[1:], " "), "`", "")
+	_, err = t.api.ExecCommand(p.sessionID, "model", map[string]any{"model": model})
+	if err != nil {
+		t.replyError(ctx, channelID, err)
+		return
+	}
+	short := model
+	if idx := strings.LastIndex(model, "/"); idx >= 0 {
+		short = model[idx+1:]
+	}
+	t.send(ctx, channelID, fmt.Sprintf("✓ Model switched to `%s`", short))
+}
+
+// formatContext renders the context breakdown as a Slack monospace code block.
+func formatContext(bd *client.ContextBreakdown) string {
+	if bd == nil {
+		return "⚠️ No context data available."
+	}
+	win := bd.ContextWindow
+	cn := func(n int) string { return compactNum(int64(n)) }
+
+	row := func(label, value string) string {
+		return fmt.Sprintf("%-14s%s\n", label, value)
+	}
+	sub := func(label, value string) string {
+		return fmt.Sprintf("  %-12s%s\n", label, value)
+	}
+
+	var data strings.Builder
+	data.WriteString(row("system prompt", cn(bd.System)+" tokens"))
+	data.WriteString(row("tools", cn(bd.Tools)+" tokens"))
+	data.WriteString(row("conversation", cn(bd.Conversation)+" tokens"))
+	data.WriteString("\n" + strings.Repeat("─", 36) + "\n")
+	data.WriteString(row("estimated", "~"+cn(bd.EstimatedTotal)+" tokens"))
+	if bd.LastRealTotal > 0 && win > 0 {
+		pct := float64(bd.LastRealTotal) / float64(win) * 100
+		data.WriteString(row("actual", cn(bd.LastRealTotal)+fmt.Sprintf(" tokens (%.1f%%)", pct)))
+		data.WriteString(sub("free", cn(bd.FreeSpace)+" of "+cn(win)))
+	} else {
+		data.WriteString("(no turn yet)\n")
+	}
+
+	var b strings.Builder
+	b.WriteString("📐 *Context breakdown*\n```\n")
+	b.WriteString(strings.TrimRight(data.String(), "\n"))
+	b.WriteString("\n```")
+	return b.String()
 }
 
 func compactNum(n int64) string {

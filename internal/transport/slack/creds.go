@@ -23,6 +23,12 @@ type slackJSON struct {
 	UserID    string `json:"user_id,omitempty"`
 	Team      string `json:"team,omitempty"`
 
+	// Admins is the list of Slack user IDs allowed to run state-changing
+	// commands (/new, /stop, /compact, /thinking, /model). Read-only commands
+	// (/help, /info, /context) are always public. Managed via
+	// `harness slack admin <userID>`.
+	Admins []string `json:"admins,omitempty"`
+
 	// Session mappings: cwd → (channelID → sessionID).
 	// A channel in a different working directory gets a separate session so the
 	// agent always has the correct project context (AGENTS.md, skills, cwd).
@@ -74,6 +80,82 @@ func writeSlackJSON(path string, s slackJSON) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0600)
+}
+
+// ── Admin management ─────────────────────────────────────────────────────
+
+// IsAdmin reports whether userID is in the admin list.
+// Returns true if admins list is empty (open mode — no admins configured yet).
+func IsAdmin(userID string) (bool, error) {
+	path, err := slackJSONPath()
+	if err != nil {
+		return false, err
+	}
+	s, err := readSlackJSON(path)
+	if err != nil {
+		return false, err
+	}
+	if len(s.Admins) == 0 {
+		return false, nil // no admins configured — nobody is admin
+	}
+	for _, a := range s.Admins {
+		if a == userID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// AddAdmin adds userID to the admin list if not already present.
+func AddAdmin(userID string) error {
+	path, err := slackJSONPath()
+	if err != nil {
+		return err
+	}
+	s, err := readSlackJSON(path)
+	if err != nil {
+		return err
+	}
+	for _, a := range s.Admins {
+		if a == userID {
+			return nil // already admin
+		}
+	}
+	s.Admins = append(s.Admins, userID)
+	return writeSlackJSON(path, s)
+}
+
+// RemoveAdmin removes userID from the admin list.
+func RemoveAdmin(userID string) error {
+	path, err := slackJSONPath()
+	if err != nil {
+		return err
+	}
+	s, err := readSlackJSON(path)
+	if err != nil {
+		return err
+	}
+	filtered := s.Admins[:0]
+	for _, a := range s.Admins {
+		if a != userID {
+			filtered = append(filtered, a)
+		}
+	}
+	s.Admins = filtered
+	return writeSlackJSON(path, s)
+}
+
+// ListAdmins returns the current admin list.
+func ListAdmins() ([]string, error) {
+	path, err := slackJSONPath()
+	if err != nil {
+		return nil, err
+	}
+	s, err := readSlackJSON(path)
+	if err != nil {
+		return nil, err
+	}
+	return s.Admins, nil
 }
 
 // ── Credentials API (used by login flow) ─────────────────────────────────
