@@ -311,8 +311,13 @@ func (t *Transport) handleEvent(ctx context.Context, evt *RTMEvent) {
 		images, attachTags = t.handleFiles(ctx, evt.Channel, evt.Files)
 	}
 
-	// Build the final prompt text (user text + attach tags for text files).
-	prompt := buildPrompt(text, attachTags)
+	// Build the final prompt: context tags (channel/user) + text + attach tags.
+	// channelID is empty for DMs so only the user tag is emitted.
+	contextChannel := evt.Channel
+	if strings.HasPrefix(evt.Channel, "D") {
+		contextChannel = "" // DM — suppress channel tag
+	}
+	prompt := buildPrompt(contextChannel, evt.User, text, attachTags)
 
 	logx.Info("slack", "prompt",
 		"channel", evt.Channel, "user", evt.User,

@@ -213,19 +213,44 @@ func downloadToTemp(ctx context.Context, bot *Bot, f SlackFile) (string, error) 
 // buildPrompt combines the user's text with any <slack:attach> tags for text
 // files. Images are sent separately via SendPromptWithImages so they don't
 // appear here.
-func buildPrompt(text string, attachTags []string) string {
-	if len(attachTags) == 0 {
-		return text
-	}
+// buildPrompt assembles the final prompt sent to the agent:
+//
+//  1. Context tags (channel + user) at the top so the model always knows who
+//     is speaking and from where.
+//  2. The user's text.
+//  3. Any <slack:attach> tags for text files at the bottom.
+//
+// channelID is empty for DMs (only the user tag is emitted).
+func buildPrompt(channelID, userID, text string, attachTags []string) string {
 	var b strings.Builder
-	if text != "" {
-		b.WriteString(text)
-		b.WriteString("\n\n")
+
+	// Context tags — always first.
+	if channelID != "" {
+		fmt.Fprintf(&b, "<slack:channel>%s</slack:channel> ", channelID)
 	}
-	for _, tag := range attachTags {
-		b.WriteString(tag)
+	if userID != "" {
+		fmt.Fprintf(&b, "<slack:user>%s</slack:user>", userID)
+	}
+	if b.Len() > 0 {
 		b.WriteByte('\n')
 	}
+
+	// User's text.
+	if text != "" {
+		b.WriteString(text)
+	}
+
+	// Attach tags at the bottom.
+	if len(attachTags) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		for _, tag := range attachTags {
+			b.WriteString(tag)
+			b.WriteByte('\n')
+		}
+	}
+
 	return strings.TrimRight(b.String(), "\n")
 }
 

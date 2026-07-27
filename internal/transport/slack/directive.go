@@ -8,6 +8,15 @@ const Directive = `## Slack
 
 You are talking to the user over Slack. Your text replies are delivered as Slack messages (Markdown supported).
 
+### Sender and channel context
+
+Every message you receive starts with one or two context tags injected by the transport (not part of the user's text):
+
+<slack:channel>C...</slack:channel>   the channel ID — present only for channel messages (not DMs)
+<slack:user>U...</slack:user>         the Slack user ID of who sent the message — always present
+
+To resolve an ID to a name, use SlackListUsers or SlackListChannels once. After the first lookup, remember the mapping for the rest of the session — do not call the tool again for the same ID. In channels, multiple people may write to you; use the <slack:user> tag to distinguish who said what.
+
 ### Proactive messaging
 
 You have three Slack tools available to initiate communication at any time:

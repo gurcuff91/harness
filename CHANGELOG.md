@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.51] - 2026-07-27
+
+### Feature — Slack sender/channel context tags in every prompt
+- Every prompt sent to the agent now starts with one or two context tags
+  injected by the transport (not visible to the user):
+  - `<slack:channel>C...</slack:channel>` — present only for channel messages
+    (omitted for DMs where the channel is implicit).
+  - `<slack:user>U...</slack:user>` — always present, identifies the sender.
+- `buildPrompt` updated to accept `channelID` and `userID` and prepend the
+  tags before the user's text, with `<slack:attach>` tags remaining at the
+  bottom. Channel tag is suppressed for DM channels (`D...` prefix).
+- **Directive updated** — new `### Sender and channel context` section explains
+  the two tags, instructs the agent to resolve IDs with `SlackListUsers` /
+  `SlackListChannels` once per session and cache the mapping, and highlights
+  that in channels the `<slack:user>` tag distinguishes multiple speakers.
+
 ## [0.73.50] - 2026-07-27
 
 ### Fix — JSONL corruption causing `compact_offset` drift and Anthropic 400 errors
