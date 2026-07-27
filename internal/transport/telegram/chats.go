@@ -24,8 +24,8 @@ type store struct {
 }
 
 type storeData struct {
-	Allowlist []int64                       `json:"allowlist"`
-	Sessions  map[string]map[string]string  `json:"sessions"` // cwd → chatID → sessionID
+	Allowlist []int64                      `json:"allowlist"`
+	Sessions  map[string]map[string]string `json:"sessions"` // cwd → chatID → sessionID
 }
 
 // openStore loads the config from path (default ~/.harness/telegram.json). A

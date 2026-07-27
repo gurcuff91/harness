@@ -213,7 +213,7 @@ func SaveCredentials(c *Credentials) error {
 type store struct {
 	mu   sync.Mutex
 	path string
-	cwd  string    // current working directory — scopes all lookups
+	cwd  string // current working directory — scopes all lookups
 	data slackJSON
 }
 
