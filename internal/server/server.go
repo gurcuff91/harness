@@ -137,6 +137,7 @@ func (s *Server) Serve(l net.Listener) error {
 type createSessionRequest struct {
 	Model string `json:"model"`
 	CWD   string `json:"cwd"`
+	Name  string `json:"name,omitempty"` // optional initial name; default: "New Session <date>"
 }
 
 // serverInfo is returned by GET /api/server
@@ -551,6 +552,11 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
+	}
+
+	// Apply optional initial name (transport-supplied, e.g. "Slack 2026-07-27").
+	if req.Name != "" {
+		_ = sess.Rename(req.Name)
 	}
 
 	// Apply thinking level from settings

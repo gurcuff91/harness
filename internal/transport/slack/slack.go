@@ -430,6 +430,13 @@ func formatInfo(info *client.SessionInfo) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// slackSessionName returns the default name for new sessions created via the
+// Slack transport, e.g. "Slack 2026-07-27 16:30". Makes sessions easily
+// identifiable in `harness sessions` vs TUI or Telegram sessions.
+func slackSessionName() string {
+	return "Slack " + time.Now().Format("2006-01-02 15:04")
+}
+
 func compactNum(n int64) string {
 	switch {
 	case n >= 1_000_000:

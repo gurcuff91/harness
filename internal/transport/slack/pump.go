@@ -83,7 +83,7 @@ func (t *Transport) acquireSession(channelID string) (string, error) {
 		_ = t.store.unbind(channelID)
 	}
 
-	sess, err := t.api.CreateSession(t.model, t.cwd)
+	sess, err := t.api.CreateSession(t.model, t.cwd, slackSessionName())
 	if err != nil {
 		return "", err
 	}

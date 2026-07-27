@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.49] - 2026-07-27
+
+### Fix — Slack session scoped by CWD + named "Slack <date>"
+- **Session mapping now keyed by `(cwd, channelID)`** — `slack.json` sessions
+  field changed from flat `channelID → sessionID` to nested
+  `cwd → { channelID → sessionID }`. Each `(project, channel)` pair gets its
+  own independent session so the agent always has the correct project context
+  (AGENTS.md, skills, working directory). Running `harness slack` from
+  `/project-a` and later from `/project-b` creates separate sessions for the
+  same channel instead of resuming the wrong-project session. Old flat keys are
+  silently ignored — new sessions are created under the current CWD.
+  The `save()` method only touches its own CWD bucket, leaving other CWDs on
+  disk intact (safe for future multi-CWD scenarios).
+- **Slack sessions named `"Slack <date>"`** — sessions created by the Slack
+  transport are named `"Slack 2026-07-27 16:30"` instead of the generic
+  `"New Session <date>"`, making them immediately identifiable in
+  `harness sessions`. Implemented via an optional `name` field on
+  `createSessionRequest` (server-side `POST /api/sessions`) and
+  `client.CreateSession(model, cwd, name)` — all other transports pass `""`
+  preserving existing behaviour.
+
 ## [0.73.48] - 2026-07-27
 
 ### Fix — claude-oauth token refresh reliability + compact retry

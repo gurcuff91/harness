@@ -9,8 +9,12 @@ import (
 
 // slackJSON is the single source of truth for ~/.harness/slack.json.
 // It holds both the auth credentials (from `harness slack login`) and the
-// channel→session mappings (from the transport runtime). Both sides read and
-// write through this struct so neither overwrites the other's fields.
+// nested session mappings. Both sides read and write through this struct so
+// neither overwrites the other's fields.
+//
+// Session structure: sessions[cwd][channelID] = sessionID
+// This ensures each (project, channel) pair has its own independent session
+// with the correct AGENTS.md, skills, and working directory context.
 type slackJSON struct {
 	// Auth credentials — written by `harness slack login`.
 	Workspace string `json:"workspace,omitempty"`
@@ -19,8 +23,10 @@ type slackJSON struct {
 	UserID    string `json:"user_id,omitempty"`
 	Team      string `json:"team,omitempty"`
 
-	// Session mappings — written by the transport at runtime.
-	Sessions map[string]string `json:"sessions,omitempty"`
+	// Session mappings: cwd → (channelID → sessionID).
+	// A channel in a different working directory gets a separate session so the
+	// agent always has the correct project context (AGENTS.md, skills, cwd).
+	Sessions map[string]map[string]string `json:"sessions,omitempty"`
 }
 
 // Credentials is the public view of the auth fields in slackJSON.
@@ -53,7 +59,7 @@ func readSlackJSON(path string) (slackJSON, error) {
 	}
 	_ = json.Unmarshal(data, &s)
 	if s.Sessions == nil {
-		s.Sessions = map[string]string{}
+		s.Sessions = map[string]map[string]string{}
 	}
 	return s, nil
 }
@@ -115,13 +121,17 @@ func SaveCredentials(c *Credentials) error {
 	return writeSlackJSON(path, s)
 }
 
-// ── Store (session mapping) — replaces store.go's separate file logic ────
+// ── Store (session mapping) ───────────────────────────────────────────────
 
-// store persists channel→session mappings in the shared ~/.harness/slack.json,
-// updating only the sessions field and leaving credentials intact.
+// store persists channel→session mappings in the shared ~/.harness/slack.json
+// under the current working directory key, updating only the sessions field
+// and leaving credentials intact.
+//
+// Lookup structure: sessions[cwd][channelID] = sessionID
 type store struct {
 	mu   sync.Mutex
 	path string
+	cwd  string    // current working directory — scopes all lookups
 	data slackJSON
 }
 
@@ -133,14 +143,15 @@ func openStore(path string) (*store, error) {
 			return nil, err
 		}
 	}
-	s := &store{path: path}
+	cwd, _ := os.Getwd()
+	s := &store{path: path, cwd: cwd}
 	var err error
 	s.data, err = readSlackJSON(path)
 	if err != nil {
 		return nil, err
 	}
 	if s.data.Sessions == nil {
-		s.data.Sessions = map[string]string{}
+		s.data.Sessions = map[string]map[string]string{}
 	}
 	return s, nil
 }
@@ -148,35 +159,53 @@ func openStore(path string) (*store, error) {
 func (s *store) sessionFor(channelID string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	id, ok := s.data.Sessions[channelID]
+	cwdMap, ok := s.data.Sessions[s.cwd]
+	if !ok {
+		return "", false
+	}
+	id, ok := cwdMap[channelID]
 	return id, ok && id != ""
 }
 
 func (s *store) bind(channelID, sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.data.Sessions[channelID] = sessionID
+	if s.data.Sessions[s.cwd] == nil {
+		s.data.Sessions[s.cwd] = map[string]string{}
+	}
+	s.data.Sessions[s.cwd][channelID] = sessionID
 	return s.save()
 }
 
 func (s *store) unbind(channelID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.data.Sessions, channelID)
+	if cwdMap, ok := s.data.Sessions[s.cwd]; ok {
+		delete(cwdMap, channelID)
+		if len(cwdMap) == 0 {
+			delete(s.data.Sessions, s.cwd)
+		}
+	}
 	return s.save()
 }
 
 // save re-reads the file to pick up any credential changes made since open,
 // then merges current sessions and writes back — so neither side loses data.
 func (s *store) save() error {
-	// Re-read to get the latest credentials (may have changed since openStore).
 	current, err := readSlackJSON(s.path)
 	if err != nil {
-		// If the file disappeared, use what we have in memory.
 		current = s.data
 	}
-	// Preserve credentials from disk; apply our in-memory sessions.
-	current.Sessions = s.data.Sessions
+	// Preserve credentials from disk; merge our in-memory sessions into it.
+	// We only own the s.cwd bucket — other CWDs on disk are untouched.
+	if current.Sessions == nil {
+		current.Sessions = map[string]map[string]string{}
+	}
+	if s.data.Sessions[s.cwd] != nil {
+		current.Sessions[s.cwd] = s.data.Sessions[s.cwd]
+	} else {
+		delete(current.Sessions, s.cwd)
+	}
 	s.data = current
 	return writeSlackJSON(s.path, current)
 }

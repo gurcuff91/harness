@@ -234,8 +234,13 @@ func (c *Client) GetSchedules(owner string) ([]Schedule, error) {
 // ── Sessions ─────────────────────────────────────────────────────────────
 
 // CreateSession opens a new session and returns it.
-func (c *Client) CreateSession(model, cwd string) (*Session, error) {
-	return ptr(decode[Session](c, "POST", "/api/sessions", map[string]string{"model": model, "cwd": cwd}))
+// name is optional — pass "" for the default "New Session <date>" naming.
+func (c *Client) CreateSession(model, cwd, name string) (*Session, error) {
+	body := map[string]string{"model": model, "cwd": cwd}
+	if name != "" {
+		body["name"] = name
+	}
+	return ptr(decode[Session](c, "POST", "/api/sessions", body))
 }
 
 // ListSessions lists sessions, optionally filtered by cwd ("" = all cwds).

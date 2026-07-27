@@ -73,7 +73,7 @@ func Run(ctx context.Context, a *agent.Agent, prompt string, opts Opts) error {
 
 	// Create session
 	cwd, _ := os.Getwd()
-	sess, err := c.CreateSession(model, cwd)
+	sess, err := c.CreateSession(model, cwd, "")
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}

@@ -95,7 +95,7 @@ func (t *TUI) autoConnect(ctx context.Context) {
 	t.addRaw(t.welcomeBanner())
 
 	// Create new session.
-	sess, err := t.client.CreateSession(t.model, cwd)
+	sess, err := t.client.CreateSession(t.model, cwd, "")
 	if err != nil {
 		t.showWarn(fmt.Sprintf("Failed to create session: %s", err.Error()))
 		return
