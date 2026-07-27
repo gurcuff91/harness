@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.55] - 2026-07-27
+
+### Fix — Slack @mention delegated to agent + 5 inviolable communication rules
+- **`@mention` removed from transport** (`internal/transport/slack/pump.go`,
+  `slack.go`) — the mechanical `<@USER_ID>` prepend on every channel reply has
+  been removed. The `lastUser` field is gone from `channelPump`. Doing it in
+  code was fragile in multi-person channels (wrong person gets pinged, ordering
+  issues) and removed contextual judgment from the agent.
+- **Agent owns the @mention** (`internal/transport/slack/directive.go`) — the
+  directive now explicitly instructs the agent: it already receives the sender's
+  user ID via `<slack:user>U...</slack:user>` on every message; in channel
+  replies it must open with `<@USER_ID>` itself. In DMs it must not self-mention.
+- **5 inviolable Slack communication rules** added to the directive:
+  1. **Lethal brevity** — 2–3 sentences max unless the deliverable is inherently long.
+  2. **Never narrate the process** — deliver results only, never list tools/steps taken.
+  3. **Never leak credentials** — no API keys, tokens, or secrets, not even truncated.
+  4. **Mirror the language** — Spanish if user writes Spanish, English if English.
+  5. **Result first** — lead with the finding; zero preamble.
+
 ## [0.73.54] - 2026-07-27
 
 ### Fix — Guaranteed turn_end + malformed tool args + IMAGE_PROCESS_FAILED
