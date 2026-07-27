@@ -39,11 +39,13 @@ func tablesToCodeBlocks(md string) string {
 	return strings.Join(out, "\n")
 }
 
-// isTableRow reports whether a line looks like a table row (has a pipe and some
-// non-pipe content).
+// isTableRow reports whether a line looks like a table row. It requires at
+// least one pipe character. Empty-cell headers (e.g. "| | |") are valid rows
+// even though strings.Trim leaves nothing after stripping pipes and spaces —
+// so we only require the pipe, not non-empty cell content.
 func isTableRow(line string) bool {
 	t := strings.TrimSpace(line)
-	return strings.Contains(t, "|") && strings.Trim(t, "|-: ") != ""
+	return strings.Contains(t, "|")
 }
 
 // isDelimiterRow reports whether a line is a table delimiter (|---|:--:|), i.e.

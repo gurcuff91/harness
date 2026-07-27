@@ -161,6 +161,10 @@ func (t *Transport) pollLoop(ctx context.Context) error {
 		}
 		for _, u := range updates {
 			offset = u.UpdateID + 1
+			if u.CallbackQuery != nil {
+				t.handleCallbackQuery(ctx, u.CallbackQuery)
+				continue
+			}
 			// Skip updates with nothing we handle.
 			if u.Message == nil || (u.Message.Text == "" &&
 				len(u.Message.Photo) == 0 &&
@@ -209,6 +213,83 @@ func (t *Transport) handleMessage(ctx context.Context, msg *Message) {
 	// stays alive for the whole turn, not just Telegram's ~5s window.
 	if _, err := t.api.SendPrompt(pump.sessionID, text); err != nil {
 		t.replyError(ctx, chatID, err)
+	}
+}
+
+// handleCallbackQuery processes an inline keyboard button tap. The callback
+// data encodes the command and value as "command:value" (e.g. "thinking:high").
+func (t *Transport) handleCallbackQuery(ctx context.Context, cb *CallbackQuery) {
+	if cb.Message == nil {
+		_ = t.bot.AnswerCallbackQuery(ctx, cb.ID, "")
+		return
+	}
+	chatID := cb.Message.Chat.ID
+	logx.Info("telegram", "callback", "chat", chatID, "data", cb.Data)
+
+	p := t.pump(chatID)
+	if p == nil {
+		_ = t.bot.AnswerCallbackQuery(ctx, cb.ID, "No active session.")
+		return
+	}
+
+	// Verify this callback matches the pending keyboard for this chat.
+	p.pendingKbMu.Lock()
+	pending := p.pendingKb
+	p.pendingKb = nil
+	p.pendingKbMu.Unlock()
+
+	if pending == nil {
+		_ = t.bot.AnswerCallbackQuery(ctx, cb.ID, "")
+		return
+	}
+
+	// Parse "command:value".
+	idx := strings.Index(cb.Data, ":")
+	if idx < 0 {
+		_ = t.bot.AnswerCallbackQuery(ctx, cb.ID, "Invalid selection.")
+		return
+	}
+	command := cb.Data[:idx]
+	value := cb.Data[idx+1:]
+
+	switch command {
+	case "noop":
+		// Provider header button — just dismiss the spinner.
+		_ = t.bot.AnswerCallbackQuery(ctx, cb.ID, "")
+		// Restore pending so the user can still pick a model.
+		p.pendingKbMu.Lock()
+		p.pendingKb = pending
+		p.pendingKbMu.Unlock()
+
+	case "thinking":
+		_, err := t.api.ExecCommand(p.sessionID, "thinking", map[string]any{"level": value})
+		if err != nil {
+			_ = t.bot.AnswerCallbackQuery(ctx, cb.ID, "Failed: "+err.Error())
+			return
+		}
+		_ = t.bot.AnswerCallbackQuery(ctx, cb.ID, "✓ thinking → "+value)
+		_ = t.bot.EditMessageText(ctx, chatID, pending.messageID,
+			fmt.Sprintf("🧠 *Thinking level* set to: `%s`", value))
+		logx.Info("telegram", "thinking_set", "chat", chatID, "level", value)
+
+	case "model":
+		_, err := t.api.ExecCommand(p.sessionID, "model", map[string]any{"model": value})
+		if err != nil {
+			_ = t.bot.AnswerCallbackQuery(ctx, cb.ID, "Failed: "+err.Error())
+			return
+		}
+		// Short label for the confirmation.
+		short := value
+		if idx := strings.LastIndex(value, "/"); idx >= 0 {
+			short = value[idx+1:]
+		}
+		_ = t.bot.AnswerCallbackQuery(ctx, cb.ID, "✓ model → "+short)
+		_ = t.bot.EditMessageText(ctx, chatID, pending.messageID,
+			fmt.Sprintf("🤖 *Model* set to: `%s`", short))
+		logx.Info("telegram", "model_set", "chat", chatID, "model", value)
+
+	default:
+		_ = t.bot.AnswerCallbackQuery(ctx, cb.ID, "Unknown command.")
 	}
 }
 

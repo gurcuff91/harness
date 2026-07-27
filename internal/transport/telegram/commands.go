@@ -6,6 +6,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/gurcuff91/harness/internal/client"
 	"github.com/gurcuff91/harness/internal/logx"
 )
 
@@ -17,6 +18,8 @@ var botCommands = []BotCommand{
 	{Command: "compact", Description: "🗜 Summarize & compact the conversation"},
 	{Command: "info", Description: "📊 Session & model info"},
 	{Command: "context", Description: "📐 Context window breakdown"},
+	{Command: "thinking", Description: "🧠 Change thinking level"},
+	{Command: "model", Description: "🤖 Switch model"},
 }
 
 // handleCommand routes a /command to its handler. Unknown commands get a short
@@ -40,8 +43,12 @@ func (t *Transport) handleCommand(ctx context.Context, chatID int64, text string
 		t.cmdInfo(ctx, chatID)
 	case "context":
 		t.cmdContext(ctx, chatID)
+	case "thinking":
+		t.cmdThinking(ctx, chatID)
+	case "model":
+		t.cmdModel(ctx, chatID)
 	default:
-		t.reply(ctx, chatID, "Unknown command. Try /new, /stop, /compact or /info.")
+		t.reply(ctx, chatID, "Unknown command. Try /new, /stop, /compact, /info, /context, /thinking or /model.")
 	}
 }
 
@@ -308,4 +315,140 @@ func compactNum(n int64) string {
 // trimDotZero drops a trailing ".0" so 200.0 -> 200 while 1.3 stays 1.3.
 func trimDotZero(s string) string {
 	return strings.TrimSuffix(s, ".0")
+}
+
+// cmdModel sends an inline keyboard grouped by provider so the user can pick
+// a model. Each button shows the short model name (after the provider/);
+// callback_data carries the full "provider/model" string.
+func (t *Transport) cmdModel(ctx context.Context, chatID int64) {
+	p, err := t.pumpFor(ctx, chatID)
+	if err != nil {
+		t.replyError(ctx, chatID, err)
+		return
+	}
+
+	models, err := t.api.ListModels()
+	if err != nil {
+		t.replyError(ctx, chatID, err)
+		return
+	}
+	if len(models) == 0 {
+		t.reply(ctx, chatID, "⚠️ No models available — connect a provider first.")
+		return
+	}
+
+	// Get current model to mark it.
+	current := ""
+	if info, err := t.api.GetSessionInfo(p.sessionID); err == nil {
+		current = info.Session.Model
+	}
+
+	// Group models by provider, preserving insertion order.
+	type providerGroup struct {
+		name   string
+		models []client.Model
+	}
+	var order []string
+	groups := map[string]*providerGroup{}
+	for _, m := range models {
+		if _, ok := groups[m.Provider]; !ok {
+			order = append(order, m.Provider)
+			groups[m.Provider] = &providerGroup{name: m.Provider}
+		}
+		groups[m.Provider].models = append(groups[m.Provider].models, m)
+	}
+
+	// Build keyboard: one header row (disabled label) + model rows of 2 per provider.
+	var rows [][]InlineKeyboardButton
+	for _, provName := range order {
+		g := groups[provName]
+		// Provider header — a non-clickable label row (callback_data = "noop").
+		rows = append(rows, []InlineKeyboardButton{
+			{Text: "── " + provName + " ──", CallbackData: "noop"},
+		})
+		// Model buttons in pairs of 2 per row.
+		for i := 0; i < len(g.models); i += 2 {
+			var row []InlineKeyboardButton
+			for j := i; j < i+2 && j < len(g.models); j++ {
+				m := g.models[j]
+				// Short label: just the part after provider/
+				short := m.Model
+				if idx := strings.LastIndex(m.Model, "/"); idx >= 0 {
+					short = m.Model[idx+1:]
+				}
+				if m.Model == current {
+					short = "✓ " + short
+				}
+				row = append(row, InlineKeyboardButton{
+					Text:         short,
+					CallbackData: "model:" + m.Model,
+				})
+			}
+			rows = append(rows, row)
+		}
+	}
+
+	kb := InlineKeyboardMarkup{InlineKeyboard: rows}
+	currentShort := current
+	if idx := strings.LastIndex(current, "/"); idx >= 0 {
+		currentShort = current[idx+1:]
+	}
+
+	msgID, err := t.bot.SendMessageWithKeyboard(ctx, chatID,
+		fmt.Sprintf("🤖 *Model* — current: `%s`\nPick a model:", currentShort), kb)
+	if err != nil {
+		t.replyError(ctx, chatID, err)
+		return
+	}
+
+	p.pendingKbMu.Lock()
+	p.pendingKb = &pendingKeyboard{messageID: msgID, command: "model"}
+	p.pendingKbMu.Unlock()
+}
+
+// thinkingLevels are the valid thinking levels in display order.
+var thinkingLevels = []string{"off", "low", "medium", "high", "xhigh"}
+
+// cmdThinking sends an inline keyboard so the user can pick a thinking level.
+func (t *Transport) cmdThinking(ctx context.Context, chatID int64) {
+	p, err := t.pumpFor(ctx, chatID)
+	if err != nil {
+		t.replyError(ctx, chatID, err)
+		return
+	}
+
+	// Get current level to show it in the prompt.
+	current := ""
+	if info, err := t.api.GetSessionInfo(p.sessionID); err == nil {
+		current = info.Session.Thinking
+		if current == "" {
+			current = "off"
+		}
+	}
+
+	// Build one row of buttons — one per level, current one marked with ✓.
+	var row []InlineKeyboardButton
+	for _, level := range thinkingLevels {
+		label := level
+		if level == current {
+			label = "✓ " + level
+		}
+		row = append(row, InlineKeyboardButton{
+			Text:         label,
+			CallbackData: "thinking:" + level,
+		})
+	}
+	kb := InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{row}}
+
+	msgID, err := t.bot.SendMessageWithKeyboard(ctx, chatID,
+		fmt.Sprintf("🧠 *Thinking level* — current: `%s`\nPick a new level:", current), kb)
+	if err != nil {
+		t.replyError(ctx, chatID, err)
+		return
+	}
+
+	// Record pending keyboard so the callback handler knows what to do.
+	p.pendingKbMu.Lock()
+	p.pendingKb = &pendingKeyboard{messageID: msgID, command: "thinking"}
+	p.pendingKbMu.Unlock()
 }

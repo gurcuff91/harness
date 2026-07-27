@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.45] - 2026-07-27
+
+### Feature — Telegram `/thinking` and `/model` commands with inline keyboards
+- **`/thinking`** — sends an inline keyboard with the 5 levels (`off`, `low`,
+  `medium`, `high`, `xhigh`), marking the current level with `✓`. Tapping a
+  button calls `ExecCommand("thinking")`, acknowledges with a short notification
+  (`✓ thinking → high`), and replaces the keyboard message with a confirmation
+  (`🧠 Thinking level set to: \`high\``). Keyboard is removed on selection.
+- **`/model`** — sends an inline keyboard grouped by provider, with models in
+  rows of 2. Provider headers are non-clickable separators; the current model
+  is marked with `✓`. Tapping a model calls `ExecCommand("model")`, acknowledges,
+  and replaces the keyboard message (`🤖 Model set to: \`claude-sonnet-5\``).
+  Keyboard is removed on selection.
+- **Inline keyboard infrastructure** (`bot.go`) —
+  - `CallbackQuery` / `InlineKeyboardMarkup` / `InlineKeyboardButton` types
+  - `GetUpdates` now subscribes to `callback_query` in addition to `message`
+  - `SendMessageWithKeyboard` — `sendMessage` with `parse_mode: MarkdownV2` and
+    `reply_markup`; falls back to plain text on parse failure
+  - `EditMessageText` — `editMessageText` with `parse_mode: MarkdownV2` and
+    `reply_markup: {}` to remove the keyboard on confirmation; plain text fallback
+  - `AnswerCallbackQuery` — acknowledges the tap (stops the loading spinner)
+- **`pendingKb`** in `chatPump` — tracks the in-flight keyboard (message ID +
+  command name) so `handleCallbackQuery` knows which command to execute when a
+  button is tapped. Cleared on selection; restored on `noop` (provider header)
+  so the user can still pick a model after tapping a header.
+- **`handleCallbackQuery`** in `telegram.go` — dispatches `command:value`
+  callback data to the correct handler (`thinking`, `model`, `noop`).
+- **Directive fix** — `SendMessageWithKeyboard` and `EditMessageText` both send
+  `parse_mode: MarkdownV2` so `*bold*` and `` `code` `` render correctly instead
+  of showing raw markers.
+
 ## [0.73.44] - 2026-07-27
 
 ### Feature — Slack transport: render, file upload, file attach, typing, observability

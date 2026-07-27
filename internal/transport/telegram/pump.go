@@ -26,6 +26,17 @@ type chatPump struct {
 	// compactExpected is set by /compact so the drain knows the next compact_start
 	// was user-requested (already announced) vs an automatic one to announce.
 	compactExpected atomic.Bool
+
+	// pendingKb tracks an in-flight inline keyboard waiting for a callback.
+	// Set when /thinking or /model sends a keyboard; cleared when answered.
+	pendingKbMu    sync.Mutex
+	pendingKb      *pendingKeyboard
+}
+
+// pendingKeyboard records an in-flight inline keyboard menu.
+type pendingKeyboard struct {
+	messageID int    // Telegram message ID of the keyboard message (to edit on selection)
+	command   string // "thinking" or "model"
 }
 
 // startTyping keeps a "typing…" indicator alive in the chat until stopTyping is

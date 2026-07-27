@@ -44,8 +44,28 @@ func NewBot(token string) *Bot {
 
 // Update is one incoming event from getUpdates.
 type Update struct {
-	UpdateID int      `json:"update_id"`
-	Message  *Message `json:"message"`
+	UpdateID      int            `json:"update_id"`
+	Message       *Message       `json:"message"`
+	CallbackQuery *CallbackQuery `json:"callback_query"`
+}
+
+// CallbackQuery is fired when a user taps an inline keyboard button.
+type CallbackQuery struct {
+	ID      string   `json:"id"`      // must be answered via answerCallbackQuery
+	From    User     `json:"from"`
+	Message *Message `json:"message"` // the message the keyboard was attached to
+	Data    string   `json:"data"`    // the callback_data set on the button
+}
+
+// InlineKeyboardMarkup is a reply_markup with inline buttons.
+type InlineKeyboardMarkup struct {
+	InlineKeyboard [][]InlineKeyboardButton `json:"inline_keyboard"`
+}
+
+// InlineKeyboardButton is one button in an inline keyboard row.
+type InlineKeyboardButton struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data"`
 }
 
 // Message is a chat message.
@@ -126,7 +146,7 @@ func (b *Bot) GetUpdates(ctx context.Context, offset, timeout int) ([]Update, er
 	body := map[string]any{
 		"offset":          offset,
 		"timeout":         timeout,
-		"allowed_updates": []string{"message"},
+		"allowed_updates": []string{"message", "callback_query"},
 	}
 	raw, err := b.call(ctx, "getUpdates", body)
 	if err != nil {
@@ -151,6 +171,65 @@ func (b *Bot) SendMessage(ctx context.Context, chatID int64, text, parseMode str
 		body["parse_mode"] = parseMode
 	}
 	_, err := b.call(ctx, "sendMessage", body)
+	return err
+}
+
+// SendMessageWithKeyboard posts a message with an inline keyboard attached,
+// rendered as MarkdownV2. Returns the message ID so the caller can edit it
+// later (e.g. to replace the keyboard with the confirmed selection).
+func (b *Bot) SendMessageWithKeyboard(ctx context.Context, chatID int64, text string, kb InlineKeyboardMarkup) (int, error) {
+	body := map[string]any{
+		"chat_id":      chatID,
+		"text":         text,
+		"parse_mode":   "MarkdownV2",
+		"reply_markup": kb,
+	}
+	raw, err := b.call(ctx, "sendMessage", body)
+	if err != nil {
+		// Fall back to plain text if MarkdownV2 parse fails.
+		delete(body, "parse_mode")
+		raw, err = b.call(ctx, "sendMessage", body)
+		if err != nil {
+			return 0, err
+		}
+	}
+	var msg Message
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return 0, err
+	}
+	return msg.MessageID, nil
+}
+
+// EditMessageText replaces the text of an existing message, rendered as
+// MarkdownV2, and removes any attached inline keyboard. Used to confirm a
+// selection after the user taps a keyboard button.
+func (b *Bot) EditMessageText(ctx context.Context, chatID int64, messageID int, text string) error {
+	body := map[string]any{
+		"chat_id":      chatID,
+		"message_id":   messageID,
+		"text":         text,
+		"parse_mode":   "MarkdownV2",
+		"reply_markup": map[string]any{}, // empty → removes the inline keyboard
+	}
+	_, err := b.call(ctx, "editMessageText", body)
+	if err != nil {
+		// Fall back to plain text, still removing the keyboard.
+		body["parse_mode"] = ""
+		delete(body, "parse_mode")
+		_, err = b.call(ctx, "editMessageText", body)
+	}
+	return err
+}
+
+// AnswerCallbackQuery acknowledges a callback query — required by Telegram to
+// stop the "loading" animation on the button the user tapped. text is shown
+// as a short notification (empty = no notification).
+func (b *Bot) AnswerCallbackQuery(ctx context.Context, callbackID, text string) error {
+	body := map[string]any{"callback_query_id": callbackID}
+	if text != "" {
+		body["text"] = text
+	}
+	_, err := b.call(ctx, "answerCallbackQuery", body)
 	return err
 }
 
