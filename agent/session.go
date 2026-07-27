@@ -383,7 +383,7 @@ func (s *Session) drainFollowUps() {
 	}
 }
 
-func (s *Session) promptSync(ctx context.Context, text string, images []types.ImageData) (string, error) {
+func (s *Session) promptSync(ctx context.Context, text string, images []types.ImageData) (retText string, retErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -401,12 +401,23 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 
 	s.emit(types.Event{Type: types.EventTurnStart})
 
+	// Guarantee turn_end is always emitted — even on unexpected early returns
+	// (store errors, panics recovered by the runtime). Without this, transports
+	// (TUI spinner, Telegram typing indicator, Slack typing) never stop.
+	turnEnded := false
+	emitTurnEnd := func() {
+		if !turnEnded {
+			turnEnded = true
+			s.emit(types.Event{Type: types.EventTurnEnd})
+		}
+	}
+	defer emitTurnEnd()
+
 	// Reserve one iteration for the summary call if max iterations is reached mid-task.
 	for i := range s.maxIterations - 1 {
 		if ctx.Err() != nil {
 			s.emit(types.Event{Type: types.EventStop})
-			s.emit(types.Event{Type: types.EventTurnEnd})
-			return "", nil
+			return "", nil // turn_end via defer
 		}
 
 		history := s.store.Messages()
@@ -424,32 +435,42 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 
 		resp, toolResults, err := s.runStream(ctx, req)
 		if ctx.Err() != nil {
-			// Cancelled by user Stop() — close the loop, emit stop, exit cleanly.
+			// Cancelled by user Stop() — close the loop, emit stop.
+			// turn_end is handled by defer emitTurnEnd().
 			s.emit(types.Event{Type: types.EventStop})
 			s.emit(types.Event{Type: types.EventLoopEnd, Loop: i})
-			s.emit(types.Event{Type: types.EventTurnEnd})
 			return "", nil
 		}
 		if err != nil {
+			// Provider/stream error — emit error + loop_end.
+			// turn_end is handled by defer emitTurnEnd().
 			s.emit(errorEvent(err))
-			s.emit(types.Event{Type: types.EventLoopEnd})
-			s.emit(types.Event{Type: types.EventTurnEnd})
+			s.emit(types.Event{Type: types.EventLoopEnd, Loop: i})
 			return "", err
 		}
 
 		if err := s.store.AddMessage(resp.Message); err != nil {
-			return "", fmt.Errorf("store assistant: %w", err)
+			// Store error — emit error + loop_end so clients close cleanly.
+			// turn_end is handled by defer emitTurnEnd().
+			storeErr := fmt.Errorf("store assistant: %w", err)
+			s.emit(errorEvent(storeErr))
+			s.emit(types.Event{Type: types.EventLoopEnd, Loop: i})
+			return "", storeErr
 		}
 
 		if len(resp.ToolCalls) == 0 {
+			// No tool calls — turn is complete. turn_end via defer.
 			s.emit(types.Event{Type: types.EventLoopEnd, Loop: i})
-			s.emit(types.Event{Type: types.EventTurnEnd})
 			return resp.Text, nil
 		}
 
 		if len(toolResults) > 0 {
 			if err := s.store.AddMessage(types.NewToolResultMessage(toolResults)); err != nil {
-				return "", fmt.Errorf("store tool results: %w", err)
+				// Store error mid-turn — emit error + loop_end. turn_end via defer.
+				storeErr := fmt.Errorf("store tool results: %w", err)
+				s.emit(errorEvent(storeErr))
+				s.emit(types.Event{Type: types.EventLoopEnd, Loop: i})
+				return "", storeErr
 			}
 		}
 
@@ -474,7 +495,7 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 	s.emit(types.Event{Type: types.EventLoopEnd})
 	s.emit(types.Event{Type: types.EventMaxIterationsReached, MaxIterations: s.maxIterations})
 	summary, err := s.requestProgressUpdate(ctx)
-	s.emit(types.Event{Type: types.EventTurnEnd})
+	// turn_end is handled by defer emitTurnEnd() on the way out.
 	return summary, err
 }
 

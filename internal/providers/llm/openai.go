@@ -359,6 +359,17 @@ func parseOpenAIStream(ctx context.Context, body io.Reader, cb types.StreamCallb
 		if len(input) == 0 {
 			input = json.RawMessage("{}")
 		}
+		// Guard against malformed argument JSON from providers (e.g. minimax-m3
+		// sometimes streams concatenated JSON fragments). If the accumulated
+		// argsBuf is not valid JSON, wrap it in a string so the store can still
+		// marshal the Message without failing.
+		if !json.Valid(input) {
+			if safe, err := json.Marshal(ts.argsBuf); err == nil {
+				input = json.RawMessage(`{"_raw":` + string(safe) + `}`)
+			} else {
+				input = json.RawMessage("{}")
+			}
+		}
 		resp.ToolCalls = append(resp.ToolCalls, types.ToolCall{
 			ID: ts.id, Name: ts.name, Input: input,
 		})

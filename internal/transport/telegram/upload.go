@@ -2,10 +2,12 @@ package telegram
 
 import (
 	"context"
-	"github.com/gurcuff91/harness/internal/logx"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/gurcuff91/harness/internal/logx"
 )
 
 // uploadTagRe matches a <tel:uploadFile>path</tel:uploadFile> action tag. The
@@ -145,7 +147,18 @@ func (t *Transport) sendUploads(ctx context.Context, chatID int64, paths []strin
 		var err error
 		switch {
 		case photoExts[ext]:
-			err = t.bot.SendPhotoFile(ctx, chatID, p)
+			// Verify the file is actually an image before sending as photo.
+			// The agent may have downloaded an HTML error page (paywall, redirect,
+			// hotlink protection) and saved it with a .jpg extension — Telegram
+			// would return IMAGE_PROCESS_FAILED. Fall back to sendDocument so the
+			// user still receives something and can see what went wrong.
+			if isRealImage(p) {
+				err = t.bot.SendPhotoFile(ctx, chatID, p)
+			} else {
+				logx.Info("telegram", "upload_fallback", "chat", chatID,
+					"file", filepath.Base(p), "reason", "file is not a valid image (likely HTML)")
+				err = t.bot.SendDocumentFile(ctx, chatID, p)
+			}
 		case animExts[ext]:
 			err = t.bot.SendAnimationFile(ctx, chatID, p)
 		default:
@@ -157,4 +170,37 @@ func (t *Transport) sendUploads(ctx context.Context, chatID int64, paths []strin
 			logx.Info("telegram", "upload", "chat", chatID, "file", filepath.Base(p))
 		}
 	}
+}
+
+// isRealImage checks the file's magic bytes to confirm it's actually an image
+// (JPEG, PNG, GIF, WebP) rather than an HTML page saved with an image extension.
+func isRealImage(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	header := make([]byte, 12)
+	n, err := f.Read(header)
+	if err != nil || n < 4 {
+		return false
+	}
+	// JPEG: FF D8 FF
+	if header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF {
+		return true
+	}
+	// PNG: 89 50 4E 47
+	if header[0] == 0x89 && header[1] == 0x50 && header[2] == 0x4E && header[3] == 0x47 {
+		return true
+	}
+	// GIF: 47 49 46 38
+	if header[0] == 0x47 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x38 {
+		return true
+	}
+	// WebP: 52 49 46 46 ... 57 45 42 50
+	if n >= 12 && header[0] == 0x52 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x46 &&
+		header[8] == 0x57 && header[9] == 0x45 && header[10] == 0x42 && header[11] == 0x50 {
+		return true
+	}
+	return false
 }

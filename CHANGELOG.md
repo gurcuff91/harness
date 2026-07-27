@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.54] - 2026-07-27
+
+### Fix — Guaranteed turn_end + malformed tool args + IMAGE_PROCESS_FAILED
+- **`promptSync` guaranteed `turn_end`** (`agent/session.go`) — a `defer`
+  ensures `EventTurnEnd` is always emitted regardless of how `promptSync`
+  exits: normal completion, provider error, store error, context cancellation,
+  or any future panic. Previously, paths that returned early (e.g.
+  `store.AddMessage` failure) never emitted `turn_end`, leaving transports
+  (Telegram typing indicator, Slack typing, TUI spinner) permanently stuck.
+  The `turnEnded` flag makes the defer idempotent — it fires exactly once even
+  if a code path already emitted `turn_end` explicitly. Store errors now also
+  emit `EventError` + `EventLoopEnd` before returning so clients receive the
+  full error lifecycle.
+- **Malformed tool argument JSON** (`internal/providers/llm/openai.go`) —
+  some providers (e.g. minimax-m3 via ollama-cloud) occasionally stream tool
+  call `arguments` as concatenated JSON fragments that fail `json.Valid`. The
+  parser now checks validity before storing; invalid args are wrapped as
+  `{"_raw": "..."}` so `store.AddMessage` never fails with
+  `invalid character '{' after top-level value`. The tool may fail at
+  execution time (args are wrong), but the error is surfaced cleanly as a
+  `tool_result` with `is_error: true` rather than crashing the store.
+- **`IMAGE_PROCESS_FAILED` on Telegram** (`internal/transport/telegram/upload.go`)
+  — the agent sometimes downloads HTML pages (paywall, hotlink protection,
+  Cloudflare challenge) and saves them with a `.jpg` extension. Telegram then
+  rejects `sendPhoto` with `IMAGE_PROCESS_FAILED`. New `isRealImage()` checks
+  the file's magic bytes (JPEG `FF D8 FF`, PNG `89 50 4E 47`, GIF `47 49 46
+  38`, WebP `52 49 46 46…57 45 42 50`) before calling `sendPhoto`; files that
+  fail the check fall back to `sendDocument` so the user still receives
+  something and the log records `upload_fallback` with the reason.
+
 ## [0.73.53] - 2026-07-27
 
 ### Feature — Telegram: session scoped by CWD + named "Telegram <date>"
