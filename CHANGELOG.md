@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.50] - 2026-07-27
+
+### Fix — JSONL corruption causing `compact_offset` drift and Anthropic 400 errors
+- **Root cause**: `appendToJSONL` could write two JSON objects on the same line
+  (without a separating `\n`) if the file was previously left without a trailing
+  newline — e.g. when two harness instances had the file open simultaneously, or
+  after a crash mid-write. This shifted every subsequent line number by +1,
+  making `compact_offset` (which counts *messages*, not *lines*) point to the
+  wrong position on resume. The working set then started at an `assistant`
+  message containing a `tool_use`, causing the next `user` message (the real
+  compaction checkpoint) to appear as an orphaned `tool_result` from Anthropic's
+  perspective → HTTP 400 `unexpected tool_use_id found in tool_result blocks`.
+- **Prevention** (`agent/store/file.go` `appendToJSONL`) — before writing each
+  new message, the function now seeks to the last byte of the file and emits a
+  missing `\n` if needed. This auto-repairs any pre-existing missing newline
+  before the new entry, so concatenation can never occur.
+- **Session repair** — session `6300e66d` was repaired manually: the JSONL was
+  rewritten cleanly (one object per line) and `compact_offset` was corrected
+  from `1092` to `1094` (the actual `IS_COMPACTION` message index).
+
 ## [0.73.49] - 2026-07-27
 
 ### Fix — Slack session scoped by CWD + named "Slack <date>"

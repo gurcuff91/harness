@@ -206,6 +206,26 @@ func appendToJSONL(path string, msg types.Message) error {
 		return err
 	}
 	defer f.Close()
+
+	// Guard against a file that doesn't end with '\n' — if the previous write
+	// was interrupted (crash, concurrent open, etc.) the next entry would be
+	// concatenated onto the same line, producing two JSON objects on one line
+	// which shifts all subsequent line-number offsets by one and corrupts the
+	// compact_offset stored in metadata.
+	//
+	// Seek to the end and check the last byte; emit a '\n' if it's missing.
+	// This is a no-op on a healthy file (already ends with '\n').
+	if info, err := f.Stat(); err == nil && info.Size() > 0 {
+		if _, err := f.Seek(-1, 2); err == nil {
+			last := make([]byte, 1)
+			if _, err := f.Read(last); err == nil && last[0] != '\n' {
+				_, _ = f.Write([]byte{'\n'}) // repair missing newline
+			}
+			// Seek back to the end for the actual write.
+			_, _ = f.Seek(0, 2)
+		}
+	}
+
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
