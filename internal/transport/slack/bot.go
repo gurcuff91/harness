@@ -154,6 +154,146 @@ func (b *Bot) DialRTM(ctx context.Context, wsURL string) (*websocket.Conn, error
 	return conn, nil
 }
 
+// ── Channels, users, DM opening ──────────────────────────────────────────
+
+// SlackChannel is one channel entry from conversations.list.
+type SlackChannel struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	IsPrivate  bool   `json:"is_private"`
+	NumMembers int    `json:"num_members"`
+}
+
+// SlackUser is one user entry from users.list.
+type SlackUser struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"` // @handle
+	Deleted bool   `json:"deleted"`
+	IsBot   bool   `json:"is_bot"`
+	Profile struct {
+		RealName    string `json:"real_name"`
+		DisplayName string `json:"display_name"`
+	} `json:"profile"`
+}
+
+// ListChannels returns all non-archived public+private channels the user can see.
+// Paginates automatically up to limit total channels (0 = 1000 max).
+func (b *Bot) ListChannels(ctx context.Context, limit int) ([]SlackChannel, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	var all []SlackChannel
+	cursor := ""
+	for {
+		params := map[string]string{
+			"exclude_archived": "true",
+			"types":            "public_channel,private_channel",
+			"limit":            "200",
+		}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		raw, err := b.apiCall(ctx, "conversations.list", params)
+		if err != nil {
+			return nil, fmt.Errorf("slack conversations.list: %w", err)
+		}
+		var resp struct {
+			OK               bool           `json:"ok"`
+			Error            string         `json:"error,omitempty"`
+			Channels         []SlackChannel `json:"channels"`
+			ResponseMetadata struct {
+				NextCursor string `json:"next_cursor"`
+			} `json:"response_metadata"`
+		}
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			return nil, fmt.Errorf("slack conversations.list: decode: %w", err)
+		}
+		if !resp.OK {
+			return nil, fmt.Errorf("slack conversations.list: %s", resp.Error)
+		}
+		all = append(all, resp.Channels...)
+		if resp.ResponseMetadata.NextCursor == "" || len(all) >= limit {
+			break
+		}
+		cursor = resp.ResponseMetadata.NextCursor
+	}
+	if len(all) > limit {
+		all = all[:limit]
+	}
+	return all, nil
+}
+
+// ListUsers returns all non-bot, non-deleted users in the workspace.
+// Paginates automatically up to limit total users (0 = 1000 max).
+func (b *Bot) ListUsers(ctx context.Context, limit int) ([]SlackUser, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	var all []SlackUser
+	cursor := ""
+	for {
+		params := map[string]string{"limit": "200"}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		raw, err := b.apiCall(ctx, "users.list", params)
+		if err != nil {
+			return nil, fmt.Errorf("slack users.list: %w", err)
+		}
+		var resp struct {
+			OK               bool        `json:"ok"`
+			Error            string      `json:"error,omitempty"`
+			Members          []SlackUser `json:"members"`
+			ResponseMetadata struct {
+				NextCursor string `json:"next_cursor"`
+			} `json:"response_metadata"`
+		}
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			return nil, fmt.Errorf("slack users.list: decode: %w", err)
+		}
+		if !resp.OK {
+			return nil, fmt.Errorf("slack users.list: %s", resp.Error)
+		}
+		for _, u := range resp.Members {
+			if !u.Deleted && !u.IsBot {
+				all = append(all, u)
+			}
+		}
+		if resp.ResponseMetadata.NextCursor == "" || len(all) >= limit {
+			break
+		}
+		cursor = resp.ResponseMetadata.NextCursor
+	}
+	if len(all) > limit {
+		all = all[:limit]
+	}
+	return all, nil
+}
+
+// OpenDM opens a direct message channel with a user and returns the DM channel
+// ID. Required before posting to a user ID — Slack DMs are channels with D…
+// IDs obtained via conversations.open.
+func (b *Bot) OpenDM(ctx context.Context, userID string) (string, error) {
+	raw, err := b.apiCall(ctx, "conversations.open", map[string]string{"users": userID})
+	if err != nil {
+		return "", fmt.Errorf("slack conversations.open: %w", err)
+	}
+	var resp struct {
+		OK      bool   `json:"ok"`
+		Error   string `json:"error,omitempty"`
+		Channel struct {
+			ID string `json:"id"`
+		} `json:"channel"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return "", fmt.Errorf("slack conversations.open: decode: %w", err)
+	}
+	if !resp.OK {
+		return "", fmt.Errorf("slack conversations.open: %s", resp.Error)
+	}
+	return resp.Channel.ID, nil
+}
+
 // ── File upload (3-step API) ──────────────────────────────────────────────
 
 // uploadURLResponse is the response from files.getUploadURLExternal.

@@ -29,8 +29,8 @@ type chatPump struct {
 
 	// pendingKb tracks an in-flight inline keyboard waiting for a callback.
 	// Set when /thinking or /model sends a keyboard; cleared when answered.
-	pendingKbMu    sync.Mutex
-	pendingKb      *pendingKeyboard
+	pendingKbMu sync.Mutex
+	pendingKb   *pendingKeyboard
 }
 
 // pendingKeyboard records an in-flight inline keyboard menu.

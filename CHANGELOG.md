@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.47] - 2026-07-27
+
+### Feature — Slack proactive messaging tools (SlackPost, SlackListChannels, SlackListUsers)
+- **`SlackListChannels`** — calls `conversations.list` (paginated) and returns
+  all channels the user can see with their IDs, privacy flag and member count.
+  The agent uses this to resolve `#general` → `C024BE91L` before posting.
+- **`SlackListUsers`** — calls `users.list` (paginated), filters out bots and
+  deleted accounts, and returns ID, handle and display name for every active
+  user. The agent uses this to resolve a person's name to their user ID for
+  `<@mention>` or sending a direct message.
+- **`SlackPost`** — posts text (and optionally files) to any target:
+  - Channel ID (`C…`) → `chat.postMessage` directly.
+  - Channel name (`#general`) → resolves via `SlackListChannels` first.
+  - User ID (`U…`) → opens DM with `conversations.open` to get a `D…` channel,
+    then posts. Files use the existing 3-step upload API
+    (`getUploadURLExternal` → PUT → `completeUploadExternal`).
+- **`agent.RegisterTool`** — new public method on `*agent.Agent` that adds a
+  tool to the agent's registry after construction. Allows transports to inject
+  transport-specific tools without changing `AgentOptions` or `New()`. Used by
+  the Slack transport to inject the three tools after credentials are verified
+  and the `Bot` instance is available.
+- **Directive updated** — new `## Proactive messaging` section documents the
+  three tools and gives the agent an example of how to combine
+  `SlackListUsers` + `SlackPost` to notify someone in a channel.
+
 ## [0.73.46] - 2026-07-27
 
 ### Feature — `harness slack login` + channel @mentions + slack.json unification

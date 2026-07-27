@@ -264,6 +264,13 @@ func (a *Agent) Options() AgentOptions {
 	return a.opts
 }
 
+// RegisterTool adds a tool to the agent's registry so all future sessions
+// created by this agent include it. Must be called before NewSession/ResumeSession.
+// Idempotent: re-registering the same name replaces the previous entry.
+func (a *Agent) RegisterTool(t tools.Tool) {
+	a.toolReg.Register(t)
+}
+
 // MCPTools returns the agent's MCP tools, for sharing with subagents (which set
 // EnableMCPs=false and receive these via AgentOptions.Tools, reusing the
 // parent's live MCP processes). Nil when MCP is disabled.

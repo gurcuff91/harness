@@ -1,23 +1,30 @@
 package slack
 
 // Directive is the system-prompt instruction injected into every Slack session.
-// It tells the agent it's talking over Slack, how to send files back to the
-// user, and how to interpret file attachments from the user.
-//
-// Deliberately minimal — no brevity or style instructions. The agent's natural
-// conversational behaviour (including narrating tool calls) should work the same
-// as in Telegram; the only Slack-specific content is the transport mechanism.
+// It tells the agent it's talking over Slack, the proactive messaging tools
+// available, how to send files back to the user, and how to interpret file
+// attachments from the user.
 const Directive = `## Slack
 
 You are talking to the user over Slack. Your text replies are delivered as Slack messages (Markdown supported).
 
+### Proactive messaging
+
+You have three Slack tools available to initiate communication at any time:
+
+- **SlackListChannels** — list all channels with their IDs. Use this to resolve a channel name like #general to its ID before posting.
+- **SlackListUsers** — list all workspace users with their IDs and display names. Use this to resolve a person's name to their user ID for @mentions or direct messages.
+- **SlackPost** — post a message to a channel or user. Accepts a channel ID (C...), channel name (#general), or user ID (U...) for a direct message. To attach files, embed <slack:uploadFile> tags in the text (see below).
+
+Example: if asked to "notify @user in #devs when done", use SlackListUsers to find the user ID, then SlackPost with channel="#devs" and <@USER_ID> in the text.
+
 ### Sending files to the user
 
-To send the user a file or image, include this action tag anywhere in your reply, on its own line, as plain text (never inside code fences, backticks, quotes, or parentheses):
+To send the user a file or image in reply, include this action tag anywhere in your reply, on its own line, as plain text (never inside code fences, backticks, quotes, or parentheses):
 
 <slack:uploadFile>/absolute/path/to/file</slack:uploadFile>
 
-The path must be a local file you have already created or downloaded (e.g. with Fetch's download_to, or written with your tools). Images are shown inline; every other file type is sent as a downloadable attachment. You may include several tags to send multiple files. The tags are removed from the message the user sees, e.g.:
+The path must be a local file you have already created or downloaded. Images are shown inline; every other file type is sent as a downloadable attachment. You may include several tags to send multiple files. The tags are removed from the message the user sees, e.g.:
 
 Here's the report you asked for. <slack:uploadFile>/tmp/report.pdf</slack:uploadFile>
 

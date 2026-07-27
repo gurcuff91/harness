@@ -52,6 +52,8 @@ type Transport struct {
 
 // Run starts the Slack transport and blocks until ctx is cancelled.
 // Credentials are resolved with precedence: flags > env > ~/.harness/slack.json.
+// Three Slack-specific tools (SlackPost, SlackListChannels, SlackListUsers) are
+// injected into the agent so it can proactively post messages and resolve names.
 func Run(ctx context.Context, a *agent.Agent, opts Options) error {
 	// Fill missing credentials from saved login (~/.harness/slack.json).
 	if opts.Workspace == "" || opts.XoxC == "" || opts.XoxD == "" {
@@ -85,11 +87,12 @@ func Run(ctx context.Context, a *agent.Agent, opts Options) error {
 	go srv.Serve(listener) //nolint:errcheck
 
 	cwd, _ := os.Getwd()
+	bot := NewBot(opts.Workspace, opts.XoxC, opts.XoxD)
 	t := &Transport{
 		opts:  opts,
 		agent: a,
 		api:   client.New(listener.Addr().String()),
-		bot:   NewBot(opts.Workspace, opts.XoxC, opts.XoxD),
+		bot:   bot,
 		store: st,
 		cwd:   cwd,
 		pumps: make(map[string]*channelPump),
@@ -109,6 +112,12 @@ func Run(ctx context.Context, a *agent.Agent, opts Options) error {
 	logx.Info("slack", "connected",
 		"user", me.UserID, "team", me.Team,
 		"default_model", t.model, "scheduler", opts.Scheduler)
+
+	// Inject Slack-specific tools into the agent so the model can proactively
+	// post messages, resolve channels and users by name, etc.
+	for _, tool := range SlackTools(bot, me.UserID) {
+		a.RegisterTool(tool)
+	}
 
 	return t.rtmLoop(ctx)
 }

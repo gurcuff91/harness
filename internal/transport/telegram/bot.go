@@ -51,7 +51,7 @@ type Update struct {
 
 // CallbackQuery is fired when a user taps an inline keyboard button.
 type CallbackQuery struct {
-	ID      string   `json:"id"`      // must be answered via answerCallbackQuery
+	ID      string   `json:"id"` // must be answered via answerCallbackQuery
 	From    User     `json:"from"`
 	Message *Message `json:"message"` // the message the keyboard was attached to
 	Data    string   `json:"data"`    // the callback_data set on the button
