@@ -605,7 +605,14 @@ func (s *Session) generateCompactionSummary(ctx context.Context) (string, error)
 	// explicit, it guarantees the conversation ends with a user turn — required by
 	// providers that reject assistant-message prefill (e.g. Claude subscription),
 	// since the working set may otherwise end on an assistant message.
-	messages := append(s.store.Messages(), types.NewUserTextMessage(compactRequestPrompt))
+	//
+	// Strip inline images from the history before sending to the compaction
+	// model: the LLM only needs text to produce a summary, and providers like
+	// Anthropic reject requests with many large images (>2000px) when they appear
+	// together in a single request (error: "image dimensions exceed max allowed
+	// size for many-image requests"). Replacing each image part with a placeholder
+	// text preserves the conversational structure without triggering the limit.
+	messages := append(stripImages(s.store.Messages()), types.NewUserTextMessage(compactRequestPrompt))
 	req := &types.Request{
 		SystemPrompt: compactSystemPrompt,
 		Model:        s.modelID,
@@ -999,4 +1006,37 @@ func (s *Session) emit(e types.Event) {
 	if s.handler != nil {
 		s.handler(e)
 	}
+}
+
+// stripImages returns a copy of msgs with all inline image parts replaced by a
+// short placeholder text. Used by generateCompactionSummary to avoid provider
+// errors when many large images are present in a single request (e.g. Anthropic
+// rejects requests with multiple images exceeding 2000px in any dimension).
+// ToolResult images are replaced with "[image omitted]" in the output string.
+func stripImages(msgs []types.Message) []types.Message {
+	result := make([]types.Message, len(msgs))
+	for i, m := range msgs {
+		stripped := types.Message{Role: m.Role, Meta: m.Meta}
+		for _, p := range m.Parts {
+			switch {
+			case p.Image != nil:
+				// Top-level image part (user message with pasted image) — replace with text.
+				stripped.Parts = append(stripped.Parts, types.ContentPart{
+					Text: "[image omitted for compaction]",
+				})
+			case p.ToolResult != nil && len(p.ToolResult.Images) > 0:
+				// Tool result carrying inline images — keep text, drop images.
+				tr := *p.ToolResult
+				tr.Images = nil
+				if tr.Output == "" {
+					tr.Output = "[image omitted for compaction]"
+				}
+				stripped.Parts = append(stripped.Parts, types.ContentPart{ToolResult: &tr})
+			default:
+				stripped.Parts = append(stripped.Parts, p)
+			}
+		}
+		result[i] = stripped
+	}
+	return result
 }
