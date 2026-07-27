@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.48] - 2026-07-27
+
+### Fix — claude-oauth token refresh reliability + compact retry
+- **Retry with backoff on token refresh** (`claude_oauth.go`) — `getValidToken`
+  now retries the OAuth refresh up to 3 times with exponential backoff
+  (1 s → 2 s → 4 s) before giving up. Transient network errors and server
+  timeouts no longer cause an immediate "session expired" failure. Auth errors
+  (HTTP 401/403, `invalid_grant`, `token_expired`, `revoked`) short-circuit
+  immediately — no point retrying a definitively rejected token.
+- **Re-read refresh token from disk before each attempt** — before every refresh
+  attempt the token is re-read from `credentials.json`. This prevents a race
+  condition when two harness instances run simultaneously (e.g. TUI + Telegram):
+  if the other instance already refreshed and wrote a newer token, we use that
+  instead of the stale in-memory one. Anthropic refresh tokens are single-use —
+  using a stale one causes a 401 that previously looked like a session expiry.
+- **Surface the real refresh error** — previously any refresh failure produced
+  the generic message `"session expired — run 'claude auth login'..."` hiding the
+  actual cause (network timeout, 401 invalid_grant, revoked token, etc.). The
+  error now includes the HTTP status and API response so it's diagnosable. The
+  reconnect hint also points to `harness connect claude-oauth` (the correct
+  harness command) instead of `claude auth login`.
+- **Compact retry with backoff** (`agent/session.go`) — `generateCompactionSummary`
+  retries up to 3 times with exponential backoff (2 s → 4 s → 8 s) before
+  emitting a `compact failed` error. This covers the case where compact triggers
+  a token refresh that transiently fails — the retry gives the token manager time
+  to succeed on the next attempt. Context cancellation is respected between
+  retries so a user `/stop` still interrupts immediately.
+
 ## [0.73.47] - 2026-07-27
 
 ### Feature — Slack proactive messaging tools (SlackPost, SlackListChannels, SlackListUsers)

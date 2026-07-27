@@ -577,6 +577,8 @@ func (s *Session) compact(ctx context.Context) error {
 // generateCompactionSummary makes a focused LLM call to summarize the full conversation
 // for use as a compaction checkpoint. Uses no tools and a dedicated system prompt.
 // The result is stored internally — NOT streamed to the transport.
+// Retries up to 3 times with exponential backoff to handle transient token
+// refresh failures or network errors during compact.
 func (s *Session) generateCompactionSummary(ctx context.Context) (string, error) {
 	// Append a user message asking for the summary. Besides making the request
 	// explicit, it guarantees the conversation ends with a user turn — required by
@@ -591,19 +593,33 @@ func (s *Session) generateCompactionSummary(ctx context.Context) (string, error)
 		MaxTokens:    4096,
 	}
 
-	var summaryText string
-	_, err := s.provider.CompleteStream(ctx, req, func(se types.StreamEvent) {
-		if se.Type == types.StreamTextDelta {
-			summaryText += se.Delta
+	const maxAttempts = 3
+	backoff := 2 * time.Second
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(backoff):
+			}
+			backoff *= 2
 		}
-	})
-	if err != nil {
-		return "", err
+
+		var summaryText string
+		_, err := s.provider.CompleteStream(ctx, req, func(se types.StreamEvent) {
+			if se.Type == types.StreamTextDelta {
+				summaryText += se.Delta
+			}
+		})
+		if err == nil {
+			return summaryText, nil
+		}
+		lastErr = err
 	}
-	if summaryText == "" {
-		return "", fmt.Errorf("empty summary")
-	}
-	return summaryText, nil
+
+	// All attempts exhausted — return the last error.
+	return "", lastErr
 }
 
 // ID returns the session's unique identifier.

@@ -514,6 +514,10 @@ func newTokenManager() *tokenManager {
 }
 
 // getValidToken returns a valid access token, refreshing if necessary.
+// It retries the refresh up to 3 times with exponential backoff to handle
+// transient network errors. Before each attempt it re-reads the refresh token
+// from disk so concurrent instances don't race each other into using a stale
+// token (Anthropic refresh tokens are single-use).
 func (tm *tokenManager) getValidToken() (string, error) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
@@ -523,13 +527,55 @@ func (tm *tokenManager) getValidToken() (string, error) {
 	if tm.creds.ExpiresAt > time.Now().UnixMilli()+expiryBufferMs {
 		return tm.creds.AccessToken, nil
 	}
-	refreshed, err := tm.refresh(tm.creds.RefreshToken)
-	if err != nil {
-		return "", fmt.Errorf("session expired — run 'claude auth login' to re-authenticate, then reconnect")
+
+	// Retry refresh up to 3 times with backoff: 1s, 2s, 4s.
+	const maxAttempts = 3
+	var lastErr error
+	backoff := time.Second
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(backoff)
+			backoff *= 2
+		}
+
+		// Re-read from disk before each attempt — another harness instance may
+		// have already refreshed and written a newer token. Using a stale
+		// refresh_token causes a 401 because Anthropic tokens are single-use.
+		refreshToken := tm.creds.RefreshToken
+		if cred, ok := config.GetCredentialsManager().Credential("claude-oauth"); ok && cred.RefreshToken != "" {
+			refreshToken = cred.RefreshToken
+		}
+
+		refreshed, err := tm.refresh(refreshToken)
+		if err != nil {
+			lastErr = err
+			// 401 = token revoked/expired — no point retrying.
+			if isAuthError(err) {
+				break
+			}
+			continue // network/timeout — retry
+		}
+		tm.creds = refreshed
+		persistOAuthCreds(refreshed)
+		return refreshed.AccessToken, nil
 	}
-	tm.creds = refreshed
-	persistOAuthCreds(refreshed)
-	return refreshed.AccessToken, nil
+
+	// Surface the real error so it's diagnosable (not just "session expired").
+	return "", fmt.Errorf("token refresh failed (run 'harness connect claude-oauth' to re-authenticate): %w", lastErr)
+}
+
+// isAuthError reports whether a refresh error is an authentication failure
+// (401/403) vs a transient network/server error worth retrying.
+func isAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "HTTP 401") ||
+		strings.Contains(s, "HTTP 403") ||
+		strings.Contains(s, "invalid_grant") ||
+		strings.Contains(s, "token_expired") ||
+		strings.Contains(s, "revoked")
 }
 
 func (tm *tokenManager) refresh(refreshToken string) (*types.Credentials, error) {
