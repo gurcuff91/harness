@@ -21,6 +21,7 @@ type channelPump struct {
 	sessionID string
 	model     string          // the session's actual model (for logs)
 	buf       strings.Builder // accumulates the current turn's text
+	lastUser  string          // Slack user ID of the last message sender (for @mention in channels)
 
 	mu              sync.Mutex
 	typingCancel    context.CancelFunc // stops the current typing heartbeat, if any
@@ -215,9 +216,27 @@ func (t *Transport) send(ctx context.Context, channelID, text string) {
 
 // sendLogged delivers text to a Slack channel, converting CommonMark to mrkdwn,
 // splitting if needed, and logging the reply with an optional trigger reason.
+// In channels (C…) the first chunk is prefixed with <@USER> to mention the
+// sender — the agent doesn't know who wrote; the transport adds it here.
 func (t *Transport) sendLogged(ctx context.Context, channelID, text, reason string) {
 	text = toMrkdwn(text)
 	chunks := splitMessage(text)
+
+	// Prepend @mention on the first chunk for channel messages.
+	if strings.HasPrefix(channelID, "C") && len(chunks) > 0 {
+		t.mu.Lock()
+		p := t.pumps[channelID]
+		t.mu.Unlock()
+		if p != nil {
+			p.mu.Lock()
+			user := p.lastUser
+			p.mu.Unlock()
+			if user != "" {
+				chunks[0] = "<@" + user + "> " + chunks[0]
+			}
+		}
+	}
+
 	for _, chunk := range chunks {
 		if err := t.bot.PostMessage(ctx, channelID, chunk); err != nil {
 			logx.Error("slack", "send", "channel", channelID, "error", err.Error())

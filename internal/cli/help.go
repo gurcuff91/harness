@@ -15,6 +15,8 @@ Usage:
   harness telegram unpair <chat_id>  Revoke a chat (also drops its session)
   harness telegram list              List paired chats
   harness slack [flags]              Run as a Slack user bot (one session per channel/DM)
+  harness slack login                Authenticate interactively (saves to ~/.harness/slack.json)
+  harness slack login --status       Verify saved credentials
   harness --resume <id> [flags]      Resume session in TUI
 
 Management:

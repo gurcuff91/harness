@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.46] - 2026-07-27
+
+### Feature — `harness slack login` + channel @mentions + slack.json unification
+- **`harness slack login`** — interactive login flow that needs only the `xoxd`
+  cookie from the browser; derives `xoxc` automatically with a single GET to the
+  workspace URL (Slack embeds `api_token` in the page HTML). Validates with
+  `auth.test` and saves credentials to `~/.harness/slack.json` (0600).
+  - `harness slack login --status` — verifies saved credentials are still valid.
+  - `harness slack` now resolves credentials with precedence:
+    `--flags` > `SLACK_*` env vars > `~/.harness/slack.json`.
+  - New files: `creds.go` (`Credentials`, `LoadCredentials`, `SaveCredentials`,
+    `DeriveXoxC`, `VerifyAndSave`); `login.go` moved into `creds.go`.
+- **Unified `slack.json`** — `store.go` merged into `creds.go` so both the auth
+  credentials and the channel→session mappings live in one `slackJSON` struct.
+  Previously `SaveCredentials` overwrote `sessions` and `store.save()` overwrote
+  credentials; now each side reads-then-merges before writing, so neither field
+  set loses data.
+- **Channel @mention replies** — when a message arrives in a channel (`C…`),
+  the transport records the sender's user ID in `channelPump.lastUser`. Every
+  reply's first chunk is prefixed with `<@USER_ID>` so Slack notifies the user
+  who asked. DMs (`D…`) are unaffected. The agent is unaware of this — it is
+  handled entirely in `sendLogged`.
+
 ## [0.73.45] - 2026-07-27
 
 ### Feature — Telegram `/thinking` and `/model` commands with inline keyboards

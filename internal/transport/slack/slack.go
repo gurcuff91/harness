@@ -51,9 +51,24 @@ type Transport struct {
 }
 
 // Run starts the Slack transport and blocks until ctx is cancelled.
+// Credentials are resolved with precedence: flags > env > ~/.harness/slack.json.
 func Run(ctx context.Context, a *agent.Agent, opts Options) error {
+	// Fill missing credentials from saved login (~/.harness/slack.json).
 	if opts.Workspace == "" || opts.XoxC == "" || opts.XoxD == "" {
-		return fmt.Errorf("slack: --workspace, --xoxc and --xoxd are all required")
+		if saved, err := LoadCredentials(); err == nil && saved != nil {
+			if opts.Workspace == "" {
+				opts.Workspace = saved.Workspace
+			}
+			if opts.XoxC == "" {
+				opts.XoxC = saved.XoxC
+			}
+			if opts.XoxD == "" {
+				opts.XoxD = saved.XoxD
+			}
+		}
+	}
+	if opts.Workspace == "" || opts.XoxC == "" || opts.XoxD == "" {
+		return fmt.Errorf("slack: credentials required — run 'harness slack login' or pass --workspace, --xoxc and --xoxd")
 	}
 
 	st, err := openStore("")
@@ -299,6 +314,12 @@ func (t *Transport) handleEvent(ctx context.Context, evt *RTMEvent) {
 	if err != nil {
 		t.replyError(ctx, evt.Channel, err)
 		return
+	}
+	// In channels (not DMs), store sender so replies can @mention them.
+	if strings.HasPrefix(evt.Channel, "C") && evt.User != "" {
+		pump.mu.Lock()
+		pump.lastUser = evt.User
+		pump.mu.Unlock()
 	}
 
 	var sendErr error
