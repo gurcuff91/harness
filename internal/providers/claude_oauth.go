@@ -561,7 +561,7 @@ func (tm *tokenManager) getValidToken() (string, error) {
 	}
 
 	// Surface the real error so it's diagnosable (not just "session expired").
-	return "", fmt.Errorf("token refresh failed (run 'harness connect claude-oauth' to re-authenticate): %w", lastErr)
+	return "", fmt.Errorf("token refresh failed (run 'claude auth login' to re-authenticate): %w", lastErr)
 }
 
 // isAuthError reports whether a refresh error is an authentication failure
