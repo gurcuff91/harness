@@ -36,6 +36,11 @@ func (t *TUI) buildUI() {
 	}
 	t.editor.OnChange = func(text string) {
 		t.palette.onEditorChange(text)
+		wasBash := t.bashMode
+		t.bashMode = strings.HasPrefix(text, "!")
+		if t.bashMode != wasBash {
+			t.tui.RequestRender(false)
+		}
 	}
 	t.editor.OnEscape = func() {
 		t.onEscape()
@@ -51,12 +56,26 @@ func (t *TUI) buildUI() {
 	//   palette   (command list, only when open)
 	//   info      (cwd • session • queue)
 	//   footer    (tokens • cost • model)
+	sep1 := newEditorSeparator(t.editor) // sep1 — shows "↑ N more" on overflow
+	sep2 := newSeparator()               // sep2
+	// Both separators share the same colorFn so they flip together when the
+	// user enters bash mode (input starts with "!").
+	sepColor := func() string {
+		if t.bashMode {
+			return ansi.HexWarn // amber — signals bash execution mode
+		}
+		return ansi.HexPrimary
+	}
+	sep1.colorFn = sepColor
+	sep2.colorFn = sepColor
+	t.editor.ColorFn = sepColor
+
 	t.tui.AddChild(t.history)
 	t.tui.AddChild(t.spinner)
-	t.tui.AddChild(newEditorSeparator(t.editor)) // sep1 — shows "↑ N more" on overflow
+	t.tui.AddChild(sep1)
 	t.tui.AddChild(t.editor)
-	t.tui.AddChild(newSeparator()) // sep2
-	t.tui.AddChild(t.palette)      // renders nothing unless open
+	t.tui.AddChild(sep2)
+	t.tui.AddChild(t.palette) // renders nothing unless open
 	t.tui.AddChild(t.info)
 	t.tui.AddChild(t.footer)
 
@@ -68,8 +87,12 @@ func (t *TUI) buildUI() {
 // separator is a thin horizontal rule. When bound to an editor and that editor
 // has input scrolled off the top, it renders a left-aligned "↑ N more" hint
 // embedded in the rule (mirrors PI's overflow indicator).
+//
+// colorFn, when set, overrides the default primary (teal) color — used by the
+// bash-mode indicator to switch both separators to rose while "!" is typed.
 type separator struct {
-	editor *components.Editor // nil = plain rule
+	editor  *components.Editor // nil = plain rule
+	colorFn func() string      // returns a hex color; nil = HexPrimary
 }
 
 func newSeparator() *separator { return &separator{} }
@@ -78,33 +101,40 @@ func newSeparator() *separator { return &separator{} }
 // hint above the visible input window.
 func newEditorSeparator(e *components.Editor) *separator { return &separator{editor: e} }
 
-func (s *separator) Render(width int) []string {
-	if s.editor != nil {
-		if n := s.editor.HiddenAbove(width); n > 0 {
-			return []string{labeledRule(width, fmt.Sprintf("↑ %d more", n))}
-		}
+func (s *separator) color() string {
+	if s.colorFn != nil {
+		return s.colorFn()
 	}
-	return []string{ansi.Primary(strings.Repeat("─", width))}
+	return ansi.HexPrimary
 }
 
-// labeledRule draws a left-aligned label embedded in an emerald rule:
+func (s *separator) Render(width int) []string {
+	col := s.color()
+	if s.editor != nil {
+		if n := s.editor.HiddenAbove(width); n > 0 {
+			return []string{labeledRule(width, fmt.Sprintf("↑ %d more", n), col)}
+		}
+	}
+	return []string{ansi.FG(col, strings.Repeat("─", width))}
+}
+
+// labeledRule draws a left-aligned label embedded in a colored rule:
 //
 //	── ↑ 2 more ─────────────────────────────
 //
 // The lead-in is two dashes, then the muted label, then dashes filling the rest.
-func labeledRule(width int, label string) string {
+func labeledRule(width int, label, hexColor string) string {
 	const lead = 2
 	lw := ansi.VisibleWidth(label)
 	// lead dashes + space + label + space, then fill the remainder.
 	used := lead + 1 + lw + 1
 	if used >= width {
-		// Not enough room for the full pattern; just show the rule.
-		return ansi.Primary(strings.Repeat("─", width))
+		return ansi.FG(hexColor, strings.Repeat("─", width))
 	}
 	trail := width - used
-	return ansi.Primary(strings.Repeat("─", lead)) + " " +
+	return ansi.FG(hexColor, strings.Repeat("─", lead)) + " " +
 		ansi.Muted(label) + " " +
-		ansi.Primary(strings.Repeat("─", trail))
+		ansi.FG(hexColor, strings.Repeat("─", trail))
 }
 
 // globalInput routes input: Ctrl+C/Ctrl+D quit, Ctrl+V pastes a clipboard

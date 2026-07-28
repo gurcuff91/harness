@@ -1,9 +1,13 @@
 package tui
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"math"
+	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/gurcuff91/harness/internal/client"
 	"github.com/gurcuff91/harness/internal/providers/authflow"
@@ -28,6 +32,7 @@ func (t *TUI) handleSubmit(text string) {
 		return
 	}
 	t.editor.Clear()
+	t.bashMode = false // reset on any submit
 
 	if strings.HasPrefix(text, "/") {
 		fields := strings.Fields(text)
@@ -37,7 +42,58 @@ func (t *TUI) handleSubmit(text string) {
 		return
 	}
 
+	// "!" prefix — direct bash execution, bypasses the agent entirely.
+	if strings.HasPrefix(text, "!") {
+		cmd := strings.TrimSpace(text[1:])
+		if cmd == "" {
+			return // bare "!" with no command — no-op
+		}
+		t.execBashCommand(cmd)
+		return
+	}
+
 	t.submitPrompt(text)
+}
+
+// bashCmdTimeout caps how long a direct "!" bash command may run.
+const bashCmdTimeout = 30 * time.Second
+
+// execBashCommand runs a shell command directly (bypassing the agent) and
+// renders it like a tool call: header styled as Err(bold "$ cmd"), output Dimmed.
+func (t *TUI) execBashCommand(cmd string) {
+	header := ansi.Warn(ansi.Bold + "$ " + cmd)
+	t.addRaw(header)
+
+	go func() {
+		ctx, cancel := context.WithTimeout(t.baseCtx, bashCmdTimeout)
+		defer cancel()
+
+		c := exec.CommandContext(ctx, "sh", "-c", cmd) //nolint:gosec — intentional user-driven shell
+		var out bytes.Buffer
+		c.Stdout = &out
+		c.Stderr = &out
+		runErr := c.Run()
+
+		output := strings.TrimRight(out.String(), "\n")
+
+		var result string
+		if ctx.Err() == context.DeadlineExceeded {
+			result = ansi.Err("✘ timed out after " + bashCmdTimeout.String())
+		} else if runErr != nil {
+			if output == "" {
+				output = runErr.Error()
+			}
+			result = ansi.Dimmed(output) + "\n" + ansi.Err("✘ exit: "+runErr.Error())
+		} else {
+			if output == "" {
+				result = ansi.Dimmed("(no output)")
+			} else {
+				result = ansi.Dimmed(output)
+			}
+		}
+
+		t.addRaw(result + "\n") // trailing \n keeps next history entry separated
+	}()
 }
 
 // beginValueCapture clears the editor and shows a guiding placeholder so the

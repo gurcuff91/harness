@@ -102,15 +102,18 @@ func (c *ClaudeOAuth) ResolveCredentials() (types.Credentials, error) {
 	return creds, nil
 }
 
-// loadCredentialsFromSources populates tokens.creds from:
-// memory cache → credentials.json. Keychain is only read during /connect.
+// loadCredentialsFromSources populates tokens.creds from credentials.json.
+// It always reads from disk so the in-memory state stays in sync with whatever
+// the latest harness instance has persisted (token refresh is single-use;
+// a stale in-memory refresh_token causes invalid_grant).
 func (c *ClaudeOAuth) loadCredentialsFromSources() error {
-	if c.tokens.creds != nil && c.tokens.creds.AccessToken != "" {
-		return nil // already cached
-	}
 	if cred, ok := config.GetCredentialsManager().Credential("claude-oauth"); ok && cred.AccessToken != "" {
 		creds := types.OAuthCredentials(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType)
 		c.tokens.creds = &creds
+		return nil
+	}
+	// Fall back to whatever is already in memory (e.g. set during Connect).
+	if c.tokens.creds != nil && c.tokens.creds.AccessToken != "" {
 		return nil
 	}
 	return fmt.Errorf("claude-oauth: no credentials found")
@@ -515,20 +518,33 @@ func newTokenManager() *tokenManager {
 
 // getValidToken returns a valid access token, refreshing if necessary.
 // It retries the refresh up to 3 times with exponential backoff to handle
-// transient network errors. Before each attempt it re-reads the refresh token
-// from disk so concurrent instances don't race each other into using a stale
-// token (Anthropic refresh tokens are single-use).
+// transient network errors.
+//
+// Before checking expiry AND before each refresh attempt, it re-reads the full
+// credentials from disk. This handles the multi-instance race: if another
+// harness process has already refreshed and written a new access+refresh token
+// pair, this instance picks it up immediately — either serving the new
+// access_token directly (if still valid) or using the new refresh_token for its
+// own refresh. Anthropic refresh tokens are single-use; using a stale one
+// causes a permanent invalid_grant 400.
 func (tm *tokenManager) getValidToken() (string, error) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	if tm.creds == nil {
 		return "", fmt.Errorf("not connected")
 	}
+
+	// Always sync from disk first — another instance may have refreshed already.
+	if cred, ok := config.GetCredentialsManager().Credential("claude-oauth"); ok && cred.AccessToken != "" {
+		synced := types.OAuthCredentials(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType)
+		tm.creds = &synced
+	}
+
 	if tm.creds.ExpiresAt > time.Now().UnixMilli()+expiryBufferMs {
 		return tm.creds.AccessToken, nil
 	}
 
-	// Retry refresh up to 3 times with backoff: 1s, 2s, 4s.
+	// Token is expired — refresh. Retry up to 3 times with backoff: 1s, 2s, 4s.
 	const maxAttempts = 3
 	var lastErr error
 	backoff := time.Second
@@ -536,20 +552,23 @@ func (tm *tokenManager) getValidToken() (string, error) {
 		if attempt > 0 {
 			time.Sleep(backoff)
 			backoff *= 2
+
+			// Re-read from disk before each retry — a concurrent instance may
+			// have succeeded in the meantime and written a fresh token pair.
+			if cred, ok := config.GetCredentialsManager().Credential("claude-oauth"); ok && cred.AccessToken != "" {
+				synced := types.OAuthCredentials(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType)
+				tm.creds = &synced
+				// If the disk token is now fresh, use it directly.
+				if tm.creds.ExpiresAt > time.Now().UnixMilli()+expiryBufferMs {
+					return tm.creds.AccessToken, nil
+				}
+			}
 		}
 
-		// Re-read from disk before each attempt — another harness instance may
-		// have already refreshed and written a newer token. Using a stale
-		// refresh_token causes a 401 because Anthropic tokens are single-use.
-		refreshToken := tm.creds.RefreshToken
-		if cred, ok := config.GetCredentialsManager().Credential("claude-oauth"); ok && cred.RefreshToken != "" {
-			refreshToken = cred.RefreshToken
-		}
-
-		refreshed, err := tm.refresh(refreshToken)
+		refreshed, err := tm.refresh(tm.creds.RefreshToken)
 		if err != nil {
 			lastErr = err
-			// 401 = token revoked/expired — no point retrying.
+			// Auth errors (invalid_grant, revoked, 401, 403) are permanent — no point retrying.
 			if isAuthError(err) {
 				break
 			}
@@ -571,7 +590,11 @@ func isAuthError(err error) bool {
 		return false
 	}
 	s := err.Error()
-	return strings.Contains(s, "HTTP 401") ||
+	// HTTP 400 with invalid_grant is permanent (bad/expired/already-used refresh
+	// token). HTTP 401/403 are also auth failures. All three must abort the retry
+	// loop immediately — there is no point retrying a credential error.
+	return strings.Contains(s, "HTTP 400") ||
+		strings.Contains(s, "HTTP 401") ||
 		strings.Contains(s, "HTTP 403") ||
 		strings.Contains(s, "invalid_grant") ||
 		strings.Contains(s, "token_expired") ||

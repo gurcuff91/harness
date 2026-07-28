@@ -103,6 +103,10 @@ type TUI struct {
 	compactStart time.Time
 	lastTurnText strings.Builder
 
+	// bashMode is true while the editor text starts with "!" — both separators
+	// switch to rose to signal direct bash execution mode.
+	bashMode bool
+
 	// pending is set when a command needs a required value typed into a clean
 	// editor (e.g. /connect <provider> waiting for the API key). While active,
 	// the next editor submission is captured as that value instead of being

@@ -26,6 +26,10 @@ type Editor struct {
 	OnChange func(text string)
 	OnEscape func()
 
+	// ColorFn, when set, overrides the default text and cursor color. It should
+	// return a hex color string (e.g. ansi.HexWarn). nil = default teal palette.
+	ColorFn func() string
+
 	// DisableSubmit, when true, makes Enter insert a newline instead of
 	// submitting (used while an overlay/palette owns the Enter key).
 	DisableSubmit bool
@@ -328,7 +332,16 @@ func (e *Editor) layout(width int) (visible []string, hiddenAbove int) {
 		cursor = len(e.buf)
 	}
 
+	// Resolve active color (default = primary teal).
+	hexColor := ansi.HexPrimary
+	if e.ColorFn != nil {
+		hexColor = e.ColorFn()
+	}
+
 	before := string(e.buf[:cursor])
+	if hexColor != ansi.HexPrimary {
+		before = ansi.FG(hexColor, before)
+	}
 	atCursor := " "
 	after := ""
 	if cursor < len(e.buf) {
@@ -340,9 +353,12 @@ func (e *Editor) layout(width int) (visible []string, hiddenAbove int) {
 			after = string(e.buf[cursor+1:])
 		}
 	}
+	if hexColor != ansi.HexPrimary && after != "" {
+		after = ansi.FG(hexColor, after)
+	}
 
-	// Fake block cursor: emerald background, dark glyph (matches v1).
-	cursorCell := ansi.Cursor(atCursor)
+	// Block cursor: background = active color, dark foreground glyph.
+	cursorCell := ansi.CursorColored(atCursor, hexColor)
 	full := before + cursorCell + after
 
 	logicalLines := strings.Split(full, "\n")

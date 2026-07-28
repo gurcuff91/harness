@@ -10,7 +10,7 @@ const (
 	HexPrimary = "#26A69A" // teal 400   — Kaiban Teal (dark-adapted)
 	HexAccent  = "#C8D96A" // chartreuse — Kaiban Energy
 	HexErr     = "#D94068" // rose       — Kaiban Rose
-	HexWarn    = "#B44CA0" // violet     — Kaiban Violet
+	HexWarn    = "#E8A838" // amber      — warning/caution (TUI semantic)
 )
 
 // SGR control codes.
@@ -95,4 +95,9 @@ func PrimaryBold(s string) string { return Bold + fgPrimary + s + Reset }
 // emerald block cursor.
 func Cursor(s string) string {
 	return hexBG(HexPrimary) + "\x1b[38;2;26;26;26m" + s + Reset
+}
+
+// CursorColored renders a block cursor using the given hex background color.
+func CursorColored(s, hexColor string) string {
+	return hexBG(hexColor) + "\x1b[38;2;26;26;26m" + s + Reset
 }

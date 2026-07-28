@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.58] - 2026-07-28
+
+### Feat — Direct bash execution (`!cmd`) in TUI + Warn color updated to amber
+- **`!` prefix mode** (`internal/transport/tui/commands.go`, `layout.go`, `tui.go`) — typing `!` in the TUI input activates bash mode: separators, input text, and cursor switch to amber (`HexWarn`). On Enter, the command after `!` is executed directly via `sh -c` (bypassing the agent), with stdout+stderr rendered in the history. Bare `!` with no command is a no-op. Timeout: 30s. Output rendered with `ansi.Dimmed`; exit errors in rose (`ansi.Err`).
+- **Unified amber theming** — separators (`layout.go`), editor text, and block cursor all share a single `colorFn func() string` that returns `HexWarn` in bash mode and `HexPrimary` otherwise. The three components flip color atomically on every keystroke. `Editor.ColorFn` added to `components/editor.go`; `ansi.CursorColored()` added to `ansi/color.go`.
+- **`HexWarn` changed from violet `#B44CA0` to amber `#E8A838`** (`ansi/color.go`) — violet is a Kaiban brand decoration color with no warning semantics (per the locked brand system). Amber is semantically unambiguous as caution/warning and reads clearly on the TUI dark background. All existing `ansi.Warn` usages (`⚠`, `⏹ Stopped`, `⚙ busy`, `T` in context grid) automatically adopt the new color.
+- **OAuth token refresh hardened** (`internal/providers/claude_oauth.go`) — `loadCredentialsFromSources` now always re-reads from disk (removed the `creds != nil` early-return guard). `getValidToken` syncs full credentials from disk before checking expiry — if a concurrent harness instance already refreshed, the fresh token is used directly. `isAuthError` now includes `HTTP 400` so `invalid_grant` aborts the retry loop immediately instead of retrying 3× on a permanent error.
+
 ## [0.73.57] - 2026-07-27
 
 ### Refactor — Schedule store keyed by (owner, slug) to prevent cross-session collisions
