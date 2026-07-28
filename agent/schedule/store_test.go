@@ -17,10 +17,10 @@ func newTestStore(t *testing.T) *Store {
 
 func TestStoreUpsertAndList(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.Set("standup", "0 9 * * 1-5", "Generate standup", ""); err != nil {
+	if err := s.Set("standup", "0 9 * * 1-5", "Generate standup", "sess-A"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Set("cleanup", "@daily", "Clean logs", ""); err != nil {
+	if err := s.Set("cleanup", "@daily", "Clean logs", "sess-A"); err != nil {
 		t.Fatal(err)
 	}
 	list := s.List()
@@ -33,8 +33,8 @@ func TestStoreUpsertAndList(t *testing.T) {
 	}
 
 	// Edit preserves audit.
-	s.RecordRun("standup", time.Now().UnixMilli())
-	s.Set("standup", "0 10 * * 1-5", "Updated", "") // edit
+	s.RecordRun("standup", "sess-A", time.Now().UnixMilli())
+	s.Set("standup", "0 10 * * 1-5", "Updated", "sess-A") // edit
 	for _, sc := range s.List() {
 		if sc.Slug == "standup" {
 			if sc.Runs != 1 {
@@ -49,22 +49,22 @@ func TestStoreUpsertAndList(t *testing.T) {
 
 func TestStoreInvalidCron(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.Set("bad", "not a cron", "x", ""); err == nil {
+	if err := s.Set("bad", "not a cron", "x", "sess-A"); err == nil {
 		t.Error("invalid cron should error")
 	}
-	if err := s.Set("bad", "99 99 * * *", "x", ""); err == nil {
+	if err := s.Set("bad", "99 99 * * *", "x", "sess-A"); err == nil {
 		t.Error("out-of-range cron should error")
 	}
 }
 
 func TestStoreDelete(t *testing.T) {
 	s := newTestStore(t)
-	s.Set("x", "@hourly", "p", "")
-	ok, _ := s.Delete("x")
+	s.Set("x", "@hourly", "p", "sess-A")
+	ok, _ := s.Delete("x", "sess-A")
 	if !ok {
 		t.Error("delete should report existed")
 	}
-	ok, _ = s.Delete("x")
+	ok, _ = s.Delete("x", "sess-A")
 	if ok {
 		t.Error("second delete should report not existed")
 	}
@@ -73,7 +73,7 @@ func TestStoreDelete(t *testing.T) {
 func TestStorePersistence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sched.json")
 	s1, _ := Open(path)
-	s1.Set("x", "@daily", "prompt", "")
+	s1.Set("x", "@daily", "prompt", "sess-A")
 	// Reopen and verify it loaded.
 	s2, _ := Open(path)
 	if len(s2.List()) != 1 {
@@ -81,9 +81,33 @@ func TestStorePersistence(t *testing.T) {
 	}
 }
 
+// Two sessions can each own a schedule with the same slug — no collision.
+func TestStoreSameSlugDifferentOwners(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.Set("daily", "@daily", "sess-A standup", "sess-A"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set("daily", "@daily", "sess-B standup", "sess-B"); err != nil {
+		t.Fatal(err)
+	}
+	list := s.List()
+	if len(list) != 2 {
+		t.Fatalf("expected 2 schedules (one per owner), got %d", len(list))
+	}
+	// Verify each owner's copy is intact.
+	for _, sc := range list {
+		if sc.Owner == "sess-A" && sc.Prompt != "sess-A standup" {
+			t.Errorf("sess-A prompt corrupted: %q", sc.Prompt)
+		}
+		if sc.Owner == "sess-B" && sc.Prompt != "sess-B standup" {
+			t.Errorf("sess-B prompt corrupted: %q", sc.Prompt)
+		}
+	}
+}
+
 func TestEngineStandardCronFires(t *testing.T) {
 	s := newTestStore(t)
-	s.Set("minutely", "* * * * *", "run", "") // every minute
+	s.Set("minutely", "* * * * *", "run", "sess-A") // every minute
 	var fired []string
 	eng := NewEngine(s, func(slug, prompt, owner string) { fired = append(fired, slug) })
 
@@ -95,7 +119,7 @@ func TestEngineStandardCronFires(t *testing.T) {
 	if len(fired) != 1 {
 		t.Fatalf("expected 1 fire, got %d", len(fired))
 	}
-	s.RecordRun("minutely", now.UnixMilli()) // engine does this on fire
+	s.RecordRun("minutely", "sess-A", now.UnixMilli()) // engine does this on fire
 
 	// Same minute again → anchored on last run (09:01:05), next is 09:02:00, not
 	// yet at 09:01:40 → no double fire.
@@ -110,7 +134,7 @@ func TestEngineStandardCronFires(t *testing.T) {
 // moving cursor) is what makes it fire.
 func TestEngineEveryFires(t *testing.T) {
 	s := newTestStore(t)
-	s.Set("tick", "@every 1m", "run", "")
+	s.Set("tick", "@every 1m", "run", "sess-A")
 	var fired []string
 	eng := NewEngine(s, func(slug, prompt, owner string) { fired = append(fired, slug) })
 
@@ -143,7 +167,7 @@ func TestEngineFiresWithOwner(t *testing.T) {
 
 // Owner survives a store round-trip (persisted in schedules.json).
 func TestStoreOwnerPersists(t *testing.T) {
-	path := newTestStore(t).path
+	path := filepath.Join(t.TempDir(), "sched.json")
 	s1, _ := Open(path)
 	s1.Set("x", "@daily", "prompt", "owner-42")
 	s2, _ := Open(path)
@@ -169,7 +193,7 @@ func TestEngineReadsFreshEachEval(t *testing.T) {
 	}
 
 	// Add one WITHOUT restarting the engine → next evaluate picks it up.
-	s.Set("added-live", "* * * * *", "run", "")
+	s.Set("added-live", "* * * * *", "run", "sess-A")
 	eng.evaluate(start, now)
 	if len(fired) != 1 || fired[0] != "added-live" {
 		t.Errorf("a schedule added at runtime should fire, got %v", fired)
@@ -177,7 +201,7 @@ func TestEngineReadsFreshEachEval(t *testing.T) {
 
 	// Delete it → stops firing.
 	fired = nil
-	s.Delete("added-live")
+	s.Delete("added-live", "sess-A")
 	eng.evaluate(start, now)
 	if len(fired) != 0 {
 		t.Errorf("a deleted schedule should stop firing, got %v", fired)
@@ -220,12 +244,18 @@ func TestAdapterOwnerIsolation(t *testing.T) {
 	if len(got) != 1 || got[0].Slug != "mine" {
 		t.Fatalf("A should see only 'mine', got %v", got)
 	}
-	// A cannot delete B's schedule (no-op, reported as not found).
+	// A cannot delete B's schedule — structurally absent under A's owner bucket.
 	if ok, _ := a.Delete("theirs", "sess-A"); ok {
 		t.Error("A must not delete B's schedule")
 	}
-	// It still exists.
-	if _, found := s.Owners()["theirs"]; !found {
+	// It still exists under B.
+	found := false
+	for _, sc := range s.List() {
+		if sc.Slug == "theirs" && sc.Owner == "sess-B" {
+			found = true
+		}
+	}
+	if !found {
 		t.Error("B's schedule should still exist after A's failed delete")
 	}
 	// A can delete its own.

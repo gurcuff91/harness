@@ -14,14 +14,11 @@ func (a *ToolAdapter) Set(slug, cron, prompt, owner string) error {
 	return a.s.Set(slug, cron, prompt, owner)
 }
 
-// Delete removes the schedule only if it belongs to owner. A slug owned by
-// another session is treated as absent (false, nil) — sessions can't delete each
-// other's schedules.
+// Delete removes the schedule only if it belongs to owner. Because the store is
+// now keyed by (owner, slug), a slug from another session is simply absent —
+// cross-session deletion is structurally impossible, not just policy-blocked.
 func (a *ToolAdapter) Delete(slug, owner string) (bool, error) {
-	if a.s.Owners()[slug] != owner {
-		return false, nil
-	}
-	return a.s.Delete(slug)
+	return a.s.Delete(slug, owner)
 }
 
 // Entries returns only the schedules owned by owner.

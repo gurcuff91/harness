@@ -7,4 +7,4 @@
 package version
 
 // Version is the harness release, set via ldflags at build time.
-var Version = "0.73.56"
+var Version = "dev"

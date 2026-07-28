@@ -86,7 +86,7 @@ func (e *Engine) evaluate(startedAt, now time.Time) {
 		next := sched.Next(anchor)
 		if !next.After(now) { // due: its next run from the anchor has arrived
 			e.fire(sc.Slug, sc.Prompt, sc.Owner)
-			_ = e.store.RecordRun(sc.Slug, now.UnixMilli())
+			_ = e.store.RecordRun(sc.Slug, sc.Owner, now.UnixMilli())
 		}
 	}
 }

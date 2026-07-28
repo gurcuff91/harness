@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.57] - 2026-07-27
+
+### Refactor — Schedule store keyed by (owner, slug) to prevent cross-session collisions
+- **Root cause** (`agent/schedule/store.go`) — the flat `map[string]Schedule` layout
+  keyed only by slug meant two sessions could silently overwrite each other's
+  schedules if they used the same slug. The `Owner` field was a runtime filter,
+  not a structural guard.
+- **New layout** — `map[string]map[string]Schedule` (`owner → slug → schedule`).
+  The composite key `(owner, slug)` is now the unit of uniqueness; cross-session
+  collision is structurally impossible, not just policy-blocked.
+- **`store.go`** — `Delete` and `RecordRun` now take `(slug, owner)`. `Owner`
+  is the outer map key, no longer stored inside the JSON value.
+- **`adapter.go`** — `Delete` simplified; no longer needs to consult `Owners()`
+  before delegating — a foreign slug is simply absent under the caller's bucket.
+- **`engine.go`** — `RecordRun` call updated to pass `sc.Owner`.
+- **`store_test.go`** — all signatures updated; added `TestStoreSameSlugDifferentOwners`
+  confirming two sessions can coexist with the same slug without collision.
+- **`~/.harness/schedules.json`** — manually migrated to new nested format;
+  original preserved as `schedules.json.bak`.
+- **Tools, types, server, and all transports** — zero changes. Pure low-level store refactor.
+
 ## [0.73.56] - 2026-07-27
 
 ### Fix — Strip inline images before compact request (Anthropic many-image 400)
