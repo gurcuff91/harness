@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.59] - 2026-07-28
+
+### Fix — Strip images from previous turns before every provider request
+- **Root cause** (`agent/session.go`) — every ReAct loop iteration sends the full message history to the provider. When multiple large images (>2000px) accumulated across several turns, Anthropic rejected the request with HTTP 400 `"image dimensions exceed max allowed size for many-image requests"`. This happened on any normal turn, not just compaction.
+- **`stripOldTurnImages(msgs)`** — new function applied to the history before each provider request. Scans backward to find the last assistant message without tool_calls (end of the previous turn); everything before that boundary has its images replaced with `[image: <mime_type>]`. Everything from the boundary onward (current turn) is sent intact so the model can analyse whatever was just shared.
+- **`stripImagesFromMessage(m)`** — extracted helper handles both image paths: `ContentPart.Image` (user-pasted screenshot) and `ToolResult.Images` (Read tool result on an image file). Placeholder includes the MIME type so the model knows what kind of image was there.
+- **`stripImages`** (compact) refactored to reuse `stripImagesFromMessage` — no behavior change.
+- **Zero impact on disk** — the JSONL store is never modified. Only the wire payload to the provider is stripped. All providers benefit (Anthropic API-key, claude-oauth, and any future provider that receives `req.Messages`).
+
 ## [0.73.58] - 2026-07-28
 
 ### Feat — Direct bash execution (`!cmd`) in TUI + Warn color updated to amber

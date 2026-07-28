@@ -420,7 +420,11 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 			return "", nil // turn_end via defer
 		}
 
-		history := s.store.Messages()
+		// Strip images from all turns except the current one before sending to
+		// the provider. Providers like Anthropic reject requests with multiple
+		// large images (>2000px) across the full history. Images in the current
+		// turn are always preserved so the model can see what was just shared.
+		history := stripOldTurnImages(s.store.Messages())
 
 		req := &types.Request{
 			SystemPrompt:  s.systemPrompt,
@@ -1008,6 +1012,55 @@ func (s *Session) emit(e types.Event) {
 	}
 }
 
+// stripOldTurnImages strips inline images from all turns except the current one.
+//
+// "Current turn" = all messages after the last assistant message that has no
+// tool_calls (i.e. the terminal response of the previous turn). Everything
+// before that boundary already had its images processed by the model in a
+// previous request — sending them again wastes tokens and, for providers like
+// Anthropic, triggers a 400 when multiple large images exceed 2000px.
+//
+// Images in the current turn are always preserved so the model can analyse
+// whatever was just shared (pasted screenshot, Read tool result, etc.).
+//
+// The on-disk store is never modified — this only affects the wire payload.
+func stripOldTurnImages(msgs []types.Message) []types.Message {
+	// Find the boundary: scan backward for the last assistant message without
+	// tool_calls. Everything after that index is the current turn.
+	boundary := 0
+	for i := len(msgs) - 1; i >= 0; i-- {
+		m := msgs[i]
+		if m.Role != types.RoleAssistant {
+			continue
+		}
+		hasToolCall := false
+		for _, p := range m.Parts {
+			if p.ToolCall != nil {
+				hasToolCall = true
+				break
+			}
+		}
+		if !hasToolCall {
+			boundary = i + 1 // current turn starts after this message
+			break
+		}
+	}
+
+	if boundary == 0 {
+		// No previous terminal assistant message found — everything is the
+		// current turn (first turn ever, or all messages are tool calls).
+		// Nothing to strip.
+		return msgs
+	}
+
+	result := make([]types.Message, len(msgs))
+	copy(result, msgs) // keep current-turn messages (boundary..end) intact
+	for i := 0; i < boundary; i++ {
+		result[i] = stripImagesFromMessage(msgs[i])
+	}
+	return result
+}
+
 // stripImages returns a copy of msgs with all inline image parts replaced by a
 // short placeholder text. Used by generateCompactionSummary to avoid provider
 // errors when many large images are present in a single request (e.g. Anthropic
@@ -1016,27 +1069,48 @@ func (s *Session) emit(e types.Event) {
 func stripImages(msgs []types.Message) []types.Message {
 	result := make([]types.Message, len(msgs))
 	for i, m := range msgs {
-		stripped := types.Message{Role: m.Role, Meta: m.Meta}
-		for _, p := range m.Parts {
-			switch {
-			case p.Image != nil:
-				// Top-level image part (user message with pasted image) — replace with text.
-				stripped.Parts = append(stripped.Parts, types.ContentPart{
-					Text: "[image omitted for compaction]",
-				})
-			case p.ToolResult != nil && len(p.ToolResult.Images) > 0:
-				// Tool result carrying inline images — keep text, drop images.
-				tr := *p.ToolResult
-				tr.Images = nil
-				if tr.Output == "" {
-					tr.Output = "[image omitted for compaction]"
-				}
-				stripped.Parts = append(stripped.Parts, types.ContentPart{ToolResult: &tr})
-			default:
-				stripped.Parts = append(stripped.Parts, p)
-			}
-		}
-		result[i] = stripped
+		result[i] = stripImagesFromMessage(m)
 	}
 	return result
+}
+
+// stripImagesFromMessage returns a copy of msg with all inline images replaced
+// by a short placeholder text. The on-disk representation is never touched.
+func stripImagesFromMessage(m types.Message) types.Message {
+	stripped := types.Message{Role: m.Role, Meta: m.Meta}
+	for _, p := range m.Parts {
+		switch {
+		case p.Image != nil:
+			// Top-level image part (user message with pasted image).
+			mime := p.Image.MimeType
+			if mime == "" {
+				mime = "image"
+			}
+			stripped.Parts = append(stripped.Parts, types.ContentPart{
+				Text: "[image: " + mime + "]",
+			})
+		case p.ToolResult != nil && len(p.ToolResult.Images) > 0:
+			// Tool result carrying inline images (e.g. Read tool on an image file).
+			// Keep the text output, replace images with a per-image placeholder.
+			tr := *p.ToolResult
+			placeholder := ""
+			for _, img := range tr.Images {
+				mime := img.MimeType
+				if mime == "" {
+					mime = "image"
+				}
+				placeholder += "[image: " + mime + "] "
+			}
+			tr.Images = nil
+			if tr.Output != "" {
+				tr.Output = tr.Output + " " + placeholder
+			} else {
+				tr.Output = placeholder
+			}
+			stripped.Parts = append(stripped.Parts, types.ContentPart{ToolResult: &tr})
+		default:
+			stripped.Parts = append(stripped.Parts, p)
+		}
+	}
+	return stripped
 }
