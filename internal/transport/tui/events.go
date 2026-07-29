@@ -303,7 +303,8 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 // breaks. Applies to both live streaming (on tool_call) and history replay.
 func (t *TUI) toolHeader(name, argsJSON string) string {
 	colorFn, icon := toolStyle(name)
-	h := colorFn(ansi.Bold + icon + " " + name)
+	display := mcpDisplayName(name)
+	h := colorFn(ansi.Bold + icon + " " + display)
 	// formatToolArgs already styles its output (param names Muted, values Dimmed),
 	// so it's appended verbatim — no outer wrap.
 	if a := formatToolArgs(name, argsJSON); a != "" {
@@ -316,7 +317,8 @@ func (t *TUI) toolHeader(name, argsJSON string) string {
 // partial JSON can't be parsed yet): just the name with an ellipsis.
 func (t *TUI) toolHeaderStreaming(name string) string {
 	colorFn, icon := toolStyle(name)
-	return colorFn(ansi.Bold+icon+" "+name) + ansi.Dimmed(" …")
+	display := mcpDisplayName(name)
+	return colorFn(ansi.Bold+icon+" "+display) + ansi.Dimmed(" …")
 }
 
 // formatToolResult renders the one-line result summary (✔/✘ + duration). When

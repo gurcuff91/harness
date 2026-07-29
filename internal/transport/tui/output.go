@@ -210,8 +210,30 @@ func toolStyle(name string) (colorFn func(string) string, icon string) {
 	case "Schedule", "ScheduleList", "ScheduleDelete":
 		return ansi.Accent, "◷" // clock: cron-scheduled prompt management
 	default:
-		return ansi.Accent, "⎔" // technical hexagon: generic MCP/extension tool
+		return ansi.Accent, "◈" // diamond: generic MCP/external tool
 	}
+}
+
+// mcpDisplayName converts an MCP tool name from its internal wire format
+// (mcp__<namespace>__<ToolName>) to a human-readable display form
+// (namespace.ToolName). Only names starting with "mcp__" are transformed;
+// all others are returned unchanged. This is purely a TUI rendering concern —
+// the internal name is never modified.
+//
+//	mcp__ext__WebSearch  →  ext.WebSearch
+//	mcp__x__MemoWrite    →  x.MemoWrite
+//	mcp__myserver__Get   →  myserver.Get
+//	Bash                 →  Bash  (unchanged)
+func mcpDisplayName(name string) string {
+	if !strings.HasPrefix(name, "mcp__") {
+		return name
+	}
+	// Strip leading "mcp__" and replace the next "__" with "."
+	rest := strings.TrimPrefix(name, "mcp__")
+	if i := strings.Index(rest, "__"); i >= 0 {
+		return rest[:i] + "." + rest[i+2:]
+	}
+	return rest // "mcp__orphan" — no second __ — just drop the prefix
 }
 
 func stripANSI(s string) string {

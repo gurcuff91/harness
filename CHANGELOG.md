@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.64] - 2026-07-29
+
+### Fix + Feat — TUI: MCP tool display name format + icon update
+- **MCP tool name formatting** (`internal/transport/tui/output.go`) — MCP tool names arrive internally as `mcp__<namespace>__<ToolName>` (wire format, unchanged). In the TUI they now render as `namespace.ToolName` (e.g. `mcp__ext__WebSearch` → `ext.WebSearch`, `mcp__x__MemoWrite` → `x.MemoWrite`). Built-in tools (`Bash`, `Read`, `Write`, etc.) are unaffected. Pure rendering concern — no internal names, events, or agent contracts modified.
+- **`mcpDisplayName(name)`** — new helper in `output.go`. Strips `mcp__` prefix and replaces the second `__` separator with `.`. Applied in `toolHeader` and `toolHeaderStreaming` in `events.go`.
+- **Generic tool icon** `⎔` → `◈` (diamond with dot) — more readable, signals "external/plugin" semantics. Only affects the `default` case in `toolStyle`; all built-in tools keep their dedicated icons (`$`, `≡`, `✚`, `✎`, `↓`, `✦`, `⊕`, `✳`, `◷`).
+
 ## [0.73.63] - 2026-07-29
 
 ### Feat — `/fork` session command (TUI) + `POST /api/sessions/{id}/fork`
