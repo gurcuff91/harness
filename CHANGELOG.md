@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.66] - 2026-07-29
+
+### Fix — Anthropic parser: malformed tool-call JSON crashes store + duplicate error message
+- **Malformed tool args (Anthropic)** (`internal/providers/llm/anthropic.go`) — Claude occasionally streams malformed JSON for tool call arguments (e.g. `{"path": "...", "offset": 1186, 1240}` — a bare value with no key). The Anthropic block parser had no `json.Valid()` guard, so `resp.Message` was built with an invalid `json.RawMessage`. When `store.AddMessage` then called `json.Marshal`, it failed with a marshal error, breaking the session. Fix: same pattern already applied to the OpenAI parser — invalid args are wrapped as `{"_raw": "..."}` so the store never fails. The tool fails cleanly at execution time with `Error parsing input`; the session and history are preserved.
+- **Duplicate error message in TUI** (`agent/session.go`) — a `StreamError` SSE event was emitted as `EventError` inside the stream callback AND again when `runStream` returned the same error to `promptSync`. The TUI rendered the same error twice. Fix: removed the `emit` from the `StreamError` callback — `promptSync` is the single emit point via `errorEvent(err)`.
+
 ## [0.73.65] - 2026-07-29
 
 ### Fix — TUI: tool executing icon ⧖ → ▶
