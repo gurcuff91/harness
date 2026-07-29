@@ -268,6 +268,16 @@ func (c *Client) CloseSession(id string) (*Status, error) {
 	return c.decodeStatus("POST", "/api/sessions/"+id+"/close", nil)
 }
 
+// ForkSession creates a new session that is an exact copy of id at this moment.
+// Returns the forked session's metadata (new ID, fresh timestamps, same history).
+func (c *Client) ForkSession(id string) (*Session, error) {
+	s, err := decode[Session](c, "POST", "/api/sessions/"+id+"/fork", nil)
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
 // ResumeSession reopens an existing session by id.
 func (c *Client) ResumeSession(id string) (*Session, error) {
 	return ptr(decode[Session](c, "POST", "/api/sessions/"+id+"/resume", nil))

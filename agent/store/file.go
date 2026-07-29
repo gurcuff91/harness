@@ -131,6 +131,34 @@ func (m *FileStore) LoadMessages(sessionID string, fromIndex int) ([]types.Messa
 	return readJSONLFrom(path, fromIndex)
 }
 
+// CopyMessages duplicates the JSONL log of srcID into dstID byte-for-byte.
+// If srcID has no log yet (never written), dstID gets an empty file.
+func (m *FileStore) CopyMessages(srcID, dstID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	dstPath, found := m.findJSONLPath(dstID)
+	if !found {
+		return fmt.Errorf("CopyMessages: destination session %s not found", dstID)
+	}
+
+	srcPath, srcFound := m.findJSONLPath(srcID)
+	if !srcFound {
+		// Source has no JSONL yet — create an empty file for dst and return.
+		f, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+		if err != nil {
+			return err
+		}
+		return f.Close()
+	}
+
+	data, err := os.ReadFile(srcPath)
+	if err != nil {
+		return fmt.Errorf("CopyMessages: read src: %w", err)
+	}
+	return os.WriteFile(dstPath, data, 0600)
+}
+
 // TruncateMessages empties the session's JSONL log. If the file doesn't exist
 // yet, the call is a no-op (nothing to truncate).
 func (m *FileStore) TruncateMessages(sessionID string) error {

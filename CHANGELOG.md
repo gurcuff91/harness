@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.63] - 2026-07-29
+
+### Feat — `/fork` session command (TUI) + `POST /api/sessions/{id}/fork`
+- **`/fork`** in the TUI creates an exact copy of the current session at that instant: same CWD, model, thinking level, compaction state, stats, and full message history. The fork gets a new ID and fresh `CreatedAt`/`LastActiveAt`. The TUI switches to the fork in-place — history stays on screen unchanged, footer updates to the fork's name/ID. A one-line notice `⑂ forked → <id[:8]>` is printed. Returns 409 if the parent session is busy (JSONL may be mid-write).
+- **`SessionStore.CopyMessages(srcID, dstID)`** — new interface method. `FileStore`: `os.ReadFile(src.jsonl)` + `os.WriteFile(dst.jsonl)` (byte-exact copy). `InMemoryStore`: slice copy.
+- **`store.Session.Fork(name)`** — clones meta (new ID, `CreatedAt = now`, name as supplied), calls `CopyMessages`, opens and returns the fork handle via `OpenSession`.
+- **`agent.Agent.ForkSession(sessionID)`** — resolves parent (live in-memory or from disk), builds a full `agent.Session` on top of the forked store (provider, tools, system prompt all rebuilt for the new session ID).
+- **`POST /api/sessions/{id}/fork`** — new server endpoint. 409 if busy, 201 with the fork's `SessionMeta`.
+- **`client.ForkSession(id)`** — new client SDK method.
+
 ## [0.73.62] - 2026-07-29
 
 ### Fix — claude-oauth: disk credentials must never overwrite fresher in-memory tokens

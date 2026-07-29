@@ -11,8 +11,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gurcuff91/harness/types"
 )
+
+func newUUID() string { return uuid.New().String() }
 
 // ── SessionMeta ──────────────────────────────────────────────────────────
 
@@ -79,6 +82,11 @@ type SessionStore interface {
 	// empty (0 lines / 0 bytes). The session's meta is NOT touched — identity,
 	// model, and timestamps are preserved; the caller resets those fields.
 	TruncateMessages(sessionID string) error
+
+	// CopyMessages duplicates the entire message log of srcID into dstID.
+	// dstID must already exist (its meta saved). srcID's log is read atomically;
+	// any existing log for dstID is overwritten.
+	CopyMessages(srcID, dstID string) error
 
 	// Close releases any backend resources (open files, DB handles, …).
 	Close() error
@@ -231,6 +239,52 @@ func (s *Session) Reset() error {
 	s.meta.Stats = types.SessionStats{}
 	s.meta.LastActiveAt = time.Now()
 	return s.port.SaveMeta(s.meta)
+}
+
+// Fork creates a new session that is an exact copy of this one at this moment.
+// The fork gets a new ID and a fresh CreatedAt/LastActiveAt; everything else
+// (CWD, Model, Thinking, CompactOffset, CompactCount, Stats, all messages) is
+// duplicated. The parent session is never modified.
+// Returns ErrBusy if the parent is in the middle of a turn (JSONL may be mid-write).
+func (s *Session) Fork(name string) (*Session, error) {
+	s.mu.Lock()
+	parentMeta := s.meta
+	s.mu.Unlock()
+
+	now := time.Now()
+	newID := newUUID()
+
+	forkMeta := SessionMeta{
+		ID:            newID,
+		CWD:           parentMeta.CWD,
+		Name:          name,
+		Model:         parentMeta.Model,
+		Thinking:      parentMeta.Thinking,
+		CompactOffset: parentMeta.CompactOffset,
+		CompactCount:  parentMeta.CompactCount,
+		Stats:         parentMeta.Stats,
+		CreatedAt:     now,
+		LastActiveAt:  now,
+	}
+
+	// Persist meta first so dstID exists before CopyMessages.
+	if err := s.port.SaveMeta(forkMeta); err != nil {
+		return nil, fmt.Errorf("fork: save meta: %w", err)
+	}
+
+	// Copy the full message log (src → dst).
+	if err := s.port.CopyMessages(s.id, newID); err != nil {
+		// Best-effort cleanup — ignore secondary error.
+		_ = s.port.DeleteSession(newID)
+		return nil, fmt.Errorf("fork: copy messages: %w", err)
+	}
+
+	// Open the fork as a live session handle (loads working set from offset).
+	fork, err := OpenSession(s.port, newID)
+	if err != nil {
+		return nil, fmt.Errorf("fork: open: %w", err)
+	}
+	return fork, nil
 }
 
 // Close releases the handle. Messages are already durable (append-immediate), so

@@ -292,6 +292,7 @@ func (t *TUI) rootCommandItems() []components.SelectItem {
 		{Value: "delete", Label: "delete", Description: "Delete a session"},
 		{Value: "info", Label: "info", Description: "Show session info snapshot"},
 		{Value: "context", Label: "context", Description: "Show context window breakdown"},
+		{Value: "fork", Label: "fork", Description: "Fork this session — exact copy with a new ID"},
 	}
 	for _, cmd := range t.sessionCmds {
 		items = append(items, components.SelectItem{

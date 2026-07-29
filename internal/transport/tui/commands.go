@@ -56,6 +56,53 @@ func (t *TUI) handleSubmit(text string) {
 	t.submitPrompt(text)
 }
 
+// cmdFork forks the current session: creates an exact copy with a new ID,
+// switches the TUI to the fork in-place, and prints a one-line notice.
+// The history stays on screen unchanged — the fork shares the same content.
+func (t *TUI) cmdFork() {
+	if t.sessionID == "" {
+		t.showWarn("No active session.")
+		return
+	}
+	parentName := t.sessionName
+
+	fork, err := t.client.ForkSession(t.sessionID)
+	if err != nil {
+		t.showWarn("fork: " + err.Error())
+		return
+	}
+
+	// Stop the SSE stream for the parent session. The fork is already active on
+	// the server (ForkSession registered it); we just need to reconnect the
+	// stream to the new session ID so events (turn_start, text_delta, etc.)
+	// arrive for the fork, not the parent.
+	if t.sseCancel != nil {
+		t.sseCancel()
+		t.sseCancel = nil
+	}
+	// Close the parent session on the server (flush to disk). The fork is a
+	// separate session — it stays alive independently.
+	t.client.CloseSession(t.sessionID) //nolint:errcheck
+
+	// Switch TUI state to the fork.
+	t.sessionID = fork.ID
+	t.sessionName = fork.Name
+	t.model = fork.Model
+	t.thinking = fork.Thinking
+	t.maxIterations = fork.MaxIterations
+	t.refreshSubscriptionFlag()
+	t.loadStatsFromSession(fork)
+	t.loadSessionCommands()
+
+	// Print notice into the existing history (do NOT clear scrollback — the
+	// fork shares the same history content as the parent at this point).
+	t.addRaw(ansi.Accent("⑂ ") + ansi.Dimmed("forked from "+parentName))
+	t.updateInfo()
+
+	// Reconnect SSE to the fork so prompts and events flow correctly.
+	t.startSSE(t.baseCtx)
+}
+
 // bashCmdTimeout caps how long a direct "!" bash command may run.
 const bashCmdTimeout = 30 * time.Second
 
@@ -188,6 +235,10 @@ func (t *TUI) runCommand(cmd string, args []string) {
 	switch cmd {
 	case "quit", "exit":
 		t.quit() // closes the session (flush to disk) + exits
+		return
+
+	case "fork":
+		go t.cmdFork()
 		return
 
 	case "info":

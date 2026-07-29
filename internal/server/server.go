@@ -95,6 +95,7 @@ func (s *Server) handler() http.Handler {
 	r.Delete("/api/sessions/{id}", s.handleDeleteSession)
 	r.Post("/api/sessions/{id}/close", s.handleCloseSession)
 	r.Post("/api/sessions/{id}/resume", s.handleResumeSession)
+	r.Post("/api/sessions/{id}/fork", s.handleForkSession)
 	r.Post("/api/sessions/{id}/prompt", s.handlePrompt)
 	r.Get("/api/sessions/{id}/events", s.handleEvents)
 	r.Get("/api/sessions/{id}/commands", s.handleListCommands)
@@ -659,6 +660,37 @@ func (s *Server) handleGetMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	messages := proxy.session.AllMessages()
 	writeJSON(w, http.StatusOK, messages)
+}
+
+// handleForkSession creates a new session that is an exact copy of the parent
+// at this instant (same history, model, stats) with a new ID and fresh timestamps.
+func (s *Server) handleForkSession(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	// Refuse if the parent session is busy — JSONL may be mid-write.
+	s.mu.RLock()
+	proxy, active := s.sessions[id]
+	s.mu.RUnlock()
+	if active && proxy.session.IsBusy() {
+		writeError(w, http.StatusConflict, "session is busy", nil)
+		return
+	}
+
+	sess, err := s.agent.ForkSession(id)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		writeErr(w, status, err)
+		return
+	}
+
+	s.mu.Lock()
+	s.sessions[sess.ID()] = newSessionProxy(sess, s.verbose)
+	s.mu.Unlock()
+
+	writeJSON(w, http.StatusCreated, sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations()})
 }
 
 func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {

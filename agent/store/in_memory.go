@@ -82,6 +82,17 @@ func (m *InMemoryStore) LoadMessages(sessionID string, fromIndex int) ([]types.M
 	return out, nil
 }
 
+// CopyMessages duplicates the in-memory log of srcID into dstID.
+func (m *InMemoryStore) CopyMessages(srcID, dstID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	src := m.logs[srcID]
+	dst := make([]types.Message, len(src))
+	copy(dst, src)
+	m.logs[dstID] = dst
+	return nil
+}
+
 // TruncateMessages discards all messages for the session from RAM.
 func (m *InMemoryStore) TruncateMessages(sessionID string) error {
 	m.mu.Lock()

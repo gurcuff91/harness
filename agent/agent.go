@@ -507,6 +507,79 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 
 // ── Session management ───────────────────────────────────────────────────
 
+// ForkSession creates a new session that is an exact copy of sessionID at this
+// moment: same CWD, model, thinking, compaction state, stats, and full message
+// history. The fork gets a new ID and fresh timestamps. The parent is unchanged.
+// Returns ErrBusy (via the store layer) if the parent turn is in flight.
+func (a *Agent) ForkSession(sessionID string) (*Session, error) {
+	// Look up parent — prefer the live in-memory session (holds the mutex);
+	// fall back to opening from disk for inactive sessions.
+	a.sessMu.Lock()
+	parent, active := a.activeSessions[sessionID]
+	a.sessMu.Unlock()
+
+	var parentStore *store.Session
+	if active {
+		parentStore = parent.store
+	} else {
+		s, err := store.OpenSession(a.store, sessionID)
+		if err != nil {
+			return nil, fmt.Errorf("fork: open parent: %w", err)
+		}
+		if s == nil {
+			return nil, fmt.Errorf("fork: session %s not found", sessionID)
+		}
+		parentStore = s
+	}
+
+	forkStore, err := parentStore.Fork(defaultSessionName(time.Now()))
+	if err != nil {
+		return nil, err
+	}
+
+	// Build a live agent.Session on top of the fork store.
+	meta := forkStore.Meta()
+	provider, modelID, err := providers.Resolve(meta.Model)
+	if err != nil {
+		return nil, fmt.Errorf("fork: resolve provider: %w", err)
+	}
+
+	thinkingLvl := meta.Thinking
+	maxTokens := a.maxTokens
+	if maxTokens == 0 {
+		if m := provider.ModelMeta(modelID); m != nil && m.MaxTokens > 0 {
+			maxTokens = m.MaxTokens
+		} else {
+			maxTokens = 32000
+		}
+	}
+
+	cwd := meta.CWD
+	loader := a.resourceLoader
+	if loader == nil {
+		loader = resources.NewFileResourceLoader(cwd)
+	}
+	res, _ := loader.Load()
+	var skills []resources.SkillInfo
+	var readSkill func(string) (string, string, error)
+	if res != nil {
+		skills = res.Skills
+		readSkill = loader.ReadSkill
+	}
+
+	forkTools, tl := a.buildSessionTools(meta.ID, cwd, meta.Model, res, loader)
+	forkPrompt, pl := a.buildSystemPrompt(cwd, res)
+	sess := newSession(forkStore,
+		provider, modelID, thinkingLvl,
+		forkTools, tl, forkPrompt, pl,
+		a.maxIterations, maxTokens,
+		skills, readSkill,
+		a.memStore != nil)
+	sess.agent = a
+	a.registerSession(sess)
+	return sess, nil
+}
+
 func (a *Agent) ListSessions(cwd string) ([]store.SessionMeta, error) {
 	return a.store.ListMetas(cwd)
 }
