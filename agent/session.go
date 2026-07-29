@@ -872,7 +872,9 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 			}
 
 		case types.StreamError:
-			s.emit(types.Event{Type: types.EventError, Message: se.Delta})
+			// Do NOT emit EventError here — runStream returns this same error
+			// to promptSync, which emits EventError via errorEvent(err). Emitting
+			// here too produces a duplicate error message in the TUI.
 		}
 	})
 	if err != nil {
