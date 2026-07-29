@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.65] - 2026-07-29
+
+### Fix — TUI: tool executing icon ⧖ → ▶
+- **`internal/transport/tui/events.go`** — the "Executing…" placeholder shown while a tool is running changed from `⧖` (hourglass) to `▶` (play). Clearer "in-progress" semantics, terminal-safe, and contrasts cleanly with the `✔`/`✘` result icons that follow.
+
 ## [0.73.64] - 2026-07-29
 
 ### Fix + Feat — TUI: MCP tool display name format + icon update

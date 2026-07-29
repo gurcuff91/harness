@@ -175,7 +175,7 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 				}
 				colorFn, _ := toolStyle(name)
 				if b := t.toolBlk[toolID]; b != nil {
-					b.SetText(colorFn("⧖") + ansi.Dimmed(" Executing..."))
+					b.SetText(colorFn("▶") + ansi.Dimmed(" Executing..."))
 				}
 				t.tui.RequestRender(false)
 
