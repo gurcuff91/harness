@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.62] - 2026-07-29
+
+### Fix — claude-oauth: disk credentials must never overwrite fresher in-memory tokens
+- **Root cause** (`internal/providers/claude_oauth.go`) — the fix in v0.73.58 made
+  `getValidToken` and `loadCredentialsFromSources` always sync from
+  `~/.harness/credentials.json` unconditionally. This introduced a new bug:
+  `Connect()` sets fresh credentials in memory (obtained from the keychain via
+  `authflow`), then calls `FetchModels()` to validate them. Inside `FetchModels`,
+  `getValidToken` ran the disk sync and overwrote the fresh in-memory tokens with
+  the stale ones still on disk — causing the validation to fail with
+  "invalid credentials". The user had to manually delete the `claude-oauth` entry
+  from `credentials.json` to bypass it.
+- **Fix** — disk credentials are now only adopted when they are **strictly newer**
+  than what is already in memory (`cred.ExpiresAt > tm.creds.ExpiresAt`). Applied
+  in three places: `loadCredentialsFromSources`, the initial sync in
+  `getValidToken`, and the per-retry sync inside the refresh loop. This preserves
+  both goals simultaneously: fresh keychain tokens from `Connect()` are never
+  overwritten by stale disk data; a concurrent harness instance that successfully
+  refreshed and wrote a newer token pair is still picked up correctly.
+
 ## [0.73.61] - 2026-07-28
 
 ### Feat — `/reset` in Telegram & Slack; remove redundant `/new`

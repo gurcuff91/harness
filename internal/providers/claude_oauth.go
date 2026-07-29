@@ -108,11 +108,20 @@ func (c *ClaudeOAuth) ResolveCredentials() (types.Credentials, error) {
 // a stale in-memory refresh_token causes invalid_grant).
 func (c *ClaudeOAuth) loadCredentialsFromSources() error {
 	if cred, ok := config.GetCredentialsManager().Credential("claude-oauth"); ok && cred.AccessToken != "" {
-		creds := types.OAuthCredentials(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType)
-		c.tokens.creds = &creds
+		// Only update in-memory creds when disk is newer. This prevents stale
+		// disk tokens (e.g. from a previous harness run) from overwriting fresh
+		// tokens just set by Connect() from the keychain/authflow.
+		inMemoryExpiry := int64(0)
+		if c.tokens.creds != nil {
+			inMemoryExpiry = c.tokens.creds.ExpiresAt
+		}
+		if cred.ExpiresAt >= inMemoryExpiry {
+			creds := types.OAuthCredentials(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType)
+			c.tokens.creds = &creds
+		}
 		return nil
 	}
-	// Fall back to whatever is already in memory (e.g. set during Connect).
+	// No disk entry — fall back to in-memory (e.g. set during Connect).
 	if c.tokens.creds != nil && c.tokens.creds.AccessToken != "" {
 		return nil
 	}
@@ -534,8 +543,13 @@ func (tm *tokenManager) getValidToken() (string, error) {
 		return "", fmt.Errorf("not connected")
 	}
 
-	// Always sync from disk first — another instance may have refreshed already.
-	if cred, ok := config.GetCredentialsManager().Credential("claude-oauth"); ok && cred.AccessToken != "" {
+	// Sync from disk only when the disk has NEWER credentials than memory.
+	// This handles the multi-instance refresh race (another process refreshed
+	// and wrote a newer token) while preserving credentials that were just
+	// set in-memory by Connect() from the keychain/authflow — those are not
+	// yet persisted to disk and must not be overwritten by stale disk data.
+	if cred, ok := config.GetCredentialsManager().Credential("claude-oauth"); ok &&
+		cred.AccessToken != "" && cred.ExpiresAt > tm.creds.ExpiresAt {
 		synced := types.OAuthCredentials(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType)
 		tm.creds = &synced
 	}
@@ -555,7 +569,9 @@ func (tm *tokenManager) getValidToken() (string, error) {
 
 			// Re-read from disk before each retry — a concurrent instance may
 			// have succeeded in the meantime and written a fresh token pair.
-			if cred, ok := config.GetCredentialsManager().Credential("claude-oauth"); ok && cred.AccessToken != "" {
+			// Only adopt disk tokens when they are newer than what we have.
+			if cred, ok := config.GetCredentialsManager().Credential("claude-oauth"); ok &&
+				cred.AccessToken != "" && cred.ExpiresAt > tm.creds.ExpiresAt {
 				synced := types.OAuthCredentials(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType)
 				tm.creds = &synced
 				// If the disk token is now fresh, use it directly.
