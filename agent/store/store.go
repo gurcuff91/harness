@@ -75,6 +75,11 @@ type SessionStore interface {
 	// absolute position in the log). fromIndex 0 returns the full history.
 	LoadMessages(sessionID string, fromIndex int) ([]types.Message, error)
 
+	// TruncateMessages discards the entire message log for a session, leaving it
+	// empty (0 lines / 0 bytes). The session's meta is NOT touched — identity,
+	// model, and timestamps are preserved; the caller resets those fields.
+	TruncateMessages(sessionID string) error
+
 	// Close releases any backend resources (open files, DB handles, …).
 	Close() error
 }
@@ -206,6 +211,24 @@ func (s *Session) AddCompactionSummary(summary string) error {
 	s.baseOffset = newOffset
 	s.meta.CompactOffset = newOffset
 	s.meta.CompactCount++
+	s.meta.LastActiveAt = time.Now()
+	return s.port.SaveMeta(s.meta)
+}
+
+// Reset wipes the session's message history and accumulated stats, returning it
+// to a freshly-created state. Identity fields (ID, CWD, Name, Model, Thinking,
+// CreatedAt) are preserved. The in-memory working set is also cleared.
+func (s *Session) Reset() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.port.TruncateMessages(s.id); err != nil {
+		return fmt.Errorf("reset: truncate messages: %w", err)
+	}
+	s.working = nil
+	s.baseOffset = 0
+	s.meta.CompactOffset = 0
+	s.meta.CompactCount = 0
+	s.meta.Stats = types.SessionStats{}
 	s.meta.LastActiveAt = time.Now()
 	return s.port.SaveMeta(s.meta)
 }

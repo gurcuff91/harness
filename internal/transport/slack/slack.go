@@ -297,7 +297,7 @@ func (t *Transport) handleEvent(ctx context.Context, evt *RTMEvent) {
 		return
 	}
 
-	// Handle /commands (typed as "@harness /compact", "@harness /new", etc.)
+	// Handle /commands (typed as "@harness /compact", "@harness /reset", etc.)
 	if strings.HasPrefix(text, "/") {
 		t.handleCommand(ctx, evt.Channel, evt.User, text)
 		return
@@ -343,9 +343,9 @@ func (t *Transport) handleEvent(ctx context.Context, evt *RTMEvent) {
 // adminOnlyCommands are the commands that require the caller to be in the admin
 // list. Read-only commands (/help, /info, /context) are always public.
 var adminOnlyCommands = map[string]bool{
-	"new":      true,
 	"stop":     true,
 	"compact":  true,
+	"reset":    true,
 	"thinking": true,
 	"model":    true,
 }
@@ -369,14 +369,6 @@ func (t *Transport) handleCommand(ctx context.Context, channelID, senderID, text
 	}
 
 	switch cmd {
-	case "new":
-		t.resetChannel(ctx, channelID)
-		if _, err := t.pumpFor(ctx, channelID); err != nil {
-			t.replyError(ctx, channelID, err)
-			return
-		}
-		t.send(ctx, channelID, "Started a fresh session.")
-
 	case "stop":
 		t.mu.Lock()
 		p := t.pumps[channelID]
@@ -404,6 +396,18 @@ func (t *Transport) handleCommand(ctx context.Context, channelID, senderID, text
 			return
 		}
 		t.send(ctx, channelID, "🗜 Compacting the conversation…")
+
+	case "reset":
+		p, err := t.pumpFor(ctx, channelID)
+		if err != nil {
+			t.replyError(ctx, channelID, err)
+			return
+		}
+		if _, err := t.api.ExecCommand(p.sessionID, "reset", nil); err != nil {
+			t.replyError(ctx, channelID, err)
+			return
+		}
+		t.send(ctx, channelID, "🔄 Session history and stats wiped. Starting fresh.")
 
 	case "info":
 		p, err := t.pumpFor(ctx, channelID)
@@ -515,9 +519,9 @@ func slackHelp(unknown string) string {
 		fmt.Fprintf(&b, "Unknown command `/%s`.\n\n", unknown)
 	}
 	b.WriteString("*Available commands:*\n")
-	b.WriteString("• `/new` — start a fresh session (clears conversation history)\n")
 	b.WriteString("• `/stop` — interrupt the current work mid-turn\n")
 	b.WriteString("• `/compact` — summarize and compact the conversation to free context space\n")
+	b.WriteString("• `/reset` — wipe history and stats, start fresh\n")
 	b.WriteString("• `/info` — show session info (model, thinking, tokens, cost, MCPs)\n")
 	b.WriteString("• `/context` — show context window breakdown (system, tools, conversation, free space)\n")
 	b.WriteString("• `/thinking [level]` — show current thinking level or set it (off/low/medium/high/xhigh)\n")

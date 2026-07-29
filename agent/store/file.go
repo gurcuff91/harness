@@ -131,6 +131,18 @@ func (m *FileStore) LoadMessages(sessionID string, fromIndex int) ([]types.Messa
 	return readJSONLFrom(path, fromIndex)
 }
 
+// TruncateMessages empties the session's JSONL log. If the file doesn't exist
+// yet, the call is a no-op (nothing to truncate).
+func (m *FileStore) TruncateMessages(sessionID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	path, found := m.findJSONLPath(sessionID)
+	if !found {
+		return nil // no file = already empty
+	}
+	return os.Truncate(path, 0)
+}
+
 func (m *FileStore) Close() error { return nil }
 
 // ── path helpers (must hold m.mu) ─────────────────────────────────────────

@@ -12,6 +12,7 @@ import (
 	"github.com/gurcuff91/harness/internal/client"
 	"github.com/gurcuff91/harness/internal/providers/authflow"
 	"github.com/gurcuff91/harness/internal/transport/tui/ansi"
+	"github.com/gurcuff91/harness/internal/transport/tui/components"
 )
 
 // defaultPlaceholder is the editor's idle hint, restored after a value capture.
@@ -386,6 +387,24 @@ func (t *TUI) applyCommandResult(cmd string, args []string, status *client.Statu
 			t.sessionName = argVal
 			confirm = "renamed → " + argVal
 		}
+	}
+	// Reset: wipe the TUI's visual history and accumulated stats so the screen
+	// matches the now-empty session store.
+	if cmd == "reset" {
+		t.history.Clear()
+		t.stats = tokensInfo{}
+		t.currTurn = 0
+		t.queueCount = 0
+		t.liveMD = nil
+		t.mu.Lock()
+		t.toolBlk = make(map[string]*components.RawBlock)
+		t.toolArgs = make(map[string]*components.RawBlock)
+		t.lastKind = ""
+		t.mu.Unlock()
+		t.addRaw(ansi.Accent("✔") + " " + ansi.Dimmed("session reset — history cleared"))
+		t.updateInfo()
+		t.tui.RequestRender(false)
+		return
 	}
 	// Commands that trigger agent streaming show the spinner instead of a
 	// static confirmation (the stream itself is the feedback).

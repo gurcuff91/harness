@@ -13,9 +13,9 @@ import (
 // botCommands is the command menu registered with Telegram (setMyCommands) and
 // the set this transport handles. Descriptions show in the "/" suggestion list.
 var botCommands = []BotCommand{
-	{Command: "new", Description: "🆕 Start a fresh session"},
 	{Command: "stop", Description: "🛑 Stop the current work"},
 	{Command: "compact", Description: "🗜 Summarize & compact the conversation"},
+	{Command: "reset", Description: "🔄 Wipe history & stats, start fresh"},
 	{Command: "info", Description: "📊 Session & model info"},
 	{Command: "context", Description: "📐 Context window breakdown"},
 	{Command: "thinking", Description: "🧠 Change thinking level"},
@@ -33,12 +33,12 @@ func (t *Transport) handleCommand(ctx context.Context, chatID int64, text string
 	logx.Info("telegram", "command", "chat", chatID, "name", cmd)
 
 	switch cmd {
-	case "new":
-		t.cmdNew(ctx, chatID)
 	case "stop":
 		t.cmdStop(ctx, chatID)
 	case "compact":
 		t.cmdCompact(ctx, chatID)
+	case "reset":
+		t.cmdReset(ctx, chatID)
 	case "info":
 		t.cmdInfo(ctx, chatID)
 	case "context":
@@ -48,18 +48,8 @@ func (t *Transport) handleCommand(ctx context.Context, chatID int64, text string
 	case "model":
 		t.cmdModel(ctx, chatID)
 	default:
-		t.reply(ctx, chatID, "Unknown command. Try /new, /stop, /compact, /info, /context, /thinking or /model.")
+		t.reply(ctx, chatID, "Unknown command. Try /stop, /compact, /reset, /info, /context, /thinking or /model.")
 	}
-}
-
-// cmdNew closes the chat's current session and starts a blank one.
-func (t *Transport) cmdNew(ctx context.Context, chatID int64) {
-	t.resetChat(ctx, chatID)
-	if _, err := t.pumpFor(ctx, chatID); err != nil {
-		t.replyError(ctx, chatID, err)
-		return
-	}
-	t.reply(ctx, chatID, "Started a fresh session.")
 }
 
 // cmdStop interrupts any in-flight work on the chat's session.
@@ -97,6 +87,21 @@ func (t *Transport) cmdCompact(ctx context.Context, chatID int64) {
 		return
 	}
 	t.reply(ctx, chatID, "🗜 Compacting the conversation…")
+}
+
+// cmdReset wipes the session's history and stats, returning it to a blank state
+// while preserving identity (model, thinking, name).
+func (t *Transport) cmdReset(ctx context.Context, chatID int64) {
+	p, err := t.pumpFor(ctx, chatID)
+	if err != nil {
+		t.replyError(ctx, chatID, err)
+		return
+	}
+	if _, err := t.api.ExecCommand(p.sessionID, "reset", nil); err != nil {
+		t.replyError(ctx, chatID, err)
+		return
+	}
+	t.reply(ctx, chatID, "🔄 Session history and stats wiped. Starting fresh.")
 }
 
 // cmdInfo reports the same picture as the TUI footer: harness version + session

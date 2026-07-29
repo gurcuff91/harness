@@ -284,6 +284,17 @@ func (s *Session) Compact(ctx context.Context) error {
 	return s.compact(ctx)
 }
 
+// Reset wipes the session's message history and accumulated stats, returning it
+// to a freshly-created state. Identity fields (ID, CWD, Name, Model, Thinking,
+// CreatedAt) are preserved — the session is the same entity, just empty.
+// Returns ErrBusy if a turn is in flight.
+func (s *Session) Reset() error {
+	if s.IsBusy() {
+		return ErrBusy
+	}
+	return s.store.Reset()
+}
+
 // Wait blocks until the session's queue is fully drained (no turn in flight and
 // nothing queued). It uses condition-variable signaling — no polling. Useful for
 // SDK/batch callers that fire several prompts and then wait for all of them:

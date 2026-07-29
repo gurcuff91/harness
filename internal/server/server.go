@@ -952,6 +952,11 @@ var commands = []commandDef{
 		Description: "Compact the conversation via LLM summary",
 		Params:      []paramDef{},
 	},
+	{
+		Name:        "reset",
+		Description: "Wipe the session history and stats, starting fresh (preserves model, thinking, and name)",
+		Params:      []paramDef{},
+	},
 }
 
 func (s *Server) handleListCommands(w http.ResponseWriter, r *http.Request) {
@@ -1081,6 +1086,17 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 		}
 		go proxy.session.Compact(context.Background()) //nolint
 		writeStatus(w, http.StatusAccepted, "started", "")
+
+	case "reset":
+		if proxy.session.IsBusy() {
+			writeError(w, http.StatusConflict, "session is busy", nil)
+			return
+		}
+		if err := proxy.session.Reset(); err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeStatus(w, http.StatusOK, "ok", "")
 
 	default:
 		// Check if it's a skill command: skill:<name>

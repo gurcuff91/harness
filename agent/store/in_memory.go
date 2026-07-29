@@ -82,4 +82,12 @@ func (m *InMemoryStore) LoadMessages(sessionID string, fromIndex int) ([]types.M
 	return out, nil
 }
 
+// TruncateMessages discards all messages for the session from RAM.
+func (m *InMemoryStore) TruncateMessages(sessionID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.logs[sessionID] = nil
+	return nil
+}
+
 func (m *InMemoryStore) Close() error { return nil }

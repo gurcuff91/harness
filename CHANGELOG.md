@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.61] - 2026-07-28
+
+### Feat — `/reset` in Telegram & Slack; remove redundant `/new`
+- **`/reset` added to Telegram** (`internal/transport/telegram/commands.go`) — new `cmdReset` handler calls `ExecCommand("reset")` and replies `🔄 Session history and stats wiped. Starting fresh.` Registered in `botCommands` so it appears in Telegram's `/` suggestion list.
+- **`/reset` added to Slack** (`internal/transport/slack/slack.go`) — admin-only (added to `adminOnlyCommands` alongside `compact`, `stop`, etc.). Non-admins receive the standard `⛔` permission message. Added to `/help` output.
+- **`/new` removed from Telegram and Slack** — `/reset` is strictly superior: same end-result (empty history) but preserves the session ID, model, thinking level, and name. `/new` created a new session entity with a new ID, which was unnecessary overhead. `resetChat`/`resetChannel` internal helpers are kept — they are still used by the pump lifecycle when a stored session is no longer found on the server.
+
+## [0.73.60] - 2026-07-28
+
+### Feat — `/reset` session command
+- **`/reset`** wipes a session's message history and accumulated stats, returning it to a freshly-created state. Identity fields (`ID`, `CWD`, `Name`, `Model`, `Thinking`, `CreatedAt`) are preserved — same session entity, empty slate.
+- **`SessionStore.TruncateMessages(sessionID)`** — new method added to the port interface. `FileStore` uses `os.Truncate(path, 0)` (file preserved, 0 bytes). `InMemoryStore` sets the log slice to `nil`.
+- **`store.Session.Reset()`** — clears the in-memory working set, resets `CompactOffset`, `CompactCount`, and `Stats` to zero, then persists the updated meta.
+- **`agent.Session.Reset()`** — public method with `ErrBusy` guard (409 if a turn is in flight).
+- **`internal/server/server.go`** — `"reset"` added to the command registry and `handleExecCommand` switch. Returns `200 ok` on success, `409` if busy.
+- **TUI** — `/reset` available immediately via the existing `execSessionCommand` path, no additional wiring needed.
+
 ## [0.73.59] - 2026-07-28
 
 ### Fix — Strip images from previous turns before every provider request
