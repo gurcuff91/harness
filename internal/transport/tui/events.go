@@ -273,7 +273,7 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 			case "max_iterations_reached":
 				// The agent hit its per-turn ReAct cap while still working. Tell the
 				// user so the (summarized) result isn't mistaken for a normal finish.
-				t.addRaw(ansi.Dimmed(fmt.Sprintf("⚠ reached the %d-iteration limit — summarizing progress", evt.MaxIterations)))
+				t.addRaw(ansi.Warn(fmt.Sprintf("⚠ reached the %d-iteration limit — summarizing progress", evt.MaxIterations)))
 
 			case "error":
 				msg := evt.Message

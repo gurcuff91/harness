@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.71] - 2026-07-29
+
+### Fix — TUI: max-iterations warning uses amber (Warn) instead of dim
+- **`internal/transport/tui/events.go`** — the `⚠ reached the N-iteration limit — summarizing progress` message now uses `ansi.Warn` (amber `#E8A838`) instead of `ansi.Dimmed`. A warning should look like a warning, not fade into the background.
+
 ## [0.73.70] - 2026-07-29
 
 ### Feat — Memory slugs listed in system prompt for proactive recall
