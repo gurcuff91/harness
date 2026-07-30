@@ -769,6 +769,26 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) (string,
 
 	if a.memStore != nil {
 		b.WriteString("\n\n## Memory\n\nYou have persistent, project-scoped memory that carries over between sessions. At the start of a task — or whenever you lack context about earlier work — use MemoSearch with relevant keywords to recover prior decisions, conventions, and context. Save durable, high-value insights with MemoWrite (never transient task state), and remove obsolete ones with MemoDelete.")
+		// List up to 30 memory slugs so the model knows what it has and can
+		// proactively search. Fetch 31: if we get 31, there are more than 30
+		// and we note "+ many more" without flooding the prompt.
+		if res, err := a.memStore.Search(cwd, "", false, 0, 31); err == nil {
+			if len(res.Results) == 0 {
+				b.WriteString("\n\nNo memories yet — use MemoWrite to save durable insights as you work.")
+			} else {
+				b.WriteString("\n\nYour memories:\n")
+				count := len(res.Results)
+				if count > 30 {
+					count = 30
+				}
+				for i := 0; i < count; i++ {
+					b.WriteString(fmt.Sprintf("- %s\n", res.Results[i].Slug))
+				}
+				if len(res.Results) > 30 {
+					b.WriteString("- many more — use MemoSearch to find them\n")
+				}
+			}
+		}
 	}
 
 	if a.schedStore != nil {

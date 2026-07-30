@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.70] - 2026-07-29
+
+### Feat — Memory slugs listed in system prompt for proactive recall
+- **`agent.buildSystemPrompt()`** (`agent/agent.go`) — the Memory section now lists up to 30 memory slugs so the model knows what memories it has and can proactively decide whether to search. Fetches with `Search(cwd, "", false, 0, 31)` (list mode, no content, limit 31): if 31 results come back, there are more than 30 and the prompt notes `"- many more — use MemoSearch to find them"`. When there are zero memories, shows `"No memories yet — use MemoWrite to save durable insights as you work."` — a gentle nudge to start using memory.
+- No `(global)` labels — memories are memories regardless of scope. The model sees a flat slug list, just like the Available Skills section. Content is never included (slugs are the index; `MemoSearch` fetches full content on demand). Cost: ~100-150 tokens for 30 slugs — negligible vs the full system prompt.
+
 ## [0.73.69] - 2026-07-29
 
 ### Feat — Pre-warm pumps at transport startup (Slack + Telegram)
