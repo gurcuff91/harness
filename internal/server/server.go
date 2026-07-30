@@ -43,6 +43,7 @@ const sseClientBufferSize = 4096
 type Server struct {
 	agent    *agent.Agent
 	verbose  bool
+	addr     string // resolved listen address (set in Serve)
 	mu       sync.RWMutex
 	sessions map[string]*SessionProxy
 }
@@ -74,6 +75,8 @@ func (s *Server) handler() http.Handler {
 
 	// Routes
 	r.Get("/api/server", s.handleServerInfo)
+	r.Get("/api/docs", s.handleDocs)
+	r.Get("/api/docs/openapi.json", s.handleOpenAPISpec)
 	r.Get("/api/settings", s.handleSettings)
 	r.Patch("/api/settings", s.handlePatchSettings)
 	r.Get("/api/settings/providers", s.handleListProviderConfigs)
@@ -127,8 +130,9 @@ func (s *Server) handler() http.Handler {
 // close-then-reopen race, no readiness polling. For a fixed address, do
 // net.Listen("tcp", addr) then Serve(l).
 func (s *Server) Serve(l net.Listener) error {
+	s.addr = l.Addr().String()
 	if s.verbose {
-		logx.Info("server", "listening", "addr", l.Addr().String())
+		logx.Info("server", "listening", "addr", s.addr)
 	}
 	return http.Serve(l, s.handler())
 }
@@ -1211,4 +1215,16 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) handleDocs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(docsHTML)) //nolint:errcheck
+}
+
+func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(openAPISpecJSON(s.addr))) //nolint:errcheck
 }

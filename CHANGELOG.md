@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.67] - 2026-07-29
+
+### Feat — OpenAPI 3.0 spec + Scalar API docs UI (`/api/docs`)
+- **`GET /api/docs`** — Scalar-powered interactive API reference UI. Single self-contained HTML page served from Go (no build step, no extra assets). Loads spec from `/api/docs/openapi.json` via CDN `@scalar/api-reference`. Open in browser while harness is running.
+- **`GET /api/docs/openapi.json`** — Hand-written OpenAPI 3.0 spec covering all 31 endpoints: server, settings, providers, models, MCP, memory, schedules, sessions (CRUD, resume, fork, prompt, SSE events, commands, messages, stop, info, context). All schemas documented (`SessionMeta`, `SessionDetail`, `SessionStats`, `ContextBreakdown`, `Provider`, `Schedule`, `MemoryEntry`, etc.).
+- **Dynamic version + server address** — spec `info.version` is injected at request time from `version.Version` (set by Makefile ldflags). `servers[0].url` is set to the actual listener address (`l.Addr().String()`) resolved in `Server.Serve()` — no hardcoded port. Both use `strings.ReplaceAll` on a template constant, zero external deps.
+- **`Server.addr`** field added to store the resolved listen address after `Serve()` is called.
+- **`internal/server/server_docs.go`** — new file holding `docsHTML`, `openAPISpecTemplate`, and `openAPISpecJSON(addr)`.
+
 ## [0.73.66] - 2026-07-29
 
 ### Fix — Anthropic parser: malformed tool-call JSON crashes store + duplicate error message
