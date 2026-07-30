@@ -249,6 +249,23 @@ func (s *store) sessionFor(channelID string) (string, bool) {
 	return id, ok && id != ""
 }
 
+// allSessions returns all (channelID → sessionID) mappings for the current
+// working directory. Used at transport startup to pre-warm pumps so scheduled
+// prompts never fire into a session with no active SSE consumer.
+func (s *store) allSessions() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cwdMap, ok := s.data.Sessions[s.cwd]
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(cwdMap))
+	for k, v := range cwdMap {
+		out[k] = v
+	}
+	return out
+}
+
 func (s *store) bind(channelID, sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

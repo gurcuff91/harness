@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.69] - 2026-07-29
+
+### Feat — Pre-warm pumps at transport startup (Slack + Telegram)
+- **Problem** — when a transport started with `--scheduler`, pumps were created lazily on the first user message. If a scheduled prompt fired before the user wrote anything, the session was auto-resumed by the agent (v0.73.68) and the response was persisted to disk, but no pump existed to deliver it to the Slack channel or Telegram chat in real time.
+- **`store.allSessions()`** (`internal/transport/slack/creds.go`, `internal/transport/telegram/chats.go`) — new method returning all `(channelID/chatID → sessionID)` mappings for the current working directory.
+- **`Transport.prewarmPumps(ctx)`** (both transports) — iterates `allSessions()` at startup and calls `pumpFor` for each stored mapping. Every pump opens its SSE stream and starts draining immediately, so when the scheduler fires a prompt the output is delivered to the channel in real time. Errors are logged as warnings (never fatal) — a failed pre-warm falls back to lazy creation on first user message.
+- **Slack** — `prewarmPumps` called after tool registration, before `rtmLoop`.
+- **Telegram** — `prewarmPumps` called after `SetMyCommands`, before `pollLoop`.
+- **TUI** — no changes. The TUI is mono-session (single `sessionID`, single SSE stream); it does not have multi-chat pumps and does not need pre-warming. The agent beneath may auto-resume sessions for the scheduler, but the TUI only listens to the one session the user has open.
+
 ## [0.73.68] - 2026-07-29
 
 ### Feat — Scheduler auto-resume: scheduled prompts never lost across restarts

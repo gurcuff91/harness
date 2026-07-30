@@ -126,6 +126,25 @@ func (s *store) sessionFor(chatID int64) (string, bool) {
 	return id, ok && id != ""
 }
 
+// allSessions returns all (chatID → sessionID) mappings for the current
+// working directory. Used at transport startup to pre-warm pumps so scheduled
+// prompts never fire into a session with no active SSE consumer.
+func (s *store) allSessions() map[int64]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cwdMap, ok := s.data.Sessions[s.cwd]
+	if !ok {
+		return nil
+	}
+	out := make(map[int64]string, len(cwdMap))
+	for k, v := range cwdMap {
+		if id, err := strconv.ParseInt(k, 10, 64); err == nil {
+			out[id] = v
+		}
+	}
+	return out
+}
+
 func (s *store) bind(chatID int64, sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

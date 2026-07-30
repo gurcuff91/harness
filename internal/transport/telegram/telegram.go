@@ -99,7 +99,22 @@ func Run(ctx context.Context, a *agent.Agent, opts Options) error {
 		logx.Warn("telegram", "set_commands", "error", err.Error())
 	}
 
+	t.prewarmPumps(ctx)
+
 	return t.pollLoop(ctx)
+}
+
+// prewarmPumps opens a pump (SSE consumer) for every stored chat mapping at
+// startup so scheduled prompts are never lost — when the scheduler fires into
+// a session, there is already a live drain goroutine writing the output back to
+// the Telegram chat. Errors are logged but never fatal: a failed pre-warm just
+// means that chat's pump will be created lazily on first user message.
+func (t *Transport) prewarmPumps(ctx context.Context) {
+	for chatID := range t.store.allSessions() {
+		if _, err := t.pumpFor(ctx, chatID); err != nil {
+			logx.Warn("telegram", "prewarm", "chat", chatID, "error", err.Error())
+		}
+	}
 }
 
 // resolveModel picks the model: the --model override if active, else the

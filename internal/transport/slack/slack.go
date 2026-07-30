@@ -119,7 +119,22 @@ func Run(ctx context.Context, a *agent.Agent, opts Options) error {
 		a.RegisterTool(tool)
 	}
 
+	t.prewarmPumps(ctx)
+
 	return t.rtmLoop(ctx)
+}
+
+// prewarmPumps opens a pump (SSE consumer) for every stored channel mapping at
+// startup so scheduled prompts are never lost — when the scheduler fires into a
+// session, there is already a live drain goroutine writing the output back to
+// the Slack channel. Errors are logged but never fatal: a failed pre-warm just
+// means that channel's pump will be created lazily on first user message.
+func (t *Transport) prewarmPumps(ctx context.Context) {
+	for channelID := range t.store.allSessions() {
+		if _, err := t.pumpFor(ctx, channelID); err != nil {
+			logx.Warn("slack", "prewarm", "channel", channelID, "error", err.Error())
+		}
+	}
 }
 
 // resolveModel picks the model: the override if active, else the persisted
