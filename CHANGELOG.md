@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.68] - 2026-07-29
+
+### Feat — Scheduler auto-resume: scheduled prompts never lost across restarts
+- **`agent.fireScheduledPrompt()`** (`agent/agent.go`) — when a schedule fires and its owner session is not active (process restarted, session never opened), the agent now auto-resumes it from disk instead of dropping the prompt. The prompt runs, the response is persisted to the session's JSONL, and when the user reconnects via any transport they see the scheduled prompt and its output in history. If the session no longer exists on disk, the prompt is still dropped silently.
+- **`agent.ResumeSession()` — idempotent** — if the session is already live in `activeSessions`, returns the existing handle without reloading from disk. Safe to call from multiple paths (transport reconnect, scheduler auto-resume, manual `/resume`) without race conditions or duplicate sessions.
+- **`server.handleResumeSession()` — idempotent** — returns `200` with session details when the session is already active, instead of `409 Conflict`. Transports no longer fall through to `CreateSession` when the scheduler auto-resumed the session first, eliminating orphaned duplicate sessions.
+- **OpenAPI spec** (`internal/server/server_docs.go`) — `POST /api/sessions/{id}/resume` updated: removed `409` response, description now notes "Resumed (or already active — idempotent)".
+
 ## [0.73.67] - 2026-07-29
 
 ### Feat — OpenAPI 3.0 spec + Scalar API docs UI (`/api/docs`)

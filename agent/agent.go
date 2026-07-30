@@ -206,15 +206,19 @@ func New(opts AgentOptions) *Agent {
 
 // fireScheduledPrompt is the engine callback: it routes the due prompt to the
 // session named by the schedule's owner, tagged as scheduled. If that session is
-// not currently active (never opened, or closed), the prompt is dropped — the
-// engine still records the run, so no catch-up piles up. A transport that has
-// subscribed to the owner session's events will see the output; nobody being
-// subscribed doesn't stop the prompt from running.
+// not currently active, it is auto-resumed from disk so scheduled prompts are
+// never lost across process restarts. The engine still records the run.
 //
 // owner == "" is the single-session fallback (e.g. the TUI): if exactly one
 // session is active, it receives the prompt.
 func (a *Agent) fireScheduledPrompt(slug, prompt, owner string) {
-	if sess := a.resolveScheduledSession(owner); sess != nil {
+	sess := a.resolveScheduledSession(owner)
+	if sess == nil && owner != "" {
+		// Session not active — auto-resume from disk so the prompt runs.
+		// If the session no longer exists on disk, drop silently.
+		sess, _ = a.ResumeSession(owner)
+	}
+	if sess != nil {
 		sess.Prompt(context.Background(), prompt, WithOriginScheduled())
 	}
 }
@@ -447,8 +451,19 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 	return sess, nil
 }
 
-// ResumeSession reopens an existing session, fully restoring its state.
+// ResumeSession reopens an existing session, fully restoring its state. If the
+// session is already active (live in the agent's registry), it returns the
+// existing handle without reloading from disk — making this idempotent and safe
+// to call from multiple paths (transport reconnect, scheduler auto-resume, …).
 func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
+	// Fast path: already active — return the live handle.
+	a.sessMu.Lock()
+	if sess, ok := a.activeSessions[sessionID]; ok {
+		a.sessMu.Unlock()
+		return sess, nil
+	}
+	a.sessMu.Unlock()
+
 	storeInst, err := store.OpenSession(a.store, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)

@@ -290,9 +290,8 @@ const openAPISpecTemplate = `{
         "operationId": "resumeSession",
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
         "responses": {
-          "200": { "description": "Resumed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SessionDetail" } } } },
-          "404": { "description": "Session not found" },
-          "409": { "description": "Session already active" }
+          "200": { "description": "Resumed (or already active — idempotent)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SessionDetail" } } } },
+          "404": { "description": "Session not found" }
         }
       }
     },

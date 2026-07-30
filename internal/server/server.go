@@ -700,11 +700,15 @@ func (s *Server) handleForkSession(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	// Already active?
+	// Already active? Return the live session (idempotent — supports scheduler
+	// auto-resume and transport reconnect without 409 errors).
 	s.mu.RLock()
-	if _, ok := s.sessions[id]; ok {
+	if proxy, ok := s.sessions[id]; ok {
 		s.mu.RUnlock()
-		writeError(w, http.StatusConflict, "session is already active", nil)
+		writeJSON(w, http.StatusOK, sessionDetailDTO{
+			SessionMeta:   proxy.session.Meta(),
+			MaxIterations: proxy.session.MaxIterations(),
+		})
 		return
 	}
 	s.mu.RUnlock()
