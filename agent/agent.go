@@ -96,6 +96,14 @@ type AgentOptions struct {
 	// transport marks one session as the scheduler target (SetScheduledSession);
 	// only one agent should enable this so prompts don't fire twice.
 	EnableScheduler bool
+
+	// EnableColleagues turns on the ColleagueList/ColleagueAsk tools: the agent
+	// can discover OTHER running harness server instances on this machine (via
+	// ~/.harness/instances.json, see agent/colleague) and delegate a prompt to
+	// one of them over HTTP — each colleague answers with its own model, MCPs,
+	// and project context, not the caller's. Off by default; disabled for
+	// subagents and one-shot CLI commands regardless of this flag.
+	EnableColleagues bool
 }
 
 // defaultMaxIterations is the fallback used when AgentOptions.MaxIterations
@@ -668,6 +676,20 @@ func (a *Agent) buildSessionTools(sessionID, cwd, model string, res *resources.R
 			reg.Register(tools.ScheduleDelete(adapter, sessionID))
 		}
 	}
+	// Colleague tools — discover and delegate to OTHER running harness
+	// instances on this machine, backed by ~/.harness/instances.json (owned
+	// and written by internal/server; these tools read the same file path
+	// directly with their own minimal parser — see agent/tools/colleague.go).
+	// Off unless EnableColleagues.
+	if a.opts.EnableColleagues {
+		if a.isToolAllowed(tools.ToolColleagueList) {
+			reg.Register(tools.ColleagueList())
+		}
+		if a.isToolAllowed(tools.ToolColleagueAsk) {
+			reg.Register(tools.ColleagueAsk())
+		}
+	}
+
 	// Subagent tool — only if allowed (excluded for sub-agents themselves)
 	if a.isToolAllowed(tools.ToolSubagent) {
 		// Capture current settings in a closure — Agent has zero knowledge of sub-agent mechanics
@@ -802,6 +824,10 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) (string,
 		b.WriteString("\n\n## Scheduling\n\nYou can schedule prompts to run automatically on a recurring cron schedule. Use Schedule to create or update one, ScheduleList to review what's scheduled and how often it has run, and ScheduleDelete to remove one. Schedule work the user wants done repeatedly on a cadence; the prompt runs later exactly as if the user sent it.")
 	}
 
+	if a.opts.EnableColleagues {
+		b.WriteString("\n\n## Colleagues\n\nYou are not necessarily alone. Other harness instances may be running on this machine right now — different projects (CWDs), different transports (TUI, Telegram, Slack, a headless server, ect..), each with their own model, MCPs, and project knowledge. Use ColleagueList to see who's online, then ColleagueAsk to delegate a question or subtask to one of them by name. A colleague answers using ITS OWN model and context, not yours — this is real delegation, not talking to yourself.\n\nColleagueAsk accepts local image paths (they are read, validated, and sent as part of the delegated prompt), an optional timeout in seconds (default 60), and an optional background flag: when true, the call returns immediately with a path to a result file you can read later instead of blocking.")
+	}
+
 	b.WriteString(fmt.Sprintf("\n\n## Working Directory\n\n%s\n", cwd))
 
 	if res.AgentsMD != "" {
@@ -821,6 +847,7 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) (string,
 	full := b.String()
 	return full, promptLens{total: len(full)}
 }
+
 
 // defaultSessionName generates the initial session name — date + time.
 // Replaced automatically by the first user message after Prompt() is called.

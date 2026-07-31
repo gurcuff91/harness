@@ -198,3 +198,16 @@ func WithMemory() Option {
 func WithScheduler() Option {
 	return func(o *Options) { o.EnableScheduler = true }
 }
+
+// WithColleagues enables the ColleagueList/ColleagueAsk tools: the agent can
+// discover OTHER running harness server instances on this machine (any
+// process that called Serve — see the client package) via the shared
+// ~/.harness/instances.json registry, and delegate a prompt to one of them by
+// name over HTTP. Each colleague answers using its OWN model, MCPs, and
+// project context, not the caller's — real delegation, not talking to itself.
+// Meant for long-running processes (a served agent, a transport); one-shot
+// callers have nothing to offer a colleague and no time to wait for one. Off
+// by default.
+func WithColleagues() Option {
+	return func(o *Options) { o.EnableColleagues = true }
+}

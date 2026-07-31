@@ -17,4 +17,6 @@ const (
 	ToolSchedule       = "Schedule"
 	ToolScheduleList   = "ScheduleList"
 	ToolScheduleDelete = "ScheduleDelete"
+	ToolColleagueList  = "ColleagueList"
+	ToolColleagueAsk   = "ColleagueAsk"
 )

@@ -64,13 +64,21 @@ func newOneShotAgent() *agent.Agent {
 // session to run in. directives are extra system-prompt blocks a transport
 // needs (e.g. Telegram's file-upload instructions); omit for TUI/serve, pass
 // telegram.Directive for Telegram.
+//
+// EnableColleagues is always on here: these are exactly the long-running
+// processes that register themselves in ~/.harness/instances.json (see
+// internal/server.Serve) and so are the ones worth discovering/delegating to.
+// One-shot commands (newOneShotAgent) and config-only commands
+// (newConfigAgent) never enable it — a process that exits in milliseconds has
+// nothing to offer a colleague and no time to wait for one.
 func newInteractiveAgent(scheduler bool, directives ...string) *agent.Agent {
 	return agent.New(agent.AgentOptions{
-		EnableMCPs:      true,
-		EnableMemory:    true,
-		EnableScheduler: scheduler,
-		MaxIterations:   interactiveMaxIterations,
-		Directives:      directives,
+		EnableMCPs:       true,
+		EnableMemory:     true,
+		EnableScheduler:  scheduler,
+		EnableColleagues: true,
+		MaxIterations:    interactiveMaxIterations,
+		Directives:       directives,
 	})
 }
 
