@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.73] - 2026-07-31
+
+### Feat — Graceful `Server.Close()` cascade: sessions → agent → HTTP shutdown
+- **`server.Server.Close()`** (`internal/server/server.go`) — new idempotent method (`sync.Once`) that performs a clean shutdown in cascade: (1) closes all active sessions (flush stores + unregister from agent), (2) closes the agent (MCP subprocesses, memory DB, scheduler engine, session store), (3) graceful HTTP `Shutdown(ctx)` with 3s deadline. `Serve()` now stores the `*http.Server` and `net.Listener` as struct fields so `Shutdown` can be called.
+- **`Agent.Close()`** (`agent/agent.go`) — made idempotent with `sync.Once` + `closeErr` field. Previously calling `Close()` twice would double-close MCP and memory DB; now the first call does all work and subsequent calls return the same error. Essential because `Server.Close` closes the agent and some call sites still have `defer a.Close()` (harmless now).
+- **TUI** (`internal/transport/tui/server.go`) — `internalServer.Close()` now delegates to `srv.Close()` instead of being a no-op. The `defer srv.Close()` in `Run()` executes the full cascade on exit.
+- **Telegram** (`internal/transport/telegram/telegram.go`) — `srv` stored in `Transport` struct; `t.srv.Close()` called after `pollLoop` returns.
+- **Slack** (`internal/transport/slack/slack.go`) — `srv` stored in `Transport` struct; `t.srv.Close()` called after `rtmLoop` returns.
+- **CLI** (`internal/cli/server.go`, `cmd_serve.go`, `cmd_telegram.go`, `cmd_slack.go`) — `internalServer.Close()` delegates to `srv.Close()`. `cmd_serve` uses `defer srv.Close()` instead of `defer a.Close()`. `cmd_telegram`/`cmd_slack` removed redundant `defer a.Close()` — `Server.Close` handles it.
+- **CLI `server.go`** (`startInternalServer`) — `Transport: "cli"` added to `ServerOptions` (was missing).
+
 ## [0.73.72] - 2026-07-31
 
 ### Feat — Server info: transport + url fields; OpenAPI spec cleanup

@@ -47,6 +47,12 @@ type Server struct {
 	addr      string // resolved listen address (set in Serve)
 	mu        sync.RWMutex
 	sessions  map[string]*SessionProxy
+
+	// Graceful shutdown plumbing (set in Serve).
+	httpSrv   *http.Server
+	listener  net.Listener
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // ServerOptions configures the HTTP server.
@@ -138,10 +144,46 @@ func (s *Server) handler() http.Handler {
 // net.Listen("tcp", addr) then Serve(l).
 func (s *Server) Serve(l net.Listener) error {
 	s.addr = l.Addr().String()
+	s.listener = l
 	if s.verbose {
 		logx.Info("server", "listening", "addr", s.addr)
 	}
-	return http.Serve(l, s.handler())
+	s.httpSrv = &http.Server{Handler: s.handler()}
+	return s.httpSrv.Serve(l)
+}
+
+// Close performs a graceful shutdown: closes all active sessions (flushing
+// their stores), closes the agent (MCP subprocesses, memory DB, scheduler
+// engine, session store), and shuts down the HTTP server. Idempotent — safe
+// to call multiple times. The first call does the work; subsequent calls
+// return the same error.
+func (s *Server) Close() error {
+	s.closeOnce.Do(func() {
+		// 1. Close all active sessions — flush stores + unregister from agent.
+		s.mu.RLock()
+		var proxies []*SessionProxy
+		for _, p := range s.sessions {
+			proxies = append(proxies, p)
+		}
+		s.mu.RUnlock()
+		for _, p := range proxies {
+			_ = p.session.Close()
+		}
+
+		// 2. Close the agent — MCP, memory, scheduler, store.
+		s.closeErr = s.agent.Close()
+
+		// 3. Graceful HTTP shutdown with a short deadline so in-flight
+		// requests (e.g. SSE streams) are given a chance to close.
+		if s.httpSrv != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := s.httpSrv.Shutdown(ctx); err != nil && s.closeErr == nil {
+				s.closeErr = err
+			}
+		}
+	})
+	return s.closeErr
 }
 
 // --- Handlers ---

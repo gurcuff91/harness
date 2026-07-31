@@ -32,6 +32,7 @@ type Transport struct {
 	api   *client.Client
 	bot   *Bot
 	store *store
+	srv   *server.Server
 	model string
 	cwd   string
 
@@ -70,6 +71,7 @@ func Run(ctx context.Context, a *agent.Agent, opts Options) error {
 		api:           client.New(listener.Addr().String()),
 		bot:           NewBot(opts.Token),
 		store:         st,
+		srv:           srv,
 		cwd:           cwd,
 		pumps:         make(map[int64]*chatPump),
 		pendingAlbums: newAlbums(),
@@ -101,7 +103,9 @@ func Run(ctx context.Context, a *agent.Agent, opts Options) error {
 
 	t.prewarmPumps(ctx)
 
-	return t.pollLoop(ctx)
+	err = t.pollLoop(ctx)
+	t.srv.Close()
+	return err
 }
 
 // prewarmPumps opens a pump (SSE consumer) for every stored chat mapping at

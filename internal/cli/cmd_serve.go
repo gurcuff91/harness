@@ -27,12 +27,13 @@ func cmdServe(args []string) error {
 	}
 
 	a := newInteractiveAgent(*scheduler)
-	defer a.Close()
 
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
+		a.Close()
 		return err
 	}
 	srv := server.NewServer(a, server.ServerOptions{Verbose: true, Transport: "server"})
+	defer srv.Close() // graceful: sessions → agent → HTTP shutdown
 	return srv.Serve(listener)
 }

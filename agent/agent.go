@@ -56,6 +56,10 @@ type Agent struct {
 	// output it wants by subscribing to that session's events. Guarded by sessMu.
 	sessMu         sync.Mutex
 	activeSessions map[string]*Session
+
+	// Graceful shutdown (idempotent Close).
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // AgentOptions configures a new Agent.
@@ -360,29 +364,32 @@ func (a *Agent) MCPStatuses() []mcp.Status {
 // Close releases agent-owned resources: it terminates MCP subprocesses and
 // closes the memory database. Only the root agent should be closed — subagents
 // are ephemeral, have no MCP manager, and merely share the parent's memory
-// store (which they must not close). Idempotent and nil-safe; both resources are
-// released even if one fails.
+// store (which they must not close). Idempotent (sync.Once) and nil-safe; both
+// resources are released even if one fails.
 func (a *Agent) Close() error {
-	var errs []error
-	if a.mcpManager != nil {
-		if err := a.mcpManager.Close(); err != nil {
-			errs = append(errs, err)
+	a.closeOnce.Do(func() {
+		var errs []error
+		if a.mcpManager != nil {
+			if err := a.mcpManager.Close(); err != nil {
+				errs = append(errs, err)
+			}
 		}
-	}
-	if a.memStore != nil && a.ownsMemory {
-		if err := a.memStore.Close(); err != nil {
-			errs = append(errs, err)
+		if a.memStore != nil && a.ownsMemory {
+			if err := a.memStore.Close(); err != nil {
+				errs = append(errs, err)
+			}
 		}
-	}
-	if a.schedEngine != nil {
-		a.schedEngine.Stop()
-	}
-	if a.store != nil {
-		if err := a.store.Close(); err != nil {
-			errs = append(errs, err)
+		if a.schedEngine != nil {
+			a.schedEngine.Stop()
 		}
-	}
-	return errors.Join(errs...)
+		if a.store != nil {
+			if err := a.store.Close(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		a.closeErr = errors.Join(errs...)
+	})
+	return a.closeErr
 }
 
 // NewSession creates a fresh session for the given working directory and model.

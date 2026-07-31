@@ -39,7 +39,6 @@ func cmdSlack(args []string) error {
 	}
 
 	a := newInteractiveAgent(*scheduler, slack.Directive)
-	defer a.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
 

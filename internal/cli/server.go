@@ -29,4 +29,6 @@ type internalServer struct {
 	srv *server.Server
 }
 
-func (s *internalServer) Close() error { return nil }
+func (s *internalServer) Close() error {
+	return s.srv.Close()
+}

@@ -29,5 +29,5 @@ type internalServer struct {
 }
 
 func (s *internalServer) Close() error {
-	return nil
+	return s.srv.Close()
 }

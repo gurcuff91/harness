@@ -35,6 +35,7 @@ type Transport struct {
 	api   *client.Client
 	bot   *Bot
 	store *store
+	srv   *server.Server
 	model string
 	cwd   string
 	myID  string // our own Slack user ID (to detect mentions)
@@ -94,6 +95,7 @@ func Run(ctx context.Context, a *agent.Agent, opts Options) error {
 		api:   client.New(listener.Addr().String()),
 		bot:   bot,
 		store: st,
+		srv:   srv,
 		cwd:   cwd,
 		pumps: make(map[string]*channelPump),
 	}
@@ -121,7 +123,9 @@ func Run(ctx context.Context, a *agent.Agent, opts Options) error {
 
 	t.prewarmPumps(ctx)
 
-	return t.rtmLoop(ctx)
+	err = t.rtmLoop(ctx)
+	t.srv.Close()
+	return err
 }
 
 // prewarmPumps opens a pump (SSE consumer) for every stored channel mapping at
