@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.83] - 2026-07-31
+
+### Fix — TUI: ColleagueAsk's colleague name was hard to read next to the prompt
+- **`internal/transport/tui/toolfmt.go`** — when a tool has both a bare primary and secondary param (currently only `ColleagueAsk`: `colleague` + `prompt`), the primary now renders `Muted` (brighter gray, same weight as the deferred `(N images)` summaries) instead of `Dimmed`. The short colleague name was visually disappearing next to the much longer prompt when both used the same faint tone. Single-primary tools (`Read`, `Bash`, `Fetch`, etc.) are unaffected — they keep the original `Dimmed` styling.
+
+## [0.73.82] - 2026-07-31
+
+### Feat — TUI: dedicated icon + dual-primary rendering for Colleague tools
+- **Icon** (`internal/transport/tui/output.go`) — `ColleagueList`/`ColleagueAsk` now render with `⇄` (back-and-forth: request/response with another agent) instead of falling through to the generic `◈` MCP/external-tool icon.
+- **Dual-primary param rendering** (`internal/transport/tui/toolfmt.go`) — new `secondaryPrimaryParam` map lets a tool show TWO params bare (no `key=`), in order, right after the tool name. `ColleagueAsk` uses `colleague` (primary) + `prompt` (secondary, shown in full like `Subagent`'s prompt) — showing only one would lose either WHO is being asked or WHAT is being asked, both needed at a glance. `images` is summarized to `(N images)` and deferred to the end, same treatment as `Fetch`'s `files`.
+- **New test cases** in `toolfmt_test.go` covering both the bare dual-primary case and the images/timeout deferred case.
+
 ## [0.73.81] - 2026-07-31
 
 ### Refactor — Colleague Pattern: separated system-prompt reasoning from tool mechanics

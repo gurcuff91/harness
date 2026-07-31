@@ -24,6 +24,16 @@ var primaryParam = map[string]string{
 	"MemoDelete":     "slug",
 	"Schedule":       "slug",
 	"ScheduleDelete": "slug",
+	"ColleagueAsk":   "colleague",
+}
+
+// secondaryPrimaryParam is a SECOND param shown bare (no "key="), right after
+// the primary — for the rare tool where two params are both needed at a
+// glance. ColleagueAsk needs both WHO (colleague, the primary) and WHAT
+// (prompt, shown in full like Subagent's) to be useful at a glance; showing
+// only one loses exactly the information a human scanning the header wants.
+var secondaryPrimaryParam = map[string]string{
+	"ColleagueAsk": "prompt",
 }
 
 // kvPair is one decoded argument, preserving JSON key order.
@@ -97,13 +107,18 @@ func formatToolArgs(name, argsJSON string) string {
 	}
 
 	primary := primaryParam[name]
-	var parts []string    // key=value params (and the bare primary), rendered first
+	secondary := secondaryPrimaryParam[name]
+	var primaryVal, secondaryVal string
+	havePrimary, haveSecondary := false, false
+	var parts []string    // key=value params, rendered after primary/secondary
 	var deferred []string // (..) summaries, always rendered LAST for a clean layout
 	for _, p := range pairs {
 		if p.key == primary {
-			// Primary param shown bare (the icon already signals the tool kind),
-			// dimmed like a value.
-			parts = append([]string{ansi.Dimmed(p.val)}, parts...)
+			primaryVal, havePrimary = p.val, true
+			continue
+		}
+		if secondary != "" && p.key == secondary {
+			secondaryVal, haveSecondary = p.val, true
 			continue
 		}
 		// Large or sensitive params are summarized as "(..)" tokens and DEFERRED to
@@ -177,12 +192,47 @@ func formatToolArgs(name, argsJSON string) string {
 				continue
 			}
 		}
+		// ColleagueAsk's images is a path list — summarize by count, deferred,
+		// same treatment as Fetch's files.
+		if name == "ColleagueAsk" && p.key == "images" {
+			if n := countJSONArray(p.rawVal); n > 0 {
+				deferred = append(deferred, ansi.Muted(imageCountLabel(n)))
+			}
+			continue
+		}
 		// Param NAME in Muted (same weight/color as the result line) to make it
 		// stand out; the VALUE stays Dimmed so it reads as secondary.
 		parts = append(parts, ansi.Muted(p.key+"=")+ansi.Dimmed(p.val))
 	}
+	// Assemble: bare primary, then bare secondary (no "key="), then key=value
+	// params, then deferred summaries last. When a tool has BOTH a primary and
+	// a secondary bare param (currently only ColleagueAsk: colleague + prompt),
+	// the primary is rendered Muted (brighter gray, same weight as the "(N
+	// images)" deferred summaries) instead of Dimmed — otherwise the short
+	// "who" (colleague name) visually disappears next to the much longer
+	// "what" (prompt), both being the same faint Dimmed tone.
+	var head []string
+	if havePrimary {
+		if secondary != "" {
+			head = append(head, ansi.Muted(primaryVal))
+		} else {
+			head = append(head, ansi.Dimmed(primaryVal))
+		}
+	}
+	if haveSecondary {
+		head = append(head, ansi.Dimmed(secondaryVal))
+	}
+	parts = append(head, parts...)
 	parts = append(parts, deferred...)
 	return strings.Join(parts, " ")
+}
+
+// imageCountLabel renders the "(N image[s])" summary for ColleagueAsk.
+func imageCountLabel(n int) string {
+	if n == 1 {
+		return "(1 image)"
+	}
+	return fmt.Sprintf("(%d images)", n)
 }
 
 // countJSONArray returns the number of elements in a JSON array value, or 0 if

@@ -28,6 +28,13 @@ func TestFormatToolArgsBuiltins(t *testing.T) {
 		"fetch": {
 			"Fetch", `{"url":"http://x","method":"GET"}`, "http://x method=GET",
 		},
+		"colleague ask (both primaries bare)": {
+			"ColleagueAsk", `{"colleague":"kabal-mercenary","prompt":"do the thing"}`, "kabal-mercenary do the thing",
+		},
+		"colleague ask (with images + timeout, deferred/key=value)": {
+			"ColleagueAsk", `{"colleague":"jax-major","prompt":"look at this","images":["a.png","b.png"],"timeout":30}`,
+			"jax-major look at this timeout=30 (2 images)",
+		},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -209,6 +209,8 @@ func toolStyle(name string) (colorFn func(string) string, icon string) {
 		return ansi.Accent, "✳" // asterisk: memory note
 	case "Schedule", "ScheduleList", "ScheduleDelete":
 		return ansi.Accent, "◷" // clock: cron-scheduled prompt management
+	case "ColleagueList", "ColleagueAsk":
+		return ansi.Accent, "⇄" // back-and-forth: request/response with another agent
 	default:
 		return ansi.Accent, "◈" // diamond: generic MCP/external tool
 	}
