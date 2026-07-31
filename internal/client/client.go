@@ -294,6 +294,20 @@ func (c *Client) SendPrompt(sessionID, text string) (*Status, error) {
 	return c.decodeStatus("POST", "/api/sessions/"+sessionID+"/prompt", map[string]string{"text": text})
 }
 
+// Ask sends a prompt and blocks until the agent's turn completes, returning
+// the final assistant text. This is the synchronous counterpart to SendPrompt.
+// Errors (4xx/5xx) are returned as *Error with the standard {"error":{"message"}}
+// shape — same as every other method in this client.
+func (c *Client) Ask(sessionID, text string) (string, error) {
+	resp, err := decode[struct {
+		Text string `json:"text"`
+	}](c, "POST", "/api/sessions/"+sessionID+"/ask", map[string]string{"text": text})
+	if err != nil {
+		return "", err
+	}
+	return resp.Text, nil
+}
+
 // SendPromptWithImages submits a prompt carrying one or more images (base64).
 // The server validates that the session's model supports vision.
 func (c *Client) SendPromptWithImages(sessionID, text string, images []types.ImageData) (*Status, error) {

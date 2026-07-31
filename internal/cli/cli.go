@@ -80,18 +80,31 @@ func Run(ctx context.Context, a *agent.Agent, prompt string, opts Opts) error {
 	sessionID := sess.ID
 	defer c.CloseSession(sessionID) //nolint
 
-	// Open SSE connection BEFORE any commands that trigger events
 	ctx2, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	// Apply thinking level before sending the prompt.
+	if thinking != "" && thinking != "off" {
+		c.ExecCommand(sessionID, "thinking", map[string]any{"level": thinking}) //nolint
+	}
+
+	// text mode only needs the final response — Ask (PromptAndWait) is a single
+	// blocking request/response, no SSE plumbing required. json/json-stream need
+	// the individual events (tool calls, thinking, tokens, timing), so they keep
+	// the SendPrompt + StreamEvents path.
+	if opts.Output == "text" {
+		text, err := c.Ask(sessionID, prompt)
+		if err != nil {
+			return fmt.Errorf("ask: %w", err)
+		}
+		fmt.Println(strings.TrimSpace(text))
+		return nil
+	}
+
+	// Open SSE connection BEFORE sending the prompt so no events are missed.
 	events, err := c.StreamEvents(ctx2, sessionID)
 	if err != nil {
 		return fmt.Errorf("stream events: %w", err)
-	}
-
-	// Apply thinking level (doesn't emit events, safe to do after SSE open)
-	if thinking != "" && thinking != "off" {
-		c.ExecCommand(sessionID, "thinking", map[string]any{"level": thinking}) //nolint
 	}
 
 	// Send prompt — session starts processing, events arrive via SSE
@@ -103,20 +116,15 @@ func Run(ctx context.Context, a *agent.Agent, prompt string, opts Opts) error {
 	return renderEvents(events, opts.Output)
 }
 
-// renderEvents reads SSE events and renders them according to the output mode.
-// The json / json-stream modes emit each event's Raw payload verbatim (exactly
-// what the server sent — see client.Event.Raw), so machine consumers see the
-// canonical wire shape, not a lossy re-encode of the typed struct.
+// renderEvents reads SSE events and renders them according to the output mode
+// (json or json-stream — text mode is handled by Ask in Run, never reaches
+// here). Both modes emit each event's Raw payload verbatim (exactly what the
+// server sent — see client.Event.Raw), so machine consumers see the canonical
+// wire shape, not a lossy re-encode of the typed struct.
 func renderEvents(events <-chan client.Event, mode string) error {
 	var collected []json.RawMessage
-	var textBuf strings.Builder
 
 	for evt := range events {
-		// Always collect text deltas for text mode
-		if evt.Type == "text" && mode == "text" {
-			textBuf.WriteString(evt.Delta)
-		}
-
 		// Error handling for all modes
 		if evt.Type == "error" {
 			fmt.Fprintln(os.Stderr, "Error:", evt.Message)
@@ -136,10 +144,7 @@ func renderEvents(events <-chan client.Event, mode string) error {
 	}
 finalize:
 
-	switch mode {
-	case "text":
-		fmt.Println(strings.TrimSpace(textBuf.String()))
-	case "json":
+	if mode == "json" {
 		fmt.Println("[")
 		for i, raw := range collected {
 			if i < len(collected)-1 {

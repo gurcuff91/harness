@@ -115,6 +115,7 @@ func (s *Server) handler() http.Handler {
 	r.Post("/api/sessions/{id}/resume", s.handleResumeSession)
 	r.Post("/api/sessions/{id}/fork", s.handleForkSession)
 	r.Post("/api/sessions/{id}/prompt", s.handlePrompt)
+	r.Post("/api/sessions/{id}/ask", s.handleAsk)
 	r.Get("/api/sessions/{id}/events", s.handleEvents)
 	r.Get("/api/sessions/{id}/commands", s.handleListCommands)
 	r.Post("/api/sessions/{id}/commands", s.handleExecCommand)
@@ -932,6 +933,54 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		status = "queued"
 	}
 	writeStatus(w, http.StatusAccepted, status, "")
+}
+
+// handleAsk sends a prompt and blocks until the agent's turn completes,
+// returning the final assistant text (or an error). This is the synchronous
+// counterpart to /prompt (which is fire-and-forget). Useful for SDK callers
+// and CLI one-shot commands that want a single request/response.
+func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	s.mu.RLock()
+	proxy, ok := s.sessions[id]
+	s.mu.RUnlock()
+	if !ok {
+		writeError(w, http.StatusNotFound, "session not found", nil)
+		return
+	}
+
+	var req promptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
+		return
+	}
+	if req.Text == "" && len(req.Images) == 0 {
+		writeError(w, http.StatusBadRequest, "text or images is required", nil)
+		return
+	}
+
+	// Validate vision support if images are provided.
+	if len(req.Images) > 0 {
+		meta := proxy.session.ModelMeta()
+		if meta == nil || !meta.Vision {
+			writeError(w, http.StatusBadRequest, "current model does not support images", nil)
+			return
+		}
+	}
+
+	opts := []agent.PromptOption{agent.WithOriginUser()}
+	if len(req.Images) > 0 {
+		opts = append(opts, agent.WithImages(req.Images...))
+	}
+
+	// PromptAndWait blocks until the turn finishes — the HTTP client controls
+	// the timeout via its own request context.
+	text, err := proxy.session.PromptAndWait(r.Context(), req.Text, opts...)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"text": text})
 }
 
 // handleEvents streams agent events as SSE.

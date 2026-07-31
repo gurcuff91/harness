@@ -323,7 +323,7 @@ const openAPISpecTemplate = `{
     "/api/sessions/{id}/prompt": {
       "post": {
         "tags": ["sessions"],
-        "summary": "Send prompt",
+        "summary": "Send prompt (async)",
         "description": "Queues a user prompt into the session. Returns immediately with status 'started' or 'queued'.",
         "operationId": "sendPrompt",
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
@@ -333,6 +333,25 @@ const openAPISpecTemplate = `{
         },
         "responses": {
           "202": { "description": "Prompt accepted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } }
+        }
+      }
+    },
+    "/api/sessions/{id}/ask": {
+      "post": {
+        "tags": ["sessions"],
+        "summary": "Send prompt (sync)",
+        "description": "Sends a prompt and blocks until the agent's turn completes, returning the final assistant text. The synchronous counterpart to /prompt (fire-and-forget). The HTTP client controls the timeout via its own request context.",
+        "operationId": "ask",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PromptRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Agent response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AskResponse" } } } },
+          "400": { "description": "Bad request (missing text, images unsupported)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Session not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "Agent error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
       }
     },
@@ -614,6 +633,25 @@ const openAPISpecTemplate = `{
         "properties": {
           "text":   { "type": "string" },
           "images": { "type": "array", "items": { "$ref": "#/components/schemas/ImageData" } }
+        }
+      },
+      "AskResponse": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string", "description": "Final assistant response text" }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "message": { "type": "string" },
+              "details": { "type": "object", "additionalProperties": true }
+            },
+            "required": ["message"]
+          }
         }
       },
       "ImageData": {

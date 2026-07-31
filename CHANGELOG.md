@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.76] - 2026-07-31
+
+### Feat — `POST /api/sessions/{id}/ask` (synchronous prompt) + CLI `-p` text mode simplified
+- **`POST /api/sessions/{id}/ask`** (`internal/server/server.go`) — new endpoint, the synchronous counterpart to `/prompt` (fire-and-forget). Blocks via `Session.PromptAndWait` until the agent's turn completes and returns the final assistant text directly: `200 {"text": "..."}`. Errors use the same standard shape as every other endpoint: `writeErr` → `{"error": {"message": ..., "details": {...}}}` (400/404/500), not a bespoke shape.
+- **`client.Ask(sessionID, text)`** — new SDK method. Uses the standard `decode[T]` helper, so 4xx/5xx responses surface as `*client.Error` exactly like every other client method — no special-casing.
+- **OpenAPI spec** — added `/api/sessions/{id}/ask`, `AskResponse` schema (`{text}`), and `ErrorResponse` schema (`{error: {message, details}}`) reused across error responses.
+- **CLI `-p <prompt>` simplified for text mode** (`internal/cli/cli.go`) — `text` output mode (the default) now calls `Ask` directly: one blocking HTTP request, no SSE connection, no event accumulator. `json`/`json-stream` modes are unchanged — they still need individual events (tool calls, thinking, tokens, timing) via `SendPrompt` + `StreamEvents`. `renderEvents` no longer handles the `text` case.
+
 ## [0.73.75] - 2026-07-31
 
 ### Fix — Instance registry: preserve existing entries, HTTP-based liveness check
