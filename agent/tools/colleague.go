@@ -153,15 +153,15 @@ func ColleagueAsk() Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolColleagueAsk,
-			Description: "Delegate a prompt to a specific colleague by name (see ColleagueList). The colleague answers using ITS OWN model, tools, and project context — not yours; this is real delegation, not a call back to yourself. Attach local image paths via `images` if relevant. Blocks until the colleague finishes and returns its final text — set `background: true` to get a result-file path immediately instead of waiting, if the task might take a while.",
+			Description: "Delegate a prompt to a specific colleague by name (see ColleagueList). The colleague answers using ITS OWN model, tools, and project context — not yours; this is real delegation, not a call back to yourself. Attach local image paths via `images` if relevant. Blocks until the colleague finishes and returns its final text — set `background: true` to get a result-file path immediately instead of waiting, if the task might take a while (background has no timeout: use it for genuinely slow tasks instead of passing a large `timeout`).",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"colleague": {"type": "string", "description": "Name of the colleague instance (from ColleagueList)"},
 					"prompt": {"type": "string", "description": "The prompt to delegate"},
 					"images": {"type": "array", "items": {"type": "string"}, "description": "Local file paths of images to attach (png, jpg, jpeg, gif, webp)"},
-					"timeout": {"type": "integer", "description": "Seconds to wait for a response (default: 60)"},
-					"background": {"type": "boolean", "description": "If true, return immediately with a path to a result file instead of blocking. Default false."}
+					"timeout": {"type": "integer", "description": "Seconds to wait for a response (default: 60). Ignored when background is true — background waits as long as needed."},
+					"background": {"type": "boolean", "description": "If true, return immediately with a path to a result file instead of blocking, and wait as long as needed (no timeout). Default false."}
 				},
 				"required": ["colleague", "prompt"]
 			}`),
@@ -191,13 +191,21 @@ func ColleagueAsk() Tool {
 				return err.Error(), err
 			}
 
+			// Timeout only applies to the blocking (foreground) path — it exists
+			// to protect the CALLER from waiting indefinitely. In background
+			// mode nothing is waiting: the tool already returned, and the
+			// goroutine below is the only thing watching the request. Applying
+			// the same timeout there would silently cut off exactly the slow
+			// task background was meant to tolerate — and force the model to
+			// compensate by passing artificially large `timeout` values that
+			// don't actually belong to the concept of "don't block".
+			if args.Background {
+				return askColleagueBackground(url, args.Colleague, args.Prompt, images)
+			}
+
 			timeout := colleagueAskTimeout
 			if args.Timeout > 0 {
 				timeout = time.Duration(args.Timeout) * time.Second
-			}
-
-			if args.Background {
-				return askColleagueBackground(url, args.Colleague, args.Prompt, images, timeout)
 			}
 			return askColleague(url, args.Prompt, images, timeout)
 		},
@@ -238,7 +246,17 @@ func askColleague(url, prompt string, images []types.ImageData, timeout time.Dur
 	if err != nil {
 		return fmt.Sprintf("Error creating session on colleague: %v", err), err
 	}
-	defer c.CloseSession(sess.ID) //nolint:errcheck
+	// Close deactivates the session (removes it from the colleague's active
+	// set); it does NOT remove its .jsonl/.meta.json from disk. Delegation
+	// sessions are purely ephemeral — nothing in them is worth keeping once the
+	// answer is back — so also delete, or every ColleagueAsk call leaves
+	// permanent litter in the colleague's ~/.harness/agent/sessions/. Runs even
+	// if Ask/AskWithImages below errors (timeout, colleague crash, etc.) —
+	// defer always fires.
+	defer func() {
+		c.CloseSession(sess.ID)  //nolint:errcheck
+		c.DeleteSession(sess.ID) //nolint:errcheck
+	}()
 
 	var (
 		text string
@@ -256,8 +274,10 @@ func askColleague(url, prompt string, images []types.ImageData, timeout time.Dur
 }
 
 // askColleagueBackground runs askColleague in a goroutine and writes the
-// result to a temp file, returning immediately with that path.
-func askColleagueBackground(url, colleagueName, prompt string, images []types.ImageData, timeout time.Duration) (string, error) {
+// result to a temp file, returning immediately with that path. No timeout —
+// see the comment at the ColleagueAsk call site for why: nothing is blocked
+// waiting on this goroutine, so there is nothing to protect by cutting it off.
+func askColleagueBackground(url, colleagueName, prompt string, images []types.ImageData) (string, error) {
 	f, err := os.CreateTemp("", "harness-colleague-*.txt")
 	if err != nil {
 		return fmt.Sprintf("Error creating result file: %v", err), err
@@ -266,7 +286,7 @@ func askColleagueBackground(url, colleagueName, prompt string, images []types.Im
 	f.Close()
 
 	go func() {
-		text, err := askColleague(url, prompt, images, timeout)
+		text, err := askColleague(url, prompt, images, 0) // 0 = no timeout
 		result := text
 		if err != nil {
 			result = fmt.Sprintf("Error: %v\n\n%s", err, text)

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.84] - 2026-07-31
+
+### Fix — ColleagueAsk: background mode was still bounded by timeout; sessions leaked on disk
+- **Background mode ignored its own purpose** (`agent/tools/colleague.go`) — `timeout` (default 60s, or whatever the model passed) was threaded all the way into `askColleagueBackground`'s goroutine, so a slow colleague still got cut off with `context deadline exceeded` even though nothing was blocked waiting on it. This defeated the reason `background` exists — tolerating a genuinely slow task — and the model was observed compensating by passing large `timeout` values (e.g. `background:true, timeout:300`) to work around it. Fixed: `askColleagueBackground` no longer takes a `timeout` param; it always calls `askColleague` with `0` (no limit). `timeout` is now only computed/used on the foreground (blocking) path, where it protects the CALLER from waiting indefinitely — a concern that doesn't exist in background mode. Description and schema updated to tell the model explicitly that `background` has no timeout, so it stops passing one.
+- **Delegation sessions leaked on the colleague's disk** — `askColleague` called `CloseSession` (deactivates, does NOT delete `.jsonl`/`.meta.json`) but never `DeleteSession`. Every `ColleagueAsk` call — successful or not — left a permanent, never-revisited session file on the colleague's `~/.harness/agent/sessions/`. Fixed: the `defer` now runs both `CloseSession` and `DeleteSession`, unconditionally (including on timeout/error paths, since `defer` always fires) — delegation sessions are purely ephemeral and nothing in them is worth keeping once the answer is back.
+
 ## [0.73.83] - 2026-07-31
 
 ### Fix — TUI: ColleagueAsk's colleague name was hard to read next to the prompt
