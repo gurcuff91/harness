@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.81] - 2026-07-31
+
+### Refactor — Colleague Pattern: separated system-prompt reasoning from tool mechanics
+- **Vocabulary fix**: removed "harness instance" wording from tool descriptions and the system prompt — the model has no reason to know the name of the software running it. Replaced with "colleague instance" / "colleague" throughout.
+- **`ColleagueList` / `ColleagueAsk` descriptions** rewritten to be purely operational (what the tool does, what it returns/accepts) — all delegation *reasoning* (when to prefer a colleague, how to weigh environment vs. working directory) moved to the `## Colleagues` system-prompt section, where it belongs once instead of being duplicated across tool descriptions.
+- **`environment` field replaces `transport`** in `ColleagueList`'s JSON output (the on-disk field name in `instances.json` is unchanged — this is presentation-only). New `environmentLabel()` in `agent/tools/colleague.go` maps chat-platform transports (`slack`, `telegram`) through as-is, and collapses everything else (`tui`, `server`, `cli`, and any future transport not yet a chat platform) to `"generic"` — from the model's perspective those all mean "an agent with tools and a working directory, no special messaging capability." Adding a future chat platform (e.g. Discord) only means adding one entry to `chatPlatformEnvironments`, no system-prompt change needed.
+- **System prompt fully abstracted**: no longer enumerates environment types or assumes what environment the calling model itself runs in (a prior draft incorrectly said "you're in a TUI", which the agent has no way to know). Explains `environment` as "extra capabilities that colleague has, which you may not" and lets the model generalize.
+- **Same-project delegation corrected**: `ColleagueAsk` creates an ephemeral session per call (`InMemoryStore`, closed immediately after — same pattern as `Subagent`), so the system prompt no longer implies a colleague "already has relevant context" from prior exchanges. It now frames same-project delegation as "an independent agent that can co-work with you on it" for a substantial, self-contained task, while being explicit that each delegation is a fresh session, not shared memory of past exchanges.
+
 ## [0.73.80] - 2026-07-31
 
 ### Feat — Colleague Pattern: ColleagueList/ColleagueAsk tools + instance registry fixes
