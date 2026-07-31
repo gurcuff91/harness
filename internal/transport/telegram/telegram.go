@@ -60,7 +60,7 @@ func Run(ctx context.Context, a *agent.Agent, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("telegram: bind server: %w", err)
 	}
-	srv := server.NewServer(a, server.ServerOptions{Verbose: false})
+	srv := server.NewServer(a, server.ServerOptions{Verbose: false, Transport: "telegram"})
 	go srv.Serve(listener) //nolint:errcheck
 
 	cwd, _ := os.Getwd()

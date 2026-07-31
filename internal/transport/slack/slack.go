@@ -83,7 +83,7 @@ func Run(ctx context.Context, a *agent.Agent, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("slack: bind server: %w", err)
 	}
-	srv := server.NewServer(a, server.ServerOptions{Verbose: false})
+	srv := server.NewServer(a, server.ServerOptions{Verbose: false, Transport: "slack"})
 	go srv.Serve(listener) //nolint:errcheck
 
 	cwd, _ := os.Getwd()

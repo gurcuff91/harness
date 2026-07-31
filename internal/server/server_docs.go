@@ -413,28 +413,6 @@ const openAPISpecTemplate = `{
           "200": { "description": "Context breakdown", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContextBreakdown" } } } }
         }
       }
-    },
-    "/api/docs": {
-      "get": {
-        "tags": ["server"],
-        "summary": "API reference UI",
-        "description": "Scalar-powered interactive API reference. Open in a browser.",
-        "operationId": "getDocs",
-        "responses": {
-          "200": { "description": "HTML page", "content": { "text/html": { "schema": { "type": "string" } } } }
-        }
-      }
-    },
-    "/api/docs/openapi.json": {
-      "get": {
-        "tags": ["server"],
-        "summary": "OpenAPI spec",
-        "description": "OpenAPI 3.0 JSON specification for this API.",
-        "operationId": "getOpenAPISpec",
-        "responses": {
-          "200": { "description": "OpenAPI spec", "content": { "application/json": { "schema": { "type": "object" } } } }
-        }
-      }
     }
   },
   "components": {
@@ -454,7 +432,13 @@ const openAPISpecTemplate = `{
       "ServerInfo": {
         "type": "object",
         "properties": {
-          "version": { "type": "string", "example": "v0.73.66" }
+          "name":       { "type": "string", "example": "harness" },
+          "version":    { "type": "string", "example": "v0.73.71" },
+          "transport":  { "type": "string", "example": "tui", "description": "Calling transport (tui, telegram, slack, server)" },
+          "url":        { "type": "string", "example": "http://127.0.0.1:52341" },
+          "cwd":        { "type": "string", "example": "/Users/gustavo/Workspace/harness" },
+          "pid":        { "type": "integer", "example": 92807 },
+          "started_at": { "type": "string", "format": "date-time", "example": "2026-07-31T00:22:16Z" }
         }
       },
       "Settings": {

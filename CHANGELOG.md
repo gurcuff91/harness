@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.72] - 2026-07-31
+
+### Feat — Server info: transport + url fields; OpenAPI spec cleanup
+- **`ServerOptions.Transport`** (`internal/server/server.go`) — new field identifying the calling transport (`"tui"`, `"telegram"`, `"slack"`, `"server"`). Defaults to `"server"` when empty. Set at all 4 callsites.
+- **`GET /api/server`** — response now includes `transport` and `url` fields. `serverInfo` changed from a static global var to a per-request struct that combines static fields (`name`, `version`, `cwd`, `pid`, `started_at`) with instance fields (`transport` from `ServerOptions`, `url` from `s.addr` resolved in `Serve()`). Example: `{"name":"harness","version":"v0.73.72","transport":"tui","url":"http://127.0.0.1:52341","cwd":"...","pid":92807,"started_at":"2026-07-31T00:22:16Z"}`.
+- **OpenAPI spec** (`internal/server/server_docs.go`) — removed self-referential `/api/docs` and `/api/docs/openapi.json` endpoints from the spec. Updated `ServerInfo` schema with `transport` and `url` fields.
+
 ## [0.73.71] - 2026-07-29
 
 ### Fix — TUI: max-iterations warning uses amber (Warn) instead of dim

@@ -41,24 +41,31 @@ const sseClientBufferSize = 4096
 
 // Server is the HTTP transport for the agent harness.
 type Server struct {
-	agent    *agent.Agent
-	verbose  bool
-	addr     string // resolved listen address (set in Serve)
-	mu       sync.RWMutex
-	sessions map[string]*SessionProxy
+	agent     *agent.Agent
+	verbose   bool
+	transport string // name of the calling transport
+	addr      string // resolved listen address (set in Serve)
+	mu        sync.RWMutex
+	sessions  map[string]*SessionProxy
 }
 
 // ServerOptions configures the HTTP server.
 type ServerOptions struct {
-	Verbose bool // enable request logging (default: false)
+	Verbose   bool   // enable request logging (default: false)
+	Transport string // name of the calling transport (e.g. "tui", "telegram", "slack"); empty defaults to "server"
 }
 
 // NewServer creates an HTTP server wrapping the agent.
 func NewServer(a *agent.Agent, opts ServerOptions) *Server {
+	transport := opts.Transport
+	if transport == "" {
+		transport = "server"
+	}
 	return &Server{
-		agent:    a,
-		verbose:  opts.Verbose,
-		sessions: make(map[string]*SessionProxy),
+		agent:     a,
+		verbose:   opts.Verbose,
+		transport: transport,
+		sessions:  make(map[string]*SessionProxy),
 	}
 }
 
@@ -145,30 +152,44 @@ type createSessionRequest struct {
 	Name  string `json:"name,omitempty"` // optional initial name; default: "New Session <date>"
 }
 
-// serverInfo is returned by GET /api/server
-var serverInfo = struct {
+// serverInfo is returned by GET /api/server.
+type serverInfo struct {
 	Name      string `json:"name"`
 	Version   string `json:"version"`
+	Transport string `json:"transport"`
+	URL       string `json:"url"`
 	CWD       string `json:"cwd"`
 	PID       int    `json:"pid"`
 	StartedAt string `json:"started_at"`
-}{
-	Name:      "harness",
-	Version:   version.Version,
-	StartedAt: time.Now().UTC().Format(time.RFC3339),
 }
+
+// Static fields populated once at init.
+var (
+	staticServerName      = "harness"
+	staticServerVersion   = version.Version
+	staticServerStartedAt = time.Now().UTC().Format(time.RFC3339)
+	staticServerCWD       string
+	staticServerPID       = os.Getpid()
+)
 
 func init() {
 	var err error
-	serverInfo.CWD, err = os.Getwd()
+	staticServerCWD, err = os.Getwd()
 	if err != nil {
-		serverInfo.CWD = "."
+		staticServerCWD = "."
 	}
-	serverInfo.PID = os.Getpid()
 }
 
 func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, serverInfo)
+	writeJSON(w, http.StatusOK, serverInfo{
+		Name:      staticServerName,
+		Version:   staticServerVersion,
+		Transport: s.transport,
+		URL:       "http://" + s.addr,
+		CWD:       staticServerCWD,
+		PID:       staticServerPID,
+		StartedAt: staticServerStartedAt,
+	})
 }
 
 // SettingsDTO is the API representation of harness settings. Its JSON tags are

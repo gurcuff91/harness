@@ -33,6 +33,6 @@ func cmdServe(args []string) error {
 	if err != nil {
 		return err
 	}
-	srv := server.NewServer(a, server.ServerOptions{Verbose: true})
+	srv := server.NewServer(a, server.ServerOptions{Verbose: true, Transport: "server"})
 	return srv.Serve(listener)
 }
