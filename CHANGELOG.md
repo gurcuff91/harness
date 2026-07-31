@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.77] - 2026-07-31
+
+### Fix — claude-oauth: disk is unconditionally the source of truth (account-switch bug)
+- **Root cause** (`internal/providers/claude_oauth.go`) — `getValidToken` and `loadCredentialsFromSources` compared `ExpiresAt` between disk and in-memory credentials to decide which was "newer", adopting disk only when its `ExpiresAt` was numerically larger. That comparison is meaningless across **different accounts**: two unrelated OAuth sessions have unrelated expiry timestamps, so a larger `ExpiresAt` does not mean "written more recently". Real-world failure: switching to a new Claude account via `claude auth login` + `/connect` in one harness instance left an older, already-running instance permanently stuck on the old account — because the old account's in-memory `ExpiresAt` happened to be numerically larger than the new account's. Every request kept using (and trying to refresh) the invalid old account, surfacing as `⚠ provider "claude-oauth" is not active (missing credentials)` even though `credentials.json` held perfectly valid new credentials.
+- **Fix** — disk (`~/.harness/credentials.json`) is now **always** the source of truth, re-read unconditionally on every `getValidToken()` call (which runs on every request to Anthropic: `ResolveCredentials`, `FetchModels`, `CompleteStream`). The only exception is a new explicit `tokens.validating` flag, set for the duration of `Connect()`'s validation window (creds set in-memory, not yet persisted) — the sole legitimate case where memory must temporarily win over disk. Cleared immediately after `persistOAuthCreds` succeeds or validation fails.
+- **`tokenManager.syncFromDisk()`** — new method: unconditional overwrite of `tm.creds` from disk, no expiry comparison. Replaces the old `ExpiresAt >` heuristic in both `getValidToken` (initial check + per-retry) and `loadCredentialsFromSources`.
+- **Result**: switching Claude accounts in any harness instance is now picked up by every other running instance on its very next request — no restart, no manual `/connect` needed elsewhere.
+
 ## [0.73.76] - 2026-07-31
 
 ### Feat — `POST /api/sessions/{id}/ask` (synchronous prompt) + CLI `-p` text mode simplified

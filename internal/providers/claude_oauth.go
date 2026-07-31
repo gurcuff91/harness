@@ -103,32 +103,37 @@ func (c *ClaudeOAuth) ResolveCredentials() (types.Credentials, error) {
 }
 
 // loadCredentialsFromSources populates tokens.creds from credentials.json.
-// It always reads from disk so the in-memory state stays in sync with whatever
-// the latest harness instance has persisted (token refresh is single-use;
-// a stale in-memory refresh_token causes invalid_grant).
+// Disk is the source of truth: it always wins, EXCEPT while Connect() is mid-
+// validation (tokens.validating), when the in-memory creds being validated
+// must not be clobbered by whatever unrelated account is currently on disk.
 func (c *ClaudeOAuth) loadCredentialsFromSources() error {
-	if cred, ok := config.GetCredentialsManager().Credential("claude-oauth"); ok && cred.AccessToken != "" {
-		// Only update in-memory creds when disk is newer. This prevents stale
-		// disk tokens (e.g. from a previous harness run) from overwriting fresh
-		// tokens just set by Connect() from the keychain/authflow.
-		inMemoryExpiry := int64(0)
-		if c.tokens.creds != nil {
-			inMemoryExpiry = c.tokens.creds.ExpiresAt
-		}
-		if cred.ExpiresAt >= inMemoryExpiry {
+	c.tokens.mu.Lock()
+	validating := c.tokens.validating
+	c.tokens.mu.Unlock()
+
+	if !validating {
+		if cred, ok := config.GetCredentialsManager().Credential("claude-oauth"); ok && cred.AccessToken != "" {
 			creds := types.OAuthCredentials(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType)
+			c.tokens.mu.Lock()
 			c.tokens.creds = &creds
+			c.tokens.mu.Unlock()
+			return nil
 		}
-		return nil
 	}
-	// No disk entry — fall back to in-memory (e.g. set during Connect).
-	if c.tokens.creds != nil && c.tokens.creds.AccessToken != "" {
+	// No disk entry, or mid-validation — fall back to in-memory (e.g. set
+	// during Connect(), or an account with no persisted creds yet).
+	c.tokens.mu.Lock()
+	hasMemCreds := c.tokens.creds != nil && c.tokens.creds.AccessToken != ""
+	c.tokens.mu.Unlock()
+	if hasMemCreds {
 		return nil
 	}
 	return fmt.Errorf("claude-oauth: no credentials found")
 }
 
-// Connect validates OAuth tokens, then persists them.
+// Connect validates OAuth tokens, then persists them. During validation,
+// tokens.validating is set so no concurrent getValidToken() call overwrites
+// these just-obtained creds with whatever unrelated account is on disk.
 func (c *ClaudeOAuth) Connect(creds types.Credentials) error {
 	if creds.Type != types.CredTypeOAuth {
 		return fmt.Errorf("claude-oauth expects oauth credentials, got %s", creds.Type)
@@ -140,10 +145,18 @@ func (c *ClaudeOAuth) Connect(creds types.Credentials) error {
 		return fmt.Errorf("refresh_token cannot be empty")
 	}
 
-	// Validate first (in-memory only)
+	// Validate first (in-memory only). validating=true blocks disk syncs from
+	// stomping these creds for the duration of the FetchModels() call below.
+	c.tokens.mu.Lock()
 	c.tokens.creds = &creds
+	c.tokens.validating = true
+	c.tokens.mu.Unlock()
+
 	if _, err := c.FetchModels(); err != nil {
+		c.tokens.mu.Lock()
 		c.tokens.creds = nil
+		c.tokens.validating = false
+		c.tokens.mu.Unlock()
 		// If the stored session is stale, the refresh inside FetchModels already
 		// produced an actionable message — surface it directly instead of wrapping
 		// it in a generic "invalid credentials".
@@ -153,8 +166,11 @@ func (c *ClaudeOAuth) Connect(creds types.Credentials) error {
 		return fmt.Errorf("invalid credentials: %w", err)
 	}
 
-	// Persist only after validation
+	// Persist — the new account is now the disk source of truth for everyone.
 	persistOAuthCreds(&creds)
+	c.tokens.mu.Lock()
+	c.tokens.validating = false
+	c.tokens.mu.Unlock()
 	return nil
 }
 
@@ -511,8 +527,30 @@ func sha256hex(input string) string {
 // tokenManager handles the OAuth token lifecycle.
 // Private — callers interact with ClaudeOAuth, not tokenManager directly.
 type tokenManager struct {
-	mu    sync.Mutex
+	mu sync.Mutex
+
 	creds *types.Credentials
+
+	// validating is true only during Connect()'s validation window: creds have
+	// been set in-memory (e.g. from a fresh keychain login) but not yet
+	// persisted to disk. While true, disk reads must NOT overwrite creds — the
+	// in-memory value is what's being validated. Cleared once Connect either
+	// persists (success) or clears creds (failure).
+	//
+	// This replaces an earlier (broken) heuristic that compared ExpiresAt
+	// between disk and memory to decide which was "newer". That comparison is
+	// meaningless across DIFFERENT accounts — two unrelated OAuth sessions have
+	// unrelated expiry timestamps, so "higher ExpiresAt" does not mean "written
+	// more recently". The bug it caused: switching to a new Claude account in
+	// one harness instance, while an older instance still held the old
+	// account's creds in memory with a numerically LARGER ExpiresAt, made the
+	// old instance permanently ignore the new disk creds — every request kept
+	// using (and trying to refresh) the old, now-invalid account.
+	//
+	// The fix: disk is ALWAYS the source of truth, period — except inside this
+	// explicit validation window, which is the only legitimate reason memory
+	// should temporarily win.
+	validating bool
 }
 
 func newTokenManager() *tokenManager {
@@ -529,13 +567,13 @@ func newTokenManager() *tokenManager {
 // It retries the refresh up to 3 times with exponential backoff to handle
 // transient network errors.
 //
-// Before checking expiry AND before each refresh attempt, it re-reads the full
-// credentials from disk. This handles the multi-instance race: if another
-// harness process has already refreshed and written a new access+refresh token
-// pair, this instance picks it up immediately — either serving the new
-// access_token directly (if still valid) or using the new refresh_token for its
-// own refresh. Anthropic refresh tokens are single-use; using a stale one
-// causes a permanent invalid_grant 400.
+// Disk (~/.harness/credentials.json) is ALWAYS the source of truth and is
+// re-read on every call — except during Connect()'s validation window
+// (tm.validating), when the in-memory creds being validated must not be
+// clobbered by whatever unrelated account is currently on disk. This makes
+// switching accounts across multiple harness instances work correctly: as
+// soon as one instance persists new creds, every other instance picks them up
+// on its very next call, unconditionally.
 func (tm *tokenManager) getValidToken() (string, error) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
@@ -543,15 +581,8 @@ func (tm *tokenManager) getValidToken() (string, error) {
 		return "", fmt.Errorf("not connected")
 	}
 
-	// Sync from disk only when the disk has NEWER credentials than memory.
-	// This handles the multi-instance refresh race (another process refreshed
-	// and wrote a newer token) while preserving credentials that were just
-	// set in-memory by Connect() from the keychain/authflow — those are not
-	// yet persisted to disk and must not be overwritten by stale disk data.
-	if cred, ok := config.GetCredentialsManager().Credential("claude-oauth"); ok &&
-		cred.AccessToken != "" && cred.ExpiresAt > tm.creds.ExpiresAt {
-		synced := types.OAuthCredentials(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType)
-		tm.creds = &synced
+	if !tm.validating {
+		tm.syncFromDisk()
 	}
 
 	if tm.creds.ExpiresAt > time.Now().UnixMilli()+expiryBufferMs {
@@ -569,12 +600,8 @@ func (tm *tokenManager) getValidToken() (string, error) {
 
 			// Re-read from disk before each retry — a concurrent instance may
 			// have succeeded in the meantime and written a fresh token pair.
-			// Only adopt disk tokens when they are newer than what we have.
-			if cred, ok := config.GetCredentialsManager().Credential("claude-oauth"); ok &&
-				cred.AccessToken != "" && cred.ExpiresAt > tm.creds.ExpiresAt {
-				synced := types.OAuthCredentials(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType)
-				tm.creds = &synced
-				// If the disk token is now fresh, use it directly.
+			if !tm.validating {
+				tm.syncFromDisk()
 				if tm.creds.ExpiresAt > time.Now().UnixMilli()+expiryBufferMs {
 					return tm.creds.AccessToken, nil
 				}
@@ -597,6 +624,18 @@ func (tm *tokenManager) getValidToken() (string, error) {
 
 	// Surface the real error so it's diagnosable (not just "session expired").
 	return "", fmt.Errorf("token refresh failed (run 'claude auth login' to re-authenticate): %w", lastErr)
+}
+
+// syncFromDisk unconditionally overwrites tm.creds with whatever is currently
+// persisted in credentials.json. Caller holds tm.mu. A no-op if there is no
+// disk entry (e.g. never connected) — in that case the in-memory value stands.
+func (tm *tokenManager) syncFromDisk() {
+	cred, ok := config.GetCredentialsManager().Credential("claude-oauth")
+	if !ok || cred.AccessToken == "" {
+		return
+	}
+	synced := types.OAuthCredentials(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType)
+	tm.creds = &synced
 }
 
 // isAuthError reports whether a refresh error is an authentication failure
