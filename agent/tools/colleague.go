@@ -58,24 +58,51 @@ func readInstances() map[string]instanceEntry {
 
 // ── ColleagueList ──────────────────────────────────────────────────────────
 
-// colleagueListEntry is what ColleagueList shows the model — just enough to
-// pick a name for ColleagueAsk and understand what that colleague can offer.
-type colleagueListEntry struct {
-	Name      string `json:"name"`
-	Transport string `json:"transport"`
-	CWD       string `json:"cwd"`
-	Version   string `json:"version"`
+// chatPlatformEnvironments are the on-disk transport values that grant a
+// colleague a genuinely distinct capability — posting/replying on an external
+// chat platform. Everything else (tui, server, cli, and any transport not
+// listed here) collapses to "generic": from the model's perspective they're
+// all "an agent with tools and a working directory, no special messaging
+// capability" — there is nothing operationally different between them worth
+// naming individually. Adding a new chat-platform transport (e.g. discord)
+// later only means adding one entry here, no system-prompt change needed.
+var chatPlatformEnvironments = map[string]bool{
+	"slack":    true,
+	"telegram": true,
 }
 
-// ColleagueList returns a Tool that lists other running harness instances on
-// this machine, excluding the caller itself (matched by PID — the one field
+// environmentLabel maps an on-disk transport value to what the model sees in
+// ColleagueList. Chat platforms keep their name (it's the whole point — the
+// model reasons about "a colleague in slack can post to Slack"); anything
+// else collapses to "generic".
+func environmentLabel(transport string) string {
+	if chatPlatformEnvironments[transport] {
+		return transport
+	}
+	return "generic"
+}
+
+// colleagueListEntry is what ColleagueList shows the model — just enough to
+// pick a name for ColleagueAsk and understand what that colleague can offer.
+// JSON key "environment" (not the on-disk field name "transport") is what the
+// model reasons over — see the "## Colleagues" system prompt section for why
+// this field matters as much as cwd when picking who to delegate to.
+type colleagueListEntry struct {
+	Name        string `json:"name"`
+	Environment string `json:"environment"`
+	CWD         string `json:"cwd"`
+	Version     string `json:"version"`
+}
+
+// ColleagueList returns a Tool that lists other reachable colleague
+// instances, excluding the caller itself (matched by PID — the one field
 // every registry entry carries that reliably identifies "not me" without any
 // extra plumbing).
 func ColleagueList() Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolColleagueList,
-			Description: "List other harness instances currently running on this machine — potential colleagues to delegate work to via ColleagueAsk. Each entry has a name (use it with ColleagueAsk), the transport it's running (tui, telegram, slack, server), its working directory, and its harness version. Returns an empty list if no other instances are running.",
+			Description: "List other colleague instances currently reachable — each is a live agent you can delegate to via ColleagueAsk. Returns each colleague's name (use it with ColleagueAsk), environment, working directory, and version. Returns an empty list if no colleagues are reachable — that's normal, not an error.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 		},
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
@@ -86,14 +113,14 @@ func ColleagueList() Tool {
 					continue
 				}
 				out = append(out, colleagueListEntry{
-					Name:      name,
-					Transport: info.Transport,
-					CWD:       info.CWD,
-					Version:   info.Version,
+					Name:        name,
+					Environment: environmentLabel(info.Transport),
+					CWD:         info.CWD,
+					Version:     info.Version,
 				})
 			}
 			if len(out) == 0 {
-				return "No other colleagues instances are currently running.", nil
+				return "No other colleagues are currently reachable.", nil
 			}
 			sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 			b, err := json.MarshalIndent(out, "", "  ")
@@ -126,7 +153,7 @@ func ColleagueAsk() Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolColleagueAsk,
-			Description: "Delegate a prompt to another running harness instance (see ColleagueList for available names). The colleague answers using ITS OWN model, MCPs, and project context — this is real delegation, not a call back to yourself. Blocks until the colleague's turn finishes and returns its final text, unless background is set.",
+			Description: "Delegate a prompt to a specific colleague by name (see ColleagueList). The colleague answers using ITS OWN model, tools, and project context — not yours; this is real delegation, not a call back to yourself. Attach local image paths via `images` if relevant. Blocks until the colleague finishes and returns its final text — set `background: true` to get a result-file path immediately instead of waiting, if the task might take a while.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {

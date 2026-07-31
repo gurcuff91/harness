@@ -825,7 +825,7 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) (string,
 	}
 
 	if a.opts.EnableColleagues {
-		b.WriteString("\n\n## Colleagues\n\nYou are not necessarily alone. Other harness instances may be running on this machine right now — different projects (CWDs), different transports (TUI, Telegram, Slack, a headless server, ect..), each with their own model, MCPs, and project knowledge. Use ColleagueList to see who's online, then ColleagueAsk to delegate a question or subtask to one of them by name. A colleague answers using ITS OWN model and context, not yours — this is real delegation, not talking to yourself.\n\nColleagueAsk accepts local image paths (they are read, validated, and sent as part of the delegated prompt), an optional timeout in seconds (default 60), and an optional background flag: when true, the call returns immediately with a path to a result file you can read later instead of blocking.")
+		b.WriteString("\n\n## Colleagues\n\nYou are not the only agent running. Other colleague instances may be reachable right now, each with its own model, tools, and project context — use them instead of trying to do everything yourself.\n\nUse ColleagueList to see who's reachable, then ColleagueAsk to delegate to one by name. Each colleague has an environment (extra capabilities that colleague has, which you may not) and a working directory (the project it has context on):\n\n- Delegate by environment when the task needs a capability you don't have — a colleague's environment may let it do things you can't from here.\n- Delegate by working directory when the task belongs to a different project than yours, or when a colleague already has relevant context you'd otherwise have to rebuild from scratch.\n\nNeither is restrictive — combine them. A colleague in a different project AND environment than yours can still be exactly the right one for the task.")
 	}
 
 	b.WriteString(fmt.Sprintf("\n\n## Working Directory\n\n%s\n", cwd))
@@ -847,7 +847,6 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) (string,
 	full := b.String()
 	return full, promptLens{total: len(full)}
 }
-
 
 // defaultSessionName generates the initial session name — date + time.
 // Replaced automatically by the first user message after Prompt() is called.
