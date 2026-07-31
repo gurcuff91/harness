@@ -41,12 +41,13 @@ const sseClientBufferSize = 4096
 
 // Server is the HTTP transport for the agent harness.
 type Server struct {
-	agent     *agent.Agent
-	verbose   bool
-	transport string // name of the calling transport
-	addr      string // resolved listen address (set in Serve)
-	mu        sync.RWMutex
-	sessions  map[string]*SessionProxy
+	agent        *agent.Agent
+	verbose      bool
+	transport    string // name of the calling transport
+	addr         string // resolved listen address (set in Serve)
+	instanceName string // unique instance name (MK11-themed, set in Serve)
+	mu           sync.RWMutex
+	sessions     map[string]*SessionProxy
 
 	// Graceful shutdown plumbing (set in Serve).
 	httpSrv   *http.Server
@@ -88,6 +89,7 @@ func (s *Server) handler() http.Handler {
 
 	// Routes
 	r.Get("/api/server", s.handleServerInfo)
+	r.Get("/api/instances", s.handleListInstances)
 	r.Get("/api/docs", s.handleDocs)
 	r.Get("/api/docs/openapi.json", s.handleOpenAPISpec)
 	r.Get("/api/settings", s.handleSettings)
@@ -148,6 +150,27 @@ func (s *Server) Serve(l net.Listener) error {
 	if s.verbose {
 		logx.Info("server", "listening", "addr", s.addr)
 	}
+
+	// Register this instance in ~/.harness/instances.json.
+	name, err := RegisterInstance(InstanceInfo{
+		Version:   staticServerVersion,
+		Transport: s.transport,
+		URL:       "http://" + s.addr,
+		CWD:       staticServerCWD,
+		PID:       staticServerPID,
+		StartedAt: staticServerStartedAt,
+	})
+	if err != nil {
+		if s.verbose {
+			logx.Warn("server", "register_instance", "error", err.Error())
+		}
+	} else {
+		s.instanceName = name
+		if s.verbose {
+			logx.Info("server", "instance", "name", name)
+		}
+	}
+
 	s.httpSrv = &http.Server{Handler: s.handler()}
 	return s.httpSrv.Serve(l)
 }
@@ -182,6 +205,11 @@ func (s *Server) Close() error {
 				s.closeErr = err
 			}
 		}
+
+		// 4. Unregister this instance from ~/.harness/instances.json.
+		if s.instanceName != "" {
+			UnregisterInstance(s.instanceName)
+		}
 	})
 	return s.closeErr
 }
@@ -198,6 +226,7 @@ type createSessionRequest struct {
 type serverInfo struct {
 	Name      string `json:"name"`
 	Version   string `json:"version"`
+	Instance  string `json:"instance"`
 	Transport string `json:"transport"`
 	URL       string `json:"url"`
 	CWD       string `json:"cwd"`
@@ -226,12 +255,27 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, serverInfo{
 		Name:      staticServerName,
 		Version:   staticServerVersion,
+		Instance:  s.instanceName,
 		Transport: s.transport,
 		URL:       "http://" + s.addr,
 		CWD:       staticServerCWD,
 		PID:       staticServerPID,
 		StartedAt: staticServerStartedAt,
 	})
+}
+
+// handleListInstances returns all registered server instances from
+// ~/.harness/instances.json (dead PIDs are pruned on load).
+func (s *Server) handleListInstances(w http.ResponseWriter, r *http.Request) {
+	instances, err := ListInstances()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if instances == nil {
+		instances = map[string]InstanceInfo{}
+	}
+	writeJSON(w, http.StatusOK, instances)
 }
 
 // SettingsDTO is the API representation of harness settings. Its JSON tags are

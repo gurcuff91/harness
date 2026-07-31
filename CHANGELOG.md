@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.75] - 2026-07-31
+
+### Fix — Instance registry: preserve existing entries, HTTP-based liveness check
+- **`loadInstances()`** (`internal/server/instances.go`) — no longer prunes entries by PID. The previous implementation used `os.FindProcess` + `signal 0` to detect dead PIDs, which is unreliable on macOS and was deleting live instances. Now reads the file as-is — existing entries are preserved.
+- **`generateInstanceName()`** — when a name collision occurs, checks liveness via HTTP (`GET /api/server` with 2s timeout) instead of PID. If the existing instance responds 200 → it's alive, try another name. If it doesn't respond → it's dead, reclaim the name and remove the stale entry. This is reliable across all platforms and doesn't depend on OS process semantics.
+- **`ListInstances()`** — returns all entries as-is without health checking. Consumers can verify liveness by calling each instance's `/api/server` endpoint.
+- **`instanceAlive()`** — new helper: quick HTTP probe to an instance's URL.
+- **Server logging** — all `logx` calls in `server.go` now gated behind `s.verbose` (including the `register_instance` warning).
+
+## [0.73.74] - 2026-07-31
+
+### Feat — Instance registry: track all running server instances
+- **`~/.harness/instances.json`** — new file tracking every running server instance with its version, transport, URL, CWD, PID, and start time. Keyed by a unique MK11-themed name (e.g. `jade-warrior`, `scorpion-spectre`).
+- **Name generator** (`internal/server/instances.go`) — 37 MK11 characters × 37 MK11-flavored adjectives = 1369 possible combinations. Random character + random adjective joined with `-`. Retries up to 50 times on collision, then falls back to numeric suffix. `loadInstances` prunes entries whose PID is no longer alive — handles crashed processes that never called `Close`.
+- **`Server.Serve()`** — registers the instance on startup (name logged at info level). **`Server.Close()`** — unregisters on graceful shutdown.
+- **`GET /api/server`** — now includes `instance` field (the MK11 name).
+- **`GET /api/instances`** — new endpoint listing all registered instances.
+- **OpenAPI spec** — updated `ServerInfo` schema with `instance` field; added `/api/instances` endpoint and `InstanceInfo` schema.
+
 ## [0.73.73] - 2026-07-31
 
 ### Feat — Graceful `Server.Close()` cascade: sessions → agent → HTTP shutdown

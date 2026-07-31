@@ -57,10 +57,21 @@ const openAPISpecTemplate = `{
       "get": {
         "tags": ["server"],
         "summary": "Server info",
-        "description": "Returns harness version and server uptime.",
+        "description": "Returns harness version, instance name, transport, URL, and process metadata.",
         "operationId": "getServerInfo",
         "responses": {
           "200": { "description": "Server info", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ServerInfo" } } } }
+        }
+      }
+    },
+    "/api/instances": {
+      "get": {
+        "tags": ["server"],
+        "summary": "List running instances",
+        "description": "Returns all registered server instances from ~/.harness/instances.json. Dead PIDs are pruned on load.",
+        "operationId": "listInstances",
+        "responses": {
+          "200": { "description": "Instance registry", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": { "$ref": "#/components/schemas/InstanceInfo" } } } } }
         }
       }
     },
@@ -433,12 +444,24 @@ const openAPISpecTemplate = `{
         "type": "object",
         "properties": {
           "name":       { "type": "string", "example": "harness" },
-          "version":    { "type": "string", "example": "v0.73.71" },
-          "transport":  { "type": "string", "example": "tui", "description": "Calling transport (tui, telegram, slack, server)" },
+          "version":    { "type": "string", "example": "v0.73.74" },
+          "instance":   { "type": "string", "example": "jade-warrior", "description": "Unique MK11-themed instance name" },
+          "transport":  { "type": "string", "example": "tui", "description": "Calling transport (tui, telegram, slack, server, cli)" },
           "url":        { "type": "string", "example": "http://127.0.0.1:52341" },
           "cwd":        { "type": "string", "example": "/Users/gustavo/Workspace/harness" },
           "pid":        { "type": "integer", "example": 92807 },
           "started_at": { "type": "string", "format": "date-time", "example": "2026-07-31T00:22:16Z" }
+        }
+      },
+      "InstanceInfo": {
+        "type": "object",
+        "properties": {
+          "version":    { "type": "string", "example": "v0.73.74" },
+          "transport":  { "type": "string", "example": "tui" },
+          "url":        { "type": "string", "example": "http://127.0.0.1:52341" },
+          "cwd":        { "type": "string" },
+          "pid":        { "type": "integer" },
+          "started_at": { "type": "string", "format": "date-time" }
         }
       },
       "Settings": {
