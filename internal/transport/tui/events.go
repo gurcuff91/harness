@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gurcuff91/harness/internal/client"
+	"github.com/gurcuff91/harness/client"
 	"github.com/gurcuff91/harness/internal/transport/tui/ansi"
 	"github.com/gurcuff91/harness/internal/transport/tui/components"
 )

@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/internal/client"
+	"github.com/gurcuff91/harness/client"
 )
 
 // RunSettings prints the current core settings (active_model, thinking_level).

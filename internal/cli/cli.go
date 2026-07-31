@@ -12,7 +12,7 @@ import (
 	"syscall"
 
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/internal/client"
+	"github.com/gurcuff91/harness/client"
 )
 
 // Opts configures the CLI transport.
@@ -93,7 +93,7 @@ func Run(ctx context.Context, a *agent.Agent, prompt string, opts Opts) error {
 	// the individual events (tool calls, thinking, tokens, timing), so they keep
 	// the SendPrompt + StreamEvents path.
 	if opts.Output == "text" {
-		text, err := c.Ask(sessionID, prompt)
+		text, err := c.Ask(sessionID, prompt, 0) // no timeout — CLI waits as long as needed
 		if err != nil {
 			return fmt.Errorf("ask: %w", err)
 		}

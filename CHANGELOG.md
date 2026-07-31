@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.79] - 2026-07-31
+
+### Fix — `harness serve` left a stale entry in instances.json on Ctrl+C/SIGTERM
+- **Root cause** (`internal/cli/cmd_serve.go`) — `Server.Close()` calls `httpSrv.Shutdown()` as step 3 of 4, which makes the blocking `srv.Serve(listener)` in the main goroutine return almost immediately. Step 4 (`UnregisterInstance`, removing the entry from `~/.harness/instances.json`) runs afterward, in the *other* goroutine that's executing `Close()`. `cmdServe` returned as soon as `Serve()` unblocked, without waiting for that goroutine to actually finish — `main()`'s `os.Exit()` killed the process mid-cleanup, leaving the instance registry entry orphaned every time (100% reproducible, not a race).
+- **Fix** — `cmdServe` now waits on a `closeDone <-chan error` channel: when `Serve()` returns via the expected shutdown path (`ctx.Err() != nil`, i.e. Ctrl+C/SIGTERM), it blocks on `<-closeDone` until the `Close()` goroutine has fully completed, including instance unregistration, before returning. Verified with repeated SIGINT/SIGTERM cycles — `instances.json` now reliably ends up `{}` after shutdown.
+
+## [0.73.78] - 2026-07-31
+
+### Feat — `client` promoted to a public SDK package + `Ask`/`AskWithImages` with per-request timeout
+- **`internal/client` → `client`** — the typed HTTP/SSE client is now a public package (`github.com/gurcuff91/harness/client`), not `internal/`. Any Go program can `import "github.com/gurcuff91/harness/client"` and drive a running `harness serve` (or any transport's in-process server) without embedding the agent directly — same session/prompt/event model, over the wire. 14 call sites across `internal/cli`, `internal/transport/{tui,telegram,slack}` updated to the new import path; zero behavior change.
+- **`types.ProviderConfig` / `types.MCPServer`** — moved from `internal/config` to `types/` (both are pure stdlib shapes — no reason for them to live in an internal package). `internal/config` now aliases them (`type ProviderConfig = types.ProviderConfig`), staying the domain owner (validation, persistence) while the shape itself is public. This was the blocker to moving `client` out of `internal/` — its `types.go` no longer needs to reach into `internal/config`.
+- **`harness.Client` / `harness.NewClient`** — re-exported in the root SDK facade (`harness.go`), alongside `Agent`/`Session`. Package doc updated to mention the client as an alternative embedding path.
+- **`client.New(addr)`** — now accepts either a bare address (`"127.0.0.1:8080"`, assumed `http://`) or a full URL with scheme (`"http://…"`, `"https://…"`) — the latter is what `InstanceInfo.URL` (colleague registry, upcoming) and any user-supplied `--addr` already carry.
+- **`client.Ask(sessionID, text, timeout)`** and new **`client.AskWithImages(sessionID, text, images, timeout)`** — both take a `time.Duration` timeout (0 = no limit) scoped to that single request via `context.WithTimeout`, not the client's shared `http.Client.Timeout` — which would incorrectly also cut off the unrelated, long-lived SSE stream. `client.do()`/`decode[T]` gained context-aware siblings (`doCtx`/`decodeCtx`) as the real transport primitives; the ~40 existing call sites are unaffected (they use the `context.Background()` wrapper).
+- **Server-side `handleAsk`** already supported images end-to-end (validated in this pass, no code change needed) — decodes `req.Images`, checks vision support, passes `agent.WithImages(...)` to `PromptAndWait`.
+
 ## [0.73.77] - 2026-07-31
 
 ### Fix — claude-oauth: disk is unconditionally the source of truth (account-switch bug)

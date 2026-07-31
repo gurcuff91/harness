@@ -2,7 +2,6 @@ package client
 
 import (
 	"github.com/gurcuff91/harness/agent/store"
-	"github.com/gurcuff91/harness/internal/config"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -13,8 +12,7 @@ import (
 // Type-sourcing rule:
 //   - Reuse a harness package's own wire type when it's LIGHTWEIGHT (stdlib- or
 //     types-only deps) and is exactly what the endpoint serializes, so the
-//     contract can't drift: types.* (zero deps), store.SessionMeta (deps types),
-//     config.ProviderConfig / config.MCPServer (stdlib only).
+//     contract can't drift: types.* (zero deps), store.SessionMeta (deps types).
 //   - Mirror the shape locally when reusing the owner would drag a HEAVY
 //     dependency into this HTTP client for nothing: MCPStatus (mcp pulls in the
 //     tools + config graph) and MemorySearchResult/Memory (memory pulls the
@@ -144,11 +142,11 @@ type SessionInfo struct {
 }
 
 // ProviderConfig and MCPServer are the settings-collection payloads. They reuse
-// config's own types (stdlib-only) verbatim: the endpoints pass them straight
+// types' own shapes (stdlib-only) verbatim: the endpoints pass them straight
 // through the SettingsManager, so this is the same struct end to end.
 type (
-	ProviderConfig = config.ProviderConfig
-	MCPServer      = config.MCPServer
+	ProviderConfig = types.ProviderConfig
+	MCPServer      = types.MCPServer
 )
 
 // MCPStatus is one element of GET /api/mcp/status — a configured MCP server's

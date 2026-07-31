@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/gurcuff91/harness/internal/client"
+	"github.com/gurcuff91/harness/client"
 	"github.com/gurcuff91/harness/internal/logx"
 	"strings"
 	"sync"

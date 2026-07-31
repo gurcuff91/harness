@@ -11,7 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/internal/client"
+	"github.com/gurcuff91/harness/client"
 	"github.com/gurcuff91/harness/internal/logx"
 	"github.com/gurcuff91/harness/internal/server"
 	"github.com/gurcuff91/harness/types"

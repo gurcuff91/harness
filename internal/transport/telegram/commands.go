@@ -6,7 +6,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/gurcuff91/harness/internal/client"
+	"github.com/gurcuff91/harness/client"
 	"github.com/gurcuff91/harness/internal/logx"
 )
 

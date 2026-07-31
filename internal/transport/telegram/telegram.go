@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/internal/client"
+	"github.com/gurcuff91/harness/client"
 	"github.com/gurcuff91/harness/internal/server"
 )
 

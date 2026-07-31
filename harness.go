@@ -25,7 +25,12 @@
 //   - agent/store     — session storage internals
 //   - agent/resources — resource loader internals
 //   - agent/memory    — the persistent memory store internals
+//   - client          — typed HTTP/SSE client for a running `harness serve`
 //   - types           — Event, Message, ModelMeta and other shared types
+//
+// A process that runs `harness serve` exposes the agent over HTTP/SSE; embed
+// [Client] to drive that server remotely instead of embedding the agent
+// directly — same session/prompt/event model, just over the wire.
 //
 // Everything under internal/ (providers, config, transports, build version) is
 // implementation detail and not part of the SDK's compatibility surface.
@@ -36,7 +41,16 @@ import (
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/agent/tools"
+	"github.com/gurcuff91/harness/client"
 )
+
+// Client is a typed HTTP/SSE client for a running harness server (`harness
+// serve`, or the in-process server any transport starts). See [client.Client].
+type Client = client.Client
+
+// NewClient connects to a harness server at addr (e.g. "127.0.0.1:8080") and
+// returns a typed client. See [client.New].
+var NewClient = client.New
 
 // Agent is a configured harness agent. See [agent.Agent].
 type Agent = agent.Agent

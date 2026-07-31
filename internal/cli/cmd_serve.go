@@ -34,6 +34,28 @@ func cmdServe(args []string) error {
 		return err
 	}
 	srv := server.NewServer(a, server.ServerOptions{Verbose: true, Transport: "server"})
-	defer srv.Close() // graceful: sessions → agent → HTTP shutdown
-	return srv.Serve(listener)
+
+	// srv.Serve blocks until the listener closes, so Close() must be triggered
+	// from elsewhere on Ctrl+C/SIGTERM. Close() itself calls httpSrv.Shutdown(),
+	// which is what makes Serve() below return — so Serve() unblocking does NOT
+	// mean Close() has finished (it unregisters the instance from
+	// instances.json as its LAST step, after Shutdown). cmdServe must wait for
+	// the Close() goroutine to actually complete before returning, otherwise
+	// main()'s os.Exit races it and the instance registry entry is left behind.
+	ctx, cancel := signalContext()
+	defer cancel()
+	closeDone := make(chan error, 1)
+	go func() {
+		<-ctx.Done()
+		closeDone <- srv.Close() // graceful: sessions → agent → HTTP shutdown → unregister instance
+	}()
+
+	err = srv.Serve(listener)
+	if ctx.Err() != nil {
+		// Expected shutdown path (Ctrl+C/SIGTERM) — http.Serve returns
+		// ErrServerClosed once Shutdown() completes. Block here until Close()
+		// (started above) has fully finished, including instance unregistration.
+		return <-closeDone
+	}
+	return err
 }

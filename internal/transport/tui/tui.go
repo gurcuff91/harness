@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/internal/client"
+	"github.com/gurcuff91/harness/client"
 	"github.com/gurcuff91/harness/internal/transport/tui/ansi"
 	"github.com/gurcuff91/harness/internal/transport/tui/components"
 	"github.com/gurcuff91/harness/internal/transport/tui/render"
@@ -30,7 +30,7 @@ import (
 // CommandDef and ParamDef are the session command shapes the palette and
 // command dispatch drive off of. They alias the client's decoded types (from
 // GET /api/sessions/{id}/commands) so this package's existing references keep
-// working while the decoding lives in internal/client.
+// working while the decoding lives in client.
 type (
 	CommandDef = client.CommandDef
 	ParamDef   = client.ParamDef

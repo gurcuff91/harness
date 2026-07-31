@@ -19,6 +19,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
+	"time"
 
 	"github.com/gurcuff91/harness/types"
 )
@@ -32,20 +34,40 @@ type Client struct {
 	http    *http.Client
 }
 
-// New creates a client for the given server address (host:port, no scheme).
+// New creates a client for the given server target. Accepts either a bare
+// address ("127.0.0.1:8080", assumed http://) or a full URL with scheme
+// ("http://127.0.0.1:8080", "https://harness.example.com") — the latter is
+// what InstanceInfo.URL (see agent/colleague) and any user-supplied --addr
+// already carry, so both forms just work without the caller normalizing them.
 func New(addr string) *Client {
+	base := addr
+	if !strings.Contains(base, "://") {
+		base = "http://" + base
+	}
 	return &Client{
-		baseURL: "http://" + addr,
+		baseURL: base,
 		http:    &http.Client{},
 	}
 }
 
-// do sends one request and returns the raw response body. A 4xx/5xx status
-// returns the body alongside an *Error (see error.go) when the response is
-// harness's standard {"error": {"message", "details"}} shape, or a plain
-// error otherwise. It is the private transport primitive; the exported methods
-// decode its result into typed values.
+// do sends one request (no explicit deadline — context.Background()) and
+// returns the raw response body. Thin wrapper over doCtx for the ~40 existing
+// call sites that don't need a caller-supplied timeout.
 func (c *Client) do(method, path string, body any) ([]byte, error) {
+	return c.doCtx(context.Background(), method, path, body)
+}
+
+// doCtx is the real transport primitive: sends one request bound to ctx and
+// returns the raw response body. A 4xx/5xx status returns the body alongside
+// an *Error (see error.go) when the response is harness's standard
+// {"error": {"message", "details"}} shape, or a plain error otherwise.
+//
+// ctx matters for calls that can legitimately take a long time — Ask/
+// AskWithImages block until an agent turn finishes, which may run for
+// minutes (multi-step ReAct loop). Passing context.WithTimeout there bounds
+// the wait without needing a client-wide http.Client.Timeout, which would
+// also (incorrectly) cut off the unrelated, long-lived SSE stream.
+func (c *Client) doCtx(ctx context.Context, method, path string, body any) ([]byte, error) {
 	var r io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -54,7 +76,7 @@ func (c *Client) do(method, path string, body any) ([]byte, error) {
 		}
 		r = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, c.baseURL+path, r)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, r)
 	if err != nil {
 		return nil, err
 	}
@@ -80,8 +102,13 @@ func (c *Client) do(method, path string, body any) ([]byte, error) {
 // decode runs do() and unmarshals the successful body into *T. A transport
 // error is returned as-is; a decode error is wrapped.
 func decode[T any](c *Client, method, path string, body any) (T, error) {
+	return decodeCtx[T](c, context.Background(), method, path, body)
+}
+
+// decodeCtx is decode with a caller-supplied context (see doCtx).
+func decodeCtx[T any](c *Client, ctx context.Context, method, path string, body any) (T, error) {
 	var out T
-	data, err := c.do(method, path, body)
+	data, err := c.doCtx(ctx, method, path, body)
 	if err != nil {
 		return out, err
 	}
@@ -298,10 +325,39 @@ func (c *Client) SendPrompt(sessionID, text string) (*Status, error) {
 // the final assistant text. This is the synchronous counterpart to SendPrompt.
 // Errors (4xx/5xx) are returned as *Error with the standard {"error":{"message"}}
 // shape — same as every other method in this client.
-func (c *Client) Ask(sessionID, text string) (string, error) {
-	resp, err := decode[struct {
+//
+// timeout bounds how long Ask waits for the turn to finish (a multi-step
+// ReAct loop can legitimately run for minutes); pass 0 for no timeout
+// (waits as long as the server does). This is scoped to the single request
+// via context, not the client's shared http.Client, so it never affects
+// unrelated calls (in particular the long-lived SSE stream).
+func (c *Client) Ask(sessionID, text string, timeout time.Duration) (string, error) {
+	return c.askCtx(timeout, sessionID, map[string]string{"text": text})
+}
+
+// AskWithImages is Ask with one or more images attached (base64, decoded by
+// the server). The server validates that the session's model supports vision.
+func (c *Client) AskWithImages(sessionID, text string, images []types.ImageData, timeout time.Duration) (string, error) {
+	return c.askCtx(timeout, sessionID, map[string]any{
+		"text":   text,
+		"images": images,
+	})
+}
+
+// askCtx is the shared implementation behind Ask/AskWithImages. It owns the
+// timeout's full lifecycle: builds the context, defers its cancel right here
+// (releasing the internal timer as soon as the request returns, not waiting
+// for the deadline), and never leaks the CancelFunc to the caller.
+func (c *Client) askCtx(timeout time.Duration, sessionID string, body any) (string, error) {
+	ctx := context.Background()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	resp, err := decodeCtx[struct {
 		Text string `json:"text"`
-	}](c, "POST", "/api/sessions/"+sessionID+"/ask", map[string]string{"text": text})
+	}](c, ctx, "POST", "/api/sessions/"+sessionID+"/ask", body)
 	if err != nil {
 		return "", err
 	}
