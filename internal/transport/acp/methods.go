@@ -2,11 +2,13 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/gurcuff91/harness/client"
+	"github.com/gurcuff91/harness/internal/version"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -46,10 +48,13 @@ func (h *handler) handleInitialize(_ initializeParams) (initializeResult, *rpcEr
 				EmbeddedContext: true,
 			},
 			SessionCapabilities: sessionCapabilities{
-				Resume: nil, // session/resume not implemented — session/load covers our use case
+				Resume: &struct{}{},
+				Close:  &struct{}{},
+				Delete: &struct{}{},
+				List:   &struct{}{},
 			},
 		},
-		AgentInfo: &implementation{Name: "harness"},
+		AgentInfo: &implementation{Name: "harness", Title: "Harness", Version: version.Version},
 	}, nil
 }
 
@@ -64,7 +69,7 @@ func (h *handler) handleAuthenticate(_ authenticateParams) (map[string]any, *rpc
 // handleNewSession creates a fresh Harness session for the given cwd, using
 // the server's currently configured default model (mcpServers from the
 // request is deliberately ignored — see the design doc).
-func (h *handler) handleNewSession(p newSessionParams) (newSessionResult, *rpcError) {
+func (h *handler) handleNewSession(c *conn, p newSessionParams) (newSessionResult, *rpcError) {
 	model, err := resolveDefaultModel(h.api)
 	if err != nil {
 		return newSessionResult{}, internalErr("resolve default model", err)
@@ -73,7 +78,7 @@ func (h *handler) handleNewSession(p newSessionParams) (newSessionResult, *rpcEr
 	if err != nil {
 		return newSessionResult{}, internalErr("create session", err)
 	}
-	return h.registerSession(sess.ID)
+	return h.registerSession(c, sess.ID)
 }
 
 // handleLoadSession resumes an existing Harness session and replays its full
@@ -88,12 +93,16 @@ func (h *handler) handleLoadSession(c *conn, p loadSessionParams) (newSessionRes
 		return newSessionResult{}, internalErr("get messages", err)
 	}
 	replayHistory(c, p.SessionID, messages)
-	return h.registerSession(p.SessionID)
+	return h.registerSession(c, p.SessionID)
 }
 
 // registerSession builds the acpSession tracking entry and the initial
-// configOptions payload shared by both session/new and session/load.
-func (h *handler) registerSession(harnessID string) (newSessionResult, *rpcError) {
+// configOptions payload shared by session/new, session/load, and
+// session/resume. It deliberately does NOT send available_commands_update
+// itself — see notifyAvailableCommands's doc comment for why that
+// notification must be sent by the CALLER, strictly after the session/new /
+// session/load / session/resume response has already been written.
+func (h *handler) registerSession(c *conn, harnessID string) (newSessionResult, *rpcError) {
 	h.mu.Lock()
 	h.sessions[harnessID] = &acpSession{harnessID: harnessID}
 	h.mu.Unlock()
@@ -103,6 +112,75 @@ func (h *handler) registerSession(harnessID string) (newSessionResult, *rpcError
 		return newSessionResult{}, internalErr("build config options", err)
 	}
 	return newSessionResult{SessionID: harnessID, ConfigOptions: opts}, nil
+}
+
+// notifyAvailableCommands sends the available_commands_update notification
+// for a session. It MUST be called strictly after the response to whichever
+// method created/loaded/resumed the session has already been written to
+// stdout — never before, and never interleaved with building that response.
+//
+// Why this ordering is load-bearing (not just tidy): Zed reads JSON-RPC as a
+// sequential line stream and only learns a sessionId once it has processed
+// that method's RESPONSE. A session/update notification for that sessionId
+// arriving on the wire before the response line does is silently dropped as
+// "notification for unknown session" — this is a confirmed, reported Zed bug
+// (zed-industries/zed#60199: "available_commands_update never shown because
+// notification arrives before session/new response"). It used to bite this
+// transport for exactly that reason: registerSession sent the notification
+// from INSIDE the handler, before the handler had even returned its result
+// to be written — so on the wire, the notification line preceded the
+// response line, and Zed threw it away every time, unconditionally.
+func (h *handler) notifyAvailableCommands(c *conn, sessionID string) {
+	cmds, err := buildAvailableCommands(h.api, sessionID)
+	if err != nil {
+		// Not fatal — the session is still fully usable without slash-command
+		// suggestions, so this only costs a UX nicety, not the session itself.
+		return
+	}
+	notify(c, sessionID, sessionUpdate{
+		SessionUpdate:     "available_commands_update",
+		AvailableCommands: cmds,
+	})
+}
+
+// handleSetConfigOption applies a value change from one of the config
+// options advertised in buildConfigOptions ("model" or "thinking" — the only
+// two IDs this transport ever hands out, so any other configId is a client
+// error) and returns the complete, current config option state, per spec.
+func (h *handler) handleSetConfigOption(p setConfigOptionParams) (setConfigOptionResult, *rpcError) {
+	h.mu.Lock()
+	_, ok := h.sessions[p.SessionID]
+	h.mu.Unlock()
+	if !ok {
+		return setConfigOptionResult{}, &rpcError{Code: errCodeInvalidParams, Message: "unknown sessionId: " + p.SessionID}
+	}
+
+	var value string
+	if err := json.Unmarshal(p.Value, &value); err != nil {
+		return setConfigOptionResult{}, &rpcError{Code: errCodeInvalidParams, Message: "value must be a string for this transport's config options: " + err.Error()}
+	}
+
+	// The session command name and its param key are NOT always the same
+	// string (see handleExecCommand in internal/server/server.go): "model"
+	// takes {"model": ...} but "thinking" takes {"level": ...}.
+	var command, paramKey string
+	switch p.ConfigID {
+	case "model":
+		command, paramKey = "model", "model"
+	case "thinking":
+		command, paramKey = "thinking", "level"
+	default:
+		return setConfigOptionResult{}, &rpcError{Code: errCodeInvalidParams, Message: "unknown configId: " + p.ConfigID}
+	}
+	if _, err := h.api.ExecCommand(p.SessionID, command, map[string]any{paramKey: value}); err != nil {
+		return setConfigOptionResult{}, internalErr("set "+p.ConfigID, err)
+	}
+
+	opts, err := buildConfigOptions(h.api)
+	if err != nil {
+		return setConfigOptionResult{}, internalErr("build config options", err)
+	}
+	return setConfigOptionResult{ConfigOptions: opts}, nil
 }
 
 // handlePrompt converts the ACP content blocks into text/images, submits the
@@ -149,6 +227,70 @@ func (h *handler) handlePrompt(ctx context.Context, c *conn, p promptParams) (pr
 // session/prompt) translates into stopReason "cancelled".
 func (h *handler) handleCancel(p cancelParams) {
 	_, _ = h.api.StopSession(p.SessionID)
+}
+
+// handleResumeSession reconnects to an existing Harness session WITHOUT
+// replaying its history — the lighter sibling of handleLoadSession. Same
+// registerSession finish (config options + available_commands_update) as
+// every other session-creating path.
+func (h *handler) handleResumeSession(c *conn, p resumeSessionParams) (resumeSessionResult, *rpcError) {
+	if _, err := h.api.ResumeSession(p.SessionID); err != nil {
+		return resumeSessionResult{}, internalErr("resume session", err)
+	}
+	return h.registerSession(c, p.SessionID)
+}
+
+// handleCloseSession cancels any in-flight work (same effect as
+// session/cancel) and frees the session's resources — but, unlike
+// session/delete, leaves it intact for a future session/load or
+// session/resume. Also drops this transport's own bookkeeping entry so a
+// stale acpSession doesn't linger for a session ACP no longer considers
+// live.
+func (h *handler) handleCloseSession(p closeSessionParams) (closeSessionResult, *rpcError) {
+	if _, err := h.api.CloseSession(p.SessionID); err != nil {
+		return closeSessionResult{}, internalErr("close session", err)
+	}
+	h.mu.Lock()
+	delete(h.sessions, p.SessionID)
+	h.mu.Unlock()
+	return closeSessionResult{}, nil
+}
+
+// handleDeleteSession permanently removes a session — it will no longer
+// appear in session/list. Per spec, deleting an already-deleted or
+// nonexistent session SHOULD succeed silently, matching
+// client.DeleteSession's semantics (DELETE is idempotent at the HTTP layer).
+func (h *handler) handleDeleteSession(p deleteSessionParams) (deleteSessionResult, *rpcError) {
+	if err := h.api.DeleteSession(p.SessionID); err != nil {
+		return deleteSessionResult{}, internalErr("delete session", err)
+	}
+	h.mu.Lock()
+	delete(h.sessions, p.SessionID)
+	h.mu.Unlock()
+	return deleteSessionResult{}, nil
+}
+
+// handleListSessions lists sessions known to Harness, optionally filtered by
+// cwd. Cursor-based pagination is not implemented — Harness's own session
+// count per cwd is small enough that a single page covering everything is
+// simpler and still spec-compliant (nextCursor is optional; omitting it
+// means "no more results"). Any incoming cursor is accepted but ignored
+// rather than rejected, since there is only ever one page to give back.
+func (h *handler) handleListSessions(p listSessionsParams) (listSessionsResult, *rpcError) {
+	sessions, err := h.api.ListSessions(p.CWD)
+	if err != nil {
+		return listSessionsResult{}, internalErr("list sessions", err)
+	}
+	out := make([]sessionInfo, 0, len(sessions))
+	for _, s := range sessions {
+		out = append(out, sessionInfo{
+			SessionID: s.ID,
+			CWD:       s.CWD,
+			Title:     s.Name,
+			UpdatedAt: s.LastActiveAt.UTC().Format(time.RFC3339),
+		})
+	}
+	return listSessionsResult{Sessions: out}, nil
 }
 
 // flattenPrompt reduces ACP's ContentBlock[] prompt into the flat

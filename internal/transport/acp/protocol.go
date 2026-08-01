@@ -52,8 +52,14 @@ type promptCapabilities struct {
 // sessionCapabilities advertises optional session lifecycle methods this
 // agent supports. Each field is an empty object (not just `true`) per spec —
 // future sub-options would live inside; omitted entirely means unsupported.
+// Harness's client.Client already exposes Resume/Close/Delete/List for every
+// transport (not ACP-specific), so all four are genuinely backed here, not
+// just advertised.
 type sessionCapabilities struct {
 	Resume *struct{} `json:"resume,omitempty"`
+	Close  *struct{} `json:"close,omitempty"`
+	Delete *struct{} `json:"delete,omitempty"`
+	List   *struct{} `json:"list,omitempty"`
 }
 
 type authMethod struct {
@@ -92,6 +98,26 @@ type newSessionResult struct {
 	ConfigOptions []sessionConfigOption `json:"configOptions,omitempty"`
 }
 
+// ── session/set_config_option ───────────────────────────────────────────────
+
+// setConfigOptionParams' Value is deliberately untyped (json.RawMessage):
+// ACP's "value" field is `string | boolean` depending on the option's type —
+// this transport only ever advertises "select" options (string values), so
+// it unmarshals Value as a plain string in methods.go and rejects anything
+// else, rather than modeling the boolean variant this transport never sends.
+type setConfigOptionParams struct {
+	SessionID string          `json:"sessionId"`
+	ConfigID  string          `json:"configId"`
+	Value     json.RawMessage `json:"value"`
+}
+
+// setConfigOptionResult carries back the COMPLETE, current config option
+// state — per spec, not just the one that changed (a model change can shift
+// what's available/current for another option).
+type setConfigOptionResult struct {
+	ConfigOptions []sessionConfigOption `json:"configOptions"`
+}
+
 // ── session/prompt ───────────────────────────────────────────────────────
 
 type promptParams struct {
@@ -116,6 +142,62 @@ const (
 
 type cancelParams struct {
 	SessionID string `json:"sessionId"`
+}
+
+// ── session/resume ───────────────────────────────────────────────────────
+
+// resumeSessionParams mirrors loadSessionParams (same fields, same MCP
+// servers-ignored rule) — session/resume is the lighter-weight sibling of
+// session/load: it reconnects without replaying history.
+type resumeSessionParams struct {
+	SessionID  string            `json:"sessionId"`
+	CWD        string            `json:"cwd"`
+	MCPServers []json.RawMessage `json:"mcpServers,omitempty"`
+}
+
+// resumeSessionResult reuses newSessionResult's shape (sessionId +
+// configOptions) — ACP's ResumeSessionResponse has the identical fields.
+type resumeSessionResult = newSessionResult
+
+// ── session/close ────────────────────────────────────────────────────────
+
+type closeSessionParams struct {
+	SessionID string `json:"sessionId"`
+}
+
+// closeSessionResult is intentionally empty — ACP's CloseSessionResponse
+// carries no fields besides the reserved _meta this transport never sets.
+type closeSessionResult struct{}
+
+// ── session/delete ───────────────────────────────────────────────────────
+
+type deleteSessionParams struct {
+	SessionID string `json:"sessionId"`
+}
+
+type deleteSessionResult struct{}
+
+// ── session/list ─────────────────────────────────────────────────────────
+
+type listSessionsParams struct {
+	CWD    string `json:"cwd,omitempty"`
+	Cursor string `json:"cursor,omitempty"`
+}
+
+type listSessionsResult struct {
+	Sessions   []sessionInfo `json:"sessions"`
+	NextCursor string        `json:"nextCursor,omitempty"`
+}
+
+// sessionInfo is ACP's SessionInfo — only sessionId and cwd are required;
+// this transport also fills title (Harness's session name, e.g. "Acp
+// 2026-08-01 18:30") and updatedAt (RFC3339, matching ACP's ISO 8601
+// expectation) from client.Session's embedded store.SessionMeta.
+type sessionInfo struct {
+	SessionID string `json:"sessionId"`
+	CWD       string `json:"cwd"`
+	Title     string `json:"title,omitempty"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
 }
 
 // ── Content blocks (shared with MCP's ContentBlock — see agentclientprotocol.com/protocol/v1/content) ──
@@ -297,13 +379,19 @@ type availableCommandInput struct {
 
 // ── Session Config Options ──────────────────────────────────────────────────
 
+// sessionConfigOption is ACP's ConfigOption — note the wire field is
+// "currentValue", NOT "value" (that name is reserved for
+// ConfigOptionValue.Value, the id of one entry in Options). Getting this
+// wrong doesn't error — Zed (and presumably any client) just silently
+// declines to render a selector for an option it can't find a current value
+// for, which is exactly the bug this comment is here to prevent regressing.
 type sessionConfigOption struct {
-	ID       string                     `json:"id"`
-	Category string                     `json:"category,omitempty"`
-	Name     string                     `json:"name"`
-	Type     string                     `json:"type"` // "select" | "boolean"
-	Value    string                     `json:"value,omitempty"`
-	Options  []sessionConfigOptionValue `json:"options,omitempty"`
+	ID           string                     `json:"id"`
+	Category     string                     `json:"category,omitempty"`
+	Name         string                     `json:"name"`
+	Type         string                     `json:"type"` // "select" | "boolean"
+	CurrentValue string                     `json:"currentValue"`
+	Options      []sessionConfigOptionValue `json:"options,omitempty"`
 }
 
 type sessionConfigOptionValue struct {

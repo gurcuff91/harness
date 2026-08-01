@@ -104,14 +104,66 @@ func (h *harness) readMessage() map[string]any {
 // mirroring how a real ACP client demultiplexes the stream.
 func (h *harness) readResponseFor(id int) map[string]any {
 	h.t.Helper()
+	resp, _ := h.readResponseForCollecting(id)
+	return resp
+}
+
+// readResponseForCollecting is readResponseFor plus every notification seen
+// BEFORE the response arrives — for tests that need to assert on any
+// out-of-band session/update notifications a handler might send ahead of its
+// own response (there currently are none — see readNotificationsAfter for
+// the ones sent AFTER, which is the spec-safe order this transport uses).
+func (h *harness) readResponseForCollecting(id int) (resp map[string]any, notifications []map[string]any) {
+	h.t.Helper()
 	for i := 0; i < 50; i++ { // generous bound: enough for any realistic notification burst
 		m := h.readMessage()
 		if gotID, ok := m["id"]; ok && int(gotID.(float64)) == id {
-			return m
+			return m, notifications
 		}
+		notifications = append(notifications, m)
 	}
 	h.t.Fatalf("never saw a response for request id %d", id)
-	return nil
+	return nil, nil
+}
+
+// readNotificationsAfter reads whatever messages arrive within a short
+// window (no fixed count — a session may legitimately send zero, one, or a
+// handful of update notifications) and returns whichever are notifications
+// (no "id" field). Unlike readMessage, running out of messages here is
+// expected and not a test failure — it just means the burst is over. Used
+// to assert on updates a handler sends strictly AFTER its own response, such
+// as available_commands_update following session/new/load/resume (see
+// notifyAvailableCommands's doc comment in methods.go for why that ordering
+// is load-bearing, not cosmetic).
+func (h *harness) readNotificationsAfter() []map[string]any {
+	h.t.Helper()
+	var out []map[string]any
+	for {
+		type result struct {
+			line []byte
+			err  error
+		}
+		ch := make(chan result, 1)
+		go func() {
+			line, err := h.fromAgent.ReadBytes('\n')
+			ch <- result{line, err}
+		}()
+		select {
+		case r := <-ch:
+			if r.err != nil {
+				return out
+			}
+			var m map[string]any
+			if err := json.Unmarshal(r.line, &m); err != nil {
+				return out
+			}
+			if _, hasID := m["id"]; !hasID {
+				out = append(out, m)
+			}
+		case <-time.After(300 * time.Millisecond):
+			return out
+		}
+	}
 }
 
 func TestInitializeHandshake(t *testing.T) {
@@ -136,6 +188,20 @@ func TestInitializeHandshake(t *testing.T) {
 	}
 	if promptCaps["audio"] == true {
 		t.Errorf("audio must not be advertised — see design doc")
+	}
+
+	// Regression: agentInfo.version was missing entirely — the spec's own
+	// Implementation type carries name/title/version, and version is what
+	// lets a client display or log which harness build is running.
+	agentInfo := result["agentInfo"].(map[string]any)
+	if agentInfo["name"] != "harness" {
+		t.Errorf("agentInfo.name = %v", agentInfo["name"])
+	}
+	if agentInfo["title"] == nil || agentInfo["title"] == "" {
+		t.Error("agentInfo.title must be set")
+	}
+	if agentInfo["version"] == nil || agentInfo["version"] == "" {
+		t.Error("agentInfo.version must be set")
 	}
 }
 
@@ -189,6 +255,58 @@ func TestNewSessionUnknownProviderStillRespondsWithError(t *testing.T) {
 	}
 }
 
+// TestNewSessionSendsAvailableCommandsUpdate is the regression test for
+// buildAvailableCommands existing but never being called: session/new must
+// be followed by a session/update notification carrying
+// available_commands_update BEFORE the session/new response itself,
+// otherwise the client never learns the session's slash commands exist —
+// see registerSession's doc comment in methods.go.
+// TestNewSessionSendsAvailableCommandsUpdateAfterResponse is the regression
+// test for the Zed-visible bug where slash commands never showed up:
+// available_commands_update MUST be sent strictly AFTER session/new's own
+// response (see notifyAvailableCommands's doc comment in methods.go —
+// Zed silently drops any session/update notification for a session it
+// doesn't know about yet, i.e. one that arrives before the response
+// carrying that sessionId). This test asserts BOTH halves: the response
+// comes first with no notification ahead of it, and the notification
+// follows with the session's commands.
+func TestNewSessionSendsAvailableCommandsUpdateAfterResponse(t *testing.T) {
+	h := startHarness(t, newTestAgent(t))
+	h.send(1, "session/new", newSessionParams{CWD: t.TempDir()})
+
+	resp, notificationsBeforeResponse := h.readResponseForCollecting(1)
+	if resp["error"] != nil {
+		t.Skip("no active provider configured in this environment — cannot create a session to test against")
+	}
+	if len(notificationsBeforeResponse) != 0 {
+		t.Fatalf("expected NO notifications before the session/new response, got %d: %v", len(notificationsBeforeResponse), notificationsBeforeResponse)
+	}
+
+	after := h.readNotificationsAfter()
+	var found bool
+	for _, n := range after {
+		params, ok := n["params"].(map[string]any)
+		if !ok {
+			continue
+		}
+		update, ok := params["update"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if update["sessionUpdate"] == "available_commands_update" {
+			found = true
+			cmds, ok := update["availableCommands"].([]any)
+			if !ok || len(cmds) == 0 {
+				t.Errorf("availableCommands = %v, want a non-empty list (rename/thinking/model/compact/reset at minimum)", update["availableCommands"])
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("session/new never sent an available_commands_update notification after its response")
+	}
+}
+
 func TestSessionPromptUnknownSessionID(t *testing.T) {
 	h := startHarness(t, newTestAgent(t))
 	h.send(1, "session/prompt", promptParams{SessionID: "does-not-exist", Prompt: []contentBlock{textBlock("hi")}})
@@ -203,6 +321,77 @@ func TestSessionPromptUnknownSessionID(t *testing.T) {
 	}
 }
 
+// TestSetConfigOptionUnknownSessionID is the regression test for
+// session/set_config_option not being implemented at all (it fell through to
+// the dispatch loop's "method not found" default) — a client selecting a
+// value in the model/thinking dropdown had no method to call.
+func TestSetConfigOptionUnknownSessionID(t *testing.T) {
+	h := startHarness(t, newTestAgent(t))
+	raw, _ := json.Marshal("high")
+	h.send(1, "session/set_config_option", setConfigOptionParams{SessionID: "does-not-exist", ConfigID: "thinking", Value: raw})
+
+	resp := h.readResponseFor(1)
+	errObj, ok := resp["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected an error for an unknown session, got %v", resp)
+	}
+	if int(errObj["code"].(float64)) != errCodeInvalidParams {
+		t.Errorf("code = %v, want %d (not method-not-found — the method IS implemented)", errObj["code"], errCodeInvalidParams)
+	}
+}
+
+func TestSetConfigOptionUnknownConfigID(t *testing.T) {
+	h := startHarness(t, newTestAgent(t))
+	h.send(1, "session/new", newSessionParams{CWD: t.TempDir()})
+	resp := h.readResponseFor(1)
+	if resp["error"] != nil {
+		t.Skip("no active provider configured in this environment — cannot create a session to test against")
+	}
+	sessionID := resp["result"].(map[string]any)["sessionId"].(string)
+
+	raw, _ := json.Marshal("whatever")
+	h.send(2, "session/set_config_option", setConfigOptionParams{SessionID: sessionID, ConfigID: "not-a-real-option", Value: raw})
+	resp = h.readResponseFor(2)
+	errObj, ok := resp["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected an error for an unknown configId, got %v", resp)
+	}
+	if int(errObj["code"].(float64)) != errCodeInvalidParams {
+		t.Errorf("code = %v, want %d", errObj["code"], errCodeInvalidParams)
+	}
+}
+
+func TestSetConfigOptionThinking(t *testing.T) {
+	h := startHarness(t, newTestAgent(t))
+	h.send(1, "session/new", newSessionParams{CWD: t.TempDir()})
+	resp := h.readResponseFor(1)
+	if resp["error"] != nil {
+		t.Skip("no active provider configured in this environment — cannot create a session to test against")
+	}
+	sessionID := resp["result"].(map[string]any)["sessionId"].(string)
+
+	raw, _ := json.Marshal("low")
+	h.send(2, "session/set_config_option", setConfigOptionParams{SessionID: sessionID, ConfigID: "thinking", Value: raw})
+	resp = h.readResponseFor(2)
+	if resp["error"] != nil {
+		t.Fatalf("unexpected error: %v", resp["error"])
+	}
+	opts, ok := resp["result"].(map[string]any)["configOptions"].([]any)
+	if !ok || len(opts) == 0 {
+		t.Fatalf("expected the complete configOptions state back, got %v", resp["result"])
+	}
+	var sawThinkingLow bool
+	for _, o := range opts {
+		opt := o.(map[string]any)
+		if opt["id"] == "thinking" && opt["currentValue"] == "low" {
+			sawThinkingLow = true
+		}
+	}
+	if !sawThinkingLow {
+		t.Errorf("configOptions did not reflect the new thinking value: %v", opts)
+	}
+}
+
 func TestSessionCancelUnknownSessionDoesNotPanicOrRespond(t *testing.T) {
 	h := startHarness(t, newTestAgent(t))
 	h.sendNotification("session/cancel", cancelParams{SessionID: "does-not-exist"})
@@ -212,6 +401,122 @@ func TestSessionCancelUnknownSessionDoesNotPanicOrRespond(t *testing.T) {
 	resp := h.readResponseFor(1)
 	if resp["error"] != nil {
 		t.Fatalf("dispatch loop did not recover: %v", resp["error"])
+	}
+}
+
+// TestInitializeAdvertisesAllFourSessionCapabilities is the regression test
+// for sessionCapabilities coming back as an empty {} even though Harness
+// genuinely backs resume/close/delete/list via client.Client for every
+// transport — the fields just weren't wired to ACP's advertisement.
+func TestInitializeAdvertisesAllFourSessionCapabilities(t *testing.T) {
+	h := startHarness(t, newTestAgent(t))
+	h.send(1, "initialize", initializeParams{ProtocolVersion: 1})
+	resp := h.readResponseFor(1)
+
+	caps := resp["result"].(map[string]any)["agentCapabilities"].(map[string]any)
+	sessionCaps, ok := caps["sessionCapabilities"].(map[string]any)
+	if !ok {
+		t.Fatalf("sessionCapabilities missing or wrong type: %v", caps["sessionCapabilities"])
+	}
+	for _, field := range []string{"resume", "close", "delete", "list"} {
+		if _, ok := sessionCaps[field]; !ok {
+			t.Errorf("sessionCapabilities.%s not advertised", field)
+		}
+	}
+}
+
+func TestSessionResumeUnknownSessionID(t *testing.T) {
+	h := startHarness(t, newTestAgent(t))
+	h.send(1, "session/resume", resumeSessionParams{SessionID: "does-not-exist", CWD: t.TempDir()})
+	resp := h.readResponseFor(1)
+	if resp["error"] == nil {
+		t.Fatal("expected an error for an unknown session")
+	}
+}
+
+func TestSessionCloseAndDeleteFullRoundTrip(t *testing.T) {
+	h := startHarness(t, newTestAgent(t))
+	h.send(1, "session/new", newSessionParams{CWD: t.TempDir()})
+	resp := h.readResponseFor(1)
+	if resp["error"] != nil {
+		t.Skip("no active provider configured in this environment — cannot create a session to test against")
+	}
+	sessionID := resp["result"].(map[string]any)["sessionId"].(string)
+
+	h.send(2, "session/close", closeSessionParams{SessionID: sessionID})
+	resp = h.readResponseFor(2)
+	if resp["error"] != nil {
+		t.Fatalf("session/close: %v", resp["error"])
+	}
+
+	h.send(3, "session/delete", deleteSessionParams{SessionID: sessionID})
+	resp = h.readResponseFor(3)
+	if resp["error"] != nil {
+		t.Fatalf("session/delete: %v", resp["error"])
+	}
+
+	// Per spec, deleting again SHOULD succeed silently.
+	h.send(4, "session/delete", deleteSessionParams{SessionID: sessionID})
+	resp = h.readResponseFor(4)
+	if resp["error"] != nil {
+		t.Errorf("deleting an already-deleted session should succeed silently, got: %v", resp["error"])
+	}
+}
+
+func TestSessionListReturnsCreatedSession(t *testing.T) {
+	h := startHarness(t, newTestAgent(t))
+	cwd := t.TempDir()
+	h.send(1, "session/new", newSessionParams{CWD: cwd})
+	resp := h.readResponseFor(1)
+	if resp["error"] != nil {
+		t.Skip("no active provider configured in this environment — cannot create a session to test against")
+	}
+	sessionID := resp["result"].(map[string]any)["sessionId"].(string)
+
+	h.send(2, "session/list", listSessionsParams{CWD: cwd})
+	resp = h.readResponseFor(2)
+	if resp["error"] != nil {
+		t.Fatalf("session/list: %v", resp["error"])
+	}
+	sessions, ok := resp["result"].(map[string]any)["sessions"].([]any)
+	if !ok {
+		t.Fatalf("sessions field missing or wrong type: %v", resp["result"])
+	}
+	var found bool
+	for _, s := range sessions {
+		info := s.(map[string]any)
+		if info["sessionId"] == sessionID {
+			found = true
+			if info["cwd"] != cwd {
+				t.Errorf("cwd = %v, want %v", info["cwd"], cwd)
+			}
+			if info["title"] == nil || info["title"] == "" {
+				t.Error("title should be set (Harness names ACP sessions \"Acp <date>\")")
+			}
+		}
+	}
+	if !found {
+		t.Errorf("session/list did not include the just-created session %s: %v", sessionID, sessions)
+	}
+}
+
+func TestSessionListEmptyReturnsEmptyArrayNotNull(t *testing.T) {
+	h := startHarness(t, newTestAgent(t))
+	h.send(1, "session/list", listSessionsParams{CWD: t.TempDir()})
+	resp := h.readResponseFor(1)
+	if resp["error"] != nil {
+		t.Fatalf("session/list: %v", resp["error"])
+	}
+	sessions, ok := resp["result"].(map[string]any)["sessions"]
+	if !ok {
+		t.Fatal("sessions field missing")
+	}
+	arr, ok := sessions.([]any)
+	if !ok {
+		t.Fatalf("sessions must be an array (possibly empty), got %T: %v", sessions, sessions)
+	}
+	if len(arr) != 0 {
+		t.Errorf("expected no sessions for a brand-new empty cwd, got %d", len(arr))
 	}
 }
 

@@ -117,8 +117,15 @@ func dispatchLoop(ctx context.Context, c *conn, h *handler) error {
 				_ = c.sendError(req.ID, errCodeInvalidParams, err.Error(), nil)
 				continue
 			}
-			result, rerr := h.handleNewSession(p)
+			result, rerr := h.handleNewSession(c, p)
 			respond(c, req.ID, result, rerr)
+			// MUST come after respond() — see notifyAvailableCommands's doc
+			// comment: sending this before the response line hits the wire is
+			// silently dropped by Zed (a confirmed upstream bug), which is
+			// exactly how this transport's slash commands went missing before.
+			if rerr == nil {
+				h.notifyAvailableCommands(c, result.SessionID)
+			}
 
 		case "session/load":
 			var p loadSessionParams
@@ -127,6 +134,48 @@ func dispatchLoop(ctx context.Context, c *conn, h *handler) error {
 				continue
 			}
 			result, rerr := h.handleLoadSession(c, p)
+			respond(c, req.ID, result, rerr)
+			if rerr == nil {
+				h.notifyAvailableCommands(c, result.SessionID)
+			}
+
+		case "session/resume":
+			var p resumeSessionParams
+			if err := json.Unmarshal(req.Params, &p); err != nil {
+				_ = c.sendError(req.ID, errCodeInvalidParams, err.Error(), nil)
+				continue
+			}
+			result, rerr := h.handleResumeSession(c, p)
+			respond(c, req.ID, result, rerr)
+			if rerr == nil {
+				h.notifyAvailableCommands(c, result.SessionID)
+			}
+
+		case "session/close":
+			var p closeSessionParams
+			if err := json.Unmarshal(req.Params, &p); err != nil {
+				_ = c.sendError(req.ID, errCodeInvalidParams, err.Error(), nil)
+				continue
+			}
+			result, rerr := h.handleCloseSession(p)
+			respond(c, req.ID, result, rerr)
+
+		case "session/delete":
+			var p deleteSessionParams
+			if err := json.Unmarshal(req.Params, &p); err != nil {
+				_ = c.sendError(req.ID, errCodeInvalidParams, err.Error(), nil)
+				continue
+			}
+			result, rerr := h.handleDeleteSession(p)
+			respond(c, req.ID, result, rerr)
+
+		case "session/list":
+			var p listSessionsParams
+			if err := json.Unmarshal(req.Params, &p); err != nil {
+				_ = c.sendError(req.ID, errCodeInvalidParams, err.Error(), nil)
+				continue
+			}
+			result, rerr := h.handleListSessions(p)
 			respond(c, req.ID, result, rerr)
 
 		case "session/prompt":
@@ -146,6 +195,15 @@ func dispatchLoop(ctx context.Context, c *conn, h *handler) error {
 			_ = json.Unmarshal(req.Params, &p)
 			h.handleCancel(p)
 			// notification — no response, per spec.
+
+		case "session/set_config_option":
+			var p setConfigOptionParams
+			if err := json.Unmarshal(req.Params, &p); err != nil {
+				_ = c.sendError(req.ID, errCodeInvalidParams, err.Error(), nil)
+				continue
+			}
+			result, rerr := h.handleSetConfigOption(p)
+			respond(c, req.ID, result, rerr)
 
 		default:
 			if isNotification {

@@ -7,10 +7,12 @@ import (
 )
 
 // buildConfigOptions returns the session config options this transport
-// advertises: the active model (category "model_config", one value per
-// connected provider's model) and the thinking level (a plain select). Both
-// are read fresh from the server so a freshly created/loaded session always
-// reports its true current values.
+// advertises: the active model (category "model" — ACP's semantic category
+// for a model selector; "model_config" is reserved for model-related
+// PARAMETERS like context size, not the selector itself) and the thinking
+// level (category "thought_level", ACP's dedicated category for a
+// reasoning-level selector). Both are read fresh from the server so a
+// freshly created/loaded session always reports its true current values.
 func buildConfigOptions(c *client.Client) ([]sessionConfigOption, error) {
 	settings, err := c.GetSettings()
 	if err != nil {
@@ -38,19 +40,20 @@ func buildConfigOptions(c *client.Client) ([]sessionConfigOption, error) {
 
 	return []sessionConfigOption{
 		{
-			ID:       "model",
-			Category: "model_config",
-			Name:     "Model",
-			Type:     "select",
-			Value:    settings.ActiveModel,
-			Options:  modelValues,
+			ID:           "model",
+			Category:     "model",
+			Name:         "Model",
+			Type:         "select",
+			CurrentValue: settings.ActiveModel,
+			Options:      modelValues,
 		},
 		{
-			ID:      "thinking",
-			Name:    "Thinking",
-			Type:    "select",
-			Value:   settings.ThinkingLevel,
-			Options: thinkingValues,
+			ID:           "thinking",
+			Category:     "thought_level",
+			Name:         "Thinking",
+			Type:         "select",
+			CurrentValue: settings.ThinkingLevel,
+			Options:      thinkingValues,
 		},
 	}, nil
 }
