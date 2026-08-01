@@ -574,6 +574,11 @@ func newTokenManager() *tokenManager {
 // switching accounts across multiple harness instances work correctly: as
 // soon as one instance persists new creds, every other instance picks them up
 // on its very next call, unconditionally.
+//
+// The fast path (token still valid) never takes the cross-process file lock
+// — only reads, which are atomic at the OS level and would otherwise add
+// needless latency to every single LLM call. The lock is only acquired once
+// we've determined a refresh is actually needed — see the refresh loop below.
 func (tm *tokenManager) getValidToken() (string, error) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
@@ -589,37 +594,58 @@ func (tm *tokenManager) getValidToken() (string, error) {
 		return tm.creds.AccessToken, nil
 	}
 
-	// Token is expired — refresh. Retry up to 3 times with backoff: 1s, 2s, 4s.
-	const maxAttempts = 3
+	// Token is expired — refresh. Anthropic refresh tokens are SINGLE-USE: if
+	// another harness process is refreshing this same account at the same
+	// moment, both would read the same refresh_token and try to redeem it —
+	// only one succeeds, the other gets a permanent invalid_grant. The
+	// cross-process file lock serializes the entire
+	// re-check-then-refresh-then-persist cycle so that can't happen: whoever
+	// gets the lock first either finds a fresh token already written by the
+	// other process (and just uses it) or is the one that actually calls the
+	// provider — never both.
+	var accessToken string
 	var lastErr error
-	backoff := time.Second
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if attempt > 0 {
-			time.Sleep(backoff)
-			backoff *= 2
+	lockErr := config.GetCredentialsManager().WithLock(func() error {
+		// Re-check after acquiring the lock — another process may have
+		// refreshed while we were waiting for it.
+		if !tm.validating {
+			tm.syncFromDisk()
+			if tm.creds.ExpiresAt > time.Now().UnixMilli()+expiryBufferMs {
+				accessToken = tm.creds.AccessToken
+				return nil
+			}
+		}
 
-			// Re-read from disk before each retry — a concurrent instance may
-			// have succeeded in the meantime and written a fresh token pair.
-			if !tm.validating {
-				tm.syncFromDisk()
-				if tm.creds.ExpiresAt > time.Now().UnixMilli()+expiryBufferMs {
-					return tm.creds.AccessToken, nil
+		// Retry up to 3 times with backoff: 1s, 2s, 4s.
+		const maxAttempts = 3
+		backoff := time.Second
+		for attempt := 0; attempt < maxAttempts; attempt++ {
+			if attempt > 0 {
+				time.Sleep(backoff)
+				backoff *= 2
+			}
+
+			refreshed, err := tm.refresh(tm.creds.RefreshToken)
+			if err != nil {
+				lastErr = err
+				// Auth errors (invalid_grant, revoked, 401, 403) are permanent — no point retrying.
+				if isAuthError(err) {
+					return nil
 				}
+				continue // network/timeout — retry
 			}
+			tm.creds = refreshed
+			persistOAuthCreds(refreshed)
+			accessToken = refreshed.AccessToken
+			return nil
 		}
-
-		refreshed, err := tm.refresh(tm.creds.RefreshToken)
-		if err != nil {
-			lastErr = err
-			// Auth errors (invalid_grant, revoked, 401, 403) are permanent — no point retrying.
-			if isAuthError(err) {
-				break
-			}
-			continue // network/timeout — retry
-		}
-		tm.creds = refreshed
-		persistOAuthCreds(refreshed)
-		return refreshed.AccessToken, nil
+		return nil
+	})
+	if lockErr != nil {
+		return "", fmt.Errorf("token refresh: %w", lockErr)
+	}
+	if accessToken != "" {
+		return accessToken, nil
 	}
 
 	// Surface the real error so it's diagnosable (not just "session expired").

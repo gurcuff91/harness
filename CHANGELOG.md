@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.86] - 2026-07-31
+
+### Fix — cross-process file lock for credentials.json (single-use refresh token race)
+- **Root cause** (`internal/providers/claude_oauth.go`) — `getValidToken`'s token-refresh cycle (re-check expiry → call the provider → persist) was only protected by an intra-process `sync.Mutex`. With multiple harness processes commonly running at once (TUI + Telegram + Slack + `serve`), two processes whose OAuth token expired near the same moment could both read the same `refresh_token` before either wrote the new one — and Anthropic refresh tokens are single-use, so only one redemption succeeds; the other permanently fails with `invalid_grant`. This is the same class of bug fixed for `instances.json` in v0.73.75, but with a much wider collision window: `credentials.json` is read and potentially rewritten on every LLM call whose token is close to expiring, not once at process start/stop.
+- **Fix** — new cross-process file lock in `internal/config/credentials.go` (`credentials.json.lock`, `O_CREATE|O_EXCL` — atomic across processes on every OS; a lock older than 5s is treated as abandoned and reclaimed automatically, same pattern as the instance registry lock). `CredentialsManager.WithLock(fn)` lets a caller hold the lock across several manager calls as one atomic unit — used by `getValidToken`'s refresh path to serialize the full re-check→refresh→persist cycle, not just the final write.
+- **Read/write split by actual risk, not blanket locking**: plain reads (`Credential`, `APIKey`, `OAuth`) do NOT take the file lock — `os.WriteFile` is atomic at the OS level for a file this size, so a reader never sees a torn write, and adding cross-process locking there would add latency to every single LLM call for no correctness benefit. `SetCredential`/`DeleteCredential` (used by `/connect`, `/disconnect`) now take the lock AND re-read from disk before mutating, so they never silently discard a concurrent writer's update. `getValidToken`'s fast path (token still valid) also never takes the lock — it only acquires it once a refresh is actually needed.
+
 ## [0.73.85] - 2026-07-31
 
 ### Feat — `SlackMessages` tool: channel history visibility + JSON format for all data-returning Slack tools
