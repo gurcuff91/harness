@@ -9,7 +9,7 @@
 - **Module:** `github.com/gurcuff91/harness`
 - **Binary:** Single binary, ~9MB — entry point in `cmd/harness/main.go` (module root free for an SDK facade)
 - **Version:** single source of truth in package `version` (`version.Version`), injected via ldflags from the `Makefile` (`VERSION=`); falls back to `"dev"` for a plain `go build`.
-- **Dependencies (direct):** `golang.org/x/term` (raw mode), `github.com/rivo/uniseg` (grapheme/width), `github.com/go-chi/chi/v5` (HTTP router), `modernc.org/sqlite` (pure-Go SQLite for the memory store), `golang.design/x/clipboard` (clipboard image paste in the TUI), `github.com/google/uuid` (IDs), `github.com/robfig/cron/v3` (schedule parsing). Keep the set minimal — no new deps without approval.
+- **Dependencies (direct):** `golang.org/x/term` (raw mode), `github.com/rivo/uniseg` (grapheme/width), `github.com/go-chi/chi/v5` (HTTP router), `modernc.org/sqlite` (pure-Go SQLite for the memory store), `golang.design/x/clipboard` (clipboard image paste in the TUI), `github.com/google/uuid` (IDs), `github.com/robfig/cron/v3` (schedule parsing), `github.com/alecthomas/kong` (CLI grammar/parsing — `internal/cli/kong.go`). Keep the set minimal — no new deps without approval.
 
 ## Golden Rules
 
@@ -195,9 +195,12 @@ make install              # build + install to ~/go/bin
 
 ### Adding a New Command
 
-1. Add a `case` in `internal/cli/app.go`'s dispatch and a `cmd_*.go` handler (own flag.FlagSet); put the command body in a `Run*` function
-2. Add an HTTP route in `internal/server/server.go` if it needs backend data
-3. Update the `--help` text in `internal/cli/help.go`
+The CLI grammar is declared with [`alecthomas/kong`](https://github.com/alecthomas/kong) struct tags — no manual `flag.FlagSet`, no hand-maintained help text, no dispatch switch.
+
+1. Add the command's struct field (`cmd:""`) to its parent in `internal/cli/kong.go` — this is the single source of truth for flags, args, help text, and tree position. Named types only (never anonymous), so a `Run()` can be attached separately. Watch the gotchas documented at the top of that file: only one `default:"..."` command per tree level, Kong forbids mixing `arg:""` with `cmd:""` siblings in the same struct, and — the easiest one to miss — **a struct with both its own `Run()` and `cmd:""` children is wrong**: Kong calls `Run()` on every node in the selected chain (child *and* parent), so the parent's action would re-fire after every subcommand and its flags would leak into each subcommand's `--help`. If a command needs both an action of its own and real subcommands (e.g. `harness telegram` vs. `telegram pair`), give the action its own hidden `default:"withargs"` child instead (see `telegramRunCmd`/`slackRunCmd`/`settingsShowCmd`) — never a `Run()` directly on the parent struct. That hidden child's flags still show up correctly in the PARENT's own `--help` (e.g. `harness slack --help` lists `--workspace`/`--xoxc`/etc.) thanks to `helpWithHiddenDefaultFlags` in `app.go`, which borrows them onto the parent node being displayed without leaking them into the parent's OTHER subcommands — nothing to do here, just don't be surprised the flags aren't declared directly on the parent struct.
+2. Add the `Run() error` method in a `kong_run*.go` file (grouped by area: `kong_run.go` for management/mcp/memo/settings/schedules, `kong_run_telegram.go`, `kong_run_slack.go`, `kong_run_tui.go`, `kong_run_serve.go`). Keep it a thin adapter over real business logic in `commands.go`/`settings.go`/`memory.go`/`schedule.go` — don't inline logic in the `Run()` method itself.
+3. Add an HTTP route in `internal/server/server.go` if it needs backend data.
+4. Run `go build ./... && go test ./internal/cli/...` — Kong validates the whole grammar (enums, arg/cmd conflicts, duplicate defaults) at parser-construction time, so a bad tag fails loudly instead of silently.
 
 ## Thinking System
 

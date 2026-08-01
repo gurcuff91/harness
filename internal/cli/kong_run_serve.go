@@ -1,34 +1,18 @@
+// Run() for `harness serve <addr>` — starts the listener and hands it to
+// the HTTP/SSE server, with careful Close() ordering against the instance
+// registry (see the comment inline below).
 package cli
 
 import (
-	"flag"
 	"net"
 
 	"github.com/gurcuff91/harness/internal/server"
 )
 
-// cmdServe runs the HTTP/SSE server on the given address — a headless transport:
-// an agent behind an API, with no UI of its own. Clients connect over HTTP/SSE
-// and bring their own sessions. With --scheduler the process also runs the cron
-// engine; a due schedule fires into its owner session if that session is
-// currently active (via owner routing), otherwise it's skipped. The command
-// builds the agent and hands it to the server.
-func cmdServe(args []string) error {
-	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	scheduler := fs.Bool("scheduler", false, "run the cron scheduler engine")
-	// Reorder so flags parse regardless of position relative to the addr
-	// (Go's flag package stops at the first non-flag argument).
-	if err := fs.Parse(reorderFlags(args)); err != nil {
-		return err
-	}
-	addr := fs.Arg(0)
-	if addr == "" {
-		return errUsage("serve <addr> [--scheduler]")
-	}
+func (c *serveCmd) Run() error {
+	a := newInteractiveAgent(c.Scheduler)
 
-	a := newInteractiveAgent(*scheduler)
-
-	listener, err := net.Listen("tcp", addr)
+	listener, err := net.Listen("tcp", c.Addr)
 	if err != nil {
 		a.Close()
 		return err
@@ -39,7 +23,7 @@ func cmdServe(args []string) error {
 	// from elsewhere on Ctrl+C/SIGTERM. Close() itself calls httpSrv.Shutdown(),
 	// which is what makes Serve() below return — so Serve() unblocking does NOT
 	// mean Close() has finished (it unregisters the instance from
-	// instances.json as its LAST step, after Shutdown). cmdServe must wait for
+	// instances.json as its LAST step, after Shutdown). Run() must wait for
 	// the Close() goroutine to actually complete before returning, otherwise
 	// main()'s os.Exit races it and the instance registry entry is left behind.
 	ctx, cancel := signalContext()
