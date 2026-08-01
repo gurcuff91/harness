@@ -270,6 +270,76 @@ func (b *Bot) ListUsers(ctx context.Context, limit int) ([]SlackUser, error) {
 	return all, nil
 }
 
+// noiseSubtypes are message subtypes with no informational value for the
+// agent — they're Slack's internal churn around editing/deleting a message,
+// or an enterprise-compliance error, never real conversation content. Every
+// OTHER subtype (channel_join, channel_leave, channel_topic, file_share,
+// bot_message, etc.) IS kept: those are real events in the channel's history
+// the agent may need (who joined/left, what changed, what was shared).
+var noiseSubtypes = map[string]bool{
+	"message_changed":   true, // superseded by the message's current state
+	"message_deleted":   true, // no content, just a gap
+	"ekm_access_denied": true, // enterprise key-management error, never relevant
+}
+
+// SlackMessage is one message entry from conversations.history, exposed to
+// the agent as-is (including Files with their URLs) so it can decide whether
+// to fetch an attachment — this transport never resolves that decision itself.
+type SlackMessage struct {
+	User    string      `json:"user,omitempty"`
+	Text    string      `json:"text"`
+	TS      string      `json:"ts"`                // Slack message timestamp — sortable, unique
+	Subtype string      `json:"subtype,omitempty"` // "" = normal message; else e.g. "channel_join"
+	BotID   string      `json:"bot_id,omitempty"`
+	Files   []SlackFile `json:"files,omitempty"`
+}
+
+// GetChannelHistory returns the most recent messages in a channel, oldest
+// first (reversed from Slack's native newest-first order, so it reads like a
+// normal conversation transcript). Noise subtypes (message edits/deletes,
+// EKM errors) are filtered out — see noiseSubtypes. limit caps how many
+// messages to fetch (Slack's native page size, not multi-page — a single
+// call is enough for "catch me up", the use case this exists for).
+func (b *Bot) GetChannelHistory(ctx context.Context, channelID string, limit int) ([]SlackMessage, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	raw, err := b.apiCall(ctx, "conversations.history", map[string]string{
+		"channel": channelID,
+		"limit":   fmt.Sprintf("%d", limit),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("slack conversations.history: %w", err)
+	}
+	var resp struct {
+		OK       bool           `json:"ok"`
+		Error    string         `json:"error,omitempty"`
+		Messages []SlackMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("slack conversations.history: decode: %w", err)
+	}
+	if !resp.OK {
+		return nil, fmt.Errorf("slack conversations.history: %s", resp.Error)
+	}
+
+	var out []SlackMessage
+	for _, m := range resp.Messages {
+		if noiseSubtypes[m.Subtype] {
+			continue
+		}
+		out = append(out, m)
+	}
+	// Slack returns newest-first; reverse to a natural chronological transcript.
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
+}
+
 // OpenDM opens a direct message channel with a user and returns the DM channel
 // ID. Required before posting to a user ID — Slack DMs are channels with D…
 // IDs obtained via conversations.open.

@@ -10,14 +10,15 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
-// SlackTools returns the three Slack-specific tools to inject into the agent
-// when running the Slack transport. They are passed via AgentOptions.Tools so
-// they appear alongside the built-in tools without touching the tool registry.
+// SlackTools returns the Slack-specific tools to inject into the agent when
+// running the Slack transport. They are passed via AgentOptions.Tools so they
+// appear alongside the built-in tools without touching the tool registry.
 func SlackTools(bot *Bot, myID string) []atools.Tool {
 	return []atools.Tool{
 		slackListChannelsTool(bot),
 		slackListUsersTool(bot),
 		slackPostTool(bot, myID),
+		slackMessagesTool(bot),
 	}
 }
 
@@ -27,7 +28,7 @@ func slackListChannelsTool(bot *Bot) atools.Tool {
 	return atools.Tool{
 		Def: types.ToolDef{
 			Name:        "SlackListChannels",
-			Description: "List all Slack channels (public and private) the current user can see. Use this to resolve a channel name (e.g. #general) to its channel ID before posting or mentioning.",
+			Description: "List all Slack channels (public and private) the current user can see, as JSON. Use this to resolve a channel name (e.g. #general) to its channel ID before posting or mentioning.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer","description":"Maximum channels to return (default 200, max 1000)","minimum":1,"maximum":1000}}}`),
 		},
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
@@ -45,17 +46,11 @@ func slackListChannelsTool(bot *Bot) atools.Tool {
 			if len(channels) == 0 {
 				return "No channels found.", nil
 			}
-			var b strings.Builder
-			fmt.Fprintf(&b, "%d channel(s):\n\n", len(channels))
-			for _, c := range channels {
-				private := ""
-				if c.IsPrivate {
-					private = " (private)"
-				}
-				fmt.Fprintf(&b, "- #%s  ID: %s%s  members: %d\n",
-					c.Name, c.ID, private, c.NumMembers)
+			b, err := json.MarshalIndent(channels, "", "  ")
+			if err != nil {
+				return "", fmt.Errorf("format channels: %w", err)
 			}
-			return b.String(), nil
+			return string(b), nil
 		},
 	}
 }
@@ -66,7 +61,7 @@ func slackListUsersTool(bot *Bot) atools.Tool {
 	return atools.Tool{
 		Def: types.ToolDef{
 			Name:        "SlackListUsers",
-			Description: "List all active (non-bot, non-deleted) users in the Slack workspace. Use this to resolve a person's name to their user ID for @mentions or sending them a direct message.",
+			Description: "List all active (non-bot, non-deleted) users in the Slack workspace, as JSON. Use this to resolve a person's name to their user ID for @mentions or sending them a direct message. Each entry has the user ID, @handle (name), and profile (real_name, display_name) — prefer display_name, falling back to real_name, then the handle, when showing a person's name.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer","description":"Maximum users to return (default 200, max 1000)","minimum":1,"maximum":1000}}}`),
 		},
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
@@ -84,22 +79,34 @@ func slackListUsersTool(bot *Bot) atools.Tool {
 			if len(users) == 0 {
 				return "No users found.", nil
 			}
-			var b strings.Builder
-			fmt.Fprintf(&b, "%d user(s):\n\n", len(users))
-			for _, u := range users {
-				display := u.Profile.DisplayName
-				if display == "" {
-					display = u.Profile.RealName
-				}
-				if display == "" {
-					display = u.Name
-				}
-				fmt.Fprintf(&b, "- %s  ID: %s  handle: @%s\n",
-					display, u.ID, u.Name)
+			b, err := json.MarshalIndent(users, "", "  ")
+			if err != nil {
+				return "", fmt.Errorf("format users: %w", err)
 			}
-			return b.String(), nil
+			return string(b), nil
 		},
 	}
+}
+
+// resolveChannelID resolves a "#name" to its channel ID via SlackListChannels'
+// data source; any other input (already a channel ID like C..., or a user ID
+// like U...) passes through unchanged. Shared by SlackPost and SlackMessages
+// so both accept the same "#general" convenience the user/model would expect.
+func resolveChannelID(ctx context.Context, bot *Bot, channel string) (string, error) {
+	if !strings.HasPrefix(channel, "#") {
+		return channel, nil
+	}
+	name := strings.TrimPrefix(channel, "#")
+	channels, err := bot.ListChannels(ctx, 1000)
+	if err != nil {
+		return "", fmt.Errorf("resolve channel %q: %w", channel, err)
+	}
+	for _, c := range channels {
+		if c.Name == name {
+			return c.ID, nil
+		}
+	}
+	return "", fmt.Errorf("channel #%s not found — use SlackListChannels to discover channels", name)
 }
 
 // ── SlackPost ─────────────────────────────────────────────────────────────
@@ -127,24 +134,9 @@ func slackPostTool(bot *Bot, myID string) atools.Tool {
 			}
 
 			// Resolve channel name (#name) → channel ID.
-			channelID := args.Channel
-			if strings.HasPrefix(args.Channel, "#") {
-				name := strings.TrimPrefix(args.Channel, "#")
-				channels, err := bot.ListChannels(ctx, 1000)
-				if err != nil {
-					return "", fmt.Errorf("resolve channel %q: %w", args.Channel, err)
-				}
-				found := false
-				for _, c := range channels {
-					if c.Name == name {
-						channelID = c.ID
-						found = true
-						break
-					}
-				}
-				if !found {
-					return "", fmt.Errorf("channel #%s not found — use SlackListChannels to discover channels", name)
-				}
+			channelID, err := resolveChannelID(ctx, bot, args.Channel)
+			if err != nil {
+				return "", err
 			}
 
 			// User ID (U...) → open DM channel first.
@@ -183,6 +175,48 @@ func slackPostTool(bot *Bot, myID string) atools.Tool {
 				return "", fmt.Errorf("post message: %w", err)
 			}
 			return fmt.Sprintf("Message posted to %s.", args.Channel), nil
+		},
+	}
+}
+
+// ── SlackMessages ─────────────────────────────────────────────────────────
+
+func slackMessagesTool(bot *Bot) atools.Tool {
+	return atools.Tool{
+		Def: types.ToolDef{
+			Name:        "SlackMessages",
+			Description: "Read recent messages posted in a Slack channel, as JSON — useful to catch up on what the group has been discussing beyond messages sent directly to you. Only meaningful for channels (multiple participants), not DMs (a DM is already the 1:1 conversation you're part of). Each entry has the sender's user ID (resolve names with SlackListUsers), text, timestamp, subtype (empty for a normal message; otherwise an event like channel_join/channel_leave/channel_topic), and any attached files with their URLs.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"channel":{"type":"string","description":"Channel ID (C...) or channel name (#general)"},"limit":{"type":"integer","description":"Maximum messages to return (default 50, max 200)","minimum":1,"maximum":200}},"required":["channel"]}`),
+		},
+		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
+			var args struct {
+				Channel string `json:"channel"`
+				Limit   int    `json:"limit"`
+			}
+			if err := json.Unmarshal(input, &args); err != nil {
+				return "", fmt.Errorf("invalid arguments: %w", err)
+			}
+			if args.Channel == "" {
+				return "", fmt.Errorf("channel is required")
+			}
+
+			channelID, err := resolveChannelID(ctx, bot, args.Channel)
+			if err != nil {
+				return "", err
+			}
+
+			messages, err := bot.GetChannelHistory(ctx, channelID, args.Limit)
+			if err != nil {
+				return "", err
+			}
+			if len(messages) == 0 {
+				return "No messages found in this channel.", nil
+			}
+			b, err := json.MarshalIndent(messages, "", "  ")
+			if err != nil {
+				return "", fmt.Errorf("format messages: %w", err)
+			}
+			return string(b), nil
 		},
 	}
 }

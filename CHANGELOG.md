@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.85] - 2026-07-31
+
+### Feat — `SlackMessages` tool: channel history visibility + JSON format for all data-returning Slack tools
+- **`SlackMessages`** (`internal/transport/slack/bot.go`, `tools.go`) — new Slack tool letting the agent read recent messages posted in a channel, as JSON. Previously the agent was blind to group conversation — it only saw messages sent directly to it (a DM or an @mention) even in busy multi-person channels. Calls `conversations.history`, reverses Slack's native newest-first order into a natural chronological transcript, and filters only genuinely noisy subtypes (`message_changed`, `message_deleted`, `ekm_access_denied`) — everything else (`channel_join`, `channel_leave`, `channel_topic`, `bot_message`, `file_share`, etc.) is preserved, since those are real events in the channel's history the agent may need. Each message includes the sender's user ID, text, timestamp, subtype, and any attached files with their URLs (`SlackFile.URLPrivate`) — the agent decides whether to fetch an attachment, the tool never resolves that on its own.
+- **`resolveChannelID()`** — the `#name` → channel ID resolution logic in `SlackPost` was extracted into a shared helper, now used by both `SlackPost` and `SlackMessages`.
+- **JSON format for data-returning Slack tools**: `SlackListChannels` and `SlackListUsers` — previously hand-formatted plain text (`fmt.Fprintf` bullet lists) — now return `json.MarshalIndent` output, consistent with every other data-returning tool in the codebase (`ColleagueList`, `ScheduleList`, `MemoSearch`, and the new `SlackMessages`). `SlackPost` is unchanged — it returns an action-confirmation string ("Message posted to..."), not data to reason over, so plain text remains correct there. `SlackListUsers`'s description now tells the model to prefer `display_name`, falling back to `real_name`, then the handle — logic the tool used to compute internally and hide.
+- **Directive updated** (`directive.go`) — documents `SlackMessages` alongside the other proactive-messaging tools, explaining when to use it (catching up on group discussion) and that it's not meaningful for DMs.
+
 ## [0.73.84] - 2026-07-31
 
 ### Fix — ColleagueAsk: background mode was still bounded by timeout; sessions leaked on disk
