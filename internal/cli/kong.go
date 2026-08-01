@@ -48,6 +48,8 @@ var CLI struct {
 
 	Slack slackCmd `cmd:"" help:"Run as a Slack user bot (one session per channel/DM)"`
 
+	ACP acpCmd `cmd:"" help:"Run as an Agent Client Protocol agent over stdio (for Zed and other ACP clients)"`
+
 	// ── Management ───────────────────────────────────────────────────────
 
 	Providers providersCmd `cmd:"" help:"List providers"`
@@ -88,6 +90,15 @@ type serveCmd struct {
 	Addr      string `arg:"" help:"Address to listen on (e.g. :8080)"`
 	Scheduler bool   `help:"Run the cron scheduler engine"`
 }
+
+// ── acp ──────────────────────────────────────────────────────────────────
+
+// acpCmd has no flags: an ACP client (Zed) launches this exact command as a
+// sub-process and speaks JSON-RPC to it over stdin/stdout — there is no
+// terminal for flags to be typed into, and every per-session setting (model,
+// thinking) is negotiated over the protocol itself instead (see
+// internal/transport/acp's session config options).
+type acpCmd struct{}
 
 // ── telegram ─────────────────────────────────────────────────────────────
 

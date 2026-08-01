@@ -146,17 +146,20 @@ func (s *Server) handler() http.Handler {
 // close-then-reopen race, no readiness polling. For a fixed address, do
 // net.Listen("tcp", addr) then Serve(l).
 func (s *Server) Serve(l net.Listener) error {
-	s.addr = l.Addr().String()
+	addr := l.Addr().String()
+	s.mu.Lock()
+	s.addr = addr
 	s.listener = l
+	s.mu.Unlock()
 	if s.verbose {
-		logx.Info("server", "listening", "addr", s.addr)
+		logx.Info("server", "listening", "addr", addr)
 	}
 
 	// Register this instance in ~/.harness/instances.json.
 	name, err := RegisterInstance(InstanceInfo{
 		Version:   staticServerVersion,
 		Transport: s.transport,
-		URL:       "http://" + s.addr,
+		URL:       "http://" + addr,
 		CWD:       staticServerCWD,
 		PID:       staticServerPID,
 		StartedAt: staticServerStartedAt,
@@ -166,14 +169,25 @@ func (s *Server) Serve(l net.Listener) error {
 			logx.Warn("server", "register_instance", "error", err.Error())
 		}
 	} else {
+		s.mu.Lock()
 		s.instanceName = name
+		s.mu.Unlock()
 		if s.verbose {
 			logx.Info("server", "instance", "name", name)
 		}
 	}
 
-	s.httpSrv = &http.Server{Handler: s.handler()}
-	return s.httpSrv.Serve(l)
+	// Serve() itself (past this point) is the one legitimate unlocked read of
+	// httpSrv: Close() only ever calls Shutdown() on it after this field is
+	// set, and there is exactly one Serve() call per Server (one process, one
+	// listener) — so there is no concurrent WRITE for this specific read to
+	// race with, only Close()'s read, which the lock below already orders
+	// after this write.
+	httpSrv := &http.Server{Handler: s.handler()}
+	s.mu.Lock()
+	s.httpSrv = httpSrv
+	s.mu.Unlock()
+	return httpSrv.Serve(l)
 }
 
 // Close performs a graceful shutdown: closes all active sessions (flushing
@@ -198,18 +212,28 @@ func (s *Server) Close() error {
 		s.closeErr = s.agent.Close()
 
 		// 3. Graceful HTTP shutdown with a short deadline so in-flight
-		// requests (e.g. SSE streams) are given a chance to close.
-		if s.httpSrv != nil {
+		// requests (e.g. SSE streams) are given a chance to close. httpSrv is
+		// set by Serve() right before it blocks in httpSrv.Serve(l) — if Close()
+		// races in fast enough to run before that assignment (e.g. a caller
+		// cancels its context the instant Serve() is scheduled, before it's had
+		// a chance to run at all), there is nothing to shut down yet; that's a
+		// caller-ordering issue outside this method's control, not something
+		// the lock below needs to paper over.
+		s.mu.RLock()
+		httpSrv := s.httpSrv
+		instanceName := s.instanceName
+		s.mu.RUnlock()
+		if httpSrv != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			if err := s.httpSrv.Shutdown(ctx); err != nil && s.closeErr == nil {
+			if err := httpSrv.Shutdown(ctx); err != nil && s.closeErr == nil {
 				s.closeErr = err
 			}
 		}
 
 		// 4. Unregister this instance from ~/.harness/instances.json.
-		if s.instanceName != "" {
-			UnregisterInstance(s.instanceName)
+		if instanceName != "" {
+			UnregisterInstance(instanceName)
 		}
 	})
 	return s.closeErr
@@ -253,12 +277,15 @@ func init() {
 }
 
 func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	addr, instanceName := s.addr, s.instanceName
+	s.mu.RUnlock()
 	writeJSON(w, http.StatusOK, serverInfo{
 		Name:      staticServerName,
 		Version:   staticServerVersion,
-		Instance:  s.instanceName,
+		Instance:  instanceName,
 		Transport: s.transport,
-		URL:       "http://" + s.addr,
+		URL:       "http://" + addr,
 		CWD:       staticServerCWD,
 		PID:       staticServerPID,
 		StartedAt: staticServerStartedAt,
@@ -1384,7 +1411,10 @@ func (s *Server) handleDocs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	addr := s.addr
+	s.mu.RUnlock()
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(openAPISpecJSON(s.addr))) //nolint:errcheck
+	w.Write([]byte(openAPISpecJSON(addr))) //nolint:errcheck
 }

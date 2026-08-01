@@ -1,0 +1,152 @@
+package acp
+
+import (
+	"github.com/gurcuff91/harness/client"
+)
+
+// toolKindByName maps a Harness tool name to its ACP ToolKind category,
+// purely by name — a small fixed table, not a per-tool annotation, since
+// this transport must not touch agent/tools/. Unlisted tools (Skill,
+// Subagent, MemoWrite/Search/Delete, Schedule*, Colleague*) fall back to
+// toolKindOther.
+var toolKindByName = map[string]string{
+	"Bash":  toolKindExec,
+	"Read":  toolKindRead,
+	"Write": toolKindEdit,
+	"Edit":  toolKindEdit,
+	"Fetch": toolKindFetch,
+}
+
+func toolKind(name string) string {
+	if k, ok := toolKindByName[name]; ok {
+		return k
+	}
+	return toolKindOther
+}
+
+// promptOutcome is what a prompt turn resolved to — carried back through the
+// pump's return so the caller can reply to the pending session/prompt
+// request with the right stopReason, or surface an error.
+type promptOutcome struct {
+	stopReason string
+	err        *rpcError // set only when the turn ended in EventError
+}
+
+// pumpEvents reads Harness's SSE event stream for one turn and translates
+// each event into 0 or 1 "session/update" notification, written immediately
+// to the ACP client. It returns once the turn is over — on "turn_end" (the
+// normal case), "stop" (cancelled), "max_iterations_reached", or "error" —
+// with the outcome the caller uses to resolve the pending session/prompt.
+//
+// pendingEdits tracks in-flight Edit/Write tool calls awaiting their "after"
+// snapshot for diff building (see diff.go) — keyed by tool call ID so
+// concurrent tool calls within one turn (the ReAct loop runs them in
+// parallel) don't clobber each other.
+func pumpEvents(c *conn, sessionID string, events <-chan client.Event) promptOutcome {
+	pendingEdits := map[string]pendingEdit{}
+
+	for evt := range events {
+		switch evt.Type {
+		case "text":
+			notify(c, sessionID, sessionUpdate{
+				SessionUpdate: "agent_message_chunk",
+				Content:       ptr(textBlock(evt.Delta)),
+			})
+
+		case "thinking":
+			notify(c, sessionID, sessionUpdate{
+				SessionUpdate: "agent_thought_chunk",
+				Content:       ptr(textBlock(evt.Delta)),
+			})
+
+		case "tool_start":
+			notify(c, sessionID, sessionUpdate{
+				SessionUpdate: "tool_call",
+				ToolCallID:    evt.ToolID,
+				Title:         evt.ToolName,
+				Kind:          toolKind(evt.ToolName),
+				Status:        toolStatusPending,
+			})
+
+		case "tool_call":
+			if evt.ToolName == "Edit" || evt.ToolName == "Write" {
+				if pre, ok := capturePreEditState(evt.ToolArgs); ok {
+					pendingEdits[evt.ToolID] = pre
+				}
+			}
+			notify(c, sessionID, sessionUpdate{
+				SessionUpdate: "tool_call_update",
+				ToolCallID:    evt.ToolID,
+				Status:        toolStatusInProgress,
+				RawInput:      []byte(evt.ToolArgs),
+			})
+
+		case "tool_result":
+			status := toolStatusCompleted
+			if evt.IsError {
+				status = toolStatusFailed
+			}
+			content := contentOnly(evt.Output)
+			if !evt.IsError {
+				if pre, ok := pendingEdits[evt.ToolID]; ok {
+					if diff, ok := buildDiffContent(pre); ok {
+						content = []toolCallContent{diff}
+					}
+				}
+			}
+			delete(pendingEdits, evt.ToolID)
+			notify(c, sessionID, sessionUpdate{
+				SessionUpdate: "tool_call_update",
+				ToolCallID:    evt.ToolID,
+				Status:        status,
+				ToolContent:   content,
+			})
+
+		case "tokens":
+			var cost *usageCost
+			if evt.CostUSD > 0 {
+				cost = &usageCost{Amount: evt.CostUSD, Currency: "USD"}
+			}
+			notify(c, sessionID, sessionUpdate{
+				SessionUpdate: "usage_update",
+				Used:          int64(evt.Input),
+				Size:          int64(evt.ContextWindow),
+				Cost:          cost,
+			})
+
+		case "turn_end":
+			return promptOutcome{stopReason: stopReasonEndTurn}
+
+		case "stop":
+			return promptOutcome{stopReason: stopReasonCancelled}
+
+		case "max_iterations_reached":
+			return promptOutcome{stopReason: stopReasonMaxTurnRequests}
+
+		case "error":
+			return promptOutcome{err: &rpcError{Code: errCodeInternalError, Message: evt.Message}}
+
+		// Every other event type (loop_start/end, tool_args, text_end,
+		// thinking_end, turn_start, received_prompt, follow_up_start,
+		// compact_start/end) is an internal render-control signal with no ACP
+		// equivalent — see the design doc's event mapping table.
+		default:
+		}
+	}
+	// Channel closed without a terminal event (e.g. the server connection
+	// dropped) — treat as a clean end so the client isn't left hanging.
+	return promptOutcome{stopReason: stopReasonEndTurn}
+}
+
+// notify sends a session/update notification, logging (to stderr, never
+// stdout — see jsonrpc.go's stdout discipline note) and swallowing any write
+// error: a broken stdout pipe means the client is gone, and there is nothing
+// useful left to do for this turn.
+func notify(c *conn, sessionID string, u sessionUpdate) {
+	_ = c.sendNotification("session/update", sessionUpdateNotification{
+		SessionID: sessionID,
+		Update:    u,
+	})
+}
+
+func ptr[T any](v T) *T { return &v }

@@ -16,7 +16,7 @@
 1. **No new dependencies** without explicit owner approval. Solve problems with stdlib first.
 2. **Always streaming.** There is no non-streaming path. Every provider implements `CompleteStream()`. Never add `Complete()`.
 3. **`provider/model` format everywhere.** Settings, env vars, CLI display, Resolve — all use `provider/model` (e.g., `anthropic/claude-sonnet-4-20250514`).
-4. **Backend/frontend separation.** `agent/` and `internal/providers/` never import `internal/server` or `internal/transport/`. The agent emits events over an HTTP/SSE API (`internal/server`); the clients (`internal/cli`, `internal/transport/tui`) consume it.
+4. **Backend/frontend separation.** `agent/` and `internal/providers/` never import `internal/server` or `internal/transport/`. The agent emits events over an HTTP/SSE API (`internal/server`); the clients (`internal/cli`, `internal/transport/{tui,telegram,slack,acp}`) consume it.
 5. **Persistent state is explicit.** No model caching. On-disk state is limited to `~/.harness/{credentials.json, settings.json}` and `~/.harness/agent/{sessions/, memory.db}`.
 6. **SDK boundary.** Public packages (`agent`, `agent/{tools,store,resources,memory}`, `mcp`, `types`) form the SDK. Keep implementation detail (`providers`, `config`, `transport`, `version`) under `internal/`, and never expose an `internal/…` type in a public signature.
 
@@ -43,6 +43,8 @@ cmd/harness/main.go             ← executable entry point (package main) — ju
 │       ├── skill.go / memory.go / truncate.go / names.go
 ├── mcp/                        ← Model Context Protocol client (stdlib) — MCPStatuses() exposes it
 │   ├── jsonrpc.go / stdio.go / http.go / client.go / manager.go
+├── client/                     ← the ONE typed HTTP/SSE SDK over internal/server's API — every transport uses *client.Client directly (no per-transport wrappers)
+│   ├── client.go / types.go / event.go / error.go / stream.go
 └── types/                      ← Event, Message, ModelMeta — shared types
 
 🔒 INTERNAL (compiler-enforced, not importable by third parties)
@@ -57,13 +59,15 @@ cmd/harness/main.go             ← executable entry point (package main) — ju
     ├── version/                ← build version (ldflags target)
     ├── server/                 ← HTTP/SSE backend (Serve(listener), handler()) — the API all clients talk to
     │   ├── server.go / sse.go / proxy.go
-    ├── client/                 ← the ONE typed SDK over the server API — every transport uses *client.Client directly (no per-transport wrappers)
-    │   ├── client.go / types.go / event.go / error.go / stream.go
-    ├── cli/                    ← CLI app: app.go router + cmd_*.go handlers (one flag.FlagSet each), agent.go builders, Run* command bodies
-    └── transport/              ← interactive session frontends (each opens a session over server)
+    ├── cli/                    ← CLI app: Kong grammar (kong.go) + kong_run*.go Run() methods, agent.go builders
+    └── transport/              ← interactive session frontends (each opens a session over server via client.Client)
         ├── tui/                ← pure-Go terminal UI (zero external TUI libs)
-        └── telegram/           ← Telegram bot (stdlib Bot API; one session per chat)
+        ├── telegram/           ← Telegram bot (stdlib Bot API; one session per chat)
+        ├── slack/               ← Slack user bot (one session per channel/DM)
+        └── acp/                ← Agent Client Protocol agent (agentclientprotocol.com) — JSON-RPC/stdio bridge for Zed and other ACP clients; one session per ACP sessionId, pure protocol translation (never touches agent/ or agent/tools/)
 ```
+
+`client/` is a top-level PUBLIC package (not `internal/client`) — the one typed SDK over the server API every transport uses directly (`client.go` / `types.go` / `event.go` / `error.go` / `stream.go`).
 
 > **internal/ rule:** its parent is the module root, so *all* harness code can
 > import `internal/…`, but external modules cannot. This lets the agent use
@@ -198,9 +202,18 @@ make install              # build + install to ~/go/bin
 The CLI grammar is declared with [`alecthomas/kong`](https://github.com/alecthomas/kong) struct tags — no manual `flag.FlagSet`, no hand-maintained help text, no dispatch switch.
 
 1. Add the command's struct field (`cmd:""`) to its parent in `internal/cli/kong.go` — this is the single source of truth for flags, args, help text, and tree position. Named types only (never anonymous), so a `Run()` can be attached separately. Watch the gotchas documented at the top of that file: only one `default:"..."` command per tree level, Kong forbids mixing `arg:""` with `cmd:""` siblings in the same struct, and — the easiest one to miss — **a struct with both its own `Run()` and `cmd:""` children is wrong**: Kong calls `Run()` on every node in the selected chain (child *and* parent), so the parent's action would re-fire after every subcommand and its flags would leak into each subcommand's `--help`. If a command needs both an action of its own and real subcommands (e.g. `harness telegram` vs. `telegram pair`), give the action its own hidden `default:"withargs"` child instead (see `telegramRunCmd`/`slackRunCmd`/`settingsShowCmd`) — never a `Run()` directly on the parent struct. That hidden child's flags still show up correctly in the PARENT's own `--help` (e.g. `harness slack --help` lists `--workspace`/`--xoxc`/etc.) thanks to `helpWithHiddenDefaultFlags` in `app.go`, which borrows them onto the parent node being displayed without leaking them into the parent's OTHER subcommands — nothing to do here, just don't be surprised the flags aren't declared directly on the parent struct.
-2. Add the `Run() error` method in a `kong_run*.go` file (grouped by area: `kong_run.go` for management/mcp/memo/settings/schedules, `kong_run_telegram.go`, `kong_run_slack.go`, `kong_run_tui.go`, `kong_run_serve.go`). Keep it a thin adapter over real business logic in `commands.go`/`settings.go`/`memory.go`/`schedule.go` — don't inline logic in the `Run()` method itself.
+2. Add the `Run() error` method in a `kong_run*.go` file (grouped by area: `kong_run.go` for management/mcp/memo/settings/schedules, `kong_run_telegram.go`, `kong_run_slack.go`, `kong_run_tui.go`, `kong_run_serve.go`, `kong_run_acp.go`). Keep it a thin adapter over real business logic in `commands.go`/`settings.go`/`memory.go`/`schedule.go` — don't inline logic in the `Run()` method itself.
 3. Add an HTTP route in `internal/server/server.go` if it needs backend data.
 4. Run `go build ./... && go test ./internal/cli/...` — Kong validates the whole grammar (enums, arg/cmd conflicts, duplicate defaults) at parser-construction time, so a bad tag fails loudly instead of silently.
+
+### Adding a New Transport
+
+A transport is a frontend that opens sessions against the SAME in-process HTTP/SSE server every other transport uses — it never talks to `agent/` directly. Follow `internal/transport/telegram` (chat bot) or `internal/transport/acp` (protocol bridge over stdio) as templates:
+
+1. Create `internal/transport/<name>/`. In its `Run(ctx, a *agent.Agent, opts Options) error`, start an in-process server on a loopback port (`server.NewServer(a, server.ServerOptions{Transport: "<name>"})`) and build a `*client.Client` pointed at it — this is the ONLY way the transport touches the agent.
+2. Translate the transport's native protocol into `client.Client` calls (`CreateSession`, `SendPrompt`/`SendPromptWithImages`, `StreamEvents`, `ExecCommand`, …) and translate `client.Event`s back into the transport's native wire format. This translation is the entire job of the package — no business logic belongs here.
+3. Add the CLI command per "Adding a New Command" above (`kong.go` + `kong_run_<name>.go`), building the agent with `newInteractiveAgent(...)` (or `newConfigAgent()`/`newAgent()` if the transport is one-shot, not interactive) in `internal/cli/agent.go`.
+4. If the transport has its own on-disk state (auth tokens, pairing lists, …), keep it under `~/.harness/<name>.json` or a directory of its own — never reuse another transport's store.
 
 ## Thinking System
 
