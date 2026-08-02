@@ -38,6 +38,21 @@ func NewFileResourceLoader(cwd string) *FileResourceLoader {
 	}
 }
 
+// Copy returns a fresh FileResourceLoader for the same cwd/maxDepth, with its
+// own empty index — never sharing f's index map. Required because Load()
+// populates f.index in place (not goroutine-safe): a sub-agent calling
+// Load() concurrently with the parent session on a SHARED instance would
+// race on that map. See the ResourceLoader.Copy() doc comment for why
+// sub-agents need this instead of the caller hardcoding
+// NewFileResourceLoader directly.
+func (f *FileResourceLoader) Copy() ResourceLoader {
+	return &FileResourceLoader{
+		cwd:      f.cwd,
+		maxDepth: f.maxDepth,
+		index:    map[string]skillEntry{},
+	}
+}
+
 // skillEntry holds a skill's metadata and eagerly loaded content.
 type skillEntry struct {
 	info    SkillInfo

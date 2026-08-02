@@ -15,3 +15,8 @@ func (NilLoader) Load() (*Resources, error) {
 func (NilLoader) ReadSkill(name string) (content string, dir string, err error) {
 	return "", "", fmt.Errorf("skill %q not found (NilLoader has no skills)", name)
 }
+
+// Copy returns a NilLoader — trivial since it carries no state at all.
+func (NilLoader) Copy() ResourceLoader {
+	return NilLoader{}
+}

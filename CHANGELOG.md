@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.74.12] - 2026-08-02
+
+### Fix — sub-agents silently ignored a custom `ResourceLoader`, breaking SDK isolation
+- **Root cause**: `agent.go`'s `buildSessionTools` Subagent executor hardcoded `resources.NewFileResourceLoader(cwd)` for every sub-agent it spawned, regardless of what `ResourceLoader` the parent `Agent` was actually configured with. A caller injecting a custom loader via `AgentOptions.ResourceLoader` (`harness.WithResourceLoader` in the SDK facade — e.g. loading skills/AGENTS.md from a database or object store instead of the filesystem) would see it work correctly for the main session, but every `Subagent` call would silently fall back to reading the local filesystem instead — a completely different, unrelated context than the one the parent session actually used. Reported directly against this code path (not from a live symptom): "in the future we might have other ResourceLoader implementations — the sub-agent should use the SAME implementation the parent is using, not a hardcoded FileResourceLoader."
+- **Fix — new `Copy()` method on `resources.ResourceLoader`** (`agent/resources/loader.go`): every implementation must return a fresh, independent instance with the same configuration — required because `Load()` may build per-call state in place (`FileResourceLoader.index`, rebuilt on every `Load()`), which isn't safe to share across concurrent callers. Implemented for both existing implementations:
+  - `FileResourceLoader.Copy()` (`agent/resources/file.go`) — same `cwd`/`maxDepth`, fresh empty `index`.
+  - `NilLoader.Copy()` (`agent/resources/nil.go`) — trivial, no state to copy.
+  - This is a breaking change to the public `ResourceLoader` interface (re-exported as `harness.ResourceLoader`) — acceptable pre-1.0; any external implementation now needs a `Copy()` method.
+- **Two call sites fixed**:
+  1. `buildSessionTools`' Subagent executor (`agent.go`) — `ResourceLoader: resources.NewFileResourceLoader(cwd)` → `ResourceLoader: loader.Copy()`, where `loader` is the parameter `buildSessionTools` already receives from its 3 callers — whatever implementation the parent Agent is actually configured with, sub-agents now get a faithful copy of it.
+  2. New `Agent.newLoader(cwd)` helper, replacing the identical 3x-duplicated `loader := a.resourceLoader; if loader == nil { loader = resources.NewFileResourceLoader(cwd) }` block in `NewSession`/`ResumeSession`/`ForkSession` — now returns `a.resourceLoader.Copy()` when a custom loader is configured, instead of the SAME shared instance every session (and any sub-agents it spawns) used to reuse. This was a related, previously unnoticed bug of its own scope: a long-lived root Agent (TUI/Telegram/ACP) serving multiple concurrent sessions with a custom loader configured would have had every session's `Load()` racing on that one shared instance's internal state — not just sub-agents.
+- 6 new tests: `TestFileResourceLoaderCopyIndependentIndex`, `TestFileResourceLoaderCopyPreservesConfig`, `TestFileResourceLoaderConcurrentLoadOnCopiesDoesNotRace` (`agent/resources/file_test.go`, new file), `TestNilLoaderCopyReturnsNilLoader` (`agent/resources/nil_test.go`, new file), `TestNewLoaderCopiesCustomResourceLoader`, `TestNewLoaderDefaultsToFileResourceLoaderWhenUnconfigured` (`agent/subagent_loader_test.go`, new file — the direct regression test for the reported bug, using a `Copy()`-call-counting wrapper loader). Full suite + `-race` green.
+
 ## [0.74.11] - 2026-08-02
 
 ### Add — ACP `session/load` now sends a `usage_update` after replaying history

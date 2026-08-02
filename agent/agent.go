@@ -400,6 +400,23 @@ func (a *Agent) Close() error {
 	return a.closeErr
 }
 
+// newLoader returns the ResourceLoader for a session about to be built: a
+// fresh FileResourceLoader(cwd) if no custom loader was configured, or an
+// independent Copy() of a.resourceLoader otherwise — never a.resourceLoader
+// itself. Each session (and, via buildSessionTools' Subagent executor, each
+// sub-agent it spawns) gets its own instance because Load() may build
+// per-call state in place (e.g. FileResourceLoader's skill index), which
+// isn't safe to share across sessions calling Load() concurrently — a root
+// Agent serving multiple long-lived sessions (TUI/Telegram/ACP) with a
+// custom loader configured via harness.WithResourceLoader would otherwise
+// have every session racing on the same instance's internal state.
+func (a *Agent) newLoader(cwd string) resources.ResourceLoader {
+	if a.resourceLoader == nil {
+		return resources.NewFileResourceLoader(cwd)
+	}
+	return a.resourceLoader.Copy()
+}
+
 // NewSession creates a fresh session for the given working directory and model.
 // model is required in "provider/model" format (e.g. "anthropic/claude-sonnet-4").
 // Returns error if the provider is not active or the model doesn't exist.
@@ -421,10 +438,7 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 	}
 
 	// Resources
-	loader := a.resourceLoader
-	if loader == nil {
-		loader = resources.NewFileResourceLoader(cwd)
-	}
+	loader := a.newLoader(cwd)
 	res, err := loader.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load resources: %w", err)
@@ -514,10 +528,7 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 	}
 
 	cwd := meta.CWD
-	loader := a.resourceLoader
-	if loader == nil {
-		loader = resources.NewFileResourceLoader(cwd)
-	}
+	loader := a.newLoader(cwd)
 	res, _ := loader.Load()
 	var skills []resources.SkillInfo
 	var readSkill func(string) (content string, dir string, err error)
@@ -590,10 +601,7 @@ func (a *Agent) ForkSession(sessionID string) (*Session, error) {
 	}
 
 	cwd := meta.CWD
-	loader := a.resourceLoader
-	if loader == nil {
-		loader = resources.NewFileResourceLoader(cwd)
-	}
+	loader := a.newLoader(cwd)
 	res, _ := loader.Load()
 	var skills []resources.SkillInfo
 	var readSkill func(string) (string, string, error)
@@ -727,8 +735,21 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 				MaxIterations: min(parentA.maxIterations, subagentMaxIterations),
 				MaxTokens:     parentA.maxTokens,
 				Store:         store.NewInMemoryStore(),
-				// Each subagent gets its OWN loader instance — FileResourceLoader is not goroutine-safe
-				ResourceLoader: resources.NewFileResourceLoader(cwd),
+				// Each subagent gets its OWN loader instance, via Copy() — never
+				// the parent's own loader value directly. Two reasons: (1) a
+				// loader's Load() may build per-call state in place (e.g.
+				// FileResourceLoader's skill index), which isn't safe to run
+				// concurrently with the parent session's own Load() on a SHARED
+				// instance; (2) hardcoding resources.NewFileResourceLoader(cwd)
+				// here — as this used to do — silently ignored whatever
+				// ResourceLoader implementation the parent Agent was actually
+				// configured with (e.g. a custom one injected via
+				// harness.WithResourceLoader, loading skills from a database or
+				// object store): every sub-agent would see a completely
+				// different, filesystem-only context than the parent session
+				// did. Copy() (see ResourceLoader's doc comment) returns a fresh
+				// instance of the SAME implementation and configuration.
+				ResourceLoader: loader.Copy(),
 				// Subagents can't launch further subagents (no recursion) and get
 				// READ-ONLY memory: they may recall context (MemoSearch) but
 				// not write or delete — only the parent agent curates what persists,
