@@ -10,6 +10,7 @@ import (
 
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/client"
+	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/server"
 )
 
@@ -49,11 +50,16 @@ func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
 		opt(&cfg)
 	}
 
+	// This transport has no WithLogger of its own — it never logs anything
+	// itself (its whole job is pure JSON-RPC protocol translation over
+	// stdin/stdout), so its in-process server always gets logx.NilLogger{}
+	// unconditionally. There's no "this transport's own logger" to keep
+	// distinct from the server's, unlike telegram/slack.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return fmt.Errorf("acp: bind server: %w", err)
 	}
-	srv := server.NewServer(a, server.ServerOptions{Verbose: false, Transport: "acp"})
+	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NilLogger{}, Transport: "acp"})
 	go srv.Serve(listener) //nolint:errcheck
 	defer srv.Close()      //nolint:errcheck
 

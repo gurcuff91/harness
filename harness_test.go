@@ -69,7 +69,7 @@ func TestNewClientAliasIsWired(t *testing.T) {
 }
 
 // TestRunServerAliasIsWiredEndToEnd verifies RunServer (and
-// ServerWithAddr/ServerWithVerbose) are genuinely wired to server.Run — not
+// ServerWithAddr/ServerWithLogger) are genuinely wired to server.Run — not
 // just type-checking aliases — by actually binding, serving one real HTTP
 // request, and shutting down cleanly through the facade alone.
 func TestRunServerAliasIsWiredEndToEnd(t *testing.T) {
@@ -78,7 +78,7 @@ func TestRunServerAliasIsWiredEndToEnd(t *testing.T) {
 	addr := "127.0.0.1:18964" // fixed, unlikely-collision test-only port
 
 	done := make(chan error, 1)
-	go func() { done <- RunServer(ctx, a, ServerWithAddr(addr), ServerWithVerbose()) }()
+	go func() { done <- RunServer(ctx, a, ServerWithAddr(addr), ServerWithLogger(NilLogger{})) }()
 
 	deadline := time.Now().Add(3 * time.Second)
 	var reached bool

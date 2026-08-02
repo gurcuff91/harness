@@ -7,16 +7,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/types"
 )
 
 // newTestProxy builds a SessionProxy without a real *agent.Session — broadcast
 // and isControlEvent don't touch p.session, only p.clients, so this is safe
-// for testing the fan-out/backpressure behavior in isolation. verbose
-// defaults to false (the zero value) — the safer default, and what the TUI's
+// for testing the fan-out/backpressure behavior in isolation. logger
+// defaults to logx.NilLogger{} — the safer default, and what the TUI's
 // in-process server actually uses.
 func newTestProxy() *SessionProxy {
-	return &SessionProxy{clients: make(map[chan<- []byte]struct{})}
+	return &SessionProxy{logger: logx.NilLogger{}, clients: make(map[chan<- []byte]struct{})}
 }
 
 // captureLog redirects the standard logger's output during fn, so tests can
@@ -173,15 +174,16 @@ func TestBroadcastDropsControlEventAfterTimeoutOnDeadClient(t *testing.T) {
 	}
 }
 
-// TestBroadcastSilentWhenNotVerbose is the regression test for the TUI-corruption
-// hazard: the TUI's in-process server always runs with Verbose: false because it
-// shares stdout/stderr with the raw-mode terminal renderer — ANY unconditional
-// log line from a background goroutine (like the agent's own event-emitting
-// goroutine, which is what calls broadcast) would corrupt the display. A dropped
-// control event (dead client, see the timeout test above) must NOT log anything
-// when verbose is off.
-func TestBroadcastSilentWhenNotVerbose(t *testing.T) {
-	p := newTestProxy() // verbose defaults to false
+// TestBroadcastSilentWithNilLogger is the regression test for the
+// TUI-corruption hazard: the TUI's in-process server always runs with
+// logx.NilLogger{} because it shares stdout/stderr with the raw-mode
+// terminal renderer — ANY unconditional log line from a background
+// goroutine (like the agent's own event-emitting goroutine, which is what
+// calls broadcast) would corrupt the display. A dropped control event (dead
+// client, see the timeout test above) must NOT log anything with the nil
+// logger.
+func TestBroadcastSilentWithNilLogger(t *testing.T) {
+	p := newTestProxy() // logger defaults to logx.NilLogger{}
 	ch := make(chan []byte, 1)
 	p.addClient(ch)
 	p.broadcast(types.Event{Type: types.EventStreamTextDelta, Delta: "filler"}) // fill; never drained
@@ -191,17 +193,17 @@ func TestBroadcastSilentWhenNotVerbose(t *testing.T) {
 	})
 
 	if out != "" {
-		t.Errorf("broadcast logged with verbose=false — this would corrupt the TUI's raw-mode render: %q", out)
+		t.Errorf("broadcast logged with a NilLogger — this would corrupt the TUI's raw-mode render: %q", out)
 	}
 }
 
-// TestBroadcastLogsWhenVerbose verifies the OTHER side: standalone `harness
-// serve` / Telegram run with Verbose: true and DO want a dropped control event
-// visible (it's a real, actionable signal there — no raw-mode terminal to
-// corrupt).
-func TestBroadcastLogsWhenVerbose(t *testing.T) {
+// TestBroadcastLogsWithRealLogger verifies the OTHER side: standalone
+// `harness serve`/Telegram inject a real Logger (internal/logx.HarnessLogger)
+// and DO want a dropped control event visible (it's a real, actionable
+// signal there — no raw-mode terminal to corrupt).
+func TestBroadcastLogsWithRealLogger(t *testing.T) {
 	p := newTestProxy()
-	p.verbose = true
+	p.logger = fakeLogger{}
 	ch := make(chan []byte, 1)
 	p.addClient(ch)
 	p.broadcast(types.Event{Type: types.EventStreamTextDelta, Delta: "filler"})
@@ -211,6 +213,16 @@ func TestBroadcastLogsWhenVerbose(t *testing.T) {
 	})
 
 	if !strings.Contains(out, "control_event_dropped") {
-		t.Errorf("expected a control_event_dropped warning with verbose=true, got: %q", out)
+		t.Errorf("expected a control_event_dropped warning with a real logger, got: %q", out)
 	}
 }
+
+// fakeLogger routes through the standard log package (like
+// internal/logx.HarnessLogger does) so captureLog can observe it, without
+// this package importing internal/logx (server must not depend on it —
+// only internal/cli constructs HarnessLogger{} and passes it in).
+type fakeLogger struct{}
+
+func (fakeLogger) Info(component, event string, kv ...any)  { log.Print(component, " ", event) }
+func (fakeLogger) Warn(component, event string, kv ...any)  { log.Print(component, " ", event) }
+func (fakeLogger) Error(component, event string, kv ...any) { log.Print(component, " ", event) }

@@ -3,11 +3,14 @@ package server
 import (
 	"context"
 	"net/http"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/store"
+	"github.com/gurcuff91/harness/logx"
 )
 
 // noKeepAliveClient disables HTTP keep-alive so each request opens (and
@@ -105,6 +108,79 @@ func TestRunServesRequestsAndShutsDownCleanly(t *testing.T) {
 	if _, err := noKeepAliveClient.Get("http://" + addr + "/api/server"); err == nil {
 		t.Error("server still accepting connections after Run returned")
 	}
+}
+
+// captureLogTee — a small recording Logger used to verify Run's WithLogger
+// actually reaches request handling, without depending on internal/logx
+// (server must not import it — only internal/cli constructs
+// internal/logx.HarnessLogger{} and passes it in via WithLogger).
+type recordingLogger struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (r *recordingLogger) Info(component, event string, kv ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lines = append(r.lines, component+" "+event)
+}
+func (r *recordingLogger) Warn(component, event string, kv ...any)  { r.Info(component, event, kv...) }
+func (r *recordingLogger) Error(component, event string, kv ...any) { r.Info(component, event, kv...) }
+
+func (r *recordingLogger) has(substr string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, l := range r.lines {
+		if strings.Contains(l, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRunDefaultsToNilLoggerSilently verifies Run's documented default —
+// logx.NilLogger{} when WithLogger isn't passed — so an SDK consumer who
+// never configures one gets no output at all, not even request logging.
+func TestRunDefaultsToNilLoggerSilently(t *testing.T) {
+	cfg := runConfig{addr: "127.0.0.1:0", logger: logx.NilLogger{}}
+	for _, opt := range []Option{} {
+		opt(&cfg)
+	}
+	if _, ok := cfg.logger.(logx.NilLogger); !ok {
+		t.Errorf("default logger = %T, want logx.NilLogger", cfg.logger)
+	}
+}
+
+// TestRunUsesInjectedLoggerForRequests is the end-to-end test for
+// WithLogger: a real HTTP request against a Run-started server must reach
+// the injected Logger's Info method (via requestLogger middleware, now
+// always registered — see requestLogger's doc comment for why that
+// simplification is safe).
+func TestRunUsesInjectedLoggerForRequests(t *testing.T) {
+	a := newTestAgentForRun()
+	ctx, cancel := context.WithCancel(context.Background())
+	addr := "127.0.0.1:18967"
+	rec := &recordingLogger{}
+
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, a, WithAddr(addr), WithLogger(rec)) }()
+	waitForServer(t, "http://"+addr+"/api/server", 3*time.Second)
+
+	resp, err := noKeepAliveClient.Get("http://" + addr + "/api/server")
+	if err != nil {
+		t.Fatalf("GET /api/server: %v", err)
+	}
+	resp.Body.Close()
+
+	if !rec.has("server request") {
+		t.Errorf("injected logger never received a request log line, got: %v", rec.lines)
+	}
+	if !rec.has("server listening") {
+		t.Errorf("injected logger never received the listening log line, got: %v", rec.lines)
+	}
+
+	cancel()
+	<-done
 }
 
 // TestRunReturnsErrorOnBindFailure verifies Run surfaces a listen failure

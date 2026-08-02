@@ -3,7 +3,6 @@ package telegram
 import (
 	"context"
 	"fmt"
-	"github.com/gurcuff91/harness/internal/logx"
 	"net"
 	"os"
 	"strings"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/client"
+	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/server"
 )
 
@@ -38,6 +38,11 @@ type Options struct {
 	// not something introduced by this rename).
 	SessionThinking string
 	AllowUnpair     bool // auto-pair: accept any chat, adding it to the allowlist on first contact
+
+	// logger is set via WithLogger — unexported since Options is otherwise a
+	// plain data struct built by kong_run_telegram.go's opts slice; only the
+	// functional Option constructors below populate it.
+	logger logx.Logger
 }
 
 // Option configures a Run call — a functional-options wrapper over Options,
@@ -70,17 +75,31 @@ func WithAllowUnpair() Option {
 	return func(o *Options) { o.AllowUnpair = true }
 }
 
+// WithLogger sets the Logger this transport uses for its own log lines
+// (connection status, per-message events, errors — see the logx.Info/Warn/
+// Error call sites throughout this package). Default: logx.NilLogger{}
+// (silent) — an SDK consumer that never configures one gets no output at
+// all; harness's own CLI always passes internal/logx.HarnessLogger{}
+// explicitly (see internal/cli/kong_run_telegram.go). This transport's
+// in-process server.Server always gets logx.NilLogger{} regardless of what
+// this option sets, so logs are never duplicated between the two layers —
+// see Run's construction of the server for where that's applied.
+func WithLogger(l logx.Logger) Option {
+	return func(o *Options) { o.logger = l }
+}
+
 // Transport is the running Telegram bot: it owns the agent, the in-process
 // server, the bot API client, and one live SSE pump per active chat.
 type Transport struct {
-	opts  Options
-	agent *agent.Agent
-	api   *client.Client
-	bot   *Bot
-	store *store
-	srv   *server.Server
-	model string
-	cwd   string
+	opts   Options
+	agent  *agent.Agent
+	api    *client.Client
+	bot    *Bot
+	store  *store
+	srv    *server.Server
+	logger logx.Logger // never nil — defaults to logx.NilLogger{}
+	model  string
+	cwd    string
 
 	mu    sync.Mutex
 	pumps map[int64]*chatPump // chat id → its live session pump
@@ -92,7 +111,7 @@ type Transport struct {
 // launches the internal server, verifies the token, then long-polls for
 // messages — each becoming a prompt for that chat's session.
 func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
-	var o Options
+	o := Options{logger: logx.NilLogger{}}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -119,13 +138,22 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 		return fmt.Errorf("telegram: a bot token is required — run 'harness telegram token <token>' or pass --token/TELEGRAM_BOT_TOKEN")
 	}
 
-	// In-process server — the transport talks to it over HTTP/SSE, exactly like
-	// the TUI, keeping the frontend/backend split clean.
+	logger := opts.logger
+	if logger == nil {
+		logger = logx.NilLogger{} // defensive — Run's default already sets this
+	}
+
+	// In-process server — the transport talks to it over HTTP/SSE, exactly
+	// like the TUI, keeping the frontend/backend split clean. Always
+	// logx.NilLogger{} here, never this transport's own `logger`: THIS
+	// transport is the one logging (via t.logger below), so its inner server
+	// must stay silent rather than duplicating every request as a second log
+	// line.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return fmt.Errorf("telegram: bind server: %w", err)
 	}
-	srv := server.NewServer(a, server.ServerOptions{Verbose: false, Transport: "telegram"})
+	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NilLogger{}, Transport: "telegram"})
 	go srv.Serve(listener) //nolint:errcheck
 
 	cwd, _ := os.Getwd()
@@ -136,6 +164,7 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 		bot:           NewBot(opts.Token),
 		store:         st,
 		srv:           srv,
+		logger:        logger,
 		cwd:           cwd,
 		pumps:         make(map[int64]*chatPump),
 		pendingAlbums: newAlbums(),
@@ -158,16 +187,16 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 	// was ever invoked — see Options' doc comment for why there's no
 	// separate Options.Scheduler here) rather than anything this transport
 	// itself configures.
-	logx.Info("telegram", "connected",
+	t.logger.Info("telegram", "connected",
 		"bot", "@"+me.Username, "default_model", t.model,
 		"scheduler", a.Options().EnableScheduler, "paired", len(st.allowlist()), "allow_unpair", opts.AllowUnpair)
 	if len(st.allowlist()) == 0 && !opts.AllowUnpair {
-		logx.Warn("telegram", "no_paired_chats", "hint", "run 'harness telegram pair <chat_id>' or use --allow-unpair")
+		t.logger.Warn("telegram", "no_paired_chats", "hint", "run 'harness telegram pair <chat_id>' or use --allow-unpair")
 	}
 
 	// Register the command menu so Telegram suggests commands on "/". Best effort.
 	if err := t.bot.SetMyCommands(ctx, botCommands); err != nil {
-		logx.Warn("telegram", "set_commands", "error", err.Error())
+		t.logger.Warn("telegram", "set_commands", "error", err.Error())
 	}
 
 	t.prewarmPumps(ctx)
@@ -185,7 +214,7 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 func (t *Transport) prewarmPumps(ctx context.Context) {
 	for chatID := range t.store.allSessions() {
 		if _, err := t.pumpFor(ctx, chatID); err != nil {
-			logx.Warn("telegram", "prewarm", "chat", chatID, "error", err.Error())
+			t.logger.Warn("telegram", "prewarm", "chat", chatID, "error", err.Error())
 		}
 	}
 }
@@ -239,7 +268,7 @@ func (t *Transport) pollLoop(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			logx.Error("telegram", "get_updates", "error", err.Error(), "action", "retrying")
+			t.logger.Error("telegram", "get_updates", "error", err.Error(), "action", "retrying")
 			select {
 			case <-ctx.Done():
 				return nil
@@ -296,7 +325,7 @@ func (t *Transport) handleMessage(ctx context.Context, msg *Message) {
 		t.replyError(ctx, chatID, err)
 		return
 	}
-	logx.Info("telegram", "prompt", "chat", chatID, "text", oneLine(text, 200))
+	t.logger.Info("telegram", "prompt", "chat", chatID, "text", oneLine(text, 200))
 	// The typing indicator is driven by the SSE drain (turn_start→turn_end) so it
 	// stays alive for the whole turn, not just Telegram's ~5s window.
 	if _, err := t.api.SendPrompt(pump.sessionID, text); err != nil {
@@ -312,7 +341,7 @@ func (t *Transport) handleCallbackQuery(ctx context.Context, cb *CallbackQuery) 
 		return
 	}
 	chatID := cb.Message.Chat.ID
-	logx.Info("telegram", "callback", "chat", chatID, "data", cb.Data)
+	t.logger.Info("telegram", "callback", "chat", chatID, "data", cb.Data)
 
 	p := t.pump(chatID)
 	if p == nil {
@@ -358,7 +387,7 @@ func (t *Transport) handleCallbackQuery(ctx context.Context, cb *CallbackQuery) 
 		_ = t.bot.AnswerCallbackQuery(ctx, cb.ID, "✓ thinking → "+value)
 		_ = t.bot.EditMessageText(ctx, chatID, pending.messageID,
 			fmt.Sprintf("🧠 *Thinking level* set to: `%s`", value))
-		logx.Info("telegram", "thinking_set", "chat", chatID, "level", value)
+		t.logger.Info("telegram", "thinking_set", "chat", chatID, "level", value)
 
 	case "model":
 		_, err := t.api.ExecCommand(p.sessionID, "model", map[string]any{"model": value})
@@ -374,7 +403,7 @@ func (t *Transport) handleCallbackQuery(ctx context.Context, cb *CallbackQuery) 
 		_ = t.bot.AnswerCallbackQuery(ctx, cb.ID, "✓ model → "+short)
 		_ = t.bot.EditMessageText(ctx, chatID, pending.messageID,
 			fmt.Sprintf("🤖 *Model* set to: `%s`", short))
-		logx.Info("telegram", "model_set", "chat", chatID, "model", value)
+		t.logger.Info("telegram", "model_set", "chat", chatID, "model", value)
 
 	default:
 		_ = t.bot.AnswerCallbackQuery(ctx, cb.ID, "Unknown command.")
@@ -391,11 +420,11 @@ func (t *Transport) authorize(ctx context.Context, chatID int64) bool {
 	}
 	if t.opts.AllowUnpair {
 		if added, err := t.store.pair(chatID); err == nil && added {
-			logx.Info("telegram", "auto_paired", "chat", chatID)
+			t.logger.Info("telegram", "auto_paired", "chat", chatID)
 		}
 		return true
 	}
-	logx.Warn("telegram", "rejected", "chat", chatID, "reason", "not paired")
+	t.logger.Warn("telegram", "rejected", "chat", chatID, "reason", "not paired")
 	t.reply(ctx, chatID, fmt.Sprintf(
 		"You're not authorized to use this bot yet.\n\nTo pair this chat, run on the host:\n`harness telegram pair %d`",
 		chatID))

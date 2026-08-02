@@ -54,11 +54,22 @@ import (
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/client"
+	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/server"
 	"github.com/gurcuff91/harness/transports/acp"
 	"github.com/gurcuff91/harness/transports/slack"
 	"github.com/gurcuff91/harness/transports/telegram"
 )
+
+// Logger is the structured logging contract RunServer/RunTelegram/RunSlack
+// accept via their WithLogger option — implement it to route harness's
+// backend logs anywhere (RunAcp has no WithLogger of its own: it never logs
+// anything itself). See [logx.Logger].
+type Logger = logx.Logger
+
+// NilLogger discards everything — the default every runner falls back to
+// when no WithLogger is passed. See [logx.NilLogger].
+type NilLogger = logx.NilLogger
 
 // Client is a typed HTTP/SSE client for a running harness server (`harness
 // serve`, or the in-process server any transport starts). See [client.Client].
@@ -215,8 +226,9 @@ type ServerOption = server.Option
 // only, OS-assigned port). See [server.WithAddr].
 var ServerWithAddr = server.WithAddr
 
-// ServerWithVerbose enables request logging. See [server.WithVerbose].
-var ServerWithVerbose = server.WithVerbose
+// ServerWithLogger sets the Logger that receives request/lifecycle log
+// lines. Default: [NilLogger] (silent). See [server.WithLogger].
+var ServerWithLogger = server.WithLogger
 
 // RunTelegram starts the Telegram bot transport on top of an already-built
 // agent and blocks until ctx is cancelled. See [telegram.Run].
@@ -240,6 +252,10 @@ var TelegramWithSessionThinking = telegram.WithSessionThinking
 // first contact instead of requiring `harness telegram pair <chat_id>`
 // first. See [telegram.WithAllowUnpair].
 var TelegramWithAllowUnpair = telegram.WithAllowUnpair
+
+// TelegramWithLogger sets the Logger this transport uses for its own log
+// lines. Default: [NilLogger] (silent). See [telegram.WithLogger].
+var TelegramWithLogger = telegram.WithLogger
 
 // RunSlack starts the Slack bot transport on top of an already-built agent
 // and blocks until ctx is cancelled. See [slack.Run].
@@ -268,9 +284,17 @@ var SlackWithSessionModel = slack.WithSessionModel
 // transport creates. See [slack.WithSessionThinking].
 var SlackWithSessionThinking = slack.WithSessionThinking
 
+// SlackWithLogger sets the Logger this transport uses for its own log
+// lines. Default: [NilLogger] (silent). See [slack.WithLogger].
+var SlackWithLogger = slack.WithLogger
+
 // RunAcp starts the Agent Client Protocol transport (for Zed and other ACP
 // clients) on top of an already-built agent and blocks until ctx is
-// cancelled or stdin closes. See [acp.Run].
+// cancelled or stdin closes. See [acp.Run]. Deliberately has no
+// AcpWithLogger: this transport never logs anything itself (its whole job
+// is pure JSON-RPC protocol translation over stdin/stdout), so there's
+// nothing for a caller to configure — its in-process server always runs
+// silently.
 var RunAcp = acp.Run
 
 // AcpOption configures a [RunAcp] call. See [acp.Option].

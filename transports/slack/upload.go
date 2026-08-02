@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 
-	"github.com/gurcuff91/harness/internal/logx"
 )
 
 const (
@@ -77,7 +76,7 @@ func (t *Transport) sendWithUploads(ctx context.Context, channelID, text, reason
 	if reason != "" {
 		kv = append(kv, "trigger", reason)
 	}
-	logx.Info("slack", "reply", kv...)
+	t.logger.Info("slack", "reply", kv...)
 
 	// Upload each file. The first file carries the accompanying text as
 	// initial_comment; subsequent files share silently (comment already shown).
@@ -86,10 +85,10 @@ func (t *Transport) sendWithUploads(ctx context.Context, channelID, text, reason
 		if i == 0 {
 			comment = mrkdwnClean
 		}
-		logx.Info("slack", "upload_file", "channel", channelID,
+		t.logger.Info("slack", "upload_file", "channel", channelID,
 			"path", path, "index", i+1, "total", len(paths))
 		if err := t.bot.UploadFile(ctx, channelID, path, comment); err != nil {
-			logx.Error("slack", "upload_file", "channel", channelID,
+			t.logger.Error("slack", "upload_file", "channel", channelID,
 				"path", path, "error", err.Error())
 			// Fall back: send the text and an error notice.
 			if i == 0 && mrkdwnClean != "" {

@@ -12,7 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/client"
-	"github.com/gurcuff91/harness/internal/logx"
+	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/server"
 	"github.com/gurcuff91/harness/types"
 )
@@ -41,6 +41,10 @@ type Options struct {
 	// through, but nothing in this package reads it yet (a preexisting gap,
 	// not something introduced by this rename).
 	SessionThinking string
+
+	// logger is set via WithLogger — unexported since Options is otherwise a
+	// plain data struct; only the functional Option constructors populate it.
+	logger logx.Logger
 }
 
 // Option configures a Run call — a functional-options wrapper over Options,
@@ -80,18 +84,30 @@ func WithSessionThinking(level string) Option {
 	return func(o *Options) { o.SessionThinking = level }
 }
 
+// WithLogger sets the Logger this transport uses for its own log lines
+// (connection status, per-message events, errors). Default: logx.NilLogger{}
+// (silent) — an SDK consumer that never configures one gets no output at
+// all; harness's own CLI always passes internal/logx.HarnessLogger{}
+// explicitly (see internal/cli/kong_run_slack.go). This transport's
+// in-process server.Server always gets logx.NilLogger{} regardless of what
+// this option sets, so logs are never duplicated between the two layers.
+func WithLogger(l logx.Logger) Option {
+	return func(o *Options) { o.logger = l }
+}
+
 // Transport is the running Slack integration: it owns the agent, the in-process
 // server, the bot client, and one live SSE pump per active channel.
 type Transport struct {
-	opts  Options
-	agent *agent.Agent
-	api   *client.Client
-	bot   *Bot
-	store *store
-	srv   *server.Server
-	model string
-	cwd   string
-	myID  string // our own Slack user ID (to detect mentions)
+	opts   Options
+	agent  *agent.Agent
+	api    *client.Client
+	bot    *Bot
+	store  *store
+	srv    *server.Server
+	logger logx.Logger // never nil — defaults to logx.NilLogger{}
+	model  string
+	cwd    string
+	myID   string // our own Slack user ID (to detect mentions)
 
 	mu    sync.Mutex
 	pumps map[string]*channelPump // channel ID → its live session pump
@@ -109,7 +125,7 @@ type Transport struct {
 // Three Slack-specific tools (SlackPost, SlackListChannels, SlackListUsers) are
 // injected into the agent so it can proactively post messages and resolve names.
 func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
-	var o Options
+	o := Options{logger: logx.NilLogger{}}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -143,25 +159,35 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 		return fmt.Errorf("slack: open store: %w", err)
 	}
 
-	// In-process server — same pattern as TUI and Telegram.
+	logger := opts.logger
+	if logger == nil {
+		logger = logx.NilLogger{} // defensive — Run's default already sets this
+	}
+
+	// In-process server — same pattern as TUI and Telegram. Always
+	// logx.NilLogger{} here, never this transport's own `logger`: THIS
+	// transport is the one logging (via t.logger below), so its inner server
+	// must stay silent rather than duplicating every request as a second log
+	// line.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return fmt.Errorf("slack: bind server: %w", err)
 	}
-	srv := server.NewServer(a, server.ServerOptions{Verbose: false, Transport: "slack"})
+	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NilLogger{}, Transport: "slack"})
 	go srv.Serve(listener) //nolint:errcheck
 
 	cwd, _ := os.Getwd()
 	bot := NewBot(opts.Workspace, opts.XoxC, opts.XoxD)
 	t := &Transport{
-		opts:  opts,
-		agent: a,
-		api:   client.New(listener.Addr().String()),
-		bot:   bot,
-		store: st,
-		srv:   srv,
-		cwd:   cwd,
-		pumps: make(map[string]*channelPump),
+		opts:   opts,
+		agent:  a,
+		api:    client.New(listener.Addr().String()),
+		bot:    bot,
+		store:  st,
+		srv:    srv,
+		logger: logger,
+		cwd:    cwd,
+		pumps:  make(map[string]*channelPump),
 	}
 
 	// Resolve model.
@@ -180,7 +206,7 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 	// was ever invoked — see Options' doc comment for why there's no
 	// separate Options.Scheduler here) rather than anything this transport
 	// itself configures.
-	logx.Info("slack", "connected",
+	t.logger.Info("slack", "connected",
 		"user", me.UserID, "team", me.Team,
 		"default_model", t.model, "scheduler", a.Options().EnableScheduler)
 
@@ -205,7 +231,7 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 func (t *Transport) prewarmPumps(ctx context.Context) {
 	for channelID := range t.store.allSessions() {
 		if _, err := t.pumpFor(ctx, channelID); err != nil {
-			logx.Warn("slack", "prewarm", "channel", channelID, "error", err.Error())
+			t.logger.Warn("slack", "prewarm", "channel", channelID, "error", err.Error())
 		}
 	}
 }
@@ -259,7 +285,7 @@ func (t *Transport) rtmLoop(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			logx.Error("slack", "rtm_connect", "error", err.Error(), "action", "retrying")
+			t.logger.Error("slack", "rtm_connect", "error", err.Error(), "action", "retrying")
 			select {
 			case <-ctx.Done():
 				return nil
@@ -273,7 +299,7 @@ func (t *Transport) rtmLoop(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			logx.Error("slack", "rtm_dial", "error", err.Error(), "action", "retrying")
+			t.logger.Error("slack", "rtm_dial", "error", err.Error(), "action", "retrying")
 			select {
 			case <-ctx.Done():
 				return nil
@@ -282,13 +308,13 @@ func (t *Transport) rtmLoop(ctx context.Context) error {
 			continue
 		}
 
-		logx.Info("slack", "rtm_connected")
+		t.logger.Info("slack", "rtm_connected")
 		t.connMu.Lock()
 		t.conn = conn
 		t.connMu.Unlock()
 
 		if err := t.readLoop(ctx, conn); err != nil && ctx.Err() == nil {
-			logx.Error("slack", "rtm_read", "error", err.Error(), "action", "reconnecting")
+			t.logger.Error("slack", "rtm_read", "error", err.Error(), "action", "reconnecting")
 		}
 
 		t.connMu.Lock()
@@ -327,7 +353,7 @@ func (t *Transport) SendTyping(channelID string) {
 	}
 	// WriteJSON acquires gorilla's write lock internally — safe with concurrent ReadJSON.
 	if err := conn.WriteJSON(msg); err != nil {
-		logx.Error("slack", "typing", "channel", channelID, "error", err.Error())
+		t.logger.Error("slack", "typing", "channel", channelID, "error", err.Error())
 	}
 }
 
@@ -407,7 +433,7 @@ func (t *Transport) handleEvent(ctx context.Context, evt *RTMEvent) {
 	}
 	prompt := buildPrompt(contextChannel, evt.User, text, attachTags)
 
-	logx.Info("slack", "prompt",
+	t.logger.Info("slack", "prompt",
 		"channel", evt.Channel, "user", evt.User,
 		"text", oneLine(prompt, 200),
 		"images", len(images), "files", len(attachTags))
@@ -442,7 +468,7 @@ var adminOnlyCommands = map[string]bool{
 func (t *Transport) handleCommand(ctx context.Context, channelID, senderID, text string) {
 	fields := strings.Fields(text)
 	cmd := strings.TrimPrefix(fields[0], "/")
-	logx.Info("slack", "command", "channel", channelID, "user", senderID, "name", cmd)
+	t.logger.Info("slack", "command", "channel", channelID, "user", senderID, "name", cmd)
 
 	// Admin-only commands require the sender to be in the admin list.
 	if adminOnlyCommands[cmd] {

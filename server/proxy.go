@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/internal/logx"
+	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -22,21 +22,21 @@ const controlBroadcastTimeout = 500 * time.Millisecond
 // It subscribes to the session once and fans out to all connected clients.
 type SessionProxy struct {
 	session *agent.Session
-	verbose bool // gates the dropped-control-event warning — see broadcast
+	logger  logx.Logger // never nil — used by the dropped-control-event warning, see broadcast
 
 	mu      sync.RWMutex
 	clients map[chan<- []byte]struct{} // SSE client channels (formatted JSON lines)
 }
 
-// newSessionProxy wraps sess for SSE fan-out. verbose must mirror the owning
-// Server's — the TUI's in-process server runs with Verbose: false specifically
-// because it shares stdout/stderr with the raw-mode terminal UI, so ANY
-// unconditional log line here would corrupt the render. See broadcast's
-// dropped-control-event warning, the one log call on this path.
-func newSessionProxy(sess *agent.Session, verbose bool) *SessionProxy {
+// newSessionProxy wraps sess for SSE fan-out. logger must mirror the owning
+// Server's — the TUI's in-process server runs with logx.NilLogger{}
+// specifically because it shares stdout/stderr with the raw-mode terminal
+// UI, so ANY unconditional log line here would corrupt the render. See
+// broadcast's dropped-control-event warning, the one log call on this path.
+func newSessionProxy(sess *agent.Session, logger logx.Logger) *SessionProxy {
 	p := &SessionProxy{
 		session: sess,
-		verbose: verbose,
+		logger:  logger,
 		clients: make(map[chan<- []byte]struct{}),
 	}
 	sess.Subscribe(p.broadcast)
@@ -114,16 +114,16 @@ func (p *SessionProxy) broadcast(e types.Event) {
 		select {
 		case ch <- line:
 		case <-time.After(controlBroadcastTimeout):
-			// Gated by verbose: this runs on the agent's own event-emitting
-			// goroutine, which for the TUI's in-process server is the SAME
-			// process driving the raw-mode terminal. An unconditional log.Print
-			// here (stdout/stderr) would corrupt the TUI's rendering — exactly
-			// why Server.verbose exists and gates requestLogger too. `harness
-			// serve`/telegram run with Verbose: true and do want this visible.
-			if p.verbose {
-				logx.Warn("sse", "control_event_dropped",
-					"event_type", int(e.Type), "timeout_ms", controlBroadcastTimeout.Milliseconds())
-			}
+			// This runs on the agent's own event-emitting goroutine, which
+			// for the TUI's in-process server is the SAME process driving
+			// the raw-mode terminal — an unconditional log line here would
+			// corrupt its rendering. p.logger is logx.NilLogger{} in exactly
+			// that case (see newSessionProxy's doc comment), so this call is
+			// always safe to make unconditionally: `harness serve`/telegram
+			// inject a real Logger and do want this visible, the TUI's inner
+			// server gets the silent one.
+			p.logger.Warn("sse", "control_event_dropped",
+				"event_type", int(e.Type), "timeout_ms", controlBroadcastTimeout.Milliseconds())
 		}
 	}
 }

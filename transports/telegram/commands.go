@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/gurcuff91/harness/client"
-	"github.com/gurcuff91/harness/internal/logx"
 )
 
 // botCommands is the command menu registered with Telegram (setMyCommands) and
@@ -30,7 +29,7 @@ func (t *Transport) handleCommand(ctx context.Context, chatID int64, text string
 	if i := strings.IndexByte(cmd, '@'); i >= 0 {
 		cmd = cmd[:i]
 	}
-	logx.Info("telegram", "command", "chat", chatID, "name", cmd)
+	t.logger.Info("telegram", "command", "chat", chatID, "name", cmd)
 
 	switch cmd {
 	case "stop":

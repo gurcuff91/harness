@@ -48,12 +48,13 @@ cmd/harness/main.go             ← executable entry point (package main) — ju
 │   ├── jsonrpc.go / stdio.go / http.go / client.go / manager.go
 ├── client/                     ← the ONE typed HTTP/SSE SDK over server's API — every transport uses *client.Client directly (no per-transport wrappers)
 │   ├── client.go / types.go / event.go / error.go / stream.go
-├── server/                     ← HTTP/SSE backend — the API all clients talk to. Run(ctx, *agent.Agent, ...Option) is the blocking convenience wrapper (listen → serve → wait for ctx → graceful shutdown); Server/NewServer/Serve/Close stay exported for fine-grained control.
+├── server/                     ← HTTP/SSE backend — the API all clients talk to. Run(ctx, *agent.Agent, ...Option) is the blocking convenience wrapper (listen → serve → wait for ctx → graceful shutdown); Server/NewServer/Serve/Close stay exported for fine-grained control. WithLogger(logx.Logger) sets what receives request/lifecycle log lines — default logx.NilLogger{} (silent).
 │   ├── server.go / sse.go / proxy.go / instances.go / middleware.go / server_docs.go / run.go
 ├── transports/                 ← interactive session frontends (each opens a session over server via client.Client); PUBLIC because an SDK consumer can run any of these programmatically on an already-built *agent.Agent
-│   ├── telegram/               ← Telegram bot (stdlib Bot API; one session per chat). Run(ctx, a, ...Option) — WithToken (required), WithSessionModel, WithSessionThinking, WithAllowUnpair. No Scheduler option: that's an agent.AgentOptions.EnableScheduler concern, decided before Run is ever called.
-│   ├── slack/                  ← Slack user bot (one session per channel/DM). Run(ctx, a, ...Option) — WithWorkspace/WithXoxC/WithXoxD (required unless saved via `harness slack login`), WithSessionModel, WithSessionThinking. Same no-Scheduler rule as telegram.
-│   └── acp/                    ← Agent Client Protocol agent (agentclientprotocol.com) — JSON-RPC/stdio bridge for Zed and other ACP clients; one session per ACP sessionId, pure protocol translation (never touches agent/ or agent/tools/). Run(ctx, a, ...Option) — WithStdin/WithStdout, defaulting to os.Stdin/os.Stdout.
+│   ├── telegram/               ← Telegram bot (stdlib Bot API; one session per chat). Run(ctx, a, ...Option) — WithToken (required), WithSessionModel, WithSessionThinking, WithAllowUnpair, WithLogger. No Scheduler option: that's an agent.AgentOptions.EnableScheduler concern, decided before Run is ever called.
+│   ├── slack/                  ← Slack user bot (one session per channel/DM). Run(ctx, a, ...Option) — WithWorkspace/WithXoxC/WithXoxD (required unless saved via `harness slack login`), WithSessionModel, WithSessionThinking, WithLogger. Same no-Scheduler rule as telegram.
+│   └── acp/                    ← Agent Client Protocol agent (agentclientprotocol.com) — JSON-RPC/stdio bridge for Zed and other ACP clients; one session per ACP sessionId, pure protocol translation (never touches agent/ or agent/tools/). Run(ctx, a, ...Option) — WithStdin/WithStdout, defaulting to os.Stdin/os.Stdout. Deliberately no WithLogger: this transport never logs anything itself.
+├── logx/                       ← the Logger CONTRACT (interface) server.Run/transports/{telegram,slack}.Run accept via WithLogger, plus NilLogger (the silent default every one of them falls back to). Implement Logger to route harness's backend logs anywhere. See internal/logx.HarnessLogger for the real line-oriented implementation harness's own CLI uses — the only concrete Logger lives there, kept internal on purpose (a formatting/output choice, not part of the contract).
 └── types/                      ← Event, Message, ModelMeta — shared types
 
 🔒 INTERNAL (compiler-enforced, not importable by third parties)
@@ -66,19 +67,26 @@ cmd/harness/main.go             ← executable entry point (package main) — ju
     ├── config/                 ← typed settings + credentials managers
     │   ├── settings.go / credentials.go / manager.go
     ├── version/                ← build version (ldflags target)
+    ├── logx/                   ← HarnessLogger{} — harness's own logx.Logger implementation (the historical `LEVEL [component] event k=v` line format). Only internal/cli constructs it, passing it explicitly to every server.Run/transports/{telegram,slack}.Run call the real binary makes; every other caller (an SDK consumer, or a transport's own in-process server) gets logx.NilLogger{} instead.
     ├── tui/                    ← pure-Go terminal UI (zero external TUI libs) — the one interactive frontend that stays INTERNAL: unlike the other transports, it's a terminal frontend tied to this binary, not something an SDK consumer embeds programmatically
     └── cli/                    ← CLI app: Kong grammar (kong.go) + kong_run*.go Run() methods, agent.go builders
 ```
 
 `server` and `transports/{telegram,slack,acp}` sit at the module root (not
 under `internal/`) even though they still freely import `internal/config`,
-`internal/providers`, `internal/version`, `internal/logx` — moving a package
-out of `internal/` doesn't change what it's allowed to import (Go's
-`internal/` rule only blocks OTHER modules, never siblings in the same
-module), and `agent/` already does exactly this (imports `internal/config`
-and `internal/providers` directly). Exposing `server` doesn't add a new kind
-of exposure: it's an HTTP interface over the same global config/provider
-machinery `agent.New`/`harness.NewAgent` already depend on.
+`internal/providers`, `internal/version` — moving a package out of
+`internal/` doesn't change what it's allowed to import (Go's `internal/`
+rule only blocks OTHER modules, never siblings in the same module), and
+`agent/` already does exactly this (imports `internal/config` and
+`internal/providers` directly). Exposing `server` doesn't add a new kind of
+exposure: it's an HTTP interface over the same global config/provider
+machinery `agent.New`/`harness.NewAgent` already depend on. Logging is the
+one exception worth calling out: `server`/`transports/{telegram,slack}` only
+ever depend on the PUBLIC `logx.Logger` contract (never `internal/logx`
+directly) — the concrete `HarnessLogger` implementation is constructed
+exactly once, in `internal/cli`, and threaded in via `WithLogger`; everyone
+else (including each transport's own in-process `server.Server`) gets
+`logx.NilLogger{}`.
 
 > **internal/ rule:** its parent is the module root, so *all* harness code can
 > import `internal/…`, but external modules cannot. This lets `agent`, `server`,
@@ -222,9 +230,9 @@ The CLI grammar is declared with [`alecthomas/kong`](https://github.com/alecthom
 
 A transport is a frontend that opens sessions against the SAME in-process HTTP/SSE server every other transport uses — it never talks to `agent/` directly. Follow `transports/telegram` (chat bot) or `transports/acp` (protocol bridge over stdio) as templates. Transports (except the TUI, which stays under `internal/tui/` — see the architecture diagram above for why) are PUBLIC packages, since an SDK consumer can run any of them programmatically on an already-built `*agent.Agent`:
 
-1. Create `transports/<name>/`. Its `Run(ctx, a *agent.Agent, opts ...Option) error` — a functional-options runner, matching `server.Run`/`transports/acp.Run`/`transports/telegram.Run`/`transports/slack.Run` — starts an in-process server on a loopback port (`server.NewServer(a, server.ServerOptions{Transport: "<name>"})`) and builds a `*client.Client` pointed at it — this is the ONLY way the transport touches the agent. Its `Option`/`With*` constructors configure the TRANSPORT itself only (listen address, bot credentials, session model/thinking overrides — named `WithSession*` to make that scope explicit, e.g. `WithSessionModel`) — never the agent's own construction-time config (thinking level, scheduler, tools, memory, …), which the caller decides before Run is ever invoked via `agent.AgentOptions`/`harness.AgentWith*`. In particular, don't add a `WithScheduler`-style option here: enabling the cron engine is always an `AgentOptions.EnableScheduler` decision made when the agent is built, not something a transport configures.
+1. Create `transports/<name>/`. Its `Run(ctx, a *agent.Agent, opts ...Option) error` — a functional-options runner, matching `server.Run`/`transports/acp.Run`/`transports/telegram.Run`/`transports/slack.Run` — starts an in-process server on a loopback port (`server.NewServer(a, server.ServerOptions{Logger: logx.NilLogger{}, Transport: "<name>"})` — always `NilLogger` here, never whatever this transport's own `WithLogger` set, so logs aren't duplicated between the two layers) and builds a `*client.Client` pointed at it — this is the ONLY way the transport touches the agent. Its `Option`/`With*` constructors configure the TRANSPORT itself only (listen address, bot credentials, session model/thinking overrides — named `WithSession*` to make that scope explicit, e.g. `WithSessionModel` — plus, if the transport logs anything of its own, a `WithLogger(logx.Logger)` defaulting to `logx.NilLogger{}`, see `transports/telegram`/`transports/slack` for the pattern; skip it entirely if the transport never logs anything itself, like `transports/acp`) — never the agent's own construction-time config (thinking level, scheduler, tools, memory, …), which the caller decides before Run is ever invoked via `agent.AgentOptions`/`harness.AgentWith*`. In particular, don't add a `WithScheduler`-style option here: enabling the cron engine is always an `AgentOptions.EnableScheduler` decision made when the agent is built, not something a transport configures.
 2. Translate the transport's native protocol into `client.Client` calls (`CreateSession`, `SendPrompt`/`SendPromptWithImages`, `StreamEvents`, `ExecCommand`, …) and translate `client.Event`s back into the transport's native wire format. This translation is the entire job of the package — no business logic belongs here.
-3. Add the CLI command per "Adding a New Command" above (`kong.go` + `kong_run_<name>.go`), building the agent with `newInteractiveAgent(...)` (or `newConfigAgent()`/`newAgent()` if the transport is one-shot, not interactive) in `internal/cli/agent.go`.
+3. Add the CLI command per "Adding a New Command" above (`kong.go` + `kong_run_<name>.go`), building the agent with `newInteractiveAgent(...)` (or `newConfigAgent()`/`newAgent()` if the transport is one-shot, not interactive) in `internal/cli/agent.go`. If the transport has a `WithLogger`, its `kong_run_<name>.go` must pass `<name>.WithLogger(internal/logx.HarnessLogger{})` explicitly — the real CLI is the ONLY caller that ever constructs `HarnessLogger{}`; every other caller (an SDK consumer, or this transport's own in-process server) gets `logx.NilLogger{}`.
 4. If the transport has its own on-disk state (auth tokens, pairing lists, …), keep it under `~/.harness/<name>.json` or a directory of its own — never reuse another transport's store.
 5. Add a `RunXxx` + `XxxWith*` alias set to `harness.go`'s facade (see `RunTelegram`/`TelegramWith*` for the pattern) — each is a thin `var RunXxx = xxx.Run` / `var XxxWithY = xxx.WithY` alias, never a reimplementation.
 

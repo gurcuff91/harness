@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gurcuff91/harness/internal/logx"
 )
 
 // uploadTagRe matches a <tel:uploadFile>path</tel:uploadFile> action tag. The
@@ -155,7 +154,7 @@ func (t *Transport) sendUploads(ctx context.Context, chatID int64, paths []strin
 			if isRealImage(p) {
 				err = t.bot.SendPhotoFile(ctx, chatID, p)
 			} else {
-				logx.Info("telegram", "upload_fallback", "chat", chatID,
+				t.logger.Info("telegram", "upload_fallback", "chat", chatID,
 					"file", filepath.Base(p), "reason", "file is not a valid image (likely HTML)")
 				err = t.bot.SendDocumentFile(ctx, chatID, p)
 			}
@@ -165,9 +164,9 @@ func (t *Transport) sendUploads(ctx context.Context, chatID int64, paths []strin
 			err = t.bot.SendDocumentFile(ctx, chatID, p)
 		}
 		if err != nil {
-			logx.Error("telegram", "upload", "chat", chatID, "file", filepath.Base(p), "error", err.Error())
+			t.logger.Error("telegram", "upload", "chat", chatID, "file", filepath.Base(p), "error", err.Error())
 		} else {
-			logx.Info("telegram", "upload", "chat", chatID, "file", filepath.Base(p))
+			t.logger.Info("telegram", "upload", "chat", chatID, "file", filepath.Base(p))
 		}
 	}
 }

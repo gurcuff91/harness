@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/gurcuff91/harness/client"
-	"github.com/gurcuff91/harness/internal/logx"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -130,7 +129,7 @@ func (t *Transport) acquireSession(chatID int64) (string, error) {
 			// the bot was launched with an explicit --model, which overrides it.
 			if t.opts.SessionModel != "" {
 				if _, err := t.api.ExecCommand(id, "model", map[string]any{"model": t.opts.SessionModel}); err != nil {
-					logx.Warn("telegram", "override_model", "chat", chatID, "error", err.Error())
+					t.logger.Warn("telegram", "override_model", "chat", chatID, "error", err.Error())
 				}
 			}
 			return id, nil
@@ -142,7 +141,7 @@ func (t *Transport) acquireSession(chatID int64) (string, error) {
 		return "", err
 	}
 	if err := t.store.bind(chatID, sess.ID); err != nil {
-		logx.Error("telegram", "persist_mapping", "chat", chatID, "error", err.Error())
+		t.logger.Error("telegram", "persist_mapping", "chat", chatID, "error", err.Error())
 	}
 	return sess.ID, nil
 }
@@ -179,7 +178,7 @@ func (t *Transport) drain(ctx context.Context, p *chatPump, events <-chan client
 			// A prompt the transport didn't send — i.e. a scheduled one fired by the
 			// engine into this session. Log it, and keep typing alive for it too.
 			if evt.Origin == "scheduled" {
-				logx.Info("telegram", "scheduled_prompt", "chat", p.chatID, "text", oneLine(evt.Text, 200))
+				t.logger.Info("telegram", "scheduled_prompt", "chat", p.chatID, "text", oneLine(evt.Text, 200))
 				p.startTyping(ctx, t.bot)
 			}
 		case "text_end":
@@ -188,7 +187,7 @@ func (t *Transport) drain(ctx context.Context, p *chatPump, events <-chan client
 			// rather than bundled at the end.
 			t.flush(ctx, p)
 		case "tool_call":
-			logx.Info("telegram", "tool", "chat", p.chatID, "name", evt.ToolName)
+			t.logger.Info("telegram", "tool", "chat", p.chatID, "name", evt.ToolName)
 		case "turn_end":
 			t.flush(ctx, p)
 			p.stopTyping()
@@ -264,7 +263,7 @@ func (t *Transport) sendText(ctx context.Context, chatID int64, text string) {
 			err = t.bot.SendMessage(ctx, chatID, chunk, "")
 		}
 		if err != nil {
-			logx.Error("telegram", "send", "chat", chatID, "error", err.Error())
+			t.logger.Error("telegram", "send", "chat", chatID, "error", err.Error())
 		}
 	}
 	if n := len(chunks); n > 0 {
@@ -276,6 +275,6 @@ func (t *Transport) sendText(ctx context.Context, chatID int64, text string) {
 		if n > 1 {
 			kv = append(kv, "messages", n)
 		}
-		logx.Info("telegram", "reply", kv...)
+		t.logger.Info("telegram", "reply", kv...)
 	}
 }

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gurcuff91/harness/client"
-	"github.com/gurcuff91/harness/internal/logx"
 )
 
 // channelPump owns one Slack channel's harness session and the goroutine that
@@ -87,7 +86,7 @@ func (t *Transport) acquireSession(channelID string) (string, error) {
 		return "", err
 	}
 	if err := t.store.bind(channelID, sess.ID); err != nil {
-		logx.Error("slack", "persist_mapping", "channel", channelID, "error", err.Error())
+		t.logger.Error("slack", "persist_mapping", "channel", channelID, "error", err.Error())
 	}
 	return sess.ID, nil
 }
@@ -163,7 +162,7 @@ func (t *Transport) drain(ctx context.Context, p *channelPump, events <-chan cli
 			// mid-turn commentary ("Let me check that…") reaches the user
 			// in real time rather than being held until turn_end.
 			t.flushReason(ctx, p, "tool_call")
-			logx.Info("slack", "tool", "channel", p.channelID, "name", evt.ToolName)
+			t.logger.Info("slack", "tool", "channel", p.channelID, "name", evt.ToolName)
 		case "turn_end":
 			t.flushReason(ctx, p, "turn_end")
 			t.stopTyping(p)
@@ -186,7 +185,7 @@ func (t *Transport) drain(ctx context.Context, p *channelPump, events <-chan cli
 			t.flushReason(ctx, p, "max_iterations_reached")
 		case "received_prompt":
 			if evt.Origin == "scheduled" {
-				logx.Info("slack", "scheduled_prompt",
+				t.logger.Info("slack", "scheduled_prompt",
 					"channel", p.channelID, "text", oneLine(evt.Text, 200))
 				t.startTyping(ctx, p)
 			}
@@ -228,7 +227,7 @@ func (t *Transport) sendLogged(ctx context.Context, channelID, text, reason stri
 
 	for _, chunk := range chunks {
 		if err := t.bot.PostMessage(ctx, channelID, chunk); err != nil {
-			logx.Error("slack", "send", "channel", channelID, "error", err.Error())
+			t.logger.Error("slack", "send", "channel", channelID, "error", err.Error())
 		}
 	}
 	if n := len(chunks); n > 0 {
@@ -245,7 +244,7 @@ func (t *Transport) sendLogged(ctx context.Context, channelID, text, reason stri
 		if reason != "" {
 			kv = append(kv, "trigger", reason)
 		}
-		logx.Info("slack", "reply", kv...)
+		t.logger.Info("slack", "reply", kv...)
 	}
 }
 

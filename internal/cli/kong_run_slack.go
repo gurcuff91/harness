@@ -10,6 +10,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/gurcuff91/harness/internal/logx"
 	"github.com/gurcuff91/harness/transports/slack"
 )
 
@@ -25,6 +26,7 @@ func (c *slackRunCmd) Run() error {
 		slack.WithWorkspace(c.Workspace),
 		slack.WithXoxC(c.XoxC),
 		slack.WithXoxD(c.XoxD),
+		slack.WithLogger(logx.HarnessLogger{}),
 	}
 	if c.Model != "" {
 		opts = append(opts, slack.WithSessionModel(c.Model))

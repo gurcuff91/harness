@@ -1,5 +1,7 @@
-// Package logx is harness's small structured logger for backend components
-// (the HTTP server, the Telegram transport, …). It renders one line per event:
+// Package logx provides harness's own structured logger implementation for
+// backend components (the HTTP server, the Telegram/Slack transports, …):
+// HarnessLogger, which implements the public logx.Logger contract
+// (github.com/gurcuff91/harness/logx). It renders one line per event:
 //
 //	<timestamp> LEVEL [component] event key=value key="value with spaces"
 //
@@ -10,23 +12,40 @@
 // The timestamp comes from the standard log package. Levels are fixed-width so
 // lines align and are easy to scan/grep. Values are quoted only when they
 // contain spaces or quotes.
+//
+// internal/cli is the only caller that constructs HarnessLogger{} — every
+// server.Run/transports/{telegram,slack}.Run call the CLI makes passes it
+// explicitly via WithLogger, so the real binary logs exactly as before this
+// package's functions became a Logger implementation. Every OTHER caller
+// (an SDK consumer, or a transport's own in-process server) gets
+// logx.NilLogger{} by default instead — see that type's doc comment.
 package logx
 
 import (
 	"fmt"
 	"log"
 	"strings"
+
+	publiclogx "github.com/gurcuff91/harness/logx"
 )
+
+// HarnessLogger is harness's own Logger implementation — this package's
+// historical line-oriented format, now behind the public logx.Logger
+// interface instead of package-level functions.
+type HarnessLogger struct{}
+
+// compile-time assertion — HarnessLogger must satisfy the public contract.
+var _ publiclogx.Logger = HarnessLogger{}
 
 // Info logs an event at INFO level for the given component. kv is a flat list of
 // alternating key, value pairs (values may be any type; rendered with %v).
-func Info(component, event string, kv ...any) { emit("INFO ", component, event, kv) }
+func (HarnessLogger) Info(component, event string, kv ...any) { emit("INFO ", component, event, kv) }
 
 // Warn logs at WARN level.
-func Warn(component, event string, kv ...any) { emit("WARN ", component, event, kv) }
+func (HarnessLogger) Warn(component, event string, kv ...any) { emit("WARN ", component, event, kv) }
 
 // Error logs at ERROR level.
-func Error(component, event string, kv ...any) { emit("ERROR", component, event, kv) }
+func (HarnessLogger) Error(component, event string, kv ...any) { emit("ERROR", component, event, kv) }
 
 // emit renders and prints one log line. Odd trailing keys (no value) are skipped.
 func emit(level, component, event string, kv []any) {

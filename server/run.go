@@ -5,14 +5,15 @@ import (
 	"net"
 
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/logx"
 )
 
 // Option configures a Run call.
 type Option func(*runConfig)
 
 type runConfig struct {
-	addr    string
-	verbose bool
+	addr   string
+	logger logx.Logger
 }
 
 // WithAddr sets the listen address (e.g. "127.0.0.1:8080" or ":8080" for all
@@ -23,9 +24,12 @@ func WithAddr(addr string) Option {
 	return func(c *runConfig) { c.addr = addr }
 }
 
-// WithVerbose enables request logging.
-func WithVerbose() Option {
-	return func(c *runConfig) { c.verbose = true }
+// WithLogger sets the Logger that receives request/lifecycle log lines.
+// Default: logx.NilLogger{} (silent) — an SDK consumer that never configures
+// one gets no output at all; harness's own CLI always passes
+// internal/logx.HarnessLogger{} explicitly (see internal/cli/kong_run_serve.go).
+func WithLogger(l logx.Logger) Option {
+	return func(c *runConfig) { c.logger = l }
 }
 
 // Run starts the HTTP/SSE server on top of an already-built agent and blocks
@@ -43,7 +47,7 @@ func WithVerbose() Option {
 // error encountered otherwise (failure to bind the listener, or a non-clean
 // HTTP server error).
 func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
-	cfg := runConfig{addr: "127.0.0.1:0"}
+	cfg := runConfig{addr: "127.0.0.1:0", logger: logx.NilLogger{}}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -54,7 +58,7 @@ func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
 		return err
 	}
 
-	srv := NewServer(a, ServerOptions{Verbose: cfg.verbose, Transport: "server"})
+	srv := NewServer(a, ServerOptions{Logger: cfg.logger, Transport: "server"})
 
 	// srv.Serve blocks until the listener closes, so Close() must be
 	// triggered from elsewhere on ctx cancellation. Close() itself calls

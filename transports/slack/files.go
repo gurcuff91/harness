@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gurcuff91/harness/internal/logx"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -134,7 +133,7 @@ func (t *Transport) handleFiles(ctx context.Context, channelID string, files []S
 			if info, err := t.bot.FilesInfo(ctx, file.ID); err == nil {
 				file = *info
 			} else {
-				logx.Error("slack", "files_info", "channel", channelID,
+				t.logger.Error("slack", "files_info", "channel", channelID,
 					"file", file.ID, "error", err.Error())
 				continue
 			}
@@ -147,7 +146,7 @@ func (t *Transport) handleFiles(ctx context.Context, channelID string, files []S
 		case fileKindImage:
 			data, err := t.bot.DownloadFile(ctx, file.URLPrivate)
 			if err != nil {
-				logx.Error("slack", "download_image", "channel", channelID,
+				t.logger.Error("slack", "download_image", "channel", channelID,
 					"file", file.Name, "error", err.Error())
 				continue
 			}
@@ -159,23 +158,23 @@ func (t *Transport) handleFiles(ctx context.Context, channelID string, files []S
 				MimeType: mime,
 				Base64:   base64.StdEncoding.EncodeToString(data),
 			})
-			logx.Info("slack", "image_attached", "channel", channelID, "file", file.Name)
+			t.logger.Info("slack", "image_attached", "channel", channelID, "file", file.Name)
 
 		case fileKindText:
 			tmpPath, err := downloadToTemp(ctx, t.bot, file)
 			if err != nil {
-				logx.Error("slack", "download_text", "channel", channelID,
+				t.logger.Error("slack", "download_text", "channel", channelID,
 					"file", file.Name, "error", err.Error())
 				continue
 			}
 			attachTags = append(attachTags, fmt.Sprintf("<slack:attach>%s</slack:attach>", tmpPath))
-			logx.Info("slack", "text_attached", "channel", channelID,
+			t.logger.Info("slack", "text_attached", "channel", channelID,
 				"file", file.Name, "path", tmpPath)
 
 		case fileKindIgnore:
 			// TODO: handle PDF, video, audio, and other binary types via future
 			// analysis tools (e.g. a PDF parser tool, a video transcription tool).
-			logx.Info("slack", "file_ignored", "channel", channelID,
+			t.logger.Info("slack", "file_ignored", "channel", channelID,
 				"file", file.Name, "mime", file.MimeType)
 		}
 	}

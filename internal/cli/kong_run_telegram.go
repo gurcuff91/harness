@@ -6,6 +6,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/gurcuff91/harness/internal/logx"
 	"github.com/gurcuff91/harness/transports/telegram"
 )
 
@@ -17,7 +18,10 @@ func (c *telegramRunCmd) Run() error {
 	ctx, cancel := signalContext()
 	defer cancel()
 
-	opts := []telegram.Option{telegram.WithToken(c.Token)}
+	opts := []telegram.Option{
+		telegram.WithToken(c.Token),
+		telegram.WithLogger(logx.HarnessLogger{}),
+	}
 	if c.Model != "" {
 		opts = append(opts, telegram.WithSessionModel(c.Model))
 	}

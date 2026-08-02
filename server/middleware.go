@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gurcuff91/harness/internal/logx"
+	"github.com/gurcuff91/harness/logx"
 )
 
 // statusRecorder wraps http.ResponseWriter to capture the status code and the
@@ -40,16 +40,24 @@ func (r *statusRecorder) Flush() {
 // requestLogger logs one line per HTTP request in the shared logx format:
 //
 //	INFO  [server] request method=GET path=/api/server status=200 bytes=128 dur=80µs
-func requestLogger(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		start := time.Now()
-		next.ServeHTTP(rec, r)
-		logx.Info("server", "request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", rec.status,
-			"bytes", rec.bytes,
-			"dur", time.Since(start).Round(time.Microsecond).String())
-	})
+//
+// Always registered as middleware (see handler()) regardless of what logger
+// the Server was built with — with the default logx.NilLogger{} this is a
+// no-op call per request, not a conditional branch, which is what let
+// Server.verbose disappear entirely in favor of always-on middleware plus an
+// injected Logger.
+func requestLogger(logger logx.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+			start := time.Now()
+			next.ServeHTTP(rec, r)
+			logger.Info("server", "request",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", rec.status,
+				"bytes", rec.bytes,
+				"dur", time.Since(start).Round(time.Microsecond).String())
+		})
+	}
 }

@@ -24,8 +24,9 @@ func capture(t *testing.T, fn func()) string {
 }
 
 func TestInfoFormat(t *testing.T) {
+	var l HarnessLogger
 	got := capture(t, func() {
-		Info("telegram", "prompt", "chat", 5353, "session", "dde9")
+		l.Info("telegram", "prompt", "chat", 5353, "session", "dde9")
 	})
 	want := "INFO [telegram] prompt chat=5353 session=dde9"
 	if got != want {
@@ -34,8 +35,9 @@ func TestInfoFormat(t *testing.T) {
 }
 
 func TestQuotingSpaces(t *testing.T) {
+	var l HarnessLogger
 	got := capture(t, func() {
-		Info("telegram", "reply", "text", "hola mundo")
+		l.Info("telegram", "reply", "text", "hola mundo")
 	})
 	if !strings.Contains(got, `text="hola mundo"`) {
 		t.Errorf("value with spaces should be quoted: %q", got)
@@ -43,13 +45,14 @@ func TestQuotingSpaces(t *testing.T) {
 }
 
 func TestLevels(t *testing.T) {
+	var l HarnessLogger
 	for _, tc := range []struct {
 		fn    func(string, string, ...any)
 		level string
 	}{
-		{Info, "INFO "},
-		{Warn, "WARN "},
-		{Error, "ERROR"},
+		{l.Info, "INFO "},
+		{l.Warn, "WARN "},
+		{l.Error, "ERROR"},
 	} {
 		got := capture(t, func() { tc.fn("server", "event") })
 		if !strings.HasPrefix(got, tc.level+"[server] event") {
@@ -60,8 +63,9 @@ func TestLevels(t *testing.T) {
 
 func TestOddKVSkipped(t *testing.T) {
 	// A trailing key with no value is ignored, not rendered as key=.
+	var l HarnessLogger
 	got := capture(t, func() {
-		Info("x", "e", "a", 1, "dangling")
+		l.Info("x", "e", "a", 1, "dangling")
 	})
 	if strings.Contains(got, "dangling") {
 		t.Errorf("dangling key should be skipped: %q", got)

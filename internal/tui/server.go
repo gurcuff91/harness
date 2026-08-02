@@ -5,12 +5,17 @@ import (
 	"net"
 
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/server"
 )
 
 // startInternalServer starts the HTTP transport on a random loopback port.
 // tui talks to this in-process server exactly like an external client —
-// keeping the frontend/backend separation clean.
+// keeping the frontend/backend separation clean. Always logx.NilLogger{}:
+// this server shares stdout/stderr with the raw-mode terminal renderer, so
+// ANY unconditional log line would corrupt the display — see
+// server.SessionProxy's broadcast doc comment for the specific hazard this
+// avoids.
 func startInternalServer(a *agent.Agent) (*internalServer, string, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -18,7 +23,7 @@ func startInternalServer(a *agent.Agent) (*internalServer, string, error) {
 	}
 	addr := listener.Addr().String()
 
-	srv := server.NewServer(a, server.ServerOptions{Verbose: false, Transport: "tui"})
+	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NilLogger{}, Transport: "tui"})
 	go srv.Serve(listener) //nolint:errcheck
 
 	return &internalServer{srv: srv}, addr, nil

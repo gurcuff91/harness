@@ -18,9 +18,9 @@ import (
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/internal/config"
-	"github.com/gurcuff91/harness/internal/logx"
 	"github.com/gurcuff91/harness/internal/providers"
 	"github.com/gurcuff91/harness/internal/version"
+	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/mcp"
 	"github.com/gurcuff91/harness/types"
 )
@@ -42,10 +42,10 @@ const sseClientBufferSize = 4096
 // Server is the HTTP transport for the agent harness.
 type Server struct {
 	agent        *agent.Agent
-	verbose      bool
-	transport    string // name of the calling transport
-	addr         string // resolved listen address (set in Serve)
-	instanceName string // unique instance name (MK11-themed, set in Serve)
+	logger       logx.Logger // never nil — defaults to logx.NilLogger{}
+	transport    string      // name of the calling transport
+	addr         string      // resolved listen address (set in Serve)
+	instanceName string      // unique instance name (MK11-themed, set in Serve)
 	mu           sync.RWMutex
 	sessions     map[string]*SessionProxy
 
@@ -58,7 +58,12 @@ type Server struct {
 
 // ServerOptions configures the HTTP server.
 type ServerOptions struct {
-	Verbose   bool   // enable request logging (default: false)
+	// Logger receives request/lifecycle log lines. Defaults to
+	// logx.NilLogger{} (silent) when left nil — the same default Run's
+	// WithLogger option falls back to. Pass logx.NilLogger{} explicitly (as
+	// every transport's own in-process server does) when something ELSE is
+	// already logging and this server must stay silent.
+	Logger    logx.Logger
 	Transport string // name of the calling transport (e.g. "tui", "telegram", "slack"); empty defaults to "server"
 }
 
@@ -68,9 +73,13 @@ func NewServer(a *agent.Agent, opts ServerOptions) *Server {
 	if transport == "" {
 		transport = "server"
 	}
+	logger := opts.Logger
+	if logger == nil {
+		logger = logx.NilLogger{}
+	}
 	return &Server{
 		agent:     a,
-		verbose:   opts.Verbose,
+		logger:    logger,
 		transport: transport,
 		sessions:  make(map[string]*SessionProxy),
 	}
@@ -81,10 +90,10 @@ func NewServer(a *agent.Agent, opts ServerOptions) *Server {
 func (s *Server) handler() http.Handler {
 	r := chi.NewRouter()
 
-	// Middleware
-	if s.verbose {
-		r.Use(requestLogger)
-	}
+	// Middleware — requestLogger always runs; with the default NilLogger it's
+	// a no-op call per request, not a conditional branch (see requestLogger's
+	// doc comment for why this simplification is safe).
+	r.Use(requestLogger(s.logger))
 	r.Use(corsMiddleware)
 
 	// Routes
@@ -151,9 +160,7 @@ func (s *Server) Serve(l net.Listener) error {
 	s.addr = addr
 	s.listener = l
 	s.mu.Unlock()
-	if s.verbose {
-		logx.Info("server", "listening", "addr", addr)
-	}
+	s.logger.Info("server", "listening", "addr", addr)
 
 	// Register this instance in ~/.harness/instances.json.
 	name, err := RegisterInstance(InstanceInfo{
@@ -165,16 +172,12 @@ func (s *Server) Serve(l net.Listener) error {
 		StartedAt: staticServerStartedAt,
 	})
 	if err != nil {
-		if s.verbose {
-			logx.Warn("server", "register_instance", "error", err.Error())
-		}
+		s.logger.Warn("server", "register_instance", "error", err.Error())
 	} else {
 		s.mu.Lock()
 		s.instanceName = name
 		s.mu.Unlock()
-		if s.verbose {
-			logx.Info("server", "instance", "name", name)
-		}
+		s.logger.Info("server", "instance", "name", name)
 	}
 
 	// Serve() itself (past this point) is the one legitimate unlocked read of
@@ -705,7 +708,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		_ = sess.SwitchThinking(level)
 	}
 
-	proxy := newSessionProxy(sess, s.verbose)
+	proxy := newSessionProxy(sess, s.logger)
 
 	s.mu.Lock()
 	s.sessions[sess.ID()] = proxy
@@ -826,7 +829,7 @@ func (s *Server) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.Lock()
-	s.sessions[sess.ID()] = newSessionProxy(sess, s.verbose)
+	s.sessions[sess.ID()] = newSessionProxy(sess, s.logger)
 	s.mu.Unlock()
 
 	writeJSON(w, http.StatusCreated, sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations()})
@@ -858,7 +861,7 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	proxy := newSessionProxy(sess, s.verbose)
+	proxy := newSessionProxy(sess, s.logger)
 	s.mu.Lock()
 	s.sessions[sess.ID()] = proxy
 	s.mu.Unlock()

@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gurcuff91/harness/internal/logx"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -153,14 +152,14 @@ func (t *Transport) handleDocument(ctx context.Context, chatID int64, caption st
 	if !isTextMIME(mime) {
 		// TODO: handle PDF, video, audio, and other binary types via future
 		// analysis tools (e.g. a PDF parser tool, a video transcription tool).
-		logx.Info("telegram", "document_ignored",
+		t.logger.Info("telegram", "document_ignored",
 			"chat", chatID, "file", doc.FileName, "mime", doc.MimeType)
 		return
 	}
 
 	data, err := t.bot.DownloadDocument(ctx, doc.FileID)
 	if err != nil {
-		logx.Error("telegram", "download_document", "chat", chatID,
+		t.logger.Error("telegram", "download_document", "chat", chatID,
 			"file", doc.FileName, "error", err.Error())
 		t.reply(ctx, chatID, "⚠️ Couldn't download the file.")
 		return
@@ -172,16 +171,16 @@ func (t *Transport) handleDocument(ctx context.Context, chatID int64, caption st
 	}
 	tmp, err := os.CreateTemp("", "*-"+name)
 	if err != nil {
-		logx.Error("telegram", "create_temp", "chat", chatID, "error", err.Error())
+		t.logger.Error("telegram", "create_temp", "chat", chatID, "error", err.Error())
 		return
 	}
 	defer tmp.Close()
 	if _, err := tmp.Write(data); err != nil {
-		logx.Error("telegram", "write_temp", "chat", chatID, "error", err.Error())
+		t.logger.Error("telegram", "write_temp", "chat", chatID, "error", err.Error())
 		return
 	}
 	tmpPath := tmp.Name()
-	logx.Info("telegram", "document_attached",
+	t.logger.Info("telegram", "document_attached",
 		"chat", chatID, "file", doc.FileName, "path", tmpPath)
 
 	pump, err := t.pumpFor(ctx, chatID)
@@ -215,7 +214,7 @@ func (t *Transport) dispatchImages(ctx context.Context, chatID int64, caption st
 	for _, sizes := range photos {
 		data, err := t.bot.DownloadPhoto(ctx, sizes)
 		if err != nil {
-			logx.Error("telegram", "download_photo", "chat", chatID, "error", err.Error())
+			t.logger.Error("telegram", "download_photo", "chat", chatID, "error", err.Error())
 			continue
 		}
 		images = append(images, types.ImageData{
@@ -227,7 +226,7 @@ func (t *Transport) dispatchImages(ctx context.Context, chatID int64, caption st
 		t.reply(ctx, chatID, "⚠️ Couldn't download the image(s).")
 		return
 	}
-	logx.Info("telegram", "images",
+	t.logger.Info("telegram", "images",
 		"chat", chatID, "count", len(images), "caption", oneLine(caption, 120))
 	if _, err := t.api.SendPromptWithImages(pump.sessionID, caption, images); err != nil {
 		t.replyError(ctx, chatID, err)
