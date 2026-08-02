@@ -2,20 +2,26 @@ package acp
 
 import "testing"
 
-// TestCommandsCoveredByConfigOptionsMatchesBuildConfigOptionsIDs guards
-// against the two lists drifting apart: every ID buildConfigOptions hands
-// out as a config option must also be in the filter set, or it would show
-// up as a redundant slash command in available_commands_update again.
-func TestCommandsCoveredByConfigOptionsMatchesBuildConfigOptionsIDs(t *testing.T) {
-	for _, id := range []string{"model", "thinking"} {
-		if !commandsCoveredByConfigOptions[id] {
-			t.Errorf("config option id %q is not filtered out of available_commands_update", id)
+// TestCommandsExcludedFromACPMatchesExpectedSet locks the exclusion list to
+// exactly the 4 known IDs — 2 covered by native configOptions (model,
+// thinking) and 2 with no ACP equivalent at all (rename, reset) — so it
+// can't silently grow or shrink. "compact" and any "skill:<name>" MUST NOT
+// be in here: they're the only two commands executableCommand (methods.go)
+// actually executes, and hiding them from available_commands_update would
+// make them undiscoverable in Zed's UI despite fully working if typed.
+func TestCommandsExcludedFromACPMatchesExpectedSet(t *testing.T) {
+	want := map[string]bool{"model": true, "thinking": true, "rename": true, "reset": true}
+	for id := range want {
+		if !commandsExcludedFromACP[id] {
+			t.Errorf("%q should be excluded from available_commands_update but isn't", id)
 		}
 	}
-	// And nothing else should be in the filter — rename/compact/reset/skills
-	// have no config-option equivalent and must keep showing up as commands.
-	if len(commandsCoveredByConfigOptions) != 2 {
-		t.Errorf("commandsCoveredByConfigOptions has %d entries, want exactly 2 (model, thinking): %v",
-			len(commandsCoveredByConfigOptions), commandsCoveredByConfigOptions)
+	for id := range commandsExcludedFromACP {
+		if !want[id] {
+			t.Errorf("unexpected id %q excluded from available_commands_update", id)
+		}
+	}
+	if len(commandsExcludedFromACP) != len(want) {
+		t.Errorf("commandsExcludedFromACP has %d entries, want %d: %v", len(commandsExcludedFromACP), len(want), commandsExcludedFromACP)
 	}
 }

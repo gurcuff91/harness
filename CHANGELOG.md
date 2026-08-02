@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.74.1] - 2026-08-01
+
+### Fix — `harness acp`: hitting the ReAct iteration cap silently lost the agent's summary
+- **Root cause** — `agent/session.go` never actually stops a turn cold at its ReAct iteration cap: it emits `EventMaxIterationsReached`, then reserves exactly ONE MORE model call (`requestProgressUpdate`) to summarize progress and hand control back to the user — the summary streams in as ordinary `text` events, followed by a genuine `turn_end` (the same UX the TUI has always shown, via `⚠ reached the N-iteration limit — summarizing progress` in `internal/transport/tui/events.go`). `pumpEvents` in `internal/transport/acp/events.go` treated `max_iterations_reached` as an immediate stopping point — returning `stopReason: "max_turn_requests"` right there — which cut the turn before any of that arrived. In Zed, this meant the user saw nothing at all once the limit was hit: no warning, and crucially no summary, silently losing exactly the thing this whole mechanism exists to deliver.
+- **Fix** (`internal/transport/acp/events.go`) — `max_iterations_reached` now emits a visible `agent_message_chunk` with the same wording as the TUI's warning, then keeps pumping instead of returning. The summary's `text` events flow through normally afterward, and the turn resolves with the ordinary `stopReasonEndTurn` once the real `turn_end` arrives — `stopReasonMaxTurnRequests` is kept defined (it's part of ACP's spec vocabulary) but is now documented as deliberately unused by this transport, since Harness never actually stops there.
+- New regression test asserts the full sequence: the warning fires, the pump does NOT return, the post-limit summary text still comes through, and the eventual stopReason is `end_turn`. Full suite + `-race` green.
+
+## [0.74.0] - 2026-08-01
+
+### Fix — `harness acp`: `rename`/`reset` were still advertised as slash commands in Zed
+- **`internal/transport/acp/commands.go`** — the previous fix (0.73.98) filtered `model`/`thinking` out of `available_commands_update` because they're redundant with the native `configOptions` selectors, but never filtered `rename`/`reset` — even though neither is executed specially by `executableCommand` (only `compact` and `skill:<name>` are — see 0.73.99) and neither has any meaningful effect in an ACP context (the client owns its own session/thread naming; there's no "clear this thread" mechanism to keep a `reset` in sync with what Zed already rendered). They kept showing up in Zed's slash-command list despite doing nothing distinct from a plain prompt if actually invoked.
+- Renamed the filter from `commandsCoveredByConfigOptions` to `commandsExcludedFromACP` and expanded it to all 4 IDs (`model`, `thinking`, `rename`, `reset`) — `compact` and every `skill:<name>` remain the only commands advertised, which is also the exact set `executableCommand` knows how to execute, keeping the advertised list truthful. Verified manually against the compiled binary: 29 commands now (`compact` + 28 skills), none of the 4 excluded IDs present. Full suite + `-race` green.
+
 ## [0.73.99] - 2026-08-01
 
 ### Fix — `harness acp`: slash commands (`/compact`, `/skill:<name>`) were sent to the LLM as plain text instead of being executed

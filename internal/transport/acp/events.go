@@ -1,6 +1,8 @@
 package acp
 
 import (
+	"fmt"
+
 	"github.com/gurcuff91/harness/client"
 )
 
@@ -150,7 +152,22 @@ func pumpEvents(c *conn, sessionID string, events <-chan client.Event, stopOnCom
 			return promptOutcome{stopReason: stopReasonCancelled}
 
 		case "max_iterations_reached":
-			return promptOutcome{stopReason: stopReasonMaxTurnRequests}
+			// Deliberately NOT a stopping point — Harness never actually ends
+			// the turn here. agent/session.go reserves exactly one more model
+			// call after this event fires (requestProgressUpdate) to summarize
+			// progress and hand control back to the user, and that summary
+			// streams in as ordinary "text" events immediately afterward,
+			// followed by a REAL "turn_end". Returning here (as this used to)
+			// would cut the pump before any of that arrives — the user would
+			// see the warning and then nothing, silently losing exactly the
+			// summary this whole mechanism exists to deliver. So: surface the
+			// warning as visible chat feedback (same wording as the TUI's) and
+			// keep pumping; the eventual stopReason is the normal "end_turn"
+			// from the real turn_end below, not a max-iterations-specific one.
+			notify(c, sessionID, sessionUpdate{
+				SessionUpdate: "agent_message_chunk",
+				Content:       ptr(textBlock(fmt.Sprintf("⚠ reached the %d-iteration limit — summarizing progress", evt.MaxIterations))),
+			})
 
 		case "error":
 			return promptOutcome{err: &rpcError{Code: errCodeInternalError, Message: evt.Message}}

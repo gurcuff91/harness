@@ -183,7 +183,6 @@ func TestPumpEventsStopReasons(t *testing.T) {
 	}{
 		{client.Event{Type: "turn_end"}, stopReasonEndTurn},
 		{client.Event{Type: "stop"}, stopReasonCancelled},
-		{client.Event{Type: "max_iterations_reached"}, stopReasonMaxTurnRequests},
 	}
 	for _, tc := range cases {
 		var buf bytes.Buffer
@@ -213,6 +212,48 @@ func TestPumpEventsError(t *testing.T) {
 	}
 	if outcome.stopReason != "" {
 		t.Errorf("stopReason should be empty on error, got %q", outcome.stopReason)
+	}
+}
+
+// TestPumpEventsMaxIterationsReachedDoesNotStopTheTurn is the regression test
+// for the core bug this fix addresses: agent/session.go reserves ONE MORE
+// model call after EventMaxIterationsReached to summarize progress
+// (requestProgressUpdate) — that summary streams in as ordinary "text"
+// events, followed by a REAL "turn_end". If pumpEvents returned right on
+// max_iterations_reached (as it used to), the pump would cut the turn before
+// any of that arrived and the user would silently lose exactly the summary
+// this whole mechanism exists to deliver. This asserts the full sequence:
+// the warning notification fires, the pump keeps reading, the post-limit
+// summary text still comes through, and the eventual stopReason is the
+// normal "end_turn" — never a max-iterations-specific one.
+func TestPumpEventsMaxIterationsReachedDoesNotStopTheTurn(t *testing.T) {
+	var buf bytes.Buffer
+	c := newConn(nil, &buf)
+
+	events := make(chan client.Event, 4)
+	events <- client.Event{Type: "max_iterations_reached", MaxIterations: 50}
+	events <- client.Event{Type: "text", Delta: "Here's a summary of what I did..."}
+	events <- client.Event{Type: "turn_end"}
+	close(events)
+
+	outcome := pumpEvents(c, "sess1", events, false)
+	if outcome.stopReason != stopReasonEndTurn {
+		t.Errorf("stopReason = %q, want %q (Harness always reaches a real turn_end after the summary, never a max-iterations-specific stop)", outcome.stopReason, stopReasonEndTurn)
+	}
+
+	notes := decodeNotifications(t, &buf)
+	if len(notes) != 2 {
+		t.Fatalf("expected 2 notifications (warning + summary text), got %d: %+v", len(notes), notes)
+	}
+	warning := notes[0]["params"].(map[string]any)["update"].(map[string]any)
+	warningText := warning["content"].(map[string]any)["text"]
+	if warningText != "⚠ reached the 50-iteration limit — summarizing progress" {
+		t.Errorf("warning text = %q", warningText)
+	}
+	summary := notes[1]["params"].(map[string]any)["update"].(map[string]any)
+	summaryText := summary["content"].(map[string]any)["text"]
+	if summaryText != "Here's a summary of what I did..." {
+		t.Errorf("summary text = %q, want it to still arrive after the warning", summaryText)
 	}
 }
 

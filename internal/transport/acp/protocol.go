@@ -129,12 +129,20 @@ type promptResult struct {
 	StopReason string `json:"stopReason"`
 }
 
-// StopReason values (ACP v1 schema).
+// StopReason values (ACP v1 schema). stopReasonMaxTurnRequests and
+// stopReasonMaxTokens are part of the spec's vocabulary but deliberately
+// unused by this transport: Harness never actually stops a turn at its
+// ReAct iteration cap the way "max_turn_requests" implies — it reserves one
+// more model call to summarize progress and hand control back to the user
+// (see the max_iterations_reached case in events.go), so the turn always
+// resolves as a normal stopReasonEndTurn once that summary and its real
+// turn_end arrive. Kept defined for completeness against the spec and in
+// case a future event ever needs them.
 const (
 	stopReasonEndTurn         = "end_turn"
-	stopReasonMaxTokens       = "max_tokens"
-	stopReasonMaxTurnRequests = "max_turn_requests"
-	stopReasonRefusal         = "refusal"
+	stopReasonMaxTokens       = "max_tokens"        //nolint:unused
+	stopReasonMaxTurnRequests = "max_turn_requests" //nolint:unused
+	stopReasonRefusal         = "refusal"           //nolint:unused
 	stopReasonCancelled       = "cancelled"
 )
 

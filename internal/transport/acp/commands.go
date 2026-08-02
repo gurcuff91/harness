@@ -58,23 +58,43 @@ func buildConfigOptions(c *client.Client) ([]sessionConfigOption, error) {
 	}, nil
 }
 
-// commandsCoveredByConfigOptions are session commands that buildConfigOptions
-// already exposes as native selectors (ACP's configOptions — a proper
-// dropdown with validated values) — advertising them AGAIN as slash commands
-// would mean two different, redundant ways to do the same thing in Zed's UI,
-// with the slash-command path being strictly worse (free-text value, no
-// autocomplete, no validation against the actual option list). Filtered out
-// of buildAvailableCommands below; everything else Harness exposes
-// (rename/compact/reset/skills) has no config-option equivalent and stays.
-var commandsCoveredByConfigOptions = map[string]bool{
+// commandsExcludedFromACP are session commands Harness exposes over the HTTP
+// API (client.ListCommands) that this transport deliberately does NOT
+// advertise in available_commands_update — for two different reasons:
+//
+//   - "model"/"thinking" are already exposed as native ACP configOptions
+//     selectors (session/set_config_option) — a proper dropdown with
+//     validated values. Advertising them AGAIN as slash commands would mean
+//     two different, redundant ways to do the same thing in Zed's UI, with
+//     the slash-command path being strictly worse (free-text value, no
+//     autocomplete, no validation against the actual option list).
+//   - "rename"/"reset" have no meaningful ACP equivalent at all: the client
+//     owns how it displays a session/thread's name (no protocol channel
+//     exists for the agent to push one live), and wiping Harness's own
+//     history via reset would desync from whatever Zed already rendered on
+//     screen from the session/update notifications already sent — there's
+//     no "clear this thread" mechanism in ACP v1 to keep the two in sync.
+//     Neither is executed specially by handlePrompt's executableCommand
+//     either (see methods.go) — they were never wired to do anything ACP-side
+//     beyond appearing in this list, so hiding them here is the complete fix,
+//     not just half of one.
+//
+// Everything else Harness exposes ("compact" and every "skill:<name>") has
+// no such equivalent and stays — both are also the only two
+// executableCommand actually executes (see methods.go), which is the
+// property that keeps this list truthful: every command it advertises here
+// really does something distinct from a plain prompt when invoked.
+var commandsExcludedFromACP = map[string]bool{
 	"model":    true,
 	"thinking": true,
+	"rename":   true,
+	"reset":    true,
 }
 
 // buildAvailableCommands translates the session's dynamic command set
 // (built-ins + discovered skills, from GET /api/sessions/{id}/commands) into
 // ACP's available_commands_update shape, excluding whatever
-// commandsCoveredByConfigOptions already covers.
+// commandsExcludedFromACP already covers.
 func buildAvailableCommands(c *client.Client, sessionID string) ([]availableCommand, error) {
 	defs, err := c.ListCommands(sessionID)
 	if err != nil {
@@ -82,7 +102,7 @@ func buildAvailableCommands(c *client.Client, sessionID string) ([]availableComm
 	}
 	out := make([]availableCommand, 0, len(defs))
 	for _, d := range defs {
-		if commandsCoveredByConfigOptions[d.Name] {
+		if commandsExcludedFromACP[d.Name] {
 			continue
 		}
 		out = append(out, availableCommand{

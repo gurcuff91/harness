@@ -306,16 +306,15 @@ func TestNewSessionSendsAvailableCommandsUpdateAfterResponse(t *testing.T) {
 			found = true
 			cmds, ok := update["availableCommands"].([]any)
 			if !ok || len(cmds) == 0 {
-				t.Errorf("availableCommands = %v, want a non-empty list (rename/compact/reset at minimum)", update["availableCommands"])
+				t.Errorf("availableCommands = %v, want a non-empty list (compact + skills at minimum)", update["availableCommands"])
 			}
-			// Regression: model/thinking must NOT appear here — they're
-			// already exposed as native configOptions selectors (see
-			// buildConfigOptions), and a redundant slash command for them
-			// would be strictly worse UX (free-text value, no validation).
+			// Regression: model/thinking (redundant with native configOptions)
+			// and rename/reset (no ACP equivalent — see commandsExcludedFromACP's
+			// doc comment) must NOT appear here at all.
 			for _, c := range cmds {
 				name, _ := c.(map[string]any)["name"].(string)
-				if name == "model" || name == "thinking" {
-					t.Errorf("available_commands_update must not include %q — it's already a configOption", name)
+				if commandsExcludedFromACP[name] {
+					t.Errorf("available_commands_update must not include %q", name)
 				}
 			}
 			break
