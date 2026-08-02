@@ -1,8 +1,11 @@
 package acp
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/gurcuff91/harness/client"
 )
 
 func TestAcpSessionNameHasTransportPrefix(t *testing.T) {
@@ -130,5 +133,53 @@ func TestExecutableCommandUnrecognizedFallsThrough(t *testing.T) {
 		if _, _, ok := executableCommand(text); ok {
 			t.Errorf("executableCommand(%q) = ok, want fall-through to a normal prompt", text)
 		}
+	}
+}
+
+// TestInternalErrCarriesClientErrorDetailsAsData is the regression test for
+// the same class of bug fixed in pumpEvents' "error" case: client.Client
+// already parses any failed HTTP call into a *client.Error{Message, Details}
+// (client/error.go) — Details being the same kind of structured provider
+// payload (e.g. a rate-limited session/prompt or ExecCommand call). Losing
+// it here would mean the 13 internalErr call sites in this file (creating a
+// session, sending a prompt, exec'ing a command, etc.) surface strictly less
+// context than a live-turn EventError does for the exact same underlying
+// provider failure.
+func TestInternalErrCarriesClientErrorDetailsAsData(t *testing.T) {
+	details := map[string]any{"error": map[string]any{"message": "Rate limit exceeded", "type": "rate_limit_error"}}
+	err := internalErr("send prompt", &client.Error{Message: "openai API error 429", Details: details})
+
+	if err.Code != errCodeInternalError {
+		t.Errorf("Code = %v", err.Code)
+	}
+	if !strings.Contains(err.Message, "openai API error 429") {
+		t.Errorf("Message = %q, want it to contain the clean client.Error message", err.Message)
+	}
+	if strings.Contains(err.Message, "Rate limit exceeded") {
+		t.Errorf("Message = %q, Details should NOT be duplicated into the text message (they belong in Data)", err.Message)
+	}
+	gotData, ok := err.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("Data = %v (%T), want the client.Error's Details map", err.Data, err.Data)
+	}
+	if _, ok := gotData["error"]; !ok {
+		t.Errorf("Data lost the provider payload: %v", gotData)
+	}
+}
+
+func TestInternalErrPlainErrorHasNoData(t *testing.T) {
+	err := internalErr("get messages", errors.New("session not found"))
+	if err.Data != nil {
+		t.Errorf("Data = %v, want nil for a plain (non-*client.Error) error", err.Data)
+	}
+	if !strings.Contains(err.Message, "session not found") {
+		t.Errorf("Message = %q", err.Message)
+	}
+}
+
+func TestInternalErrClientErrorWithoutDetailsHasNoData(t *testing.T) {
+	err := internalErr("create session", &client.Error{Message: "session is busy"})
+	if err.Data != nil {
+		t.Errorf("Data = %v, want nil when *client.Error has no Details", err.Data)
 	}
 }

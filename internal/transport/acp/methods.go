@@ -404,7 +404,28 @@ func flattenPrompt(blocks []contentBlock) (text string, images []types.ImageData
 	return text, images
 }
 
+// internalErr builds the JSON-RPC error for any failed client.Client call
+// (session creation, sending a prompt, exec'ing a command, etc.) — the
+// generic path for the 13 call sites in this file. client.Client already
+// parses any HTTP error response in harness's standard shape into a
+// *client.Error{Message, Details} (client/error.go) — Details is the same
+// kind of structured provider payload (e.g. a ProviderAPIError's parsed
+// error body) EventError already carries in pumpEvents' "error" case, so the
+// same translation applies here: surface it as ACP's Error.data instead of
+// letting it go to waste. When err is a *client.Error, its own clean
+// Message is used directly (not err.Error(), which would duplicate the
+// Details as marshaled JSON appended to the message text — client.Error's
+// Error() method does that for plain-text callers, but we have a dedicated
+// structured field for exactly this here). Any other error type falls back
+// to its plain %v text with no Data, same as before this existed.
 func internalErr(action string, err error) *rpcError {
+	if ce, ok := err.(*client.Error); ok {
+		var data any
+		if len(ce.Details) > 0 {
+			data = ce.Details
+		}
+		return &rpcError{Code: errCodeInternalError, Message: fmt.Sprintf("acp: %s: %s", action, ce.Message), Data: data}
+	}
 	return &rpcError{Code: errCodeInternalError, Message: fmt.Sprintf("acp: %s: %v", action, err)}
 }
 

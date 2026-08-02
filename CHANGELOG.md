@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.74.3] - 2026-08-01
+
+### Fix — `harness acp`: the same provider-error-details loss also affected non-turn errors
+- **Root cause** — the 0.74.2 fix covered `EventError` (errors during a live turn), but `internal/transport/acp/methods.go`'s `internalErr()` — the generic error path for the 13 other call sites in this file (creating/resuming/closing/deleting/listing a session, sending a prompt, exec'ing a command) — had the exact same gap. `client.Client` already parses any failed HTTP call into a `*client.Error{Message, Details}` (`client/error.go`), `Details` being the same kind of structured provider payload a `ProviderAPIError` produces, but `internalErr` only ever used `err`'s generic `%v` text, discarding `Details` even when the underlying error genuinely carried one (e.g. a rate limit hit while `session/prompt`'s initial send call fails synchronously, or while switching models via `ExecCommand` triggers a provider call that fails).
+- **Fix** — `internalErr` now type-asserts for `*client.Error` and, when present, uses its clean `Message` directly (not `Error()`, which would re-duplicate `Details` as JSON text appended to the message — that's the right behavior for a plain-text caller, but redundant once there's a dedicated structured field) and carries `Details` through as `rpcError.Data`. Any other error type keeps the previous plain-text fallback with no `Data`, unchanged.
+- 3 new tests cover: a `*client.Error` with `Details` producing a clean message and populated `Data`; a plain (non-`*client.Error`) error yielding no `Data`; a `*client.Error` without `Details` also yielding no `Data`. Verified manually against the compiled binary that a plain error (no `Details`) still omits `data` entirely (no wire noise for the common case). Full suite + `-race` green.
+
 ## [0.74.2] - 2026-08-01
 
 ### Fix — `harness acp`: provider error details were dropped, leaving only a generic message
