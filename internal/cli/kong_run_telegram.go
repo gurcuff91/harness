@@ -20,7 +20,7 @@ func (c *telegramRunCmd) Run() error {
 
 	opts := []telegram.Option{
 		telegram.WithToken(c.Token),
-		telegram.WithLogger(logx.HarnessLogger{}),
+		telegram.WithLogger(logx.NewHarnessLogger()),
 	}
 	if c.Model != "" {
 		opts = append(opts, telegram.WithSessionModel(c.Model))

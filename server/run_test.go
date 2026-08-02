@@ -113,7 +113,7 @@ func TestRunServesRequestsAndShutsDownCleanly(t *testing.T) {
 // captureLogTee — a small recording Logger used to verify Run's WithLogger
 // actually reaches request handling, without depending on internal/logx
 // (server must not import it — only internal/cli constructs
-// internal/logx.HarnessLogger{} and passes it in via WithLogger).
+// internal/logx.NewHarnessLogger() and passes it in via WithLogger).
 type recordingLogger struct {
 	mu    sync.Mutex
 	lines []string
@@ -139,16 +139,20 @@ func (r *recordingLogger) has(substr string) bool {
 }
 
 // TestRunDefaultsToNilLoggerSilently verifies Run's documented default —
-// logx.NilLogger{} when WithLogger isn't passed — so an SDK consumer who
+// logx.NewNilLogger() when WithLogger isn't passed — so an SDK consumer who
 // never configures one gets no output at all, not even request logging.
+// nilLogger is unexported (constructed only via NewNilLogger), so this
+// checks BEHAVIOR (no panic, nothing observable) rather than the concrete
+// type — exactly what an external caller can rely on too.
 func TestRunDefaultsToNilLoggerSilently(t *testing.T) {
-	cfg := runConfig{addr: "127.0.0.1:0", logger: logx.NilLogger{}}
+	cfg := runConfig{addr: "127.0.0.1:0", logger: logx.NewNilLogger()}
 	for _, opt := range []Option{} {
 		opt(&cfg)
 	}
-	if _, ok := cfg.logger.(logx.NilLogger); !ok {
-		t.Errorf("default logger = %T, want logx.NilLogger", cfg.logger)
+	if cfg.logger == nil {
+		t.Fatal("default logger is nil, want logx.NewNilLogger()")
 	}
+	cfg.logger.Info("x", "e") // must not panic
 }
 
 // TestRunUsesInjectedLoggerForRequests is the end-to-end test for

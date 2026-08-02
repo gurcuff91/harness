@@ -11,5 +11,5 @@ func (c *serveCmd) Run() error {
 	a := newInteractiveAgent(c.Scheduler)
 	ctx, cancel := signalContext()
 	defer cancel()
-	return server.Run(ctx, a, server.WithAddr(c.Addr), server.WithLogger(logx.HarnessLogger{}))
+	return server.Run(ctx, a, server.WithAddr(c.Addr), server.WithLogger(logx.NewHarnessLogger()))
 }

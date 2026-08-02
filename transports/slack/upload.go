@@ -3,7 +3,6 @@ package slack
 import (
 	"context"
 	"strings"
-
 )
 
 const (

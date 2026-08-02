@@ -52,14 +52,14 @@ func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
 
 	// This transport has no WithLogger of its own — it never logs anything
 	// itself (its whole job is pure JSON-RPC protocol translation over
-	// stdin/stdout), so its in-process server always gets logx.NilLogger{}
+	// stdin/stdout), so its in-process server always gets logx.NewNilLogger()
 	// unconditionally. There's no "this transport's own logger" to keep
 	// distinct from the server's, unlike telegram/slack.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return fmt.Errorf("acp: bind server: %w", err)
 	}
-	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NilLogger{}, Transport: "acp"})
+	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "acp"})
 	go srv.Serve(listener) //nolint:errcheck
 	defer srv.Close()      //nolint:errcheck
 

@@ -78,7 +78,7 @@ func TestRunServerAliasIsWiredEndToEnd(t *testing.T) {
 	addr := "127.0.0.1:18964" // fixed, unlikely-collision test-only port
 
 	done := make(chan error, 1)
-	go func() { done <- RunServer(ctx, a, ServerWithAddr(addr), ServerWithLogger(NilLogger{})) }()
+	go func() { done <- RunServer(ctx, a, ServerWithAddr(addr), ServerWithLogger(NewNilLogger())) }()
 
 	deadline := time.Now().Add(3 * time.Second)
 	var reached bool

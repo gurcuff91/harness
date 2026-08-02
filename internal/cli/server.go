@@ -12,7 +12,7 @@ import (
 // startInternalServer starts the HTTP transport on a random port. Because we
 // open the listener ourselves and hand it straight to Serve, the port is already
 // accepting connections the instant net.Listen returns — no close-then-reopen
-// race, so no readiness polling is needed. Always logx.NilLogger{} — this
+// race, so no readiness polling is needed. Always logx.NewNilLogger() — this
 // server exists purely as the CLI's own private plumbing to talk to itself
 // over HTTP/SSE for a single one-shot prompt; nobody else ever queries it,
 // so its request log would be pure noise (matching the previous
@@ -24,7 +24,7 @@ func startInternalServer(a *agent.Agent) (*internalServer, string, error) {
 	}
 	addr := listener.Addr().String()
 
-	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NilLogger{}, Transport: "cli"})
+	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "cli"})
 	go srv.Serve(listener) //nolint:errcheck
 
 	return &internalServer{srv: srv}, addr, nil

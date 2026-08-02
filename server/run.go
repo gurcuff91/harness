@@ -25,9 +25,9 @@ func WithAddr(addr string) Option {
 }
 
 // WithLogger sets the Logger that receives request/lifecycle log lines.
-// Default: logx.NilLogger{} (silent) — an SDK consumer that never configures
+// Default: logx.NewNilLogger() (silent) — an SDK consumer that never configures
 // one gets no output at all; harness's own CLI always passes
-// internal/logx.HarnessLogger{} explicitly (see internal/cli/kong_run_serve.go).
+// internal/logx.NewHarnessLogger() explicitly (see internal/cli/kong_run_serve.go).
 func WithLogger(l logx.Logger) Option {
 	return func(c *runConfig) { c.logger = l }
 }
@@ -47,7 +47,7 @@ func WithLogger(l logx.Logger) Option {
 // error encountered otherwise (failure to bind the listener, or a non-clean
 // HTTP server error).
 func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
-	cfg := runConfig{addr: "127.0.0.1:0", logger: logx.NilLogger{}}
+	cfg := runConfig{addr: "127.0.0.1:0", logger: logx.NewNilLogger()}
 	for _, opt := range opts {
 		opt(&cfg)
 	}

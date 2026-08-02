@@ -85,11 +85,11 @@ func WithSessionThinking(level string) Option {
 }
 
 // WithLogger sets the Logger this transport uses for its own log lines
-// (connection status, per-message events, errors). Default: logx.NilLogger{}
+// (connection status, per-message events, errors). Default: logx.NewNilLogger()
 // (silent) — an SDK consumer that never configures one gets no output at
-// all; harness's own CLI always passes internal/logx.HarnessLogger{}
+// all; harness's own CLI always passes internal/logx.NewHarnessLogger()
 // explicitly (see internal/cli/kong_run_slack.go). This transport's
-// in-process server.Server always gets logx.NilLogger{} regardless of what
+// in-process server.Server always gets logx.NewNilLogger() regardless of what
 // this option sets, so logs are never duplicated between the two layers.
 func WithLogger(l logx.Logger) Option {
 	return func(o *Options) { o.logger = l }
@@ -104,7 +104,7 @@ type Transport struct {
 	bot    *Bot
 	store  *store
 	srv    *server.Server
-	logger logx.Logger // never nil — defaults to logx.NilLogger{}
+	logger logx.Logger // never nil — defaults to logx.NewNilLogger()
 	model  string
 	cwd    string
 	myID   string // our own Slack user ID (to detect mentions)
@@ -125,7 +125,7 @@ type Transport struct {
 // Three Slack-specific tools (SlackPost, SlackListChannels, SlackListUsers) are
 // injected into the agent so it can proactively post messages and resolve names.
 func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
-	o := Options{logger: logx.NilLogger{}}
+	o := Options{logger: logx.NewNilLogger()}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -161,11 +161,11 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 
 	logger := opts.logger
 	if logger == nil {
-		logger = logx.NilLogger{} // defensive — Run's default already sets this
+		logger = logx.NewNilLogger() // defensive — Run's default already sets this
 	}
 
 	// In-process server — same pattern as TUI and Telegram. Always
-	// logx.NilLogger{} here, never this transport's own `logger`: THIS
+	// logx.NewNilLogger() here, never this transport's own `logger`: THIS
 	// transport is the one logging (via t.logger below), so its inner server
 	// must stay silent rather than duplicating every request as a second log
 	// line.
@@ -173,7 +173,7 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("slack: bind server: %w", err)
 	}
-	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NilLogger{}, Transport: "slack"})
+	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "slack"})
 	go srv.Serve(listener) //nolint:errcheck
 
 	cwd, _ := os.Getwd()

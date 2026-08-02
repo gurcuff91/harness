@@ -14,10 +14,10 @@ import (
 // newTestProxy builds a SessionProxy without a real *agent.Session — broadcast
 // and isControlEvent don't touch p.session, only p.clients, so this is safe
 // for testing the fan-out/backpressure behavior in isolation. logger
-// defaults to logx.NilLogger{} — the safer default, and what the TUI's
+// defaults to logx.NewNilLogger() — the safer default, and what the TUI's
 // in-process server actually uses.
 func newTestProxy() *SessionProxy {
-	return &SessionProxy{logger: logx.NilLogger{}, clients: make(map[chan<- []byte]struct{})}
+	return &SessionProxy{logger: logx.NewNilLogger(), clients: make(map[chan<- []byte]struct{})}
 }
 
 // captureLog redirects the standard logger's output during fn, so tests can
@@ -176,14 +176,14 @@ func TestBroadcastDropsControlEventAfterTimeoutOnDeadClient(t *testing.T) {
 
 // TestBroadcastSilentWithNilLogger is the regression test for the
 // TUI-corruption hazard: the TUI's in-process server always runs with
-// logx.NilLogger{} because it shares stdout/stderr with the raw-mode
+// logx.NewNilLogger() because it shares stdout/stderr with the raw-mode
 // terminal renderer — ANY unconditional log line from a background
 // goroutine (like the agent's own event-emitting goroutine, which is what
 // calls broadcast) would corrupt the display. A dropped control event (dead
 // client, see the timeout test above) must NOT log anything with the nil
 // logger.
 func TestBroadcastSilentWithNilLogger(t *testing.T) {
-	p := newTestProxy() // logger defaults to logx.NilLogger{}
+	p := newTestProxy() // logger defaults to logx.NewNilLogger()
 	ch := make(chan []byte, 1)
 	p.addClient(ch)
 	p.broadcast(types.Event{Type: types.EventStreamTextDelta, Delta: "filler"}) // fill; never drained
@@ -220,7 +220,7 @@ func TestBroadcastLogsWithRealLogger(t *testing.T) {
 // fakeLogger routes through the standard log package (like
 // internal/logx.HarnessLogger does) so captureLog can observe it, without
 // this package importing internal/logx (server must not depend on it —
-// only internal/cli constructs HarnessLogger{} and passes it in).
+// only internal/cli constructs NewHarnessLogger() and passes it in).
 type fakeLogger struct{}
 
 func (fakeLogger) Info(component, event string, kv ...any)  { log.Print(component, " ", event) }

@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-
 )
 
 // uploadTagRe matches a <tel:uploadFile>path</tel:uploadFile> action tag. The

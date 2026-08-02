@@ -67,9 +67,10 @@ import (
 // anything itself). See [logx.Logger].
 type Logger = logx.Logger
 
-// NilLogger discards everything — the default every runner falls back to
-// when no WithLogger is passed. See [logx.NilLogger].
-type NilLogger = logx.NilLogger
+// NewNilLogger returns a Logger that discards everything — the default
+// every runner falls back to when no WithLogger is passed. See
+// [logx.NewNilLogger].
+var NewNilLogger = logx.NewNilLogger
 
 // Client is a typed HTTP/SSE client for a running harness server (`harness
 // serve`, or the in-process server any transport starts). See [client.Client].
@@ -227,7 +228,7 @@ type ServerOption = server.Option
 var ServerWithAddr = server.WithAddr
 
 // ServerWithLogger sets the Logger that receives request/lifecycle log
-// lines. Default: [NilLogger] (silent). See [server.WithLogger].
+// lines. Default: [NewNilLogger] (silent). See [server.WithLogger].
 var ServerWithLogger = server.WithLogger
 
 // RunTelegram starts the Telegram bot transport on top of an already-built
@@ -254,7 +255,7 @@ var TelegramWithSessionThinking = telegram.WithSessionThinking
 var TelegramWithAllowUnpair = telegram.WithAllowUnpair
 
 // TelegramWithLogger sets the Logger this transport uses for its own log
-// lines. Default: [NilLogger] (silent). See [telegram.WithLogger].
+// lines. Default: [NewNilLogger] (silent). See [telegram.WithLogger].
 var TelegramWithLogger = telegram.WithLogger
 
 // RunSlack starts the Slack bot transport on top of an already-built agent
@@ -285,7 +286,7 @@ var SlackWithSessionModel = slack.WithSessionModel
 var SlackWithSessionThinking = slack.WithSessionThinking
 
 // SlackWithLogger sets the Logger this transport uses for its own log
-// lines. Default: [NilLogger] (silent). See [slack.WithLogger].
+// lines. Default: [NewNilLogger] (silent). See [slack.WithLogger].
 var SlackWithLogger = slack.WithLogger
 
 // RunAcp starts the Agent Client Protocol transport (for Zed and other ACP

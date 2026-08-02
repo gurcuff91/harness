@@ -24,7 +24,7 @@ func capture(t *testing.T, fn func()) string {
 }
 
 func TestInfoFormat(t *testing.T) {
-	var l HarnessLogger
+	l := NewHarnessLogger()
 	got := capture(t, func() {
 		l.Info("telegram", "prompt", "chat", 5353, "session", "dde9")
 	})
@@ -35,7 +35,7 @@ func TestInfoFormat(t *testing.T) {
 }
 
 func TestQuotingSpaces(t *testing.T) {
-	var l HarnessLogger
+	l := NewHarnessLogger()
 	got := capture(t, func() {
 		l.Info("telegram", "reply", "text", "hola mundo")
 	})
@@ -45,7 +45,7 @@ func TestQuotingSpaces(t *testing.T) {
 }
 
 func TestLevels(t *testing.T) {
-	var l HarnessLogger
+	l := NewHarnessLogger()
 	for _, tc := range []struct {
 		fn    func(string, string, ...any)
 		level string
@@ -63,7 +63,7 @@ func TestLevels(t *testing.T) {
 
 func TestOddKVSkipped(t *testing.T) {
 	// A trailing key with no value is ignored, not rendered as key=.
-	var l HarnessLogger
+	l := NewHarnessLogger()
 	got := capture(t, func() {
 		l.Info("x", "e", "a", 1, "dangling")
 	})

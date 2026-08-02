@@ -77,11 +77,11 @@ func WithAllowUnpair() Option {
 
 // WithLogger sets the Logger this transport uses for its own log lines
 // (connection status, per-message events, errors — see the logx.Info/Warn/
-// Error call sites throughout this package). Default: logx.NilLogger{}
+// Error call sites throughout this package). Default: logx.NewNilLogger()
 // (silent) — an SDK consumer that never configures one gets no output at
-// all; harness's own CLI always passes internal/logx.HarnessLogger{}
+// all; harness's own CLI always passes internal/logx.NewHarnessLogger()
 // explicitly (see internal/cli/kong_run_telegram.go). This transport's
-// in-process server.Server always gets logx.NilLogger{} regardless of what
+// in-process server.Server always gets logx.NewNilLogger() regardless of what
 // this option sets, so logs are never duplicated between the two layers —
 // see Run's construction of the server for where that's applied.
 func WithLogger(l logx.Logger) Option {
@@ -97,7 +97,7 @@ type Transport struct {
 	bot    *Bot
 	store  *store
 	srv    *server.Server
-	logger logx.Logger // never nil — defaults to logx.NilLogger{}
+	logger logx.Logger // never nil — defaults to logx.NewNilLogger()
 	model  string
 	cwd    string
 
@@ -111,7 +111,7 @@ type Transport struct {
 // launches the internal server, verifies the token, then long-polls for
 // messages — each becoming a prompt for that chat's session.
 func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
-	o := Options{logger: logx.NilLogger{}}
+	o := Options{logger: logx.NewNilLogger()}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -140,12 +140,12 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 
 	logger := opts.logger
 	if logger == nil {
-		logger = logx.NilLogger{} // defensive — Run's default already sets this
+		logger = logx.NewNilLogger() // defensive — Run's default already sets this
 	}
 
 	// In-process server — the transport talks to it over HTTP/SSE, exactly
 	// like the TUI, keeping the frontend/backend split clean. Always
-	// logx.NilLogger{} here, never this transport's own `logger`: THIS
+	// logx.NewNilLogger() here, never this transport's own `logger`: THIS
 	// transport is the one logging (via t.logger below), so its inner server
 	// must stay silent rather than duplicating every request as a second log
 	// line.
@@ -153,7 +153,7 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("telegram: bind server: %w", err)
 	}
-	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NilLogger{}, Transport: "telegram"})
+	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "telegram"})
 	go srv.Serve(listener) //nolint:errcheck
 
 	cwd, _ := os.Getwd()

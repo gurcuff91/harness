@@ -42,7 +42,7 @@ const sseClientBufferSize = 4096
 // Server is the HTTP transport for the agent harness.
 type Server struct {
 	agent        *agent.Agent
-	logger       logx.Logger // never nil — defaults to logx.NilLogger{}
+	logger       logx.Logger // never nil — defaults to logx.NewNilLogger()
 	transport    string      // name of the calling transport
 	addr         string      // resolved listen address (set in Serve)
 	instanceName string      // unique instance name (MK11-themed, set in Serve)
@@ -59,8 +59,8 @@ type Server struct {
 // ServerOptions configures the HTTP server.
 type ServerOptions struct {
 	// Logger receives request/lifecycle log lines. Defaults to
-	// logx.NilLogger{} (silent) when left nil — the same default Run's
-	// WithLogger option falls back to. Pass logx.NilLogger{} explicitly (as
+	// logx.NewNilLogger() (silent) when left nil — the same default Run's
+	// WithLogger option falls back to. Pass logx.NewNilLogger() explicitly (as
 	// every transport's own in-process server does) when something ELSE is
 	// already logging and this server must stay silent.
 	Logger    logx.Logger
@@ -75,7 +75,7 @@ func NewServer(a *agent.Agent, opts ServerOptions) *Server {
 	}
 	logger := opts.Logger
 	if logger == nil {
-		logger = logx.NilLogger{}
+		logger = logx.NewNilLogger()
 	}
 	return &Server{
 		agent:     a,

@@ -29,7 +29,7 @@ type SessionProxy struct {
 }
 
 // newSessionProxy wraps sess for SSE fan-out. logger must mirror the owning
-// Server's — the TUI's in-process server runs with logx.NilLogger{}
+// Server's — the TUI's in-process server runs with logx.NewNilLogger()
 // specifically because it shares stdout/stderr with the raw-mode terminal
 // UI, so ANY unconditional log line here would corrupt the render. See
 // broadcast's dropped-control-event warning, the one log call on this path.
@@ -117,7 +117,7 @@ func (p *SessionProxy) broadcast(e types.Event) {
 			// This runs on the agent's own event-emitting goroutine, which
 			// for the TUI's in-process server is the SAME process driving
 			// the raw-mode terminal — an unconditional log line here would
-			// corrupt its rendering. p.logger is logx.NilLogger{} in exactly
+			// corrupt its rendering. p.logger is logx.NewNilLogger() in exactly
 			// that case (see newSessionProxy's doc comment), so this call is
 			// always safe to make unconditionally: `harness serve`/telegram
 			// inject a real Logger and do want this visible, the TUI's inner

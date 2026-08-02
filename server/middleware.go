@@ -42,7 +42,7 @@ func (r *statusRecorder) Flush() {
 //	INFO  [server] request method=GET path=/api/server status=200 bytes=128 dur=80µs
 //
 // Always registered as middleware (see handler()) regardless of what logger
-// the Server was built with — with the default logx.NilLogger{} this is a
+// the Server was built with — with the default logx.NewNilLogger() this is a
 // no-op call per request, not a conditional branch, which is what let
 // Server.verbose disappear entirely in favor of always-on middleware plus an
 // injected Logger.

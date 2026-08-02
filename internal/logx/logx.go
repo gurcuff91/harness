@@ -1,6 +1,6 @@
 // Package logx provides harness's own structured logger implementation for
 // backend components (the HTTP server, the Telegram/Slack transports, …):
-// HarnessLogger, which implements the public logx.Logger contract
+// NewHarnessLogger, which implements the public logx.Logger contract
 // (github.com/gurcuff91/harness/logx). It renders one line per event:
 //
 //	<timestamp> LEVEL [component] event key=value key="value with spaces"
@@ -13,12 +13,13 @@
 // lines align and are easy to scan/grep. Values are quoted only when they
 // contain spaces or quotes.
 //
-// internal/cli is the only caller that constructs HarnessLogger{} — every
-// server.Run/transports/{telegram,slack}.Run call the CLI makes passes it
-// explicitly via WithLogger, so the real binary logs exactly as before this
-// package's functions became a Logger implementation. Every OTHER caller
-// (an SDK consumer, or a transport's own in-process server) gets
-// logx.NilLogger{} by default instead — see that type's doc comment.
+// internal/cli is the only caller that constructs a harnessLogger (via
+// NewHarnessLogger) — every server.Run/transports/{telegram,slack}.Run call
+// the CLI makes passes it explicitly via WithLogger, so the real binary
+// logs exactly as before this package's functions became a Logger
+// implementation. Every OTHER caller (an SDK consumer, or a transport's own
+// in-process server) gets logx.NewNilLogger() by default instead — see that
+// function's doc comment.
 package logx
 
 import (
@@ -29,23 +30,28 @@ import (
 	publiclogx "github.com/gurcuff91/harness/logx"
 )
 
-// HarnessLogger is harness's own Logger implementation — this package's
+// harnessLogger is harness's own Logger implementation — this package's
 // historical line-oriented format, now behind the public logx.Logger
-// interface instead of package-level functions.
-type HarnessLogger struct{}
+// interface instead of package-level functions. Unexported: construct one
+// only through NewHarnessLogger, so callers depend on the Logger interface
+// rather than this concrete type.
+type harnessLogger struct{}
 
-// compile-time assertion — HarnessLogger must satisfy the public contract.
-var _ publiclogx.Logger = HarnessLogger{}
+// NewHarnessLogger returns harness's own Logger implementation — the
+// line-oriented format documented on this package. Only internal/cli
+// constructs one; every WithLogger call the real harness binary makes
+// passes it explicitly.
+func NewHarnessLogger() publiclogx.Logger { return harnessLogger{} }
 
 // Info logs an event at INFO level for the given component. kv is a flat list of
 // alternating key, value pairs (values may be any type; rendered with %v).
-func (HarnessLogger) Info(component, event string, kv ...any) { emit("INFO ", component, event, kv) }
+func (harnessLogger) Info(component, event string, kv ...any) { emit("INFO ", component, event, kv) }
 
 // Warn logs at WARN level.
-func (HarnessLogger) Warn(component, event string, kv ...any) { emit("WARN ", component, event, kv) }
+func (harnessLogger) Warn(component, event string, kv ...any) { emit("WARN ", component, event, kv) }
 
 // Error logs at ERROR level.
-func (HarnessLogger) Error(component, event string, kv ...any) { emit("ERROR", component, event, kv) }
+func (harnessLogger) Error(component, event string, kv ...any) { emit("ERROR", component, event, kv) }
 
 // emit renders and prints one log line. Odd trailing keys (no value) are skipped.
 func emit(level, component, event string, kv []any) {

@@ -26,7 +26,7 @@ func (c *slackRunCmd) Run() error {
 		slack.WithWorkspace(c.Workspace),
 		slack.WithXoxC(c.XoxC),
 		slack.WithXoxD(c.XoxD),
-		slack.WithLogger(logx.HarnessLogger{}),
+		slack.WithLogger(logx.NewHarnessLogger()),
 	}
 	if c.Model != "" {
 		opts = append(opts, slack.WithSessionModel(c.Model))
