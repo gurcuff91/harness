@@ -38,11 +38,19 @@ type promptOutcome struct {
 // normal case), "stop" (cancelled), "max_iterations_reached", or "error" —
 // with the outcome the caller uses to resolve the pending session/prompt.
 //
+// stopOnCompactEnd changes what "turn over" means for the /compact command
+// specifically: unlike a normal prompt or "/skill:*" (both real ReAct turns
+// that end in EventTurnEnd), Session.Compact() runs standalone and only ever
+// emits EventCompactStart → EventCompactEnd (or EventError on failure) — it
+// never emits a turn_end at all, so pumpEvents would otherwise block forever
+// waiting for one. Pass true only from the /compact command path; every
+// other caller (normal prompts, "/skill:*") leaves it false.
+//
 // pendingEdits tracks in-flight Edit/Write tool calls awaiting their "after"
 // snapshot for diff building (see diff.go) — keyed by tool call ID so
 // concurrent tool calls within one turn (the ReAct loop runs them in
 // parallel) don't clobber each other.
-func pumpEvents(c *conn, sessionID string, events <-chan client.Event) promptOutcome {
+func pumpEvents(c *conn, sessionID string, events <-chan client.Event, stopOnCompactEnd bool) promptOutcome {
 	pendingEdits := map[string]pendingEdit{}
 
 	for evt := range events {
@@ -114,6 +122,27 @@ func pumpEvents(c *conn, sessionID string, events <-chan client.Event) promptOut
 				Cost:          cost,
 			})
 
+		case "compact_start":
+			// Compaction can fire either from an explicit /compact command or
+			// AUTOMATICALLY mid-turn (agent/session.go compacts on its own
+			// between ReAct iterations once context usage crosses 98%) — the
+			// user never asked for it in that second case, so a visible chunk
+			// is the only way Zed's UI ever reflects that the context was just
+			// rewritten out from under the conversation it's displaying.
+			notify(c, sessionID, sessionUpdate{
+				SessionUpdate: "agent_message_chunk",
+				Content:       ptr(textBlock("⏳ Compacting context...")),
+			})
+
+		case "compact_end":
+			notify(c, sessionID, sessionUpdate{
+				SessionUpdate: "agent_message_chunk",
+				Content:       ptr(textBlock("✓ Context compacted.")),
+			})
+			if stopOnCompactEnd {
+				return promptOutcome{stopReason: stopReasonEndTurn}
+			}
+
 		case "turn_end":
 			return promptOutcome{stopReason: stopReasonEndTurn}
 
@@ -127,9 +156,9 @@ func pumpEvents(c *conn, sessionID string, events <-chan client.Event) promptOut
 			return promptOutcome{err: &rpcError{Code: errCodeInternalError, Message: evt.Message}}
 
 		// Every other event type (loop_start/end, tool_args, text_end,
-		// thinking_end, turn_start, received_prompt, follow_up_start,
-		// compact_start/end) is an internal render-control signal with no ACP
-		// equivalent — see the design doc's event mapping table.
+		// thinking_end, turn_start, received_prompt, follow_up_start) is an
+		// internal render-control signal with no ACP equivalent — see the
+		// design doc's event mapping table.
 		default:
 		}
 	}

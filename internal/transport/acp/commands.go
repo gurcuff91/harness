@@ -58,10 +58,23 @@ func buildConfigOptions(c *client.Client) ([]sessionConfigOption, error) {
 	}, nil
 }
 
+// commandsCoveredByConfigOptions are session commands that buildConfigOptions
+// already exposes as native selectors (ACP's configOptions — a proper
+// dropdown with validated values) — advertising them AGAIN as slash commands
+// would mean two different, redundant ways to do the same thing in Zed's UI,
+// with the slash-command path being strictly worse (free-text value, no
+// autocomplete, no validation against the actual option list). Filtered out
+// of buildAvailableCommands below; everything else Harness exposes
+// (rename/compact/reset/skills) has no config-option equivalent and stays.
+var commandsCoveredByConfigOptions = map[string]bool{
+	"model":    true,
+	"thinking": true,
+}
+
 // buildAvailableCommands translates the session's dynamic command set
 // (built-ins + discovered skills, from GET /api/sessions/{id}/commands) into
-// ACP's available_commands_update shape. Every command Harness exposes is
-// included — see the design doc's decision to announce all of them.
+// ACP's available_commands_update shape, excluding whatever
+// commandsCoveredByConfigOptions already covers.
 func buildAvailableCommands(c *client.Client, sessionID string) ([]availableCommand, error) {
 	defs, err := c.ListCommands(sessionID)
 	if err != nil {
@@ -69,6 +82,9 @@ func buildAvailableCommands(c *client.Client, sessionID string) ([]availableComm
 	}
 	out := make([]availableCommand, 0, len(defs))
 	for _, d := range defs {
+		if commandsCoveredByConfigOptions[d.Name] {
+			continue
+		}
 		out = append(out, availableCommand{
 			Name:        d.Name,
 			Description: d.Description,

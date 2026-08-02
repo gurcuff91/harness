@@ -86,3 +86,49 @@ func TestFlattenPromptEmpty(t *testing.T) {
 		t.Errorf("text = %q, images = %v", text, images)
 	}
 }
+
+func TestExecutableCommandCompact(t *testing.T) {
+	cmd, params, ok := executableCommand("/compact")
+	if !ok || cmd != "compact" {
+		t.Fatalf("cmd=%q ok=%v, want compact/true", cmd, ok)
+	}
+	if len(params) != 0 {
+		t.Errorf("params = %v, want empty", params)
+	}
+}
+
+func TestExecutableCommandSkillNoArgs(t *testing.T) {
+	cmd, params, ok := executableCommand("/skill:brainstorming")
+	if !ok || cmd != "skill:brainstorming" {
+		t.Fatalf("cmd=%q ok=%v, want skill:brainstorming/true", cmd, ok)
+	}
+	if _, has := params["prompt"]; has {
+		t.Errorf("params = %v, want no 'prompt' key when no args given", params)
+	}
+}
+
+func TestExecutableCommandSkillWithArgs(t *testing.T) {
+	cmd, params, ok := executableCommand("/skill:brainstorming build me a todo app")
+	if !ok || cmd != "skill:brainstorming" {
+		t.Fatalf("cmd=%q ok=%v", cmd, ok)
+	}
+	if params["prompt"] != "build me a todo app" {
+		t.Errorf(`params["prompt"] = %q`, params["prompt"])
+	}
+}
+
+func TestExecutableCommandUnrecognizedFallsThrough(t *testing.T) {
+	for _, text := range []string{
+		"/rename foo",    // deliberately excluded — see executableCommand's doc comment
+		"/model x",       // covered by configOptions instead
+		"/thinking high", // covered by configOptions instead
+		"/reset",         // deliberately excluded
+		"/bogus",         // not a real command at all
+		"not a command",  // no leading slash
+		"",
+	} {
+		if _, _, ok := executableCommand(text); ok {
+			t.Errorf("executableCommand(%q) = ok, want fall-through to a normal prompt", text)
+		}
+	}
+}

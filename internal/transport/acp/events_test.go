@@ -54,7 +54,7 @@ func TestPumpEventsTextDelta(t *testing.T) {
 	events <- client.Event{Type: "turn_end"}
 	close(events)
 
-	outcome := pumpEvents(c, "sess1", events)
+	outcome := pumpEvents(c, "sess1", events, false)
 	if outcome.stopReason != stopReasonEndTurn {
 		t.Fatalf("stopReason = %q, want %q", outcome.stopReason, stopReasonEndTurn)
 	}
@@ -86,7 +86,7 @@ func TestPumpEventsThinkingDelta(t *testing.T) {
 	events <- client.Event{Type: "turn_end"}
 	close(events)
 
-	pumpEvents(c, "sess1", events)
+	pumpEvents(c, "sess1", events, false)
 
 	notes := decodeNotifications(t, &buf)
 	update := notes[0]["params"].(map[string]any)["update"].(map[string]any)
@@ -106,7 +106,7 @@ func TestPumpEventsToolCallLifecycle(t *testing.T) {
 	events <- client.Event{Type: "turn_end"}
 	close(events)
 
-	pumpEvents(c, "sess1", events)
+	pumpEvents(c, "sess1", events, false)
 
 	notes := decodeNotifications(t, &buf)
 	if len(notes) != 3 {
@@ -142,7 +142,7 @@ func TestPumpEventsToolResultError(t *testing.T) {
 	events <- client.Event{Type: "turn_end"}
 	close(events)
 
-	pumpEvents(c, "sess1", events)
+	pumpEvents(c, "sess1", events, false)
 
 	notes := decodeNotifications(t, &buf)
 	update := notes[0]["params"].(map[string]any)["update"].(map[string]any)
@@ -160,7 +160,7 @@ func TestPumpEventsTokens(t *testing.T) {
 	events <- client.Event{Type: "turn_end"}
 	close(events)
 
-	pumpEvents(c, "sess1", events)
+	pumpEvents(c, "sess1", events, false)
 
 	notes := decodeNotifications(t, &buf)
 	update := notes[0]["params"].(map[string]any)["update"].(map[string]any)
@@ -192,7 +192,7 @@ func TestPumpEventsStopReasons(t *testing.T) {
 		events <- tc.evt
 		close(events)
 
-		outcome := pumpEvents(c, "sess1", events)
+		outcome := pumpEvents(c, "sess1", events, false)
 		if outcome.stopReason != tc.want {
 			t.Errorf("event %q: stopReason = %q, want %q", tc.evt.Type, outcome.stopReason, tc.want)
 		}
@@ -207,7 +207,7 @@ func TestPumpEventsError(t *testing.T) {
 	events <- client.Event{Type: "error", Message: "provider exploded"}
 	close(events)
 
-	outcome := pumpEvents(c, "sess1", events)
+	outcome := pumpEvents(c, "sess1", events, false)
 	if outcome.err == nil || outcome.err.Message != "provider exploded" {
 		t.Fatalf("err = %+v", outcome.err)
 	}
@@ -223,18 +223,105 @@ func TestPumpEventsIgnoredEventTypes(t *testing.T) {
 	events := make(chan client.Event, 16)
 	for _, ty := range []string{
 		"loop_start", "loop_end", "tool_args", "text_end", "thinking_end",
-		"turn_start", "received_prompt", "follow_up_start", "compact_start", "compact_end",
+		"turn_start", "received_prompt", "follow_up_start",
 	} {
 		events <- client.Event{Type: ty}
 	}
 	events <- client.Event{Type: "turn_end"}
 	close(events)
 
-	pumpEvents(c, "sess1", events)
+	pumpEvents(c, "sess1", events, false)
 
 	notes := decodeNotifications(t, &buf)
 	if len(notes) != 0 {
 		t.Fatalf("expected no notifications for ignored event types, got %d: %+v", len(notes), notes)
+	}
+}
+
+// TestPumpEventsCompactStartAndEnd is the regression test for compaction —
+// whether triggered by an explicit /compact command or fired AUTOMATICALLY
+// mid-turn (agent/session.go compacts on its own past 98% context usage) —
+// producing visible feedback in the chat, since it's the only channel ACP
+// gives a client to learn the context was just rewritten out from under the
+// conversation it's rendering.
+func TestPumpEventsCompactStartAndEnd(t *testing.T) {
+	var buf bytes.Buffer
+	c := newConn(nil, &buf)
+
+	events := make(chan client.Event, 4)
+	events <- client.Event{Type: "compact_start"}
+	events <- client.Event{Type: "compact_end", Summary: "the actual summary text is not surfaced"}
+	events <- client.Event{Type: "turn_end"}
+	close(events)
+
+	pumpEvents(c, "sess1", events, false)
+
+	notes := decodeNotifications(t, &buf)
+	if len(notes) != 2 {
+		t.Fatalf("expected 2 notifications (compact_start, compact_end), got %d: %+v", len(notes), notes)
+	}
+	start := notes[0]["params"].(map[string]any)["update"].(map[string]any)
+	if start["sessionUpdate"] != "agent_message_chunk" {
+		t.Errorf("compact_start sessionUpdate = %v", start["sessionUpdate"])
+	}
+	startText := start["content"].(map[string]any)["text"]
+	if startText != "⏳ Compacting context..." {
+		t.Errorf("compact_start text = %q", startText)
+	}
+
+	end := notes[1]["params"].(map[string]any)["update"].(map[string]any)
+	endText := end["content"].(map[string]any)["text"]
+	if endText != "✓ Context compacted." {
+		t.Errorf("compact_end text = %q", endText)
+	}
+}
+
+// TestPumpEventsStopOnCompactEndForStandaloneCompact is the regression test
+// for the /compact command specifically: Session.Compact() never emits
+// turn_end (it's not a ReAct turn — see the stopOnCompactEnd doc comment on
+// pumpEvents), so with stopOnCompactEnd=true the pump must return right
+// after compact_end instead of blocking forever waiting for a turn_end that
+// will never arrive.
+func TestPumpEventsStopOnCompactEndForStandaloneCompact(t *testing.T) {
+	var buf bytes.Buffer
+	c := newConn(nil, &buf)
+
+	events := make(chan client.Event, 2)
+	events <- client.Event{Type: "compact_start"}
+	events <- client.Event{Type: "compact_end"}
+	// Deliberately NOT closing the channel and NOT sending turn_end — a real
+	// standalone compact never sends one either. If stopOnCompactEnd didn't
+	// work, pumpEvents would hang here and the test would time out.
+	outcome := pumpEvents(c, "sess1", events, true)
+	if outcome.stopReason != stopReasonEndTurn {
+		t.Errorf("stopReason = %q, want %q", outcome.stopReason, stopReasonEndTurn)
+	}
+}
+
+// TestPumpEventsCompactEndDoesNotStopForNormalTurns confirms the opposite
+// side of the same behavior: with stopOnCompactEnd=false (every prompt path
+// except /compact), a compact_end firing mid-turn — which is exactly what
+// automatic compaction does, between ReAct iterations of an otherwise normal
+// turn — must NOT end the pump early; it has to keep reading until the
+// turn's real turn_end.
+func TestPumpEventsCompactEndDoesNotStopForNormalTurns(t *testing.T) {
+	var buf bytes.Buffer
+	c := newConn(nil, &buf)
+
+	events := make(chan client.Event, 4)
+	events <- client.Event{Type: "compact_start"}
+	events <- client.Event{Type: "compact_end"}
+	events <- client.Event{Type: "text", Delta: "still working after auto-compaction"}
+	events <- client.Event{Type: "turn_end"}
+	close(events)
+
+	outcome := pumpEvents(c, "sess1", events, false)
+	if outcome.stopReason != stopReasonEndTurn {
+		t.Fatalf("stopReason = %q, want %q", outcome.stopReason, stopReasonEndTurn)
+	}
+	notes := decodeNotifications(t, &buf)
+	if len(notes) != 3 { // compact_start, compact_end, and the text delta after it
+		t.Fatalf("expected 3 notifications, got %d: %+v", len(notes), notes)
 	}
 }
 
@@ -245,7 +332,7 @@ func TestPumpEventsClosedChannelWithoutTerminalEvent(t *testing.T) {
 	events := make(chan client.Event)
 	close(events)
 
-	outcome := pumpEvents(c, "sess1", events)
+	outcome := pumpEvents(c, "sess1", events, false)
 	if outcome.stopReason != stopReasonEndTurn {
 		t.Errorf("stopReason = %q, want %q (clean fallback)", outcome.stopReason, stopReasonEndTurn)
 	}

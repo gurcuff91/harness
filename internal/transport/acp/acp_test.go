@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,14 @@ import (
 // MCP/memory/scheduler, an in-memory session store (so nothing touches
 // disk), matching how internal/cli's newOneShotAgent isolates one-shot
 // throwaway work.
+// readMessageTimeout bounds how long readMessage waits for one line from the
+// agent under test. Generous enough to cover a real /compact round trip
+// against a genuinely connected provider (a real LLM call to generate the
+// compaction summary, observed taking ~7s in this environment) — a plain
+// event notification arrives near-instantly, so this only matters for the
+// handful of tests that trigger real model calls.
+const readMessageTimeout = 20 * time.Second
+
 func newTestAgent(t *testing.T) *agent.Agent {
 	t.Helper()
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore()})
@@ -93,7 +102,7 @@ func (h *harness) readMessage() map[string]any {
 			h.t.Fatalf("decode message %q: %v", r.line, err)
 		}
 		return m
-	case <-time.After(5 * time.Second):
+	case <-time.After(readMessageTimeout):
 		h.t.Fatal("timed out waiting for a message from the agent")
 		return nil
 	}
@@ -297,7 +306,17 @@ func TestNewSessionSendsAvailableCommandsUpdateAfterResponse(t *testing.T) {
 			found = true
 			cmds, ok := update["availableCommands"].([]any)
 			if !ok || len(cmds) == 0 {
-				t.Errorf("availableCommands = %v, want a non-empty list (rename/thinking/model/compact/reset at minimum)", update["availableCommands"])
+				t.Errorf("availableCommands = %v, want a non-empty list (rename/compact/reset at minimum)", update["availableCommands"])
+			}
+			// Regression: model/thinking must NOT appear here — they're
+			// already exposed as native configOptions selectors (see
+			// buildConfigOptions), and a redundant slash command for them
+			// would be strictly worse UX (free-text value, no validation).
+			for _, c := range cmds {
+				name, _ := c.(map[string]any)["name"].(string)
+				if name == "model" || name == "thinking" {
+					t.Errorf("available_commands_update must not include %q — it's already a configOption", name)
+				}
 			}
 			break
 		}
@@ -389,6 +408,97 @@ func TestSetConfigOptionThinking(t *testing.T) {
 	}
 	if !sawThinkingLow {
 		t.Errorf("configOptions did not reflect the new thinking value: %v", opts)
+	}
+}
+
+// TestSlashCompactExecutesRealCommandNotPlainPrompt is the regression test
+// for the core bug this batch of work fixes: "/compact" sent as
+// session/prompt text must be EXECUTED as the session's compact command
+// (client.ExecCommand) — with real compact_start/compact_end feedback in the
+// stream — not forwarded to the LLM as an ordinary message.
+func TestSlashCompactExecutesRealCommandNotPlainPrompt(t *testing.T) {
+	h := startHarness(t, newTestAgent(t))
+	h.send(1, "session/new", newSessionParams{CWD: t.TempDir()})
+	resp := h.readResponseFor(1)
+	if resp["error"] != nil {
+		t.Skip("no active provider configured in this environment — cannot create a session to test against")
+	}
+	sessionID := resp["result"].(map[string]any)["sessionId"].(string)
+
+	// Compacting an essentially empty, brand-new session legitimately fails
+	// server-side (nothing meaningful to summarize) — that's fine here: we're
+	// asserting it was ATTEMPTED as a real command (visible compact_start, or
+	// a clean "✗ ..." failure notice), never silently treated as chat text.
+	// (No need to drain the available_commands_update notification first —
+	// readResponseForCollecting below will pick it up along with everything
+	// else on the way to the session/prompt response.)
+	h.send(2, "session/prompt", promptParams{SessionID: sessionID, Prompt: []contentBlock{textBlock("/compact")}})
+	resp, notifications := h.readResponseForCollecting(2)
+	if resp["error"] != nil {
+		t.Fatalf("session/prompt for /compact returned a protocol error, want a clean stopReason: %v", resp["error"])
+	}
+	if resp["result"].(map[string]any)["stopReason"] != stopReasonEndTurn {
+		t.Errorf("stopReason = %v, want %q", resp["result"].(map[string]any)["stopReason"], stopReasonEndTurn)
+	}
+
+	var sawCompactSignal bool
+	for _, n := range notifications {
+		params, ok := n["params"].(map[string]any)
+		if !ok {
+			continue
+		}
+		update, ok := params["update"].(map[string]any)
+		if !ok || update["sessionUpdate"] != "agent_message_chunk" {
+			continue
+		}
+		text, _ := update["content"].(map[string]any)["text"].(string)
+		if strings.Contains(text, "Compacting") || strings.Contains(text, "compacted") || strings.HasPrefix(text, "✗") {
+			sawCompactSignal = true
+		}
+	}
+	if !sawCompactSignal {
+		t.Errorf("expected compact_start/compact_end feedback or a failure notice, got notifications: %v", notifications)
+	}
+}
+
+func TestSlashSkillUnknownNameReportsCleanFailure(t *testing.T) {
+	h := startHarness(t, newTestAgent(t))
+	h.send(1, "session/new", newSessionParams{CWD: t.TempDir()})
+	resp := h.readResponseFor(1)
+	if resp["error"] != nil {
+		t.Skip("no active provider configured in this environment — cannot create a session to test against")
+	}
+	sessionID := resp["result"].(map[string]any)["sessionId"].(string)
+
+	h.send(2, "session/prompt", promptParams{SessionID: sessionID, Prompt: []contentBlock{textBlock("/skill:this-skill-does-not-exist")}})
+	resp, notifications := h.readResponseForCollecting(2)
+	if resp["error"] != nil {
+		t.Fatalf("an unknown skill must not be a protocol error, want a clean stopReason with a failure notice: %v", resp["error"])
+	}
+	if resp["result"].(map[string]any)["stopReason"] != stopReasonEndTurn {
+		t.Errorf("stopReason = %v, want %q", resp["result"].(map[string]any)["stopReason"], stopReasonEndTurn)
+	}
+	var sawFailureNotice bool
+	for _, n := range notifications {
+		params, ok := n["params"].(map[string]any)
+		if !ok {
+			continue
+		}
+		update, ok := params["update"].(map[string]any)
+		if !ok {
+			continue
+		}
+		content, ok := update["content"].(map[string]any)
+		if !ok {
+			continue // e.g. available_commands_update, which has no "content" field
+		}
+		text, _ := content["text"].(string)
+		if strings.HasPrefix(text, "✗") {
+			sawFailureNotice = true
+		}
+	}
+	if !sawFailureNotice {
+		t.Errorf("expected a '✗ ...' failure notice for an unknown skill, got: %v", notifications)
 	}
 }
 

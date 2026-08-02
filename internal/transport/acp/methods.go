@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -204,6 +205,40 @@ func (h *handler) handlePrompt(ctx context.Context, c *conn, p promptParams) (pr
 		return promptResult{}, internalErr("stream events", err)
 	}
 
+	// Slash commands arrive as plain text inside session/prompt — ACP has no
+	// dedicated method for invoking one (see slash-commands.md: "Commands are
+	// run as part of regular prompt requests"). Only "compact" and "skill:*"
+	// are recognized here — see executableCommand's doc comment for why
+	// rename/model/thinking/reset are deliberately NOT handled this way.
+	if cmd, cmdArgs, ok := executableCommand(text); ok {
+		status, execErr := h.api.ExecCommand(p.SessionID, cmd, cmdArgs)
+		if execErr != nil {
+			// A failed command is a normal conversational outcome, not a
+			// protocol failure — the session is completely fine, only the
+			// command didn't apply. Report it as agent text, same as the
+			// existing pattern for compact_start/compact_end below, and end
+			// the turn cleanly rather than surfacing a JSON-RPC error.
+			notify(c, p.SessionID, sessionUpdate{
+				SessionUpdate: "agent_message_chunk",
+				Content:       ptr(textBlock("✗ " + execErr.Error())),
+			})
+			return promptResult{StopReason: stopReasonEndTurn}, nil
+		}
+		_ = status // "started"/"queued" — the real feedback is the event stream below
+		// "compact" runs standalone and only ever emits
+		// compact_start → compact_end/error (never turn_end — see
+		// pumpEvents' stopOnCompactEnd doc comment), so it's the one command
+		// that needs the alternate stop condition. "skill:*" is a genuine
+		// ReAct turn under the hood (the server builds a real prompt and
+		// calls session.Prompt) and ends in turn_end exactly like a normal
+		// prompt, so it uses the standard path.
+		outcome := pumpEvents(c, p.SessionID, events, cmd == "compact")
+		if outcome.err != nil {
+			return promptResult{}, outcome.err
+		}
+		return promptResult{StopReason: outcome.stopReason}, nil
+	}
+
 	var sendErr error
 	if len(images) > 0 {
 		_, sendErr = h.api.SendPromptWithImages(p.SessionID, text, images)
@@ -214,11 +249,59 @@ func (h *handler) handlePrompt(ctx context.Context, c *conn, p promptParams) (pr
 		return promptResult{}, internalErr("send prompt", sendErr)
 	}
 
-	outcome := pumpEvents(c, p.SessionID, events)
+	outcome := pumpEvents(c, p.SessionID, events, false)
 	if outcome.err != nil {
 		return promptResult{}, outcome.err
 	}
 	return promptResult{StopReason: outcome.stopReason}, nil
+}
+
+// executableCommand recognizes text as an actual session command to EXECUTE
+// (via client.ExecCommand) rather than send to the LLM as a normal prompt.
+// Only "compact" and "skill:<name>" qualify — both are the two commands that
+// put the agent to REAL work (a genuine turn worth streaming back, exactly
+// like a prompt), which is why they're handled here at all instead of
+// falling through to SendPrompt.
+//
+// rename/model/thinking/reset are deliberately excluded even though the
+// Harness session API supports them as commands too:
+//   - model/thinking are already exposed as native ACP configOptions
+//     (session/set_config_option) — a client shouldn't need a slash command
+//     for something with its own dropdown.
+//   - rename has no ACP-visible effect: the client owns how it displays a
+//     session/thread's name, and there's no protocol channel for the agent
+//     to push a live name change to it.
+//   - reset would desync the client's own rendered history (built from every
+//     session/update this transport already sent) from Harness's — wiping the
+//     Harness-side log doesn't erase what Zed already put on screen.
+//
+// Unrecognized text starting with "/" (including a genuinely bad slash
+// command) falls through to the normal prompt path unchanged, per spec:
+// nothing in ACP requires an agent to validate slash-command syntax before
+// treating text as a prompt.
+func executableCommand(text string) (cmd string, params map[string]any, ok bool) {
+	if !strings.HasPrefix(text, "/") {
+		return "", nil, false
+	}
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return "", nil, false
+	}
+	name := strings.TrimPrefix(fields[0], "/")
+	args := strings.Join(fields[1:], " ")
+
+	switch {
+	case name == "compact":
+		return "compact", map[string]any{}, true
+	case strings.HasPrefix(name, "skill:"):
+		params := map[string]any{}
+		if args != "" {
+			params["prompt"] = args
+		}
+		return name, params, true
+	default:
+		return "", nil, false
+	}
 }
 
 // handleCancel is a notification (no response expected) — it stops the
