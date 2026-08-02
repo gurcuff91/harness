@@ -24,6 +24,11 @@ type store struct {
 }
 
 type storeData struct {
+	// Token is the bot token, saved via `harness telegram token <token>` so
+	// Run doesn't require --token/TELEGRAM_BOT_TOKEN on every invocation —
+	// same fallback pattern as Slack's Workspace/XoxC/XoxD in
+	// ~/.harness/slack.json (see slack/creds.go).
+	Token     string                       `json:"token,omitempty"`
 	Allowlist []int64                      `json:"allowlist"`
 	Sessions  map[string]map[string]string `json:"sessions"` // cwd → chatID → sessionID
 }
@@ -51,6 +56,34 @@ func openStore(path string) (*store, error) {
 		}
 	}
 	return s, nil
+}
+
+// ── Token ─────────────────────────────────────────────────────────────────
+
+// SaveToken persists the bot token to ~/.harness/telegram.json, preserving
+// any existing allowlist/session mappings — the same read-modify-write
+// pattern slack.SaveCredentials uses for its own auth fields.
+func SaveToken(token string) error {
+	st, err := openStore("")
+	if err != nil {
+		return err
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.data.Token = token
+	return st.save()
+}
+
+// LoadToken reads the saved bot token from ~/.harness/telegram.json.
+// Returns "" (no error) if none was ever saved.
+func LoadToken() (string, error) {
+	st, err := openStore("")
+	if err != nil {
+		return "", err
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.data.Token, nil
 }
 
 // ── Allowlist ─────────────────────────────────────────────────────────────

@@ -112,6 +112,7 @@ type telegramCmd struct {
 	Pair   telegramPairCmd   `cmd:"" help:"Allow a chat to use the bot"`
 	Unpair telegramUnpairCmd `cmd:"" help:"Revoke a chat"`
 	List   telegramListCmd   `cmd:"" help:"List paired chats"`
+	Token  telegramTokenCmd  `cmd:"" help:"Save the bot token (or check the saved one with --status)"`
 }
 
 type telegramRunCmd struct {
@@ -131,6 +132,11 @@ type telegramUnpairCmd struct {
 }
 
 type telegramListCmd struct{}
+
+type telegramTokenCmd struct {
+	Token  string `arg:"" optional:"" help:"Bot token to save (omit with --status to check the saved one)"`
+	Status bool   `help:"Show whether a token is saved, instead of saving one"`
+}
 
 // ── slack ────────────────────────────────────────────────────────────────
 

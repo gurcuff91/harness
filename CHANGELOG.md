@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.75.3] - 2026-08-02
+
+### Test — confirmed `harness slack login` already validates workspace/xoxc/xoxd before saving (no code change needed)
+- Prompted by the Telegram token-validation fix (0.75.2): checked whether Slack's own credential-saving path (`harness slack login`) had the same gap. It doesn't — `slack.VerifyAndSave` already calls the real `auth.test` API (exercising `workspace` + `xoxc` + `xoxd` together, since `NewBot` builds its client from all three and every `apiCall` sends them all) and only calls `SaveCredentials` if that succeeds; the interactive flow's earlier `DeriveXoxC` step already rejects an invalid `workspace`/`xoxd` combination before even reaching `VerifyAndSave`. No credential combination that doesn't actually work can reach `~/.harness/slack.json`.
+- Added test coverage that didn't exist before for this package (new `transports/slack/login_test.go`, using a fake Slack server via `httptest` — no real network calls): `TestVerifyAndSaveDoesNotSaveOnAuthTestFailure` (a rejected `auth.test` must leave `slack.json` untouched), `TestVerifyAndSaveSavesOnAuthTestSuccess` (the save path IS gated by verification, not independent of it), `TestDeriveXoxCRejectsInvalidWorkspaceOrCookie` (the first verification step of the interactive flow fails cleanly on a bogus workspace page). Full suite + `-race` green.
+
+## [0.75.2] - 2026-08-02
+
+### Fix — `harness telegram token <token>` saved a token WITHOUT verifying it worked
+- **Gap**: v0.75.1's `telegramTokenCmd.Run()` called `telegram.SaveToken(c.Token)` unconditionally — a typo'd or already-revoked token was written straight to `~/.harness/telegram.json` with no check at all, only surfacing as a problem at the NEXT `harness telegram` launch (or if someone happened to run `harness telegram token --status` to notice — that path already verified, the save path didn't).
+- **Fix** (`internal/cli/kong_run_telegram.go`) — `telegramTokenCmd.Run()` now calls the real Bot API (`telegram.NewBot(c.Token).GetMe(ctx)`) BEFORE saving anything; a rejected token returns an error and `SaveToken` is never called — verified manually the file isn't even created on a bad token. A verified token's save confirmation now also prints the bot's `@username` (`✓ Token verified — bot: @name`), matching the confirmation `--status` already gave.
+- Verified manually against the compiled binary with an isolated `$HOME`: `harness telegram token badtoken123` → `error: token rejected by Telegram's API (telegram 404: Not Found) — not saved`, exit code 1, and no `telegram.json` written at all; a subsequent `--status` correctly reports "No token saved". Full suite + `-race` green.
+
+## [0.75.1] - 2026-08-02
+
+### Add — `harness telegram token <token>` saves the bot token, so it doesn't have to be passed on every run
+- **`transports/telegram/chats.go`** — `storeData` gains a `Token` field (persisted to `~/.harness/telegram.json`, alongside the existing allowlist/session mappings). New `SaveToken(token)`/`LoadToken()` functions — same read-modify-write persistence pattern `slack.SaveCredentials`/`LoadCredentials` already use for Slack's `Workspace`/`XoxC`/`XoxD`.
+- **`transports/telegram/telegram.go`** — `runWithOptions` now falls back to the saved token when neither `WithToken` nor `TELEGRAM_BOT_TOKEN` provided one, before failing — same precedence Slack's `Run` already applies (flags/env > saved config).
+- **New CLI command `harness telegram token <token>`** (`internal/cli/kong.go`'s `telegramTokenCmd`, `internal/cli/kong_run_telegram.go`) saves the token via `telegram.SaveToken`. `harness telegram token --status` checks the saved token against the real Bot API (`GetMe`) instead of just reporting its presence — same "verify it actually works" approach `harness slack login --status` takes, catching a revoked/invalid token immediately rather than only at the next `harness telegram` launch.
+- 6 new tests in `transports/telegram/chats_test.go`: `TestSaveTokenAndLoadTokenRoundTrip`, `TestLoadTokenEmptyWhenNeverSaved`, `TestSaveTokenPreservesAllowlistAndSessions` (read-modify-write doesn't clobber existing state), `TestSaveTokenOverwritesPreviousToken`, `TestRunFallsBackToSavedToken` (distinguishes "fallback happened" from "no token at all" by which error message `Run` fails with — reaching the real `GetMe` network call vs. failing before it), `TestRunFailsWithoutTokenOrSavedFallback`.
+- Verified manually against the compiled binary with an isolated `$HOME`: `harness telegram token --status` (no token) → "No token saved"; `harness telegram token abc123fake` → saved to `telegram.json`; `harness telegram token --status` again → `✗ Saved token is invalid or unreachable: telegram 404: Not Found` (real API call, correctly detecting the fake token). Full suite + `-race` green.
+
 ## [0.75.0] - 2026-08-02
 
 ### Add — `server` and `transports/{telegram,slack,acp}` are now public SDK packages

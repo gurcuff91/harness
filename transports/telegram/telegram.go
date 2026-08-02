@@ -103,13 +103,20 @@ func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
 // split out so the WithX-option-application step above stays a thin,
 // separately testable layer over the real logic.
 func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
-	if opts.Token == "" {
-		return fmt.Errorf("telegram: a bot token is required (--token or TELEGRAM_BOT_TOKEN)")
-	}
-
 	st, err := openStore("")
 	if err != nil {
 		return err
+	}
+
+	// Fall back to the token saved via `harness telegram token <token>`
+	// (~/.harness/telegram.json) when neither --token nor
+	// TELEGRAM_BOT_TOKEN was given — same precedence Slack's Run applies to
+	// its own credentials (flags/env > saved config).
+	if opts.Token == "" {
+		opts.Token = st.data.Token
+	}
+	if opts.Token == "" {
+		return fmt.Errorf("telegram: a bot token is required — run 'harness telegram token <token>' or pass --token/TELEGRAM_BOT_TOKEN")
 	}
 
 	// In-process server — the transport talks to it over HTTP/SSE, exactly like
