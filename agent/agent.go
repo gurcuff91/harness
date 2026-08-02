@@ -438,7 +438,11 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 	// The id is generated first so the session's Schedule tool can capture it as
 	// the owner for any schedules it creates.
 	sessionID := uuid.New().String()
-	sessionTools, tl := a.buildSessionTools(sessionID, cwd, model, res, loader)
+	// sess is filled in below, right after newSession — see buildSessionTools'
+	// sessRef doc comment for why the Subagent tool needs this indirection
+	// instead of the plain "model" string.
+	var sess *Session
+	sessionTools, tl := a.buildSessionTools(sessionID, cwd, &sess, res, loader)
 	systemPrompt, pl := a.buildSystemPrompt(cwd, res)
 
 	meta := store.SessionMeta{
@@ -455,7 +459,7 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 		return nil, fmt.Errorf("create store: %w", err)
 	}
 
-	sess := newSession(storeInst,
+	sess = newSession(storeInst,
 		provider, modelID, a.thinkingLevel,
 		sessionTools, tl, systemPrompt, pl,
 		a.maxIterations, maxTokens,
@@ -522,9 +526,10 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 		readSkill = loader.ReadSkill
 	}
 
-	resumeTools, tl := a.buildSessionTools(meta.ID, cwd, meta.Model, res, loader)
+	var sess *Session
+	resumeTools, tl := a.buildSessionTools(meta.ID, cwd, &sess, res, loader)
 	resumePrompt, pl := a.buildSystemPrompt(cwd, res)
-	sess := newSession(storeInst,
+	sess = newSession(storeInst,
 		provider, modelID, thinkingLvl,
 		resumeTools, tl, resumePrompt, pl,
 		a.maxIterations, maxTokens,
@@ -597,9 +602,10 @@ func (a *Agent) ForkSession(sessionID string) (*Session, error) {
 		readSkill = loader.ReadSkill
 	}
 
-	forkTools, tl := a.buildSessionTools(meta.ID, cwd, meta.Model, res, loader)
+	var sess *Session
+	forkTools, tl := a.buildSessionTools(meta.ID, cwd, &sess, res, loader)
 	forkPrompt, pl := a.buildSystemPrompt(cwd, res)
-	sess := newSession(forkStore,
+	sess = newSession(forkStore,
 		provider, modelID, thinkingLvl,
 		forkTools, tl, forkPrompt, pl,
 		a.maxIterations, maxTokens,
@@ -635,7 +641,23 @@ type toolLens struct {
 	totalBytes int // JSON byte length of all tool schemas (built-in + MCP)
 }
 
-func (a *Agent) buildSessionTools(sessionID, cwd, model string, res *resources.Resources, loader resources.ResourceLoader) (*tools.Registry, toolLens) {
+// sessRef is a pointer-to-pointer the caller fills in with the real *Session
+// once it exists (buildSessionTools runs BEFORE newSession, so there is no
+// session to reference yet at construction time — see the call sites in
+// NewSession/ResumeSession/ForkSession, each of which does
+// `sess = newSession(...)` into the same variable this points at
+// immediately after building it). The Subagent tool's executor closure
+// captures sessRef (not a model string) specifically so it can read
+// (*sessRef).CurrentModel() at EXECUTION time — reflecting any SwitchModel
+// call made since the session was created — instead of freezing whatever
+// model the session happened to have when its tools were first built. That
+// freeze was a real bug: a session created with a rate-limited model, then
+// switched via /model (or ACP's session/set_config_option) to a working
+// one, kept spawning sub-agents against the ORIGINAL model — the main
+// session itself worked fine (it reads its own live s.modelID every turn),
+// only Subagent was stuck, because its closure had captured a plain string
+// once and never looked at it again.
+func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res *resources.Resources, loader resources.ResourceLoader) (*tools.Registry, toolLens) {
 	reg := tools.NewRegistry()
 	for _, def := range a.toolReg.Definitions() {
 		if a.isToolAllowed(def.Name) {
@@ -722,7 +744,15 @@ func (a *Agent) buildSessionTools(sessionID, cwd, model string, res *resources.R
 				Tools:        parentA.MCPTools(),
 				sharedMemory: parentA.memStore, // share the parent's store (read-only for subagents; not closed by the subagent)
 			})
-			sess, err := subAgent.NewSession(cwd, model)
+			// Read the CURRENT model at execution time, not the one captured
+			// when this closure was built — see buildSessionTools' sessRef
+			// doc comment for why that distinction is the whole point here.
+			// (*sessRef) is guaranteed non-nil by the time this executor can
+			// ever run: the tool it belongs to isn't reachable by the model
+			// until the owning session's Prompt() has been called at least
+			// once, which is well after every call site below assigns it.
+			currentModel := (*sessRef).CurrentModel()
+			sess, err := subAgent.NewSession(cwd, currentModel)
 			if err != nil {
 				return "", fmt.Errorf("sub-agent: %w", err)
 			}

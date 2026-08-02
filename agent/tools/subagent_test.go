@@ -13,12 +13,17 @@ import (
 // runs it with the given input JSON, and returns (output, error).
 func callSubagent(t *testing.T, executor SubagentExecutor, input map[string]any) (string, error) {
 	t.Helper()
+	return callSubagentWithContext(t, context.Background(), executor, input)
+}
+
+func callSubagentWithContext(t *testing.T, ctx context.Context, executor SubagentExecutor, input map[string]any) (string, error) {
+	t.Helper()
 	tool := Subagent(executor)
 	raw, err := json.Marshal(input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return tool.Execute(context.Background(), raw)
+	return tool.Execute(ctx, raw)
 }
 
 func TestSubagentMissingPromptErrors(t *testing.T) {
@@ -140,6 +145,65 @@ func TestSubagentBackgroundIgnoresTimeoutField(t *testing.T) {
 	}
 	path := extractFilePath(t, out)
 	os.Remove(path)
+}
+
+// TestSubagentBackgroundSurvivesCallerContextCancellation is the regression
+// test for the real production bug: agent/session.go's drainFollowUps
+// unconditionally cancels each turn's context the instant that turn's own
+// promptSync returns — completely unaware of (and not waiting for) any
+// goroutine a tool call kicked off in the background. Since Execute's ctx
+// IS that per-turn context, a background Subagent call used to die with
+// "context canceled" the moment its OWN launching turn ended — which is
+// always, since that's the normal, fast, expected end of a turn — making
+// the whole feature unusable: the goroutine writing the result file was
+// killed before it could ever get there. Simulates exactly that: the ctx
+// passed to Execute is cancelled right after the tool returns (mirroring
+// drainFollowUps' unconditional `cancel()`), and the background executor
+// must still complete successfully.
+func TestSubagentBackgroundSurvivesCallerContextCancellation(t *testing.T) {
+	turnCtx, cancelTurn := context.WithCancel(context.Background())
+	executorSawCancellation := make(chan bool, 1)
+
+	out, err := callSubagentWithContext(t, turnCtx, func(ctx context.Context, prompt string) (string, error) {
+		// Give the test time to cancel turnCtx before this returns, then
+		// report whether ITS ctx (which must NOT be turnCtx) got cancelled too.
+		select {
+		case <-ctx.Done():
+			executorSawCancellation <- true
+		case <-time.After(300 * time.Millisecond):
+			executorSawCancellation <- false
+		}
+		return "sub-agent completed successfully", nil
+	}, map[string]any{"prompt": "hi", "background": true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	path := extractFilePath(t, out)
+	defer os.Remove(path)
+
+	// Mirror drainFollowUps: cancel the turn's context immediately after the
+	// tool call that launched the background work returns — this is exactly
+	// what happens in production the instant the launching turn ends.
+	cancelTurn()
+
+	if sawCancellation := <-executorSawCancellation; sawCancellation {
+		t.Fatal("the background executor's ctx was cancelled when the CALLER's turn context was cancelled — background mode must be immune to this")
+	}
+
+	var content []byte
+	for i := 0; i < 50; i++ {
+		content, err = os.ReadFile(path)
+		if err == nil && len(content) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("reading result file: %v", err)
+	}
+	if string(content) != "sub-agent completed successfully" {
+		t.Errorf("file content = %q, want the real result — not a context-cancelled error", content)
+	}
 }
 
 // extractFilePath pulls the temp file path out of the background message

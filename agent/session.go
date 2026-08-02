@@ -352,6 +352,21 @@ func (s *Session) ModelMeta() *types.ModelMeta {
 	return s.provider.ModelMeta(s.modelID)
 }
 
+// CurrentModel returns the session's active model in "provider/model" form,
+// reflecting any SwitchModel call that has happened since the session was
+// created — unlike a plain string captured once at construction time (the
+// bug this exists to fix: the Subagent tool's executor closure in
+// agent.go's buildSessionTools used to close over the model string as it
+// was when the session was FIRST created, so a later /model change was
+// invisible to it — every subsequent sub-agent kept using the original
+// model, including one that had since become rate-limited). Safe to call
+// from any goroutine; SwitchModel holds the same lock while mutating.
+func (s *Session) CurrentModel() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.provider.Name() + "/" + s.modelID
+}
+
 func (s *Session) drainFollowUps() {
 	first := true
 	for {

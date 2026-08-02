@@ -149,6 +149,18 @@ const colleagueAskTimeout = 120 * time.Second
 // ColleagueAsk returns a Tool that delegates a prompt to another running
 // harness instance by name, blocking for the response (or, with background:
 // true, returning immediately with a path to a result file).
+//
+// Background mode's goroutine (askColleagueBackground) never touches the
+// ctx this tool is invoked with — askColleague talks to the colleague via
+// client.Client, which builds its own context.Background() per request
+// (see client.Client.askCtx) — so it never inherits agent/session.go's
+// per-turn cancellation the way Subagent's background mode used to (a real
+// bug, fixed by having it stop using that ctx entirely — see
+// runSubagentBackground's doc comment in subagent.go for the full
+// mechanism). ColleagueAsk was never at risk of it in the first place: it
+// delegates over HTTP to a genuinely separate process, and that request's
+// own context was always independent of the local turn's — the ctx
+// parameter below is read for the SYNCHRONOUS (foreground) path only.
 func ColleagueAsk() Tool {
 	return Tool{
 		Def: types.ToolDef{
