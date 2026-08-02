@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	atools "github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/types"
@@ -13,12 +14,15 @@ import (
 // SlackTools returns the Slack-specific tools to inject into the agent when
 // running the Slack transport. They are passed via AgentOptions.Tools so they
 // appear alongside the built-in tools without touching the tool registry.
-func SlackTools(bot *Bot, myID string) []atools.Tool {
+// t is needed by SlackAsk to register/wait on pending asks (see asks.go);
+// the other tools only need bot/myID.
+func SlackTools(bot *Bot, myID string, t *Transport) []atools.Tool {
 	return []atools.Tool{
 		slackListChannelsTool(bot),
 		slackListUsersTool(bot),
 		slackPostTool(bot, myID),
 		slackMessagesTool(bot),
+		slackAskTool(bot, myID, t),
 	}
 }
 
@@ -217,6 +221,102 @@ func slackMessagesTool(bot *Bot) atools.Tool {
 				return "", fmt.Errorf("format messages: %w", err)
 			}
 			return string(b), nil
+		},
+	}
+}
+
+// slackAskDefaultTimeout is the default wait when the timeout field isn't
+// specified — same value ColleagueAsk/Subagent default to.
+const slackAskDefaultTimeout = 120 * time.Second
+
+// ── SlackAsk ──────────────────────────────────────────────────────────────
+
+// slackAskTool asks a specific person a question via direct message and
+// BLOCKS until they reply or the timeout expires. Only works for DMs — see
+// the channel-prefix check below for why group channels are rejected
+// outright. Uses ExecuteRich (not Execute) so a reply carrying an image
+// reaches the model as an actual image, not just a filename.
+func slackAskTool(bot *Bot, myID string, t *Transport) atools.Tool {
+	return atools.Tool{
+		Def: types.ToolDef{
+			Name: "SlackAsk",
+			Description: "Ask a specific person a question via direct message and BLOCK until they reply (default timeout: 120s, override with `timeout`). " +
+				"If they don't respond in time, that's a normal outcome, not necessarily an error — you can try again later. " +
+				"Only works for DIRECT MESSAGES — a user ID (U...) or an existing DM channel (D...); a channel name (#general) or channel ID (C...) is REJECTED, since \"the\" reply is ambiguous once more than one person can answer — use SlackPost for those (fire-and-forget, no waiting). " +
+				"Opens the DM automatically if one doesn't exist yet. Only one SlackAsk can be pending per DM at a time. " +
+				"The reply's text is returned, along with any image the person attached (visible directly) and any text file (as a `<slack:attach>` path your Read tool can open).",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"channel":{"type":"string","description":"User ID (U...) or an existing DM channel ID (D...). A channel name (#general) or channel ID (C...) is accepted as input but always rejected — SlackAsk cannot target a group channel"},"text":{"type":"string","description":"The question to ask"},"timeout":{"type":"integer","description":"Seconds to wait for a reply (default: 120)"}},"required":["channel","text"]}`),
+		},
+		ExecuteRich: func(ctx context.Context, input json.RawMessage) (string, []types.ImageData, error) {
+			var args struct {
+				Channel string `json:"channel"`
+				Text    string `json:"text"`
+				Timeout int    `json:"timeout"`
+			}
+			if err := json.Unmarshal(input, &args); err != nil {
+				return "", nil, fmt.Errorf("invalid arguments: %w", err)
+			}
+			if args.Channel == "" {
+				return "", nil, fmt.Errorf("channel is required")
+			}
+			if strings.TrimSpace(args.Text) == "" {
+				return "", nil, fmt.Errorf("text is required")
+			}
+
+			channelID, err := resolveChannelID(ctx, bot, args.Channel)
+			if err != nil {
+				return "", nil, err
+			}
+			if strings.HasPrefix(channelID, "U") && channelID != myID {
+				dmID, err := bot.OpenDM(ctx, channelID)
+				if err != nil {
+					return "", nil, fmt.Errorf("open DM with %s: %w", channelID, err)
+				}
+				channelID = dmID
+			}
+			if !strings.HasPrefix(channelID, "D") {
+				return "", nil, fmt.Errorf("SlackAsk only works for direct messages (a user ID or existing DM) — use SlackPost for channels")
+			}
+
+			replyCh, err := t.registerAsk(channelID)
+			if err != nil {
+				return "", nil, err
+			}
+			// Guarantees the pending entry is cleaned up on EVERY exit path
+			// (a real reply, the timeout firing, or ctx being cancelled) —
+			// without this, a later SlackAsk to the same DM would find one
+			// already "pending" forever.
+			defer t.unregisterAsk(channelID)
+
+			if err := bot.PostMessage(ctx, channelID, toMrkdwn(args.Text)); err != nil {
+				return "", nil, fmt.Errorf("post question: %w", err)
+			}
+
+			timeout := slackAskDefaultTimeout
+			if args.Timeout > 0 {
+				timeout = time.Duration(args.Timeout) * time.Second
+			}
+			timer := time.NewTimer(timeout)
+			defer timer.Stop()
+
+			select {
+			case reply := <-replyCh:
+				text := reply.text
+				if len(reply.attachTags) > 0 {
+					if text != "" {
+						text += "\n\n"
+					}
+					text += strings.Join(reply.attachTags, "\n")
+				}
+				if text == "" {
+					text = "[no text — see attached]"
+				}
+				return text, reply.images, nil
+			case <-timer.C:
+				return fmt.Sprintf("No reply within %s — the person may not have seen it, or chose not to respond. Not necessarily an error; you can ask again later.", timeout), nil, nil
+			case <-ctx.Done():
+				return "", nil, ctx.Err()
+			}
 		},
 	}
 }

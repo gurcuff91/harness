@@ -112,6 +112,15 @@ type Transport struct {
 	mu    sync.Mutex
 	pumps map[string]*channelPump // channel ID → its live session pump
 
+	// pendingAsks tracks SlackAsk calls waiting for a reply, keyed by DM
+	// channel ID (D...) — at most one per channel, enforced by SlackAsk
+	// itself. handleEvent checks this map before routing an incoming DM
+	// message to the agent as a normal prompt: a hit means the message is
+	// the awaited reply, consumed here instead of becoming a prompt. See
+	// tryDeliverAsk and slackAskTool (tools.go).
+	asksMu      sync.Mutex
+	pendingAsks map[string]chan askReply
+
 	// Active RTM WebSocket connection. Set/cleared by rtmLoop under connMu.
 	// Used by SendTyping to write typing events without blocking the read goroutine.
 	// gorilla/websocket requires that concurrent reads and writes use separate locks.
@@ -179,15 +188,16 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 	cwd, _ := os.Getwd()
 	bot := NewBot(opts.Workspace, opts.XoxC, opts.XoxD)
 	t := &Transport{
-		opts:   opts,
-		agent:  a,
-		api:    client.New(listener.Addr().String()),
-		bot:    bot,
-		store:  st,
-		srv:    srv,
-		logger: logger,
-		cwd:    cwd,
-		pumps:  make(map[string]*channelPump),
+		opts:        opts,
+		agent:       a,
+		api:         client.New(listener.Addr().String()),
+		bot:         bot,
+		store:       st,
+		srv:         srv,
+		logger:      logger,
+		cwd:         cwd,
+		pumps:       make(map[string]*channelPump),
+		pendingAsks: make(map[string]chan askReply),
 	}
 
 	// Resolve model.
@@ -212,7 +222,7 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 
 	// Inject Slack-specific tools into the agent so the model can proactively
 	// post messages, resolve channels and users by name, etc.
-	for _, tool := range SlackTools(bot, me.UserID) {
+	for _, tool := range SlackTools(bot, me.UserID, t) {
 		a.RegisterTool(tool)
 	}
 
@@ -390,11 +400,29 @@ func (t *Transport) handleEvent(ctx context.Context, evt *RTMEvent) {
 	if evt.User == t.myID || evt.BotID != "" || evt.SubType != "" {
 		return
 	}
-	if evt.Channel == "" || evt.Text == "" {
+	if evt.Channel == "" {
 		return
 	}
 
 	isDM := strings.HasPrefix(evt.Channel, "D")
+
+	// SlackAsk interception: if this DM has a pending ask waiting for a
+	// reply, deliver the message there instead of routing it to the agent
+	// as a normal prompt — BEFORE the "no text" early-return below, since a
+	// reply that's only a file attachment (no text) must still count. A
+	// slash command is the one exception: a human typing "/stop" while an
+	// ask is pending almost certainly means the command, not "my answer is
+	// /stop", so tryDeliverAsk itself checks for that and declines,
+	// letting it fall through to handleCommand as usual.
+	if isDM {
+		if t.tryDeliverAsk(ctx, evt) {
+			return
+		}
+	}
+
+	if evt.Text == "" {
+		return
+	}
 	isMention := strings.Contains(evt.Text, "<@"+t.myID+">")
 
 	// Only respond to: direct messages OR explicit @mentions in channels.

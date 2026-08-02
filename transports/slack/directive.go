@@ -33,7 +33,8 @@ You have Slack tools available to initiate communication at any time:
 
 - **SlackListChannels** — list all channels with their IDs. Use this to resolve a channel name like #general to its ID before posting.
 - **SlackListUsers** — list all workspace users with their IDs and display names. Use this to resolve a person's name to their user ID for @mentions or direct messages.
-- **SlackPost** — post a message to a channel or user. Accepts a channel ID (C...), channel name (#general), or user ID (U...) for a direct message. To attach files, embed <slack:uploadFile> tags in the text (see below).
+- **SlackPost** — post a message to a channel or user. Accepts a channel ID (C...), channel name (#general), or user ID (U...) for a direct message. Fire-and-forget — does not wait for a reply. To attach files, embed <slack:uploadFile> tags in the text (see below).
+- **SlackAsk** — ask a specific person a question via direct message and BLOCK until they reply (default timeout 120s). Only works for DMs (a user ID or existing DM) — a channel is always rejected, since "the" reply is ambiguous once more than one person can answer; use SlackPost for those. No reply within the timeout is a normal outcome, not an error — you can try again later. The reply may include an image (returned directly) or a file (as a <slack:attach> tag — see below).
 - **SlackMessages** — read recent messages posted in a channel. Channels have multiple participants — you only see messages sent directly to you (a DM or an @mention), so use this to catch up on what the group has been discussing before responding, or when asked about something you weren't directly pinged on. Not meaningful for DMs.
 
 Example: if asked to "notify @user in #devs when done", use SlackListUsers to find the user ID, then SlackPost with channel="#devs" and <@USER_ID> in the text.

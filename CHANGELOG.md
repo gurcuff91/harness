@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.3] - 2026-08-02
+
+### Fix — `transports/slack.Directive` didn't mention `SlackAsk`
+- **Gap**: the system-prompt directive injected into every Slack session (`transports/slack/directive.go`) lists all proactive-messaging tools in its "Proactive messaging" section — `SlackListChannels`/`SlackListUsers`/`SlackPost`/`SlackMessages` — but `SlackAsk` (added in v0.76.1) was never added there, so the model had no prompt-level guidance steering it toward the tool beyond its own schema description.
+- **Fix** — added a `SlackAsk` bullet in the same section, same terse style as the others: only works for DMs, blocks with a 120s default timeout, no reply in time is a normal (non-error) outcome, and a reply's image/attachment surfaces the same way SlackPost's own file handling already does. `SlackPost`'s own bullet also gained "Fire-and-forget — does not wait for a reply" to make the SlackPost/SlackAsk distinction explicit right where the model reads about both.
+
+## [0.76.2] - 2026-08-02
+
+### Fix — `SlackAsk`'s description said "NOT a channel name" but `#name` syntax is actually accepted (and then rejected downstream)
+- **Gap**: `SlackAsk`'s tool description/schema said the `channel` field is "NOT a channel name" — misleading, since the same `resolveChannelID` helper `SlackPost`/`SlackMessages` use DOES accept `#name` syntax and resolves it to a real channel ID via `conversations.list` before the DM-only check runs. The rejection was real (a resolved channel ID still fails the `strings.HasPrefix(channelID, "D")` check), but the description implied `#name` was invalid INPUT syntax, when it's actually valid syntax that's rejected for a different reason — it resolves to a channel, not a DM.
+- **Fix** (`transports/slack/tools.go`) — description and input schema reworded to be accurate: `#general`/a channel ID (`C...`) is accepted as input but always rejected, since `SlackAsk` can't target a group channel — never implying the syntax itself is malformed.
+- New test `TestSlackAskRejectsChannelNameSyntax` (`transports/slack/tools_ask_test.go`) locks in the exact scenario: a fake Slack server resolves `#general` → a real channel ID via `conversations.list` (same mechanism `resolveChannelID` uses), and `SlackAsk` still rejects it with the direct-messages-only error — proving the rejection is downstream of successful resolution, not a syntax check. Full suite + `-race` green.
+
+## [0.76.1] - 2026-08-02
+
+### Add — `SlackAsk`: ask a specific person a question via DM and block for their reply
+- New tool `SlackAsk(channel, text, timeout?)`, injected alongside `SlackPost`/`SlackListChannels`/`SlackListUsers`/`SlackMessages` when running the Slack transport. Same "ask and wait" shape as `ColleagueAsk`/`Subagent` (default timeout 120s, no reply within it is a normal outcome — not an error — so the model can try again later).
+- **Only works for direct messages** — a channel ID/name is rejected outright with a clear error pointing at `SlackPost` instead: "the" reply is ambiguous once more than one person can answer. `SlackPost` remains the fire-and-forget tool for channels (and for DMs where no answer is needed back) — the split isn't "channel vs DM", it's "wait for a reply or not."
+- **Interception mechanism** (`transports/slack/asks.go`): a new `Transport.pendingAsks map[string]chan askReply` (keyed by DM channel ID) tracks in-flight asks. `handleEvent` now checks this map for every incoming DM message BEFORE routing it to the agent as a normal prompt (and before the empty-text early return, since a reply that's purely a file attachment must still count) — a hit means the message is the awaited reply, consumed here and never reaching the agent as a prompt. A slash command (`/stop`, etc.) is the one exception: it's declined and falls through to `handleCommand` as usual, since a human typing a command while an ask is pending almost certainly means the command, not "my answer is `/stop`."
+- **At most one pending ask per DM** — a second `SlackAsk` to a channel that already has one outstanding fails immediately with a clear error, rather than racing the first for the same incoming reply. The pending entry is always cleaned up via `defer` (a real reply, the timeout firing, or `ctx` cancellation all unregister it), so a later `SlackAsk` to the same DM is never blocked by a stale entry.
+- **Attachments in the reply** — a reply carrying files reuses the exact same `Transport.handleFiles` helper the normal prompt path already uses: an image comes back as an actual `types.ImageData` (via `ExecuteRich`, so the model sees it directly, not just a filename) and a text file comes back as a `<slack:attach>/tmp/path</slack:attach>` tag appended to the returned text, the same convention every other Slack-sourced attachment already uses — no new format invented.
+- New tests: `transports/slack/asks_test.go` (8 tests covering `registerAsk`/`unregisterAsk`/`tryDeliverAsk` in isolation — concurrent-ask rejection, per-channel independence, cleanup-then-retry, slash-command exclusion, empty-event guard) and `transports/slack/tools_ask_test.go` (4 end-to-end tests against a fake Slack server via `httptest` — channel rejection, a real 1s timeout that both returns cleanly and unregisters afterward, a reply delivered mid-wait via `tryDeliverAsk` reaching the blocked executor, blank-text validation). Full suite + `-race` green.
+
 ## [0.76.0] - 2026-08-02
 
 ### Add — public `logx.Logger` contract: `WithLogger` on `server.Run`/`transports/telegram.Run`/`transports/slack.Run`, silent by default
