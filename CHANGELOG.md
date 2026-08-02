@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.74.2] - 2026-08-01
+
+### Fix — `harness acp`: provider error details were dropped, leaving only a generic message
+- **Root cause** — when a provider API call fails (e.g. a rate limit), `types.NewProviderAPIError` parses the provider's own JSON error body into `Details` (`agent/session.go`'s `errorEvent`, then `internal/server/sse.go`'s SSE payload, then `client.Event.Details` — the same data the TUI already pretty-prints below its error line, see `internal/transport/tui/events.go`). `pumpEvents`'s `"error"` case in `internal/transport/acp/events.go` only used `evt.Message` when building the JSON-RPC error, discarding `evt.Details` entirely — a client only ever saw a bare `{"code": -32603, "message": "openai API error 429"}`, with no indication of *why* (rate limit? invalid request? something else?).
+- **Fix** — confirmed against ACP's own `Error` type (`{ code, message, data?: unknown }` — a purpose-built field for exactly this) and wired `evt.Details` through as `rpcError.Data`, a field that already existed on the struct but was never populated at this call site. A rate-limited request from Zed now surfaces the provider's complete error payload in `data`, e.g. `{"error": {"http_code": "429", "message": "Token Plan usage limit reached...", "type": "rate_limit_error"}, "request_id": "..."}` — the same depth of detail the TUI has always shown, just carried in JSON-RPC's standard field instead of a rendered text block.
+- New regression test asserts `Details` survives the translation into `Data`. Verified manually against the compiled binary with a real rate-limited request. Full suite + `-race` green.
+
 ## [0.74.1] - 2026-08-01
 
 ### Fix — `harness acp`: hitting the ReAct iteration cap silently lost the agent's summary

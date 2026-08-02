@@ -213,6 +213,43 @@ func TestPumpEventsError(t *testing.T) {
 	if outcome.stopReason != "" {
 		t.Errorf("stopReason should be empty on error, got %q", outcome.stopReason)
 	}
+	if outcome.err.Data != nil {
+		t.Errorf("Data = %v, want nil when the event carries no Details", outcome.err.Data)
+	}
+}
+
+// TestPumpEventsErrorCarriesProviderDetailsAsData is the regression test for
+// silently dropping a provider's own structured error payload (e.g. a rate
+// limit response body, parsed into types.ProviderAPIError.Details) when
+// translating EventError to ACP's Error object. The TUI already surfaces this
+// as a pretty-printed JSON block under the error line
+// (internal/transport/tui/events.go) — ACP has a purpose-built field for the
+// same thing, "data?: unknown" on the Error type, so it must not be dropped
+// down to just the generic message ("openai API error 429" alone, with no
+// indication of WHY).
+func TestPumpEventsErrorCarriesProviderDetailsAsData(t *testing.T) {
+	var buf bytes.Buffer
+	c := newConn(nil, &buf)
+
+	details := map[string]any{"error": map[string]any{"message": "Rate limit exceeded", "type": "rate_limit_error"}}
+	events := make(chan client.Event, 1)
+	events <- client.Event{Type: "error", Message: "openai API error 429", Details: details}
+	close(events)
+
+	outcome := pumpEvents(c, "sess1", events, false)
+	if outcome.err == nil {
+		t.Fatal("expected a non-nil error")
+	}
+	if outcome.err.Message != "openai API error 429" {
+		t.Errorf("Message = %q", outcome.err.Message)
+	}
+	gotData, ok := outcome.err.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("Data = %v (%T), want the provider's Details map", outcome.err.Data, outcome.err.Data)
+	}
+	if _, ok := gotData["error"]; !ok {
+		t.Errorf("Data lost the provider payload: %v", gotData)
+	}
 }
 
 // TestPumpEventsMaxIterationsReachedDoesNotStopTheTurn is the regression test

@@ -170,7 +170,19 @@ func pumpEvents(c *conn, sessionID string, events <-chan client.Event, stopOnCom
 			})
 
 		case "error":
-			return promptOutcome{err: &rpcError{Code: errCodeInternalError, Message: evt.Message}}
+			// evt.Details carries the provider's own structured error payload
+			// (types.ProviderAPIError.Details — e.g. a rate-limit response
+			// body) when the error originated from a provider API call. The
+			// TUI already renders this as a pretty-printed JSON block below
+			// its error line (internal/transport/tui/events.go); ACP's Error
+			// object has an equivalent purpose-built field for exactly this —
+			// "data?: unknown" — so the same context reaches Zed instead of
+			// being silently dropped down to just the generic message.
+			var data any
+			if len(evt.Details) > 0 {
+				data = evt.Details
+			}
+			return promptOutcome{err: &rpcError{Code: errCodeInternalError, Message: evt.Message, Data: data}}
 
 		// Every other event type (loop_start/end, tool_args, text_end,
 		// thinking_end, turn_start, received_prompt, follow_up_start) is an
