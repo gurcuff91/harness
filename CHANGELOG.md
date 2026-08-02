@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.74.11] - 2026-08-02
+
+### Add — ACP `session/load` now sends a `usage_update` after replaying history
+- `internal/transport/acp/methods.go` — `handleLoadSession` now sends one `"usage_update"` session/update notification right after replaying the session's message history (and before the `session/load` response), built from the resumed session's accumulated stats (`ResumeSession`'s response already carries `store.SessionMeta.Stats`, previously discarded). Without this, a client loading a session with real history started with a blank/zero usage indicator until the NEXT turn's live `tokens` event arrived — wrong, since the context window was already partially used by everything just replayed.
+- New `notifyUsage` helper builds the exact same shape events.go's live `"tokens"` case already sends: `{sessionUpdate: "usage_update", used, size, cost: {amount, currency}}`. `used` is derived as `ContextUsage × ContextWindow` — deliberately NOT `stats.InputTokens` (a cumulative, ever-growing counter across every turn the session has run, per `SessionStats`' own doc comment) — mirroring the same reconstruction `newSession` already does when restoring `lastInputTokens` from persisted stats on resume.
+- 6 new tests: 3 unit (`TestNotifyUsageSendsUsageUpdate`, `TestNotifyUsageSkipsWhenNoContextWindow`, `TestNotifyUsageOmitsCostWhenZero`) plus 1 end-to-end (`TestSessionLoadSendsUsageUpdateAfterReplay`). Verified manually against the compiled binary with a real session/new → session/prompt → session/load round trip — the exact wire shape confirmed: `{"cost":{"amount":0.0043...,"currency":"USD"},"sessionUpdate":"usage_update","size":1000000,"used":11974}`. Full suite + `-race` green.
+
 ## [0.74.10] - 2026-08-02
 
 ### Fix — ACP `/info` and `/context` output was misaligned in Zed

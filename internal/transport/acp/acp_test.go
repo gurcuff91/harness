@@ -597,6 +597,52 @@ func TestSlashContextReturnsContextBreakdownAsChunk(t *testing.T) {
 	}
 }
 
+// TestSessionLoadSendsUsageUpdateAfterReplay verifies handleLoadSession's
+// end-to-end wiring: session/load must send a "usage_update" notification
+// (built from the resumed session's stats) among its notifications, in
+// addition to the message replay it already sent. A session that has never
+// had a real turn legitimately reports "used: 0" — that's accurate (zero
+// tokens consumed so far), not something to suppress; see notifyUsage's doc
+// comment for why ContextWindow is always > 0 for any session a real model
+// resolved. (The case where a session has NON-zero accumulated stats is
+// covered by the unit test TestNotifyUsageSendsUsageUpdate in
+// methods_test.go — driving that end-to-end here would require a real
+// provider turn, same limitation TestSlashCompactExecutesRealCommandNotPlainPrompt's
+// comment describes.)
+func TestSessionLoadSendsUsageUpdateAfterReplay(t *testing.T) {
+	h := startHarness(t, newTestAgent(t))
+	h.send(1, "session/new", newSessionParams{CWD: t.TempDir()})
+	resp := h.readResponseFor(1)
+	if resp["error"] != nil {
+		t.Skip("no active provider configured in this environment — cannot create a session to test against")
+	}
+	sessionID := resp["result"].(map[string]any)["sessionId"].(string)
+
+	h.send(2, "session/load", loadSessionParams{SessionID: sessionID, CWD: t.TempDir()})
+	resp, notifications := h.readResponseForCollecting(2)
+	if resp["error"] != nil {
+		t.Fatalf("session/load failed: %v", resp["error"])
+	}
+
+	var sawUsageUpdate bool
+	for _, n := range notifications {
+		params, ok := n["params"].(map[string]any)
+		if !ok {
+			continue
+		}
+		update, ok := params["update"].(map[string]any)
+		if ok && update["sessionUpdate"] == "usage_update" {
+			sawUsageUpdate = true
+			if _, hasSize := update["size"]; !hasSize {
+				t.Errorf("usage_update missing 'size': %v", update)
+			}
+		}
+	}
+	if !sawUsageUpdate {
+		t.Errorf("expected a usage_update notification after session/load's replay, got: %v", notifications)
+	}
+}
+
 func TestSessionCancelUnknownSessionDoesNotPanicOrRespond(t *testing.T) {
 	h := startHarness(t, newTestAgent(t))
 	h.sendNotification("session/cancel", cancelParams{SessionID: "does-not-exist"})

@@ -85,8 +85,18 @@ func (h *handler) handleNewSession(c *conn, p newSessionParams) (newSessionResul
 // handleLoadSession resumes an existing Harness session and replays its full
 // message history as session/update notifications BEFORE returning — per
 // spec, all replay notifications must precede the response.
+//
+// After the message replay, it also sends one "usage_update" built from the
+// resumed session's accumulated stats (ResumeSession's response already
+// carries them — store.SessionMeta.Stats) — the exact same shape events.go's
+// "tokens" case sends live after every turn. Without this, a client loading
+// a session with real history starts with a blank/zero usage indicator until
+// the NEXT turn's tokens event arrives, which is wrong: the context window is
+// already partially used by everything just replayed, and the client has no
+// other way to learn that before the user's first new prompt.
 func (h *handler) handleLoadSession(c *conn, p loadSessionParams) (newSessionResult, *rpcError) {
-	if _, err := h.api.ResumeSession(p.SessionID); err != nil {
+	sess, err := h.api.ResumeSession(p.SessionID)
+	if err != nil {
 		return newSessionResult{}, internalErr("resume session", err)
 	}
 	messages, err := h.api.GetMessages(p.SessionID)
@@ -94,7 +104,46 @@ func (h *handler) handleLoadSession(c *conn, p loadSessionParams) (newSessionRes
 		return newSessionResult{}, internalErr("get messages", err)
 	}
 	replayHistory(c, p.SessionID, messages)
+	notifyUsage(c, p.SessionID, sess.Stats)
 	return h.registerSession(c, p.SessionID)
+}
+
+// notifyUsage sends a "usage_update" notification from a session's
+// accumulated stats — the same shape events.go's "tokens" case sends live,
+// reused here for handleLoadSession's post-replay snapshot. The
+// ContextWindow <= 0 guard is purely defensive (a session with a resolved
+// model — the only kind ResumeSession can return — always has one; see
+// Session.Meta(), which unconditionally injects the current model's context
+// window even before any turn) and only matters for a genuinely malformed
+// or zero-value input. A fresh session with no turns yet legitimately gets
+// "used: 0, size: <window>" — that's accurate, not noise: it really has used
+// zero tokens so far.
+//
+// "Used" is derived as ContextUsage × ContextWindow, NOT stats.InputTokens —
+// InputTokens is a cumulative counter across every turn the session has ever
+// run (grows unbounded since each turn resends the full history; see
+// SessionStats' own doc comment: "use CostUSD for actual spend tracking"),
+// while ContextUsage is the fraction of the context window the LAST turn
+// actually consumed — the same quantity events.go's live "tokens" case
+// reports as Used (there it's s.lastInputTokens, computed the exact same
+// way). Mirrors the identical reconstruction newSession already does when
+// restoring a resumed session's in-memory lastInputTokens from persisted
+// stats.
+func notifyUsage(c *conn, sessionID string, stats types.SessionStats) {
+	if stats.ContextWindow <= 0 {
+		return
+	}
+	used := int64(stats.ContextUsage * float64(stats.ContextWindow))
+	var cost *usageCost
+	if stats.CostUSD > 0 {
+		cost = &usageCost{Amount: stats.CostUSD, Currency: "USD"}
+	}
+	notify(c, sessionID, sessionUpdate{
+		SessionUpdate: "usage_update",
+		Used:          used,
+		Size:          int64(stats.ContextWindow),
+		Cost:          cost,
+	})
 }
 
 // registerSession builds the acpSession tracking entry and the initial

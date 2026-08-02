@@ -1,17 +1,96 @@
 package acp
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/gurcuff91/harness/client"
+	"github.com/gurcuff91/harness/types"
 )
 
 func TestAcpSessionNameHasTransportPrefix(t *testing.T) {
 	name := acpSessionName()
 	if !strings.HasPrefix(name, "Acp ") {
 		t.Errorf("acpSessionName() = %q, want prefix %q", name, "Acp ")
+	}
+}
+
+// TestNotifyUsageSendsUsageUpdate is the core case for the feature this test
+// file adds coverage for: handleLoadSession sends a "usage_update"
+// notification after replaying history, built from the resumed session's
+// accumulated stats — so a client loading a session with real history
+// immediately sees how much of the context window is already used, instead
+// of a blank/zero indicator until the next turn's live tokens event.
+func TestNotifyUsageSendsUsageUpdate(t *testing.T) {
+	var buf bytes.Buffer
+	c := newConn(nil, &buf)
+
+	notifyUsage(c, "sess1", types.SessionStats{
+		ContextUsage:  0.0248,
+		ContextWindow: 1_000_000,
+		CostUSD:       0.027477977,
+	})
+
+	notes := decodeNotifications(t, &buf)
+	if len(notes) != 1 {
+		t.Fatalf("expected 1 notification, got %d: %+v", len(notes), notes)
+	}
+	update := notes[0]["params"].(map[string]any)["update"].(map[string]any)
+	if update["sessionUpdate"] != "usage_update" {
+		t.Fatalf("sessionUpdate = %v, want usage_update", update["sessionUpdate"])
+	}
+	// used = ContextUsage * ContextWindow = 0.0248 * 1_000_000 = 24800 — NOT
+	// stats.InputTokens (a cumulative, ever-growing counter across every turn
+	// the session has run — see notifyUsage's doc comment for why that would
+	// be the wrong number here).
+	if got := update["used"].(float64); got != 24800 {
+		t.Errorf("used = %v, want 24800", got)
+	}
+	if got := update["size"].(float64); got != 1_000_000 {
+		t.Errorf("size = %v, want 1000000", got)
+	}
+	cost := update["cost"].(map[string]any)
+	if got := cost["amount"].(float64); got != 0.027477977 {
+		t.Errorf("cost.amount = %v, want 0.027477977", got)
+	}
+	if cost["currency"] != "USD" {
+		t.Errorf("cost.currency = %v, want USD", cost["currency"])
+	}
+}
+
+// TestNotifyUsageSkipsWhenNoContextWindow verifies notifyUsage sends nothing
+// for a session that has never had a real turn (ContextWindow == 0) — a
+// brand-new session loaded before its first prompt has nothing meaningful to
+// report, and "used: 0, size: 0" would be noise rather than information.
+func TestNotifyUsageSkipsWhenNoContextWindow(t *testing.T) {
+	var buf bytes.Buffer
+	c := newConn(nil, &buf)
+
+	notifyUsage(c, "sess1", types.SessionStats{})
+
+	if buf.Len() != 0 {
+		t.Errorf("expected no notification sent, got: %s", buf.String())
+	}
+}
+
+// TestNotifyUsageOmitsCostWhenZero verifies the cost field is nil (omitted)
+// when CostUSD is zero — mirrors events.go's live "tokens" case, which uses
+// the same "only set Cost if > 0" rule.
+func TestNotifyUsageOmitsCostWhenZero(t *testing.T) {
+	var buf bytes.Buffer
+	c := newConn(nil, &buf)
+
+	notifyUsage(c, "sess1", types.SessionStats{
+		ContextUsage:  0.1,
+		ContextWindow: 100_000,
+	})
+
+	notes := decodeNotifications(t, &buf)
+	update := notes[0]["params"].(map[string]any)["update"].(map[string]any)
+	if _, hasCost := update["cost"]; hasCost {
+		t.Errorf("expected no 'cost' field when CostUSD is 0, got: %v", update)
 	}
 }
 
