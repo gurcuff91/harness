@@ -97,7 +97,7 @@ type serveCmd struct {
 // sub-process and speaks JSON-RPC to it over stdin/stdout — there is no
 // terminal for flags to be typed into, and every per-session setting (model,
 // thinking) is negotiated over the protocol itself instead (see
-// internal/transport/acp's session config options).
+// transports/acp's session config options).
 type acpCmd struct{}
 
 // ── telegram ─────────────────────────────────────────────────────────────

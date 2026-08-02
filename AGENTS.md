@@ -16,18 +16,21 @@
 1. **No new dependencies** without explicit owner approval. Solve problems with stdlib first.
 2. **Always streaming.** There is no non-streaming path. Every provider implements `CompleteStream()`. Never add `Complete()`.
 3. **`provider/model` format everywhere.** Settings, env vars, CLI display, Resolve — all use `provider/model` (e.g., `anthropic/claude-sonnet-4-20250514`).
-4. **Backend/frontend separation.** `agent/` and `internal/providers/` never import `internal/server` or `internal/transport/`. The agent emits events over an HTTP/SSE API (`internal/server`); the clients (`internal/cli`, `internal/transport/{tui,telegram,slack,acp}`) consume it.
+4. **Backend/frontend separation.** `agent/` and `internal/providers/` never import `server` or `transports/`. The agent emits events over an HTTP/SSE API (`server`); the clients (`internal/cli`, `internal/tui`, `transports/{telegram,slack,acp}`) consume it.
 5. **Persistent state is explicit.** No model caching. On-disk state is limited to `~/.harness/{credentials.json, settings.json}` and `~/.harness/agent/{sessions/, memory.db}`.
 6. **SDK boundary.** Public packages (`agent`, `agent/{tools,store,resources,memory}`, `mcp`, `types`) form the SDK. Keep implementation detail (`providers`, `config`, `transport`, `version`) under `internal/`, and never expose an `internal/…` type in a public signature.
 
 ## Architecture
 
-The **agent is the SDK**. Public packages form the embeddable surface; everything
-under `internal/` is implementation detail the Go compiler forbids third parties
-from importing. A thin `harness.go` facade at the root re-exports the essentials.
+The **agent is the SDK**. Public packages form the embeddable surface — this now
+includes `server` and `transports/{telegram,slack,acp}`, so an SDK consumer can
+programmatically run any of those transports on top of an embedded agent, not
+just the core ReAct loop. Everything under `internal/` is implementation detail
+the Go compiler forbids third parties from importing. A thin `harness.go`
+facade at the root re-exports the essentials.
 
 ```
-harness.go                      ← 🔓 SDK facade (package harness): NewAgent, AgentWith* options, Client/NewClient — nothing else (no type aliases; use agent.Agent, agent.Session, types.Event, etc. directly)
+harness.go                      ← 🔓 SDK facade (package harness): NewAgent/AgentWith* (agent construction), RunServer/RunTelegram/RunSlack/RunAcp + their XxxWith* (transport runners — thin aliases over server.Run/transports/*.Run), Client/NewClient — nothing else (no type aliases beyond these; use agent.Agent, agent.Session, types.Event, etc. directly)
 cmd/harness/main.go             ← executable entry point (package main) — just calls cli.Main(os.Args)
 
 🔓 PUBLIC (the SDK surface)
@@ -43,8 +46,14 @@ cmd/harness/main.go             ← executable entry point (package main) — ju
 │       ├── skill.go / memory.go / truncate.go / names.go
 ├── mcp/                        ← Model Context Protocol client (stdlib) — MCPStatuses() exposes it
 │   ├── jsonrpc.go / stdio.go / http.go / client.go / manager.go
-├── client/                     ← the ONE typed HTTP/SSE SDK over internal/server's API — every transport uses *client.Client directly (no per-transport wrappers)
+├── client/                     ← the ONE typed HTTP/SSE SDK over server's API — every transport uses *client.Client directly (no per-transport wrappers)
 │   ├── client.go / types.go / event.go / error.go / stream.go
+├── server/                     ← HTTP/SSE backend — the API all clients talk to. Run(ctx, *agent.Agent, ...Option) is the blocking convenience wrapper (listen → serve → wait for ctx → graceful shutdown); Server/NewServer/Serve/Close stay exported for fine-grained control.
+│   ├── server.go / sse.go / proxy.go / instances.go / middleware.go / server_docs.go / run.go
+├── transports/                 ← interactive session frontends (each opens a session over server via client.Client); PUBLIC because an SDK consumer can run any of these programmatically on an already-built *agent.Agent
+│   ├── telegram/               ← Telegram bot (stdlib Bot API; one session per chat). Run(ctx, a, ...Option) — WithToken (required), WithSessionModel, WithSessionThinking, WithAllowUnpair. No Scheduler option: that's an agent.AgentOptions.EnableScheduler concern, decided before Run is ever called.
+│   ├── slack/                  ← Slack user bot (one session per channel/DM). Run(ctx, a, ...Option) — WithWorkspace/WithXoxC/WithXoxD (required unless saved via `harness slack login`), WithSessionModel, WithSessionThinking. Same no-Scheduler rule as telegram.
+│   └── acp/                    ← Agent Client Protocol agent (agentclientprotocol.com) — JSON-RPC/stdio bridge for Zed and other ACP clients; one session per ACP sessionId, pure protocol translation (never touches agent/ or agent/tools/). Run(ctx, a, ...Option) — WithStdin/WithStdout, defaulting to os.Stdin/os.Stdout.
 └── types/                      ← Event, Message, ModelMeta — shared types
 
 🔒 INTERNAL (compiler-enforced, not importable by third parties)
@@ -57,23 +66,26 @@ cmd/harness/main.go             ← executable entry point (package main) — ju
     ├── config/                 ← typed settings + credentials managers
     │   ├── settings.go / credentials.go / manager.go
     ├── version/                ← build version (ldflags target)
-    ├── server/                 ← HTTP/SSE backend (Serve(listener), handler()) — the API all clients talk to
-    │   ├── server.go / sse.go / proxy.go
-    ├── cli/                    ← CLI app: Kong grammar (kong.go) + kong_run*.go Run() methods, agent.go builders
-    └── transport/              ← interactive session frontends (each opens a session over server via client.Client)
-        ├── tui/                ← pure-Go terminal UI (zero external TUI libs)
-        ├── telegram/           ← Telegram bot (stdlib Bot API; one session per chat)
-        ├── slack/               ← Slack user bot (one session per channel/DM)
-        └── acp/                ← Agent Client Protocol agent (agentclientprotocol.com) — JSON-RPC/stdio bridge for Zed and other ACP clients; one session per ACP sessionId, pure protocol translation (never touches agent/ or agent/tools/)
+    ├── tui/                    ← pure-Go terminal UI (zero external TUI libs) — the one interactive frontend that stays INTERNAL: unlike the other transports, it's a terminal frontend tied to this binary, not something an SDK consumer embeds programmatically
+    └── cli/                    ← CLI app: Kong grammar (kong.go) + kong_run*.go Run() methods, agent.go builders
 ```
 
-`client/` is a top-level PUBLIC package (not `internal/client`) — the one typed SDK over the server API every transport uses directly (`client.go` / `types.go` / `event.go` / `error.go` / `stream.go`).
+`server` and `transports/{telegram,slack,acp}` sit at the module root (not
+under `internal/`) even though they still freely import `internal/config`,
+`internal/providers`, `internal/version`, `internal/logx` — moving a package
+out of `internal/` doesn't change what it's allowed to import (Go's
+`internal/` rule only blocks OTHER modules, never siblings in the same
+module), and `agent/` already does exactly this (imports `internal/config`
+and `internal/providers` directly). Exposing `server` doesn't add a new kind
+of exposure: it's an HTTP interface over the same global config/provider
+machinery `agent.New`/`harness.NewAgent` already depend on.
 
 > **internal/ rule:** its parent is the module root, so *all* harness code can
-> import `internal/…`, but external modules cannot. This lets the agent use
-> providers/config/transport freely while keeping them out of the SDK contract.
-> **Corollary:** no public package (agent, tools, mcp, memory, types, …) may
-> expose an `internal/…` type in an exported signature.
+> import `internal/…`, but external modules cannot. This lets `agent`, `server`,
+> and `transports/*` use providers/config/version freely while keeping them out
+> of the SDK's own exported signatures.
+> **Corollary:** no public package (agent, tools, mcp, memory, types, server,
+> transports/*, …) may expose an `internal/…` type in an exported signature.
 
 ## Key Interfaces
 
@@ -203,17 +215,18 @@ The CLI grammar is declared with [`alecthomas/kong`](https://github.com/alecthom
 
 1. Add the command's struct field (`cmd:""`) to its parent in `internal/cli/kong.go` — this is the single source of truth for flags, args, help text, and tree position. Named types only (never anonymous), so a `Run()` can be attached separately. Watch the gotchas documented at the top of that file: only one `default:"..."` command per tree level, Kong forbids mixing `arg:""` with `cmd:""` siblings in the same struct, and — the easiest one to miss — **a struct with both its own `Run()` and `cmd:""` children is wrong**: Kong calls `Run()` on every node in the selected chain (child *and* parent), so the parent's action would re-fire after every subcommand and its flags would leak into each subcommand's `--help`. If a command needs both an action of its own and real subcommands (e.g. `harness telegram` vs. `telegram pair`), give the action its own hidden `default:"withargs"` child instead (see `telegramRunCmd`/`slackRunCmd`/`settingsShowCmd`) — never a `Run()` directly on the parent struct. That hidden child's flags still show up correctly in the PARENT's own `--help` (e.g. `harness slack --help` lists `--workspace`/`--xoxc`/etc.) thanks to `helpWithHiddenDefaultFlags` in `app.go`, which borrows them onto the parent node being displayed without leaking them into the parent's OTHER subcommands — nothing to do here, just don't be surprised the flags aren't declared directly on the parent struct.
 2. Add the `Run() error` method in a `kong_run*.go` file (grouped by area: `kong_run.go` for management/mcp/memo/settings/schedules, `kong_run_telegram.go`, `kong_run_slack.go`, `kong_run_tui.go`, `kong_run_serve.go`, `kong_run_acp.go`). Keep it a thin adapter over real business logic in `commands.go`/`settings.go`/`memory.go`/`schedule.go` — don't inline logic in the `Run()` method itself.
-3. Add an HTTP route in `internal/server/server.go` if it needs backend data.
+3. Add an HTTP route in `server/server.go` if it needs backend data.
 4. Run `go build ./... && go test ./internal/cli/...` — Kong validates the whole grammar (enums, arg/cmd conflicts, duplicate defaults) at parser-construction time, so a bad tag fails loudly instead of silently.
 
 ### Adding a New Transport
 
-A transport is a frontend that opens sessions against the SAME in-process HTTP/SSE server every other transport uses — it never talks to `agent/` directly. Follow `internal/transport/telegram` (chat bot) or `internal/transport/acp` (protocol bridge over stdio) as templates:
+A transport is a frontend that opens sessions against the SAME in-process HTTP/SSE server every other transport uses — it never talks to `agent/` directly. Follow `transports/telegram` (chat bot) or `transports/acp` (protocol bridge over stdio) as templates. Transports (except the TUI, which stays under `internal/tui/` — see the architecture diagram above for why) are PUBLIC packages, since an SDK consumer can run any of them programmatically on an already-built `*agent.Agent`:
 
-1. Create `internal/transport/<name>/`. In its `Run(ctx, a *agent.Agent, opts Options) error`, start an in-process server on a loopback port (`server.NewServer(a, server.ServerOptions{Transport: "<name>"})`) and build a `*client.Client` pointed at it — this is the ONLY way the transport touches the agent.
+1. Create `transports/<name>/`. Its `Run(ctx, a *agent.Agent, opts ...Option) error` — a functional-options runner, matching `server.Run`/`transports/acp.Run`/`transports/telegram.Run`/`transports/slack.Run` — starts an in-process server on a loopback port (`server.NewServer(a, server.ServerOptions{Transport: "<name>"})`) and builds a `*client.Client` pointed at it — this is the ONLY way the transport touches the agent. Its `Option`/`With*` constructors configure the TRANSPORT itself only (listen address, bot credentials, session model/thinking overrides — named `WithSession*` to make that scope explicit, e.g. `WithSessionModel`) — never the agent's own construction-time config (thinking level, scheduler, tools, memory, …), which the caller decides before Run is ever invoked via `agent.AgentOptions`/`harness.AgentWith*`. In particular, don't add a `WithScheduler`-style option here: enabling the cron engine is always an `AgentOptions.EnableScheduler` decision made when the agent is built, not something a transport configures.
 2. Translate the transport's native protocol into `client.Client` calls (`CreateSession`, `SendPrompt`/`SendPromptWithImages`, `StreamEvents`, `ExecCommand`, …) and translate `client.Event`s back into the transport's native wire format. This translation is the entire job of the package — no business logic belongs here.
 3. Add the CLI command per "Adding a New Command" above (`kong.go` + `kong_run_<name>.go`), building the agent with `newInteractiveAgent(...)` (or `newConfigAgent()`/`newAgent()` if the transport is one-shot, not interactive) in `internal/cli/agent.go`.
 4. If the transport has its own on-disk state (auth tokens, pairing lists, …), keep it under `~/.harness/<name>.json` or a directory of its own — never reuse another transport's store.
+5. Add a `RunXxx` + `XxxWith*` alias set to `harness.go`'s facade (see `RunTelegram`/`TelegramWith*` for the pattern) — each is a thin `var RunXxx = xxx.Run` / `var XxxWithY = xxx.WithY` alias, never a reimplementation.
 
 ## Thinking System
 
@@ -263,13 +276,13 @@ Universal levels mapped per-provider:
 - **Error handling:** Return errors up, don't panic. Log to stderr only for fatal.
 - **Streaming callback:** `StreamCallback = func(StreamEvent)` — events fire inline during HTTP read.
 - **Tool execution after stream:** the stream accumulates `pendingCalls`; once it closes, all tool calls run **concurrently** (one goroutine each, joined by `sync.WaitGroup`) and the loop waits for every result before the next iteration.
-- **Goroutines are the exception, not the rule.** The ReAct loop itself is sequential. Deliberate uses: parallel tool execution (`agent/session.go`), TUI spinner (`internal/transport/tui/components/spinner.go`), SSE readers (`internal/providers/llm/sse.go`, `internal/client/stream.go`), `bash` timeout wait, MCP HTTP transport, and the Telegram pump. Don't add new ones without a reason.
+- **Goroutines are the exception, not the rule.** The ReAct loop itself is sequential. Deliberate uses: parallel tool execution (`agent/session.go`), TUI spinner (`internal/tui/components/spinner.go`), SSE readers (`internal/providers/llm/sse.go`, `client/stream.go`), `bash` timeout wait, MCP HTTP transport, and the Telegram pump. Don't add new ones without a reason.
 - **`bufio.Writer` for output.** All terminal output goes through the buffered writer with explicit `flush()`. Never use `fmt.Println` directly.
 
 ## Anti-Patterns to Avoid
 
 - ❌ Adding `Complete()` (non-streaming) to Provider interface
-- ❌ Importing `internal/server` or `internal/transport/` from `agent/` or `internal/providers/`
+- ❌ Importing `server` or `transports/` from `agent/` or `internal/providers/`
 - ❌ Exposing an `internal/…` type in a public (SDK) package signature
 - ❌ File-based model cache
 - ❌ Multiple spinner goroutines running simultaneously
@@ -283,10 +296,10 @@ Keep files focused. Current largest files for reference:
 
 | File | Lines | Role |
 |------|-------|------|
-| `transport/tui/components/markdown.go` | ~1130 | Faithful streaming markdown renderer (complex by nature) |
-| `internal/server/server.go` | ~1080 | HTTP/SSE routes + handlers |
-| `agent/session.go` | ~865 | Session lifecycle, ReAct loop, history, tool pairing |
-| `agent/agent.go` | ~695 | Agent factory, MCP/memory/scheduler wiring, prompt assembly |
+| `server/server.go` | ~1420 | HTTP/SSE routes + handlers |
+| `agent/session.go` | ~1170 | Session lifecycle, ReAct loop, history, tool pairing |
+| `internal/tui/components/markdown.go` | ~1130 | Faithful streaming markdown renderer (complex by nature) |
+| `agent/agent.go` | ~920 | Agent factory, MCP/memory/scheduler wiring, prompt assembly |
 | `internal/providers/claude_oauth.go` | ~610 | OAuth token management + streaming |
 | `internal/providers/llm/anthropic.go` | ~505 | Anthropic request/response types |
 | `internal/cli/app.go` | ~85 | CLI router + dispatch |

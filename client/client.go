@@ -1,5 +1,5 @@
 // Package client is the single, typed HTTP/SSE client for harness's internal
-// API (internal/server). Every transport (TUI, Telegram, the CLI's one-shot
+// API (server). Every transport (TUI, Telegram, the CLI's one-shot
 // `-p` prompt, and any future one) is a thin frontend over the same backend —
 // this is the one client they all share, instead of each reimplementing the
 // same request/decode/stream boilerplate.
@@ -26,7 +26,7 @@ import (
 )
 
 // Client is a typed HTTP/SSE client for the harness internal API
-// (internal/server). One instance per connection to a running server
+// (server). One instance per connection to a running server
 // (typically the in-process server a transport starts on a loopback port via
 // startInternalServer).
 type Client struct {

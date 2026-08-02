@@ -708,7 +708,7 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 	}
 	// Colleague tools — discover and delegate to OTHER running harness
 	// instances on this machine, backed by ~/.harness/instances.json (owned
-	// and written by internal/server; these tools read the same file path
+	// and written by server; these tools read the same file path
 	// directly with their own minimal parser — see agent/tools/colleague.go).
 	// Off unless EnableColleagues.
 	if a.opts.EnableColleagues {

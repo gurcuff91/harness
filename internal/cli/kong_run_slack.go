@@ -10,22 +10,29 @@ package cli
 import (
 	"fmt"
 
-	"github.com/gurcuff91/harness/internal/transport/slack"
+	"github.com/gurcuff91/harness/transports/slack"
 )
 
 func (c *slackRunCmd) Run() error {
+	// c.Scheduler decides the AGENT's own scheduler engine here — it's an
+	// agent.AgentOptions.EnableScheduler concern, not something
+	// slack.Options carries (see its doc comment for why).
 	a := newInteractiveAgent(c.Scheduler, slack.Directive)
 	ctx, cancel := signalContext()
 	defer cancel()
 
-	return slack.Run(ctx, a, slack.Options{
-		Workspace: c.Workspace,
-		XoxC:      c.XoxC,
-		XoxD:      c.XoxD,
-		Model:     c.Model,
-		Thinking:  c.Thinking,
-		Scheduler: c.Scheduler,
-	})
+	opts := []slack.Option{
+		slack.WithWorkspace(c.Workspace),
+		slack.WithXoxC(c.XoxC),
+		slack.WithXoxD(c.XoxD),
+	}
+	if c.Model != "" {
+		opts = append(opts, slack.WithSessionModel(c.Model))
+	}
+	if c.Thinking != "" {
+		opts = append(opts, slack.WithSessionThinking(c.Thinking))
+	}
+	return slack.Run(ctx, a, opts...)
 }
 
 func (c *slackLoginCmd) Run() error {

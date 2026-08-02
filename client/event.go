@@ -9,7 +9,7 @@ import "encoding/json"
 // mirrors exactly how every consumer already treated the events (switch on the
 // type string, then read the handful of fields that type carries), only typed
 // instead of map[string]any lookups. The wire shape is defined by the server's
-// formatEvent (internal/server/sse.go); the json tags here match it 1:1.
+// formatEvent (server/sse.go); the json tags here match it 1:1.
 type Event struct {
 	Type string `json:"type"`
 

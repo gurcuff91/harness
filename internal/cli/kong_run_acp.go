@@ -1,10 +1,9 @@
-// Run() for `harness acp` — bridges the ACP transport onto stdin/stdout.
+// Run() for `harness acp` — bridges the ACP transport onto stdin/stdout
+// (acp.Run's defaults, so no options are needed here).
 package cli
 
 import (
-	"os"
-
-	"github.com/gurcuff91/harness/internal/transport/acp"
+	"github.com/gurcuff91/harness/transports/acp"
 )
 
 func (c *acpCmd) Run() error {
@@ -12,5 +11,5 @@ func (c *acpCmd) Run() error {
 	defer a.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
-	return acp.Run(ctx, a, os.Stdin, os.Stdout)
+	return acp.Run(ctx, a)
 }

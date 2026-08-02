@@ -5,7 +5,7 @@
 package cli
 
 import (
-	"github.com/gurcuff91/harness/internal/transport/tui"
+	"github.com/gurcuff91/harness/internal/tui"
 )
 
 func (c *tuiCmd) Run() error {

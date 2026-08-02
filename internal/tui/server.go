@@ -1,4 +1,4 @@
-package cli
+package tui
 
 import (
 	"fmt"
@@ -8,10 +8,9 @@ import (
 	"github.com/gurcuff91/harness/server"
 )
 
-// startInternalServer starts the HTTP transport on a random port. Because we
-// open the listener ourselves and hand it straight to Serve, the port is already
-// accepting connections the instant net.Listen returns — no close-then-reopen
-// race, so no readiness polling is needed.
+// startInternalServer starts the HTTP transport on a random loopback port.
+// tui talks to this in-process server exactly like an external client —
+// keeping the frontend/backend separation clean.
 func startInternalServer(a *agent.Agent) (*internalServer, string, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -19,7 +18,7 @@ func startInternalServer(a *agent.Agent) (*internalServer, string, error) {
 	}
 	addr := listener.Addr().String()
 
-	srv := server.NewServer(a, server.ServerOptions{Verbose: false, Transport: "cli"})
+	srv := server.NewServer(a, server.ServerOptions{Verbose: false, Transport: "tui"})
 	go srv.Serve(listener) //nolint:errcheck
 
 	return &internalServer{srv: srv}, addr, nil

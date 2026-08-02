@@ -67,7 +67,7 @@ func newOneShotAgent() *agent.Agent {
 //
 // EnableColleagues is always on here: these are exactly the long-running
 // processes that register themselves in ~/.harness/instances.json (see
-// internal/server.Serve) and so are the ones worth discovering/delegating to.
+// server.Serve) and so are the ones worth discovering/delegating to.
 // One-shot commands (newOneShotAgent) and config-only commands
 // (newConfigAgent) never enable it — a process that exits in milliseconds has
 // nothing to offer a colleague and no time to wait for one.

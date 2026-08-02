@@ -4,21 +4,28 @@
 package cli
 
 import (
-	"github.com/gurcuff91/harness/internal/transport/telegram"
+	"github.com/gurcuff91/harness/transports/telegram"
 )
 
 func (c *telegramRunCmd) Run() error {
+	// c.Scheduler decides the AGENT's own scheduler engine here — it's an
+	// agent.AgentOptions.EnableScheduler concern, not something
+	// telegram.Options carries (see its doc comment for why).
 	a := newInteractiveAgent(c.Scheduler, telegram.Directive)
 	ctx, cancel := signalContext()
 	defer cancel()
 
-	return telegram.Run(ctx, a, telegram.Options{
-		Token:       c.Token,
-		Model:       c.Model,
-		Thinking:    c.Thinking,
-		Scheduler:   c.Scheduler,
-		AllowUnpair: c.AllowUnpair,
-	})
+	opts := []telegram.Option{telegram.WithToken(c.Token)}
+	if c.Model != "" {
+		opts = append(opts, telegram.WithSessionModel(c.Model))
+	}
+	if c.Thinking != "" {
+		opts = append(opts, telegram.WithSessionThinking(c.Thinking))
+	}
+	if c.AllowUnpair {
+		opts = append(opts, telegram.WithAllowUnpair())
+	}
+	return telegram.Run(ctx, a, opts...)
 }
 
 func (c *telegramPairCmd) Run() error {

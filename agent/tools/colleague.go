@@ -17,18 +17,18 @@ import (
 
 // ── Instance registry reader (minimal, self-contained) ──────────────────────
 //
-// ~/.harness/instances.json is written by internal/server (RegisterInstance/
+// ~/.harness/instances.json is written by server (RegisterInstance/
 // UnregisterInstance, guarded by a cross-process file lock) every time a
 // `harness serve`-style process starts/stops. That file — its path and JSON
 // shape — is the interop contract, not a shared Go type: these tools read it
-// directly with their own tiny parser instead of importing internal/server
+// directly with their own tiny parser instead of importing server
 // (which agent/tools must never do) or promoting the whole registry
 // implementation (name generator, file-locking, liveness probing) to a public
 // package just to hand over a struct. If the on-disk shape ever changes,
 // update this struct to match — it intentionally only declares the fields
 // these tools actually use.
 
-// instanceEntry mirrors the subset of internal/server's InstanceInfo this
+// instanceEntry mirrors the subset of server's InstanceInfo this
 // package needs. Extra fields on disk (if any) are ignored by json.Unmarshal.
 type instanceEntry struct {
 	Version   string `json:"version"`

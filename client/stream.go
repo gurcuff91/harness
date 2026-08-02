@@ -16,7 +16,7 @@ import (
 // (one per streamed token/fragment); if the consumer falls behind a burst for
 // a moment, this is how much slack it gets before backpressure reaches the
 // socket read. Matches sseClientBufferSize on the server's side of the same
-// pipe (internal/server/server.go) — the two ends of one pipe should have
+// pipe (server/server.go) — the two ends of one pipe should have
 // comparable slack, not one starving the other.
 //
 // This single constant replaces three independent (and drifted) values that

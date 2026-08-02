@@ -18,20 +18,33 @@
 //	sess.Subscribe(func(e types.Event) { /* render */ })
 //	sess.Prompt(ctx, "Hello!")
 //
+// An already-built agent can also be handed to a RUNNER — a blocking call
+// that serves it over a transport until ctx is cancelled: [RunServer] for
+// the HTTP/SSE API, [RunTelegram] / [RunSlack] for a chat bot, [RunAcp] for
+// the Agent Client Protocol (Zed and other ACP clients). Each is a thin
+// alias over its package's own Run — see [server], [transports/telegram],
+// [transports/slack], [transports/acp] for the real implementations and
+// their Option types.
+//
+//	ctx, cancel := context.WithCancel(context.Background())
+//	defer cancel()
+//	err := harness.RunServer(ctx, a, harness.ServerWithAddr(":8080"))
+//
 // Deeper building blocks live in their own public packages:
-//   - agent           — Agent, Session, and the contracts you implement
-//                        (agent.ResourceLoader) or extend (agent.PromptOption)
-//   - agent/store     — SessionStore + SessionMeta, the persistence port
-//   - agent/resources — ResourceLoader internals (the default filesystem one)
-//   - agent/tools     — Tool, the registry, and built-in tools
-//   - agent/memory    — the persistent memory store internals
-//   - types           — Event, Message, ModelMeta and other shared types
+//   - agent            — Agent, Session, and the contracts you implement
+//     (agent.ResourceLoader) or extend (agent.PromptOption)
+//   - agent/store      — SessionStore + SessionMeta, the persistence port
+//   - agent/resources  — ResourceLoader internals (the default filesystem one)
+//   - agent/tools      — Tool, the registry, and built-in tools
+//   - agent/memory     — the persistent memory store internals
+//   - server           — the HTTP/SSE backend every transport (including this
+//     facade's RunServer) runs on top of
+//   - transports/{telegram,slack,acp} — the runners RunTelegram/RunSlack/
+//     RunAcp wrap, and their Option types
+//   - client           — typed HTTP/SSE client for a running harness server
+//   - types            — Event, Message, ModelMeta and other shared types
 //
-// A process that runs `harness serve` exposes the agent over HTTP/SSE; use
-// [Client] to drive that server remotely instead of embedding the agent
-// directly — same session/prompt/event model, just over the wire.
-//
-// Everything under internal/ (providers, config, transports, build version) is
+// Everything under internal/ (providers, config, the TUI, build version) is
 // implementation detail and not part of the SDK's compatibility surface.
 package harness
 
@@ -41,6 +54,10 @@ import (
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/client"
+	"github.com/gurcuff91/harness/server"
+	"github.com/gurcuff91/harness/transports/acp"
+	"github.com/gurcuff91/harness/transports/slack"
+	"github.com/gurcuff91/harness/transports/telegram"
 )
 
 // Client is a typed HTTP/SSE client for a running harness server (`harness
@@ -50,6 +67,8 @@ type Client = client.Client
 // NewClient connects to a harness server at addr (e.g. "127.0.0.1:8080") and
 // returns a typed client. See [client.New].
 var NewClient = client.New
+
+// ── Agent construction ──────────────────────────────────────────────────
 
 // AgentOption configures an [agent.Agent] at construction time. Options are
 // applied in order by [NewAgent]; later options win. Zero options yields a
@@ -171,3 +190,96 @@ func AgentWithScheduler() AgentOption {
 func AgentWithColleagues() AgentOption {
 	return func(o *agent.AgentOptions) { o.EnableColleagues = true }
 }
+
+// ── Runners ──────────────────────────────────────────────────────────────
+//
+// Each RunX is a direct alias for its package's own Run(ctx, *agent.Agent,
+// ...Option) error — none of them reimplement anything, they only save the
+// caller a sub-package import for the common case. The agent is always
+// already fully configured (thinking level, scheduler, tools, memory, …) by
+// the time it's passed in — a runner's own Option type only ever configures
+// the TRANSPORT itself (listen address, bot credentials, session
+// overrides), never the agent (see each package's Options doc comment).
+// All four block until ctx is cancelled (or the transport's own natural end,
+// e.g. ACP's stdin closing) and return nil for that expected shutdown path.
+
+// RunServer starts the HTTP/SSE server on top of an already-built agent and
+// blocks until ctx is cancelled, performing a graceful shutdown before
+// returning. See [server.Run].
+var RunServer = server.Run
+
+// ServerOption configures a [RunServer] call. See [server.Option].
+type ServerOption = server.Option
+
+// ServerWithAddr sets the listen address (default: "127.0.0.1:0" — loopback
+// only, OS-assigned port). See [server.WithAddr].
+var ServerWithAddr = server.WithAddr
+
+// ServerWithVerbose enables request logging. See [server.WithVerbose].
+var ServerWithVerbose = server.WithVerbose
+
+// RunTelegram starts the Telegram bot transport on top of an already-built
+// agent and blocks until ctx is cancelled. See [telegram.Run].
+var RunTelegram = telegram.Run
+
+// TelegramOption configures a [RunTelegram] call. See [telegram.Option].
+type TelegramOption = telegram.Option
+
+// TelegramWithToken sets the bot token (required). See [telegram.WithToken].
+var TelegramWithToken = telegram.WithToken
+
+// TelegramWithSessionModel overrides the model for sessions this transport
+// creates. See [telegram.WithSessionModel].
+var TelegramWithSessionModel = telegram.WithSessionModel
+
+// TelegramWithSessionThinking overrides the thinking level for sessions
+// this transport creates. See [telegram.WithSessionThinking].
+var TelegramWithSessionThinking = telegram.WithSessionThinking
+
+// TelegramWithAllowUnpair enables auto-pairing: any chat is accepted on
+// first contact instead of requiring `harness telegram pair <chat_id>`
+// first. See [telegram.WithAllowUnpair].
+var TelegramWithAllowUnpair = telegram.WithAllowUnpair
+
+// RunSlack starts the Slack bot transport on top of an already-built agent
+// and blocks until ctx is cancelled. See [slack.Run].
+var RunSlack = slack.Run
+
+// SlackOption configures a [RunSlack] call. See [slack.Option].
+type SlackOption = slack.Option
+
+// SlackWithWorkspace sets the Slack workspace URL (required, unless already
+// saved via `harness slack login`). See [slack.WithWorkspace].
+var SlackWithWorkspace = slack.WithWorkspace
+
+// SlackWithXoxC sets the xoxc- browser session API token (required, unless
+// already saved). See [slack.WithXoxC].
+var SlackWithXoxC = slack.WithXoxC
+
+// SlackWithXoxD sets the xoxd- browser session cookie (required, unless
+// already saved). See [slack.WithXoxD].
+var SlackWithXoxD = slack.WithXoxD
+
+// SlackWithSessionModel overrides the model for sessions this transport
+// creates. See [slack.WithSessionModel].
+var SlackWithSessionModel = slack.WithSessionModel
+
+// SlackWithSessionThinking overrides the thinking level for sessions this
+// transport creates. See [slack.WithSessionThinking].
+var SlackWithSessionThinking = slack.WithSessionThinking
+
+// RunAcp starts the Agent Client Protocol transport (for Zed and other ACP
+// clients) on top of an already-built agent and blocks until ctx is
+// cancelled or stdin closes. See [acp.Run].
+var RunAcp = acp.Run
+
+// AcpOption configures a [RunAcp] call. See [acp.Option].
+type AcpOption = acp.Option
+
+// AcpWithStdin sets the stream ACP JSON-RPC requests are read from (default:
+// os.Stdin). See [acp.WithStdin].
+var AcpWithStdin = acp.WithStdin
+
+// AcpWithStdout sets the stream ACP JSON-RPC responses/notifications are
+// written to (default: os.Stdout). See [acp.WithStdout].
+var AcpWithStdout = acp.WithStdout
