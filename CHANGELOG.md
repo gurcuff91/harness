@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.74.5] - 2026-08-01
+
+### Fix — `ColleagueAsk`/`Subagent`: default timeout unified to 120s
+- **`agent/tools/colleague.go`**, **`agent/tools/subagent.go`** — `colleagueAskTimeout` (was 60s) and `subagentTimeout` (was 5 minutes, i.e. 300s) now both default to 120 seconds — a more consistent, reasonable wait for tools that invoke another agent/sub-agent's full turn (LLM calls, tool use, multi-step reasoning) rather than a quick API round trip. Both tool schemas' `timeout` field descriptions updated to match. Full suite + `-race` green.
+
+## [0.74.4] - 2026-08-01
+
+### Feat — `Subagent` tool: configurable timeout + background mode (matches `ColleagueAsk`)
+- **`agent/tools/subagent.go`** — the tool previously had a hardcoded 5-minute timeout with no way to override it and no way to avoid blocking the caller's turn while a sub-agent explores a large codebase or works through a multi-step task. Ported the exact `timeout`/`background` shape already established by `ColleagueAsk`: an optional `timeout` (seconds, default 300 — the same value as before, now just configurable) for the blocking path, and an optional `background: true` that returns immediately with a path to a result file, running the sub-agent in a goroutine with no artificial timeout (only the caller's own `ctx`, e.g. a real `/stop`, can still cancel it).
+- **One documented difference from `ColleagueAsk`**: `ColleagueAsk` delegates to a separate harness *process*, so its background mode survives independently. `Subagent` runs in-process via the executor closure — if the parent process exits, the background goroutine (and whatever it was about to write) goes with it. "background" here means "doesn't block the current turn", not "survives the process".
+- 8 new tests cover the foreground default timeout, a custom timeout actually being applied and expiring, background mode returning immediately, writing its result to a file, and background correctly ignoring an incidental `timeout` value. Verified manually end-to-end: `background: true` returned the file-path message immediately, and the sub-agent's real answer appeared in that file moments later. Full suite + `-race` green.
+
 ## [0.74.3] - 2026-08-01
 
 ### Fix — `harness acp`: the same provider-error-details loss also affected non-turn errors

@@ -144,7 +144,7 @@ type colleagueAskInput struct {
 }
 
 // colleagueAskTimeout is the default wait when Timeout isn't specified.
-const colleagueAskTimeout = 60 * time.Second
+const colleagueAskTimeout = 120 * time.Second
 
 // ColleagueAsk returns a Tool that delegates a prompt to another running
 // harness instance by name, blocking for the response (or, with background:
@@ -160,7 +160,7 @@ func ColleagueAsk() Tool {
 					"colleague": {"type": "string", "description": "Name of the colleague instance (from ColleagueList)"},
 					"prompt": {"type": "string", "description": "The prompt to delegate"},
 					"images": {"type": "array", "items": {"type": "string"}, "description": "Local file paths of images to attach (png, jpg, jpeg, gif, webp)"},
-					"timeout": {"type": "integer", "description": "Seconds to wait for a response (default: 60). Ignored when background is true — background waits as long as needed."},
+					"timeout": {"type": "integer", "description": "Seconds to wait for a response (default: 120). Ignored when background is true — background waits as long as needed."},
 					"background": {"type": "boolean", "description": "If true, return immediately with a path to a result file instead of blocking, and wait as long as needed (no timeout). Default false."}
 				},
 				"required": ["colleague", "prompt"]
