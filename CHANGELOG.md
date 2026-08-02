@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.4] - 2026-08-02
+
+### Add — `SlackAsk` now supports `<slack:uploadFile>` attachments, same as `SlackPost`
+- **Gap**: `SlackAsk` posted its question via a plain `bot.PostMessage(ctx, channelID, toMrkdwn(args.Text))`, never running the `<slack:uploadFile>` extraction `SlackPost` already does — a question with an embedded upload tag would have posted the literal tag text instead of uploading anything.
+- **Fix** (`transports/slack/tools.go`) — `SlackAsk`'s executor now runs `extractUploads(args.Text)` first, exactly like `SlackPost`: if the question carries one or more `<slack:uploadFile>` tags, each path is uploaded via `bot.UploadFile` (the first carries the cleaned question text as its caption) instead of a plain `PostMessage`. Description and input schema updated to document the same attachment mechanism `SlackPost` already advertises.
+- `transports/slack/directive.go`'s `SlackAsk` bullet updated to mention the same `<slack:uploadFile>` support.
+- New test `TestSlackAskUploadsFileFromUploadFileTag` (`transports/slack/tools_ask_test.go`) — a fake Slack server recording which API methods were called confirms the upload flow (`files.getUploadURLExternal` → PUT → `files.completeUploadExternal`) runs instead of `chat.postMessage` when the question text carries the tag. Full suite + `-race` green.
+
 ## [0.76.3] - 2026-08-02
 
 ### Fix — `transports/slack.Directive` didn't mention `SlackAsk`

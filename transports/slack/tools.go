@@ -244,8 +244,9 @@ func slackAskTool(bot *Bot, myID string, t *Transport) atools.Tool {
 				"If they don't respond in time, that's a normal outcome, not necessarily an error — you can try again later. " +
 				"Only works for DIRECT MESSAGES — a user ID (U...) or an existing DM channel (D...); a channel name (#general) or channel ID (C...) is REJECTED, since \"the\" reply is ambiguous once more than one person can answer — use SlackPost for those (fire-and-forget, no waiting). " +
 				"Opens the DM automatically if one doesn't exist yet. Only one SlackAsk can be pending per DM at a time. " +
+				"To attach files to your question, embed <slack:uploadFile>/path/to/file</slack:uploadFile> tags anywhere in text — they are stripped from the visible message and uploaded automatically, same as SlackPost. " +
 				"The reply's text is returned, along with any image the person attached (visible directly) and any text file (as a `<slack:attach>` path your Read tool can open).",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{"channel":{"type":"string","description":"User ID (U...) or an existing DM channel ID (D...). A channel name (#general) or channel ID (C...) is accepted as input but always rejected — SlackAsk cannot target a group channel"},"text":{"type":"string","description":"The question to ask"},"timeout":{"type":"integer","description":"Seconds to wait for a reply (default: 120)"}},"required":["channel","text"]}`),
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"channel":{"type":"string","description":"User ID (U...) or an existing DM channel ID (D...). A channel name (#general) or channel ID (C...) is accepted as input but always rejected — SlackAsk cannot target a group channel"},"text":{"type":"string","description":"The question to ask. Embed <slack:uploadFile>/path</slack:uploadFile> tags to attach files."},"timeout":{"type":"integer","description":"Seconds to wait for a reply (default: 120)"}},"required":["channel","text"]}`),
 		},
 		ExecuteRich: func(ctx context.Context, input json.RawMessage) (string, []types.ImageData, error) {
 			var args struct {
@@ -288,7 +289,21 @@ func slackAskTool(bot *Bot, myID string, t *Transport) atools.Tool {
 			// already "pending" forever.
 			defer t.unregisterAsk(channelID)
 
-			if err := bot.PostMessage(ctx, channelID, toMrkdwn(args.Text)); err != nil {
+			// Extract <slack:uploadFile> tags from text — identical mechanism
+			// to SlackPost, so a question can carry an attachment the same
+			// way a fire-and-forget post can.
+			filePaths, cleanText := extractUploads(args.Text)
+			if len(filePaths) > 0 {
+				for i, path := range filePaths {
+					comment := ""
+					if i == 0 {
+						comment = toMrkdwn(cleanText)
+					}
+					if err := bot.UploadFile(ctx, channelID, path, comment); err != nil {
+						return "", nil, fmt.Errorf("upload %s: %w", path, err)
+					}
+				}
+			} else if err := bot.PostMessage(ctx, channelID, toMrkdwn(cleanText)); err != nil {
 				return "", nil, fmt.Errorf("post question: %w", err)
 			}
 

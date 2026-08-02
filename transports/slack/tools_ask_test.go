@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,34 @@ func newFakeSlackServer(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	}))
+}
+
+// newFakeSlackServerRecordingCalls is like newFakeSlackServer but records
+// which API methods (by URL path suffix) were called — used to verify
+// SlackAsk's upload path (files.getUploadURLExternal → PUT →
+// files.completeUploadExternal) runs instead of a plain chat.postMessage
+// when the question text carries a <slack:uploadFile> tag. The server also
+// serves the pre-signed "upload_url" it hands back, pointing right back at
+// itself, so the PUT step (which needs no Slack auth) has somewhere to go.
+func newFakeSlackServerRecordingCalls(t *testing.T) (*httptest.Server, *[]string) {
+	t.Helper()
+	var calls []string
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "files.getUploadURLExternal"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true, "upload_url": srv.URL + "/upload", "file_id": "F123",
+			})
+		case r.URL.Path == "/upload":
+			w.WriteHeader(http.StatusOK)
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		}
+	}))
+	return srv, &calls
 }
 
 // newFakeSlackServerWithChannel is like newFakeSlackServer but resolves
@@ -173,6 +202,54 @@ func TestSlackAskReceivesReplyBeforeTimeout(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("SlackAsk never returned after the reply was delivered")
+	}
+}
+
+// TestSlackAskUploadsFileFromUploadFileTag verifies SlackAsk supports the
+// same <slack:uploadFile> attachment mechanism SlackPost already does: a
+// question carrying the tag must upload the file via the
+// getUploadURLExternal → PUT → completeUploadExternal flow (bot.UploadFile)
+// instead of a plain chat.postMessage, and the tag itself must not end up
+// literally posted as part of the question text.
+func TestSlackAskUploadsFileFromUploadFileTag(t *testing.T) {
+	srv, calls := newFakeSlackServerRecordingCalls(t)
+	defer srv.Close()
+
+	tmpFile, err := os.CreateTemp(t.TempDir(), "report-*.txt")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	if _, err := tmpFile.WriteString("hello"); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	bot := NewBot(srv.URL, "xoxc", "xoxd")
+	tr := newTestTransportForAsks()
+	tool := slackAskTool(bot, "UMYSELF", tr)
+
+	question := "Can you check this? <slack:uploadFile>" + tmpFile.Name() + "</slack:uploadFile>"
+	input, _ := json.Marshal(map[string]any{"channel": "D123", "text": question, "timeout": 1})
+
+	_, _, err = tool.ExecuteRich(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err) // times out after 1s — that's fine, we're checking the post mechanism
+	}
+
+	var sawUploadFlow, sawPlainPost bool
+	for _, c := range *calls {
+		if strings.Contains(c, "files.getUploadURLExternal") || strings.Contains(c, "files.completeUploadExternal") {
+			sawUploadFlow = true
+		}
+		if strings.Contains(c, "chat.postMessage") {
+			sawPlainPost = true
+		}
+	}
+	if !sawUploadFlow {
+		t.Errorf("expected the upload flow (getUploadURLExternal/completeUploadExternal) to run, calls: %v", *calls)
+	}
+	if sawPlainPost {
+		t.Errorf("expected chat.postMessage NOT to run when an upload tag is present, calls: %v", *calls)
 	}
 }
 
