@@ -284,7 +284,7 @@ func TestPumpEventsMaxIterationsReachedDoesNotStopTheTurn(t *testing.T) {
 	}
 	warning := notes[0]["params"].(map[string]any)["update"].(map[string]any)
 	warningText := warning["content"].(map[string]any)["text"]
-	if warningText != "⚠ reached the 50-iteration limit — summarizing progress" {
+	if warningText != "⚠ reached the 50-iteration limit — summarizing progress\n" {
 		t.Errorf("warning text = %q", warningText)
 	}
 	summary := notes[1]["params"].(map[string]any)["update"].(map[string]any)
@@ -343,13 +343,13 @@ func TestPumpEventsCompactStartAndEnd(t *testing.T) {
 		t.Errorf("compact_start sessionUpdate = %v", start["sessionUpdate"])
 	}
 	startText := start["content"].(map[string]any)["text"]
-	if startText != "⏳ Compacting context..." {
+	if startText != "⏳ Compacting context...\n" {
 		t.Errorf("compact_start text = %q", startText)
 	}
 
 	end := notes[1]["params"].(map[string]any)["update"].(map[string]any)
 	endText := end["content"].(map[string]any)["text"]
-	if endText != "✓ Context compacted." {
+	if endText != "✓ Context compacted.\n" {
 		t.Errorf("compact_end text = %q", endText)
 	}
 }

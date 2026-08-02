@@ -207,10 +207,30 @@ func (h *handler) handlePrompt(ctx context.Context, c *conn, p promptParams) (pr
 
 	// Slash commands arrive as plain text inside session/prompt — ACP has no
 	// dedicated method for invoking one (see slash-commands.md: "Commands are
-	// run as part of regular prompt requests"). Only "compact" and "skill:*"
-	// are recognized here — see executableCommand's doc comment for why
-	// rename/model/thinking/reset are deliberately NOT handled this way.
+	// run as part of regular prompt requests"). "compact", "skill:*", "info"
+	// and "context" are recognized here — see executableCommand's doc comment
+	// for why rename/model/thinking/reset are deliberately NOT handled.
 	if cmd, cmdArgs, ok := executableCommand(text); ok {
+		// "info" and "context" are read-only API queries — no ExecCommand,
+		// no event stream, no LLM call. Format the response as a single
+		// agent_message_chunk and end the turn cleanly. They use the same
+		// notify + end_turn pattern as the compact error path below.
+		if cmd == "info" || cmd == "context" {
+			chunk, err := h.formatSessionQuery(p.SessionID, cmd)
+			if err != nil {
+				notify(c, p.SessionID, sessionUpdate{
+					SessionUpdate: "agent_message_chunk",
+					Content:       ptr(textBlock("✗ " + err.Error() + "\n")),
+				})
+			} else {
+				notify(c, p.SessionID, sessionUpdate{
+					SessionUpdate: "agent_message_chunk",
+					Content:       ptr(textBlock(chunk)),
+				})
+			}
+			return promptResult{StopReason: stopReasonEndTurn}, nil
+		}
+
 		status, execErr := h.api.ExecCommand(p.SessionID, cmd, cmdArgs)
 		if execErr != nil {
 			// A failed command is a normal conversational outcome, not a
@@ -256,12 +276,42 @@ func (h *handler) handlePrompt(ctx context.Context, c *conn, p promptParams) (pr
 	return promptResult{StopReason: outcome.stopReason}, nil
 }
 
+// formatSessionQuery handles the read-only /info and /context slash commands
+// — it calls the corresponding GET endpoint and formats the response as
+// plain text suitable for an agent_message_chunk. Unlike compact/skill,
+// these don't produce a turn or event stream: they're pure API queries.
+func (h *handler) formatSessionQuery(sessionID, cmd string) (string, error) {
+	switch cmd {
+	case "info":
+		info, err := h.api.GetSessionInfo(sessionID)
+		if err != nil {
+			return "", err
+		}
+		return formatInfoPlain(info), nil
+	case "context":
+		bd, err := h.api.GetSessionContext(sessionID)
+		if err != nil {
+			return "", err
+		}
+		return formatContextPlain(bd), nil
+	default:
+		return "", fmt.Errorf("unknown query command: %s", cmd)
+	}
+}
+
 // executableCommand recognizes text as an actual session command to EXECUTE
 // (via client.ExecCommand) rather than send to the LLM as a normal prompt.
-// Only "compact" and "skill:<name>" qualify — both are the two commands that
-// put the agent to REAL work (a genuine turn worth streaming back, exactly
-// like a prompt), which is why they're handled here at all instead of
-// falling through to SendPrompt.
+// "compact" and "skill:<name>" qualify — both put the agent to REAL work (a
+// genuine turn worth streaming back, exactly like a prompt), which is why
+// they're handled here at all instead of falling through to SendPrompt.
+//
+// "info" and "context" also qualify but are handled differently: they're
+// read-only API queries (GET /api/sessions/{id}/info and /context), not
+// session commands that produce a turn. handlePrompt intercepts them before
+// the ExecCommand path and formats the response as a single
+// agent_message_chunk — no event stream, no LLM call. They're listed in
+// available_commands_update via buildAvailableCommands (appended manually,
+// since ListCommands doesn't expose them).
 //
 // rename/model/thinking/reset are deliberately excluded even though the
 // Harness session API supports them as commands too:
@@ -293,6 +343,14 @@ func executableCommand(text string) (cmd string, params map[string]any, ok bool)
 	switch {
 	case name == "compact":
 		return "compact", map[string]any{}, true
+	case name == "info":
+		// Read-only API query — handled inline in handlePrompt (no
+		// ExecCommand, no event stream). Not a Harness session command
+		// (ListCommands doesn't expose it); it's a standalone GET endpoint.
+		return "info", map[string]any{}, true
+	case name == "context":
+		// Same as /info — read-only GET, handled inline.
+		return "context", map[string]any{}, true
 	case strings.HasPrefix(name, "skill:"):
 		params := map[string]any{}
 		if args != "" {

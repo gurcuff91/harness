@@ -512,6 +512,91 @@ func TestSlashSkillUnknownNameReportsCleanFailure(t *testing.T) {
 	}
 }
 
+// TestSlashInfoReturnsSessionInfoAsChunk verifies that "/info" sent as
+// session/prompt text is handled inline as a read-only API query — it calls
+// GET /api/sessions/{id}/info, formats the result as plain text, and sends
+// it as a single agent_message_chunk with stopReason end_turn. It must NOT
+// be forwarded to the LLM (no SendPrompt, no event stream).
+func TestSlashInfoReturnsSessionInfoAsChunk(t *testing.T) {
+	h := startHarness(t, newTestAgent(t))
+	h.send(1, "session/new", newSessionParams{CWD: t.TempDir()})
+	resp := h.readResponseFor(1)
+	if resp["error"] != nil {
+		t.Skip("no active provider configured in this environment — cannot create a session to test against")
+	}
+	sessionID := resp["result"].(map[string]any)["sessionId"].(string)
+
+	h.send(2, "session/prompt", promptParams{SessionID: sessionID, Prompt: []contentBlock{textBlock("/info")}})
+	resp, notifications := h.readResponseForCollecting(2)
+	if resp["error"] != nil {
+		t.Fatalf("/info must not be a protocol error: %v", resp["error"])
+	}
+	if resp["result"].(map[string]any)["stopReason"] != stopReasonEndTurn {
+		t.Errorf("stopReason = %v, want %q", resp["result"].(map[string]any)["stopReason"], stopReasonEndTurn)
+	}
+
+	var infoText string
+	for _, n := range notifications {
+		params, ok := n["params"].(map[string]any)
+		if !ok {
+			continue
+		}
+		update, ok := params["update"].(map[string]any)
+		if !ok || update["sessionUpdate"] != "agent_message_chunk" {
+			continue
+		}
+		text, _ := update["content"].(map[string]any)["text"].(string)
+		if strings.Contains(text, "harness") || strings.Contains(text, "model") {
+			infoText = text
+		}
+	}
+	if infoText == "" {
+		t.Errorf("expected an agent_message_chunk with session info, got: %v", notifications)
+	}
+}
+
+// TestSlashContextReturnsContextBreakdownAsChunk verifies that "/context"
+// is handled inline as a read-only API query — same pattern as /info but
+// calling GET /api/sessions/{id}/context and formatting the context
+// breakdown (system, tools, conversation, free space) as plain text.
+func TestSlashContextReturnsContextBreakdownAsChunk(t *testing.T) {
+	h := startHarness(t, newTestAgent(t))
+	h.send(1, "session/new", newSessionParams{CWD: t.TempDir()})
+	resp := h.readResponseFor(1)
+	if resp["error"] != nil {
+		t.Skip("no active provider configured in this environment — cannot create a session to test against")
+	}
+	sessionID := resp["result"].(map[string]any)["sessionId"].(string)
+
+	h.send(2, "session/prompt", promptParams{SessionID: sessionID, Prompt: []contentBlock{textBlock("/context")}})
+	resp, notifications := h.readResponseForCollecting(2)
+	if resp["error"] != nil {
+		t.Fatalf("/context must not be a protocol error: %v", resp["error"])
+	}
+	if resp["result"].(map[string]any)["stopReason"] != stopReasonEndTurn {
+		t.Errorf("stopReason = %v, want %q", resp["result"].(map[string]any)["stopReason"], stopReasonEndTurn)
+	}
+
+	var ctxText string
+	for _, n := range notifications {
+		params, ok := n["params"].(map[string]any)
+		if !ok {
+			continue
+		}
+		update, ok := params["update"].(map[string]any)
+		if !ok || update["sessionUpdate"] != "agent_message_chunk" {
+			continue
+		}
+		text, _ := update["content"].(map[string]any)["text"].(string)
+		if strings.Contains(text, "system") || strings.Contains(text, "tools") || strings.Contains(text, "conversation") {
+			ctxText = text
+		}
+	}
+	if ctxText == "" {
+		t.Errorf("expected an agent_message_chunk with context breakdown, got: %v", notifications)
+	}
+}
+
 func TestSessionCancelUnknownSessionDoesNotPanicOrRespond(t *testing.T) {
 	h := startHarness(t, newTestAgent(t))
 	h.sendNotification("session/cancel", cancelParams{SessionID: "does-not-exist"})

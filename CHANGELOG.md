@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.74.10] - 2026-08-02
+
+### Fix — ACP `/info` and `/context` output was misaligned in Zed
+- **Root cause**: `formatInfoPlain`/`formatContextPlain` (added in v0.74.9) padded labels to a fixed column width (`%-12s` etc.) expecting that to visually align — but that only holds in a monospace font. Zed renders `agent_message_chunk` text as Markdown in a proportional font, where "harness" and "thinking" occupy different pixel widths — so the padded columns looked ragged on screen (reported with a screenshot). Slack's own `formatInfo`/`formatContext` never hit this because they've always wrapped their output in a fenced ` ``` ` block, forcing monospace — ACP's versions never did.
+- **Fix** (`internal/transport/acp/commands.go`) — both formatters now wrap their output in a fenced code block via a new `fence()` helper, plus a title line and a `━` separator (replacing the Markdown bold the fence itself can't render). Column width unified to one named constant (`infoContextFenceWidth`) instead of separate magic numbers per formatter.
+  ```
+  📊 Session info
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  harness         v0.74.9
+  session         Acp 2026-08-02 01:19
+
+  model           ollama-cloud/glm-5.2
+  thinking        medium
+  iters           max 120
+  ...
+  ```
+- Tests updated: `TestFormatInfoPlainRendersKeyFields`/`TestFormatContextPlainRendersKeyFields` now assert the fence wrapper instead of asserting its *absence*; new `TestFenceTrimsTrailingNewlineBeforeClosing` covers the helper directly. Full suite + `-race` green.
+
+## [0.74.9] - 2026-08-02
+
+### Add — ACP: `/info` and `/context` slash commands
+- `internal/transport/acp/methods.go`, `internal/transport/acp/commands.go` — `/info` and `/context` are now recognized as slash commands in ACP's `session/prompt` path. Unlike `compact`/`skill:*` (which trigger real agent turns via `ExecCommand` + event stream), these are **read-only API queries** handled inline: `handlePrompt` calls `GetSessionInfo` / `GetSessionContext` via `client.Client`, formats the response as plain text (`formatInfoPlain` / `formatContextPlain` — no Slack-style Markdown), and sends it as a single `agent_message_chunk` with `stopReason: end_turn`. No LLM call, no event stream, no `ExecCommand`.
+- `buildAvailableCommands` (`commands.go`) now appends `info` and `context` manually after filtering `ListCommands` results — they're not Harness session commands (the server's `ListCommands` only exposes `rename`/`thinking`/`model`/`compact`/`reset` + skills), they're standalone GET endpoints (`/api/sessions/{id}/info` and `/context`), so they'd never appear in the command list otherwise. This makes them discoverable in Zed's command picker.
+- `formatInfoPlain` and `formatContextPlain` mirror the structure of Slack's `formatInfo`/`formatContext` but produce plain text (no `*bold*` or ` ``` ` blocks — ACP renders `agent_message_chunk` content as-is).
+- 8 new tests: `TestExecutableCommandInfo`, `TestExecutableCommandContext` (recognition), `TestSlashInfoReturnsSessionInfoAsChunk`, `TestSlashContextReturnsContextBreakdownAsChunk` (end-to-end: chunk + stopReason), `TestFormatInfoPlainRendersKeyFields`, `TestFormatInfoPlainNil`, `TestFormatContextPlainRendersKeyFields`, `TestFormatContextPlainNil` (formatting). Full suite + `-race` green.
+
+### Fix — ACP: trailing `\n` on compact/max-iterations chat messages
+- `internal/transport/acp/events.go` — the three status messages sent as `agent_message_chunk` during a turn (`⏳ Compacting context...`, `✓ Context compacted.`, `⚠ reached the N-iteration limit — summarizing progress`) now end with `\n`, matching the convention of all other text chunks sent to Zed. Tests updated to match.
+
 ## [0.74.8] - 2026-08-02
 
 ### Fix — `Subagent` foreground mode deadlocked on every call (regression from v0.74.7's `CurrentModel()`)

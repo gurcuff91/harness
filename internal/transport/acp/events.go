@@ -133,13 +133,13 @@ func pumpEvents(c *conn, sessionID string, events <-chan client.Event, stopOnCom
 			// rewritten out from under the conversation it's displaying.
 			notify(c, sessionID, sessionUpdate{
 				SessionUpdate: "agent_message_chunk",
-				Content:       ptr(textBlock("⏳ Compacting context...")),
+				Content:       ptr(textBlock("⏳ Compacting context...\n")),
 			})
 
 		case "compact_end":
 			notify(c, sessionID, sessionUpdate{
 				SessionUpdate: "agent_message_chunk",
-				Content:       ptr(textBlock("✓ Context compacted.")),
+				Content:       ptr(textBlock("✓ Context compacted.\n")),
 			})
 			if stopOnCompactEnd {
 				return promptOutcome{stopReason: stopReasonEndTurn}
@@ -166,7 +166,7 @@ func pumpEvents(c *conn, sessionID string, events <-chan client.Event, stopOnCom
 			// from the real turn_end below, not a max-iterations-specific one.
 			notify(c, sessionID, sessionUpdate{
 				SessionUpdate: "agent_message_chunk",
-				Content:       ptr(textBlock(fmt.Sprintf("⚠ reached the %d-iteration limit — summarizing progress", evt.MaxIterations))),
+				Content:       ptr(textBlock(fmt.Sprintf("⚠ reached the %d-iteration limit — summarizing progress\n", evt.MaxIterations))),
 			})
 
 		case "error":

@@ -100,6 +100,20 @@ func TestExecutableCommandCompact(t *testing.T) {
 	}
 }
 
+func TestExecutableCommandInfo(t *testing.T) {
+	cmd, _, ok := executableCommand("/info")
+	if !ok || cmd != "info" {
+		t.Fatalf("cmd=%q ok=%v, want info/true", cmd, ok)
+	}
+}
+
+func TestExecutableCommandContext(t *testing.T) {
+	cmd, _, ok := executableCommand("/context")
+	if !ok || cmd != "context" {
+		t.Fatalf("cmd=%q ok=%v, want context/true", cmd, ok)
+	}
+}
+
 func TestExecutableCommandSkillNoArgs(t *testing.T) {
 	cmd, params, ok := executableCommand("/skill:brainstorming")
 	if !ok || cmd != "skill:brainstorming" {
