@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.74.8] - 2026-08-02
+
+### Fix — `Subagent` foreground mode deadlocked on every call (regression from v0.74.7's `CurrentModel()`)
+- **Root cause**: `Session.CurrentModel()`, introduced in v0.74.7 to fix the model-freeze bug, took `s.mu.Lock()` — the same mutex `promptSync` holds for the ENTIRE duration of a turn (from before the first ReAct iteration through `wg.Wait()` on parallel tool execution). The `Subagent` tool's executor calls `CurrentModel()` to resolve the session's active model, and that executor runs as one of those parallel tool goroutines inside `runStream`. Result: a textbook **deadlock** — the tool goroutine blocked waiting for `s.mu` while `promptSync`'s `wg.Wait()` blocked waiting for the tool goroutine to finish. A circular wait confirmed by a real stack trace from a killed process:
+  ```
+  goroutine N [sync.Mutex.Lock, 3 minutes]:   Session.CurrentModel       ← waiting for s.mu
+  goroutine M [sync.Mutex.Lock, 3 minutes]:   WaitGroup.Wait → runStream → promptSync  ← already holds s.mu
+  ```
+  Every foreground `Subagent` call hung indefinitely — no timeout fired (the deadlock prevented the tool from ever reaching the timeout check), no error, no result. The process had to be killed externally. Background mode was unaffected (its executor uses `context.Background()`, but it still calls `CurrentModel()` first — that call would also deadlock, but since the whole turn hangs, the background return path is never reached either; in practice ALL Subagent calls were broken).
+- **Fix** (`agent/session.go`) — `CurrentModel()` now reads from an `atomic.Value` (`modelStr`) instead of taking `s.mu`. The value is written under `s.mu` in `newSession` and `SwitchModel` (the same lock that guards the individual `provider`/`modelID` fields), so writes remain serialized with respect to all other state changes — but reads are completely lock-free, so `CurrentModel()` can be called from inside a turn (where `s.mu` is already held) without deadlocking. No new mutex, no lock-ordering change, no added complexity: a single `atomic.Value` field and a `Store` call in the two write sites.
+- **Regression tests** (`agent/subagent_model_test.go`):
+  - `TestCurrentModelDoesNotDeadlockUnderPromptSyncLock` — takes `s.mu` (simulating `promptSync`'s hold during a turn) and calls `CurrentModel()` from another goroutine (simulating the Subagent executor). With the old `s.mu.Lock()`-based implementation this deadlocks and the test times out after 3s; with the `atomic.Value` fix it returns instantly. Verified the test FAILS against the pre-fix code and PASSES against the fix.
+  - `TestCurrentModelConcurrentReadsWhileSwitchModelWrites` — 10 reader goroutines calling `CurrentModel()` in a tight loop while 100 `SwitchModel` calls execute, under `-race`. Catches any data race a non-atomic implementation would introduce.
+- Verified end-to-end against the compiled binary: a foreground `Subagent` call (`background: false`, prompt "Respond with exactly: PONG") completed in ~901ms and returned `PONG` — previously this exact command hung indefinitely. Full suite + `-race` green.
+
 ## [0.74.7] - 2026-08-02
 
 ### Fix — `Subagent` tool: 2 real bugs found while investigating a Zed report — model "frozen" at session creation, and background mode always dying with "context canceled"

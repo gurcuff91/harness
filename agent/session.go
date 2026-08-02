@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gurcuff91/harness/agent/resources"
@@ -70,6 +71,17 @@ type Session struct {
 	mu            sync.Mutex
 	maxIterations int
 	maxTokens     int
+
+	// modelStr is the session's active "provider/model" string, stored in an
+	// atomic.Value so it can be read lock-free from CurrentModel(). The value
+	// is written under s.mu (in newSession and SwitchModel — the same lock
+	// that guards the individual provider/modelID fields) but reads from
+	// CurrentModel() don't need s.mu at all, which is the whole point:
+	// CurrentModel() is called by the Subagent tool's executor, which runs
+	// INSIDE a turn (promptSync holds s.mu for the entire turn, including
+	// tool execution), so taking s.mu there would deadlock. atomic.Value gives
+	// us a safe, consistent snapshot without any lock contention.
+	modelStr atomic.Value // string
 
 	// Follow-up prompts — separate mutex to avoid deadlock with mu
 	followMu      sync.Mutex
@@ -175,6 +187,7 @@ func newSession(storeInst *store.Session,
 	}
 	s.followCond = sync.NewCond(&s.followMu)
 	s.loadModelMeta(modelID)
+	s.modelStr.Store(provider.Name() + "/" + modelID)
 
 	// Restore lastInputTokens from persisted stats so ContextBreakdown() shows
 	// meaningful "actual" + "free space" values immediately on resume, without
@@ -359,12 +372,22 @@ func (s *Session) ModelMeta() *types.ModelMeta {
 // agent.go's buildSessionTools used to close over the model string as it
 // was when the session was FIRST created, so a later /model change was
 // invisible to it — every subsequent sub-agent kept using the original
-// model, including one that had since become rate-limited). Safe to call
-// from any goroutine; SwitchModel holds the same lock while mutating.
+// model, including one that had since become rate-limited).
+//
+// Lock-free (reads an atomic.Value snapshot written under s.mu by
+// newSession/SwitchModel). This is NOT just an optimization: CurrentModel()
+// is called by the Subagent tool's executor, which runs INSIDE a turn — and
+// promptSync holds s.mu for the entire turn, including tool execution. A
+// s.mu.Lock() here would deadlock: the tool goroutine would wait for s.mu
+// while promptSync's wg.Wait() waits for the tool goroutine — a circular
+// wait confirmed by a real stack trace from a hung process. atomic.Value
+// breaks the cycle: the reader needs no lock at all, so it can't block on
+// one that the turn already holds.
 func (s *Session) CurrentModel() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.provider.Name() + "/" + s.modelID
+	if v := s.modelStr.Load(); v != nil {
+		return v.(string)
+	}
+	return "" // unreachable: modelStr is set in newSession before the session escapes
 }
 
 func (s *Session) drainFollowUps() {
@@ -559,6 +582,7 @@ func (s *Session) SwitchModel(ctx context.Context, fullModel string) error {
 	s.provider = provider
 	s.modelID = modelID
 	s.loadModelMeta(modelID)
+	s.modelStr.Store(fullModel) // update lock-free snapshot for CurrentModel()
 	meta := s.store.Meta()
 	meta.Model = fullModel
 	s.store.UpdateMeta(meta)
