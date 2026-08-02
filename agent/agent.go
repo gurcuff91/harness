@@ -231,7 +231,7 @@ func (a *Agent) fireScheduledPrompt(slug, prompt, owner string) {
 		sess, _ = a.ResumeSession(owner)
 	}
 	if sess != nil {
-		sess.Prompt(context.Background(), prompt, WithOriginScheduled())
+		sess.Prompt(context.Background(), prompt, PromptWithOriginScheduled())
 	}
 }
 

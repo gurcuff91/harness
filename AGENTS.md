@@ -27,7 +27,7 @@ under `internal/` is implementation detail the Go compiler forbids third parties
 from importing. A thin `harness.go` facade at the root re-exports the essentials.
 
 ```
-harness.go                      ← 🔓 SDK facade (package harness): New, Agent, Session, Options, Event
+harness.go                      ← 🔓 SDK facade (package harness): NewAgent, AgentWith* options, Client/NewClient — nothing else (no type aliases; use agent.Agent, agent.Session, types.Event, etc. directly)
 cmd/harness/main.go             ← executable entry point (package main) — just calls cli.Main(os.Args)
 
 🔓 PUBLIC (the SDK surface)

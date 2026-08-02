@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.74.14] - 2026-08-02
+
+### Change — `agent.Session.Prompt` options renamed to the `PromptWith*` convention
+- `agent/session.go` — `WithImages`/`WithOriginUser`/`WithOriginScheduled` (all constructing a `PromptOption`, consumed by `Session.Prompt`/`PromptAndWait`) renamed to `PromptWithImages`/`PromptWithOriginUser`/`PromptWithOriginScheduled`. Same naming inconsistency class as `harness.go`'s v0.74.13 cleanup (`With*` → `AgentWith*` for `AgentOption`s) — a bare `With*` name doesn't say which option-config type it belongs to (`AgentOption` vs `PromptOption`), which gets genuinely confusing once a codebase has more than one `With*` family. `PromptWith*` makes the target explicit at the call site.
+- 4 call sites updated: `agent/agent.go` (scheduled-prompt routing), `internal/server/server.go` (`/prompt` and `/ask` handlers, 2 sites each).
+- New `agent/prompt_option_test.go`: `TestBuildPromptConfigDefaultsToUserOrigin`, `TestPromptWithImagesAppendsImages`, `TestPromptWithOriginUserAndScheduled` — no prior test coverage existed for this construct. Full suite + `-race` green; `go vet` clean.
+
+## [0.74.13] - 2026-08-02
+
+### Change — SDK facade (`harness.go`) cleaned up: `NewAgent`/`AgentWith*`, no type aliases
+- **`harness.go`** rewritten: `New` → `NewAgent`, every `With*` option → `AgentWith*` (`AgentWithThinking`, `AgentWithMCPs`, `AgentWithStore`, `AgentWithResourceLoader`, `AgentWithTools`, `AgentWithDisallowedTools`, `AgentWithMaxIterations`, `AgentWithMaxTokens`, `AgentWithSystemPrompt`, `AgentWithDirectives`, `AgentWithMemory`, `AgentWithScheduler`, `AgentWithColleagues`, `AgentWithOptions`). `Option` → `AgentOption`.
+- All type aliases removed (`Agent`, `Options`, `Session`, `PromptOption`, `SessionStore`, `SessionMeta`, `ResourceLoader`, `Tool`, `Event`, `Handler`, and the `WithImages` re-export) — the facade now only wraps **construction** (`NewAgent`/`AgentWith*` returning `*agent.Agent`) plus the fully independent `Client`/`NewClient` (the remote HTTP/SSE client, unrelated to agent construction — kept as-is). Everything else (`agent.Agent`, `agent.Session`, `agent.PromptOption`, `agent.WithImages`, `types.Event`, `agent/tools.Tool`, `agent/store.SessionStore`, `agent/resources.ResourceLoader`, …) is referenced directly from its real package now — no sub-package imports were saved by the removed aliases in practice (confirmed: nothing in this repo ever imported the root `harness` package internally; it exists purely for external SDK consumers), and keeping them meant re-explaining the same type in two places for zero benefit.
+- Package doc comment rewritten to match: shows the `NewAgent`/`AgentWith*` construction pattern and points to `agent`/`agent/store`/`agent/resources`/`agent/tools`/`types` directly for everything else.
+- `AGENTS.md`'s package-tree summary line for `harness.go` updated to match.
+- New `harness_test.go` (smoke tests): `TestNewAgentDefaults`, `TestAgentWithOptionsAppliesConfig` (each `AgentWith*` option actually mutates the built `AgentOptions`), `TestAgentWithOptionsAppliesPrebuiltStruct` (last-write-wins ordering), `TestNewClientAliasIsWired`. Full suite + `-race` green; `go vet` clean.
+
 ## [0.74.12] - 2026-08-02
 
 ### Fix — sub-agents silently ignored a custom `ResourceLoader`, breaking SDK isolation

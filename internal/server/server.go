@@ -948,10 +948,10 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 
 	opts := []agent.PromptOption{}
 	if len(req.Images) > 0 {
-		opts = append(opts, agent.WithImages(req.Images...))
+		opts = append(opts, agent.PromptWithImages(req.Images...))
 	}
 	if req.Origin == agent.OriginScheduled {
-		opts = append(opts, agent.WithOriginScheduled())
+		opts = append(opts, agent.PromptWithOriginScheduled())
 	}
 	ps := proxy.session.Prompt(context.Background(), req.Text, opts...)
 
@@ -995,9 +995,9 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	opts := []agent.PromptOption{agent.WithOriginUser()}
+	opts := []agent.PromptOption{agent.PromptWithOriginUser()}
 	if len(req.Images) > 0 {
-		opts = append(opts, agent.WithImages(req.Images...))
+		opts = append(opts, agent.PromptWithImages(req.Images...))
 	}
 
 	// PromptAndWait blocks until the turn finishes — the HTTP client controls

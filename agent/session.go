@@ -118,19 +118,19 @@ type promptConfig struct {
 	origin string
 }
 
-// WithImages attaches images to the prompt (vision requests).
-func WithImages(images ...types.ImageData) PromptOption {
+// PromptWithImages attaches images to the prompt (vision requests).
+func PromptWithImages(images ...types.ImageData) PromptOption {
 	return func(c *promptConfig) { c.images = append(c.images, images...) }
 }
 
-// WithOriginUser tags the prompt as user-originated (the default).
-func WithOriginUser() PromptOption {
+// PromptWithOriginUser tags the prompt as user-originated (the default).
+func PromptWithOriginUser() PromptOption {
 	return func(c *promptConfig) { c.origin = OriginUser }
 }
 
-// WithOriginScheduled tags the prompt as fired by the scheduler, so transports
-// can render it with a scheduled indicator.
-func WithOriginScheduled() PromptOption {
+// PromptWithOriginScheduled tags the prompt as fired by the scheduler, so
+// transports can render it with a scheduled indicator.
+func PromptWithOriginScheduled() PromptOption {
 	return func(c *promptConfig) { c.origin = OriginScheduled }
 }
 
@@ -226,8 +226,8 @@ func (s *Session) loadModelMeta(modelID string) {
 // Prompt sends a message to the session. If no turn is active, it starts
 // processing immediately; if a turn is running, the message is queued and
 // processed when the current turn finishes. Options attach images
-// (WithImages) or tag the origin (WithOriginUser/WithOriginScheduled; default
-// user).
+// (PromptWithImages) or tag the origin (PromptWithOriginUser/
+// PromptWithOriginScheduled; default user).
 func (s *Session) Prompt(ctx context.Context, text string, opts ...PromptOption) types.PromptStatus {
 	c := buildPromptConfig(opts)
 	s.followMu.Lock()
