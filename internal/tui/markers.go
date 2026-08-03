@@ -6,7 +6,10 @@ import (
 )
 
 // spinnerLabels are the themed status messages (mirrors transport/tui).
-var spinnerLabels = []string{"Boostaffing", "Maskarizing", "Outworlding", "Khanifying", "Emeraldizing"}
+var spinnerLabels = []string{
+	"Boostaffing", "Maskarizing", "Outworlding", "Khanifying", "Emeraldizing",
+	"Razoranging", "Brutalizing", "Windwalking", "Edenianizing", "Kitananizing",
+}
 
 var rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 

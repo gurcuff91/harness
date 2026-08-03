@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.8] - 2026-08-03
+
+### Add — 5 new MK11/Outworld-themed spinner labels
+- `internal/tui/markers.go`'s `spinnerLabels` grows from 5 to 10 entries, adding `Razoranging` (Jade's Razorang weapon), `Brutalizing` (MK11 Brutalities), `Windwalking` (Jade's teleport move), `Edenianizing` (her home realm, Edenia), and `Kitananizing` (her bond as Kitana's guardian) alongside the existing `Boostaffing`/`Maskarizing`/`Outworlding`/`Khanifying`/`Emeraldizing`. Same random-pick mechanism (`spinnerLabel()`), no behavior change — just a bigger pool.
+
 ## [0.76.7] - 2026-08-03
 
 ### Add — `loop_start`/`loop_end` SSE events now carry the agent's own 0-based ReAct iteration index (`loop`)
