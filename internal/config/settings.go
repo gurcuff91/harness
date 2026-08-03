@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/gurcuff91/harness/types"
 )
@@ -49,9 +50,10 @@ var thinkingLevels = map[string]bool{
 // applying env-var cascades, defaults, etc. — is the responsibility of the
 // provider itself. The manager just stores and returns typed values by name.
 type SettingsManager struct {
-	mu   sync.RWMutex
-	path string
-	data settingsData
+	mu       sync.RWMutex
+	path     string
+	data     settingsData
+	loadedAt time.Time // mtime of the file as of the last load() — see reloadIfStale
 }
 
 // settingsData is the on-disk representation. Field names, struct tags, and the
@@ -77,19 +79,59 @@ func newSettingsManager() *SettingsManager {
 	return m
 }
 
+// ── Cross-process freshness ───────────────────────────────────────────────
+//
+// Same problem, same fix as CredentialsManager.reloadIfStale (see its comment
+// for the full story): m.mu only guards goroutines within THIS process, so
+// multiple harness processes (TUI + Telegram + Slack + serve, or several TUI
+// windows) each held their own in-memory settings.json snapshot, populated
+// once at startup, and every read method served straight from it forever —
+// a /model or /mcp add in one instance was invisible to every other running
+// instance until it restarted. reloadIfStale is called at the top of every
+// public read method; os.Stat is far cheaper than the full os.ReadFile+
+// json.Unmarshal a load() does, so this barely costs anything on the common
+// case (file unchanged) and only reloads when it actually has to.
+func (m *SettingsManager) reloadIfStale() {
+	info, err := os.Stat(m.path)
+	if err != nil {
+		return // no file yet — nothing to reload
+	}
+	m.mu.RLock()
+	stale := info.ModTime().After(m.loadedAt)
+	m.mu.RUnlock()
+	if !stale {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if info.ModTime().After(m.loadedAt) {
+		m.load()
+	}
+}
+
 // ── Domain methods ───────────────────────────────────────────────────────
 
 // ActiveModel returns the persisted active model ("provider/model").
 func (m *SettingsManager) ActiveModel() string {
+	m.reloadIfStale()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.data.ActiveModel
 }
 
-// SetActiveModel persists the active model.
+// SetActiveModel persists the active model. Locked cross-process (see
+// SetProvider's comment) — re-reads the latest disk state first so a
+// concurrent write to an unrelated field is never discarded.
 func (m *SettingsManager) SetActiveModel(model string) error {
+	release, err := acquireFileLock(m.path)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.load()
 	m.data.ActiveModel = model
 	return m.save()
 }
@@ -98,6 +140,7 @@ func (m *SettingsManager) SetActiveModel(model string) error {
 // single source of truth; per-invocation overrides use the CLI/TUI --thinking
 // flag (which also validates), not an environment variable.
 func (m *SettingsManager) ThinkingLevel() string {
+	m.reloadIfStale()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.data.ThinkingLevel
@@ -110,8 +153,15 @@ func (m *SettingsManager) SetThinkingLevel(level string) error {
 	if !thinkingLevels[level] {
 		return fmt.Errorf("%w: %q (want off|low|medium|high|xhigh)", ErrInvalidThinkingLevel, level)
 	}
+	release, err := acquireFileLock(m.path)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.load()
 	m.data.ThinkingLevel = level
 	return m.save()
 }
@@ -122,6 +172,7 @@ func (m *SettingsManager) SetThinkingLevel(level string) error {
 
 // Provider returns the stored config for a provider by name.
 func (m *SettingsManager) Provider(name string) (ProviderConfig, bool) {
+	m.reloadIfStale()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	cfg, ok := m.data.Providers[name]
@@ -130,6 +181,7 @@ func (m *SettingsManager) Provider(name string) (ProviderConfig, bool) {
 
 // Providers returns a defensive copy of the whole providers collection.
 func (m *SettingsManager) Providers() map[string]ProviderConfig {
+	m.reloadIfStale()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make(map[string]ProviderConfig, len(m.data.Providers))
@@ -139,10 +191,22 @@ func (m *SettingsManager) Providers() map[string]ProviderConfig {
 	return out
 }
 
-// SetProvider stores (or replaces) a provider's config.
+// SetProvider stores (or replaces) a provider's config. Locked cross-process:
+// re-reads the latest disk state first (another process may have changed an
+// unrelated setting since this manager's in-memory copy was last synced),
+// applies this change on top, then persists — so a concurrent writer's
+// update is never silently discarded (the same pattern credentials.go's
+// SetCredential already used; settings.json had no such lock until now).
 func (m *SettingsManager) SetProvider(name string, cfg ProviderConfig) error {
+	release, err := acquireFileLock(m.path)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.load()
 	if m.data.Providers == nil {
 		m.data.Providers = make(map[string]ProviderConfig)
 	}
@@ -150,10 +214,18 @@ func (m *SettingsManager) SetProvider(name string, cfg ProviderConfig) error {
 	return m.save()
 }
 
-// DeleteProvider removes a provider's config.
+// DeleteProvider removes a provider's config. Same lock-then-reload pattern
+// as SetProvider.
 func (m *SettingsManager) DeleteProvider(name string) error {
+	release, err := acquireFileLock(m.path)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.load()
 	delete(m.data.Providers, name)
 	return m.save()
 }
@@ -163,6 +235,7 @@ func (m *SettingsManager) DeleteProvider(name string) error {
 
 // MCPServer returns the stored config for an MCP server by name.
 func (m *SettingsManager) MCPServer(name string) (MCPServer, bool) {
+	m.reloadIfStale()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	srv, ok := m.data.MCP[name]
@@ -171,6 +244,7 @@ func (m *SettingsManager) MCPServer(name string) (MCPServer, bool) {
 
 // MCPServers returns a defensive copy of the whole MCP collection.
 func (m *SettingsManager) MCPServers() map[string]MCPServer {
+	m.reloadIfStale()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make(map[string]MCPServer, len(m.data.MCP))
@@ -197,13 +271,21 @@ func validateMCPServer(srv MCPServer) error {
 }
 
 // SetMCPServer validates and stores (or replaces) an MCP server's config. The
-// transport is inferred from which of command/url is set.
+// transport is inferred from which of command/url is set. Locked
+// cross-process — see SetProvider's comment.
 func (m *SettingsManager) SetMCPServer(name string, srv MCPServer) error {
 	if err := validateMCPServer(srv); err != nil {
 		return err
 	}
+	release, err := acquireFileLock(m.path)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.load()
 	if m.data.MCP == nil {
 		m.data.MCP = make(map[string]MCPServer)
 	}
@@ -211,22 +293,37 @@ func (m *SettingsManager) SetMCPServer(name string, srv MCPServer) error {
 	return m.save()
 }
 
-// DeleteMCPServer removes an MCP server's config.
+// DeleteMCPServer removes an MCP server's config. Same lock-then-reload
+// pattern as SetMCPServer.
 func (m *SettingsManager) DeleteMCPServer(name string) error {
+	release, err := acquireFileLock(m.path)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.load()
 	delete(m.data.MCP, name)
 	return m.save()
 }
 
 // ── Internal ─────────────────────────────────────────────────────────────
 
+// load reads settings.json from disk into m.data and records the file's
+// mtime (at the moment of the read) in m.loadedAt — the baseline
+// reloadIfStale compares future os.Stat calls against. Caller holds m.mu.
 func (m *SettingsManager) load() {
+	info, statErr := os.Stat(m.path)
 	data, err := os.ReadFile(m.path)
 	if err != nil {
 		return
 	}
 	json.Unmarshal(data, &m.data)
+	if statErr == nil {
+		m.loadedAt = info.ModTime()
+	}
 }
 
 func (m *SettingsManager) save() error {
@@ -234,5 +331,11 @@ func (m *SettingsManager) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(m.path, data, 0600)
+	if err := os.WriteFile(m.path, data, 0600); err != nil {
+		return err
+	}
+	if info, err := os.Stat(m.path); err == nil {
+		m.loadedAt = info.ModTime()
+	}
+	return nil
 }

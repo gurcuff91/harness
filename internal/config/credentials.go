@@ -20,9 +20,10 @@ var ErrInvalidCredential = errors.New("invalid credential")
 // they are never exposed over the HTTP API or a CLI command — only connect /
 // disconnect read and write them.
 type CredentialsManager struct {
-	mu   sync.RWMutex
-	path string
-	data credentialsData
+	mu       sync.RWMutex
+	path     string
+	data     credentialsData
+	loadedAt time.Time // mtime of the file as of the last load() — see reloadIfStale
 }
 
 type credentialsData struct {
@@ -51,57 +52,43 @@ func newCredentialsManager() *CredentialsManager {
 	return m
 }
 
-// ── Cross-process file lock ───────────────────────────────────────────────
+// ── Cross-process freshness ───────────────────────────────────────────────
 //
 // m.mu (sync.RWMutex) only protects goroutines WITHIN this process. Multiple
-// harness processes (TUI + Telegram + Slack + serve, all common to run at
-// once) each have their own, unrelated m.mu — none of them see each other.
-// credentials.json is read and potentially rewritten on every LLM call whose
-// OAuth token is close to expiring (see claude_oauth.go's getValidToken), so
-// the read-check-refresh-write cycle races far more often than a one-shot
-// write like instances.json's. And OAuth refresh tokens are SINGLE-USE: if
-// two processes both read the same refresh_token before either writes the
-// new one, both attempt to redeem it — only one succeeds, the other gets a
-// permanent invalid_grant from the provider. This lock closes that window by
-// serializing the ENTIRE read-modify-write cycle across processes, not just
-// the final write.
+// harness processes (TUI + Telegram + Slack + serve, or several TUI windows,
+// all common to run at once) each have their own, unrelated in-memory copy of
+// credentials.json — none of them see a write another process makes, because
+// m.data was populated once at startup and every read method used to serve
+// straight from that stale in-memory snapshot forever. In practice: process A
+// refreshes an expired OAuth token (or a user runs /connect there) and
+// persists the new one; every OTHER running instance kept using its own
+// stale copy — including the now-redeemed refresh token — and got a
+// permanent invalid_grant on its own next refresh attempt, forcing a manual
+// /connect in EVERY instance instead of just the one.
 //
-// Same primitive as agent/... — wait, this lives in internal/config, so it
-// has its own copy: os.OpenFile(O_CREATE|O_EXCL) is atomic across processes
-// on every OS Go supports, no per-platform syscalls needed. A lock older than
-// staleCredentialsLockAge is treated as abandoned (a crashed holder) and
-// reclaimed automatically — never wedges every future credential operation.
-const (
-	credentialsLockRetryDelay  = 20 * time.Millisecond
-	credentialsLockMaxAttempts = 100
-	staleCredentialsLockAge    = 5 * time.Second
-)
-
-func credentialsLockPath(credsPath string) string {
-	return credsPath + ".lock"
-}
-
-// acquireCredentialsLock creates credentialsLockPath() exclusively, retrying
-// with backoff if another process holds it. Returns a release function the
-// caller must call (removing the lock file) once done.
-func acquireCredentialsLock(credsPath string) (release func(), err error) {
-	path := credentialsLockPath(credsPath)
-	for attempt := 0; attempt < credentialsLockMaxAttempts; attempt++ {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-		if err == nil {
-			f.Close()
-			return func() { _ = os.Remove(path) }, nil
-		}
-		if !os.IsExist(err) {
-			return nil, fmt.Errorf("credentials: create lock: %w", err)
-		}
-		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > staleCredentialsLockAge {
-			_ = os.Remove(path)
-			continue
-		}
-		time.Sleep(credentialsLockRetryDelay)
+// reloadIfStale (called at the top of every public read method) closes that
+// gap cheaply: os.Stat is far lighter than the os.ReadFile+json.Unmarshal a
+// full load() does, so comparing mtimes on every read barely costs anything,
+// and only triggers a real reload when the file has actually changed
+// underneath this process.
+func (m *CredentialsManager) reloadIfStale() {
+	info, err := os.Stat(m.path)
+	if err != nil {
+		return // no file yet (never connected) — nothing to reload
 	}
-	return nil, fmt.Errorf("credentials: timed out waiting for credentials.json lock")
+	m.mu.RLock()
+	stale := info.ModTime().After(m.loadedAt)
+	m.mu.RUnlock()
+	if !stale {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Re-check under the write lock: another goroutine may have already
+	// reloaded while we were waiting for it.
+	if info.ModTime().After(m.loadedAt) {
+		m.load()
+	}
 }
 
 // WithLock runs fn while holding the cross-process credentials.json lock —
@@ -112,8 +99,18 @@ func acquireCredentialsLock(credsPath string) (release func(), err error) {
 // internally for their own single read-modify-write; WithLock is for callers
 // (like claude_oauth's token refresh) that need the lock held across several
 // manager calls as one atomic unit.
+//
+// credentials.json is read and potentially rewritten on every LLM call whose
+// OAuth token is close to expiring (see claude_oauth.go's getValidToken), so
+// the read-check-refresh-write cycle races far more often than a one-shot
+// write like instances.json's. And OAuth refresh tokens are SINGLE-USE: if
+// two processes both read the same refresh_token before either writes the
+// new one, both attempt to redeem it — only one succeeds, the other gets a
+// permanent invalid_grant from the provider. This lock closes that window by
+// serializing the ENTIRE read-modify-write cycle across processes, not just
+// the final write.
 func (m *CredentialsManager) WithLock(fn func() error) error {
-	release, err := acquireCredentialsLock(m.path)
+	release, err := acquireFileLock(m.path)
 	if err != nil {
 		return err
 	}
@@ -148,6 +145,7 @@ func validateCredential(c ProviderCredential) error {
 
 // Credential returns the stored credential for a provider by name (any type).
 func (m *CredentialsManager) Credential(provider string) (ProviderCredential, bool) {
+	m.reloadIfStale()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	c, ok := m.data.Providers[provider]
@@ -157,6 +155,7 @@ func (m *CredentialsManager) Credential(provider string) (ProviderCredential, bo
 // APIKey returns the stored API key for a provider, or ("", false) if there is
 // no credential or it is not an api_key credential.
 func (m *CredentialsManager) APIKey(provider string) (string, bool) {
+	m.reloadIfStale()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	c, ok := m.data.Providers[provider]
@@ -169,6 +168,7 @@ func (m *CredentialsManager) APIKey(provider string) (string, bool) {
 // OAuth returns the stored OAuth credential for a provider, or (zero, false) if
 // there is no credential or it is not an oauth credential.
 func (m *CredentialsManager) OAuth(provider string) (ProviderCredential, bool) {
+	m.reloadIfStale()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	c, ok := m.data.Providers[provider]
@@ -188,7 +188,7 @@ func (m *CredentialsManager) SetCredential(provider string, cred ProviderCredent
 	if err := validateCredential(cred); err != nil {
 		return err
 	}
-	release, err := acquireCredentialsLock(m.path)
+	release, err := acquireFileLock(m.path)
 	if err != nil {
 		return err
 	}
@@ -207,7 +207,7 @@ func (m *CredentialsManager) SetCredential(provider string, cred ProviderCredent
 // DeleteCredential removes a provider's credential. Same lock-then-reload
 // pattern as SetCredential — see its comment.
 func (m *CredentialsManager) DeleteCredential(provider string) error {
-	release, err := acquireCredentialsLock(m.path)
+	release, err := acquireFileLock(m.path)
 	if err != nil {
 		return err
 	}
@@ -220,12 +220,21 @@ func (m *CredentialsManager) DeleteCredential(provider string) error {
 	return m.save()
 }
 
+// load reads credentials.json from disk into m.data and records the file's
+// mtime (at the moment of the read) in m.loadedAt — the baseline
+// reloadIfStale compares future os.Stat calls against. Caller holds m.mu (at
+// least for writing loadedAt/data) — see reloadIfStale, SetCredential,
+// DeleteCredential, and newCredentialsManager for its call sites.
 func (m *CredentialsManager) load() {
+	info, statErr := os.Stat(m.path)
 	data, err := os.ReadFile(m.path)
 	if err != nil {
 		return
 	}
 	json.Unmarshal(data, &m.data)
+	if statErr == nil {
+		m.loadedAt = info.ModTime()
+	}
 }
 
 func (m *CredentialsManager) save() error {
@@ -233,5 +242,11 @@ func (m *CredentialsManager) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(m.path, data, 0600)
+	if err := os.WriteFile(m.path, data, 0600); err != nil {
+		return err
+	}
+	if info, err := os.Stat(m.path); err == nil {
+		m.loadedAt = info.ModTime()
+	}
+	return nil
 }

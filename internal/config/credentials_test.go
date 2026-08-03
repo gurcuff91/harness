@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func newTestCreds(t *testing.T, initial string) *CredentialsManager {
@@ -75,6 +76,74 @@ func TestCredentialRoundTrip(t *testing.T) {
 	}
 	if _, ok := m2.Credential("minimax"); ok {
 		t.Errorf("minimax still present after delete")
+	}
+}
+
+// TestCredentialCrossProcessReload is the regression test for the reported
+// multi-instance bug: one CredentialsManager writes (simulating e.g. an
+// OAuth token refresh, or a fresh /connect, in another harness process); a
+// SECOND, independent manager instance already pointed at the same file must
+// see the update on its very next read — WITHOUT needing to be recreated
+// (the old bug: each manager cached its first load() forever, so every other
+// running instance kept using stale — for OAuth, already-redeemed and thus
+// invalid — credentials until the process restarted).
+func TestCredentialCrossProcessReload(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "credentials.json")
+
+	writer := &CredentialsManager{path: path}
+	writer.load()
+	reader := &CredentialsManager{path: path}
+	reader.load()
+
+	// Reader sees nothing yet — matches the writer's empty initial state.
+	if _, ok := reader.Credential("claude-oauth"); ok {
+		t.Fatalf("reader should see no credential before the writer's first write")
+	}
+
+	if err := writer.SetCredential("claude-oauth", ProviderCredential{
+		Type: "oauth", AccessToken: "at-1", RefreshToken: "rt-1", ExpiresAt: 111,
+	}); err != nil {
+		t.Fatalf("writer.SetCredential: %v", err)
+	}
+	// Force the mtime forward deterministically — some filesystems have
+	// coarse mtime resolution (1s), which would make this test flaky if it
+	// relied on wall-clock elapsed time between the two writes instead.
+	bumpMtime(t, path, 2*time.Second)
+
+	got, ok := reader.Credential("claude-oauth")
+	if !ok || got.AccessToken != "at-1" {
+		t.Fatalf("reader did not pick up the writer's credential via reloadIfStale: %+v ok=%v", got, ok)
+	}
+
+	// A second write (simulating a token refresh in the other process) must
+	// also propagate — this isn't a one-shot "load once more" fix.
+	if err := writer.SetCredential("claude-oauth", ProviderCredential{
+		Type: "oauth", AccessToken: "at-2", RefreshToken: "rt-2", ExpiresAt: 222,
+	}); err != nil {
+		t.Fatalf("writer.SetCredential (2nd): %v", err)
+	}
+	bumpMtime(t, path, 4*time.Second)
+
+	got, ok = reader.Credential("claude-oauth")
+	if !ok || got.AccessToken != "at-2" {
+		t.Fatalf("reader did not pick up the SECOND write: %+v ok=%v", got, ok)
+	}
+}
+
+// bumpMtime advances path's mtime by delta beyond its current mtime, then
+// waits for that new mtime to actually land on disk. Used to make
+// reloadIfStale's mtime comparison deterministic in tests regardless of the
+// filesystem's mtime resolution or how fast the test runs.
+func bumpMtime(t *testing.T, path string, delta time.Duration) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	newTime := info.ModTime().Add(delta)
+	if err := os.Chtimes(path, newTime, newTime); err != nil {
+		t.Fatalf("chtimes %s: %v", path, err)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // newTestSettings builds a SettingsManager backed by a temp file with the given
@@ -48,6 +49,61 @@ func TestRoundTrip(t *testing.T) {
 	}
 	if out["thinking_level"] != "high" {
 		t.Errorf("thinking_level missing/wrong after save: %s", raw)
+	}
+}
+
+// TestSettingsCrossProcessReload is the regression test for the same
+// multi-instance staleness bug as credentials.go's
+// TestCredentialCrossProcessReload, but for settings.json: a second,
+// independent SettingsManager pointed at the same file must pick up another
+// manager's write (e.g. /model in one TUI instance) on its very next read,
+// without needing to be recreated.
+func TestSettingsCrossProcessReload(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+
+	writer := &SettingsManager{path: path}
+	writer.load()
+	reader := &SettingsManager{path: path}
+	reader.load()
+
+	if got := reader.ActiveModel(); got != "" {
+		t.Fatalf("reader should see no active model yet, got %q", got)
+	}
+
+	if err := writer.SetActiveModel("anthropic/claude-a"); err != nil {
+		t.Fatalf("writer.SetActiveModel: %v", err)
+	}
+	bumpSettingsMtime(t, path, 2*time.Second)
+
+	if got := reader.ActiveModel(); got != "anthropic/claude-a" {
+		t.Fatalf("reader did not pick up the writer's ActiveModel via reloadIfStale: %q", got)
+	}
+
+	// A second write must also propagate.
+	if err := writer.SetActiveModel("anthropic/claude-b"); err != nil {
+		t.Fatalf("writer.SetActiveModel (2nd): %v", err)
+	}
+	bumpSettingsMtime(t, path, 4*time.Second)
+
+	if got := reader.ActiveModel(); got != "anthropic/claude-b" {
+		t.Fatalf("reader did not pick up the SECOND write: %q", got)
+	}
+}
+
+// bumpSettingsMtime is settings_test.go's copy of credentials_test.go's
+// bumpMtime (unexported, package-private helpers can't cross _test.go files
+// cleanly without a shared non-test file, and this is trivial enough not to
+// warrant one).
+func bumpSettingsMtime(t *testing.T, path string, delta time.Duration) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	newTime := info.ModTime().Add(delta)
+	if err := os.Chtimes(path, newTime, newTime); err != nil {
+		t.Fatalf("chtimes %s: %v", path, err)
 	}
 }
 
