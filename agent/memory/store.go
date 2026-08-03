@@ -258,8 +258,18 @@ LIMIT ? OFFSET ?`, listArgs...)
 			return SearchResult{}, fmt.Errorf("memory: scan: %w", err)
 		}
 		if searching {
-			// Scale the tiny bm25 magnitude to a readable value (monotonic).
-			m.Score = math.Round(m.Score*1e6*100) / 100
+			// m.Score already holds -bm25(memories_fts) from the SELECT above
+			// (SQLite's bm25() is negative, more-negative-is-better; negating
+			// it gives a positive, higher-is-more-relevant value that's
+			// already sane to show as-is — typically a small number, roughly
+			// 0-15 for short documents like these, and it's what ORDER BY
+			// bm25(memories_fts) already sorted by). No arbitrary scaling
+			// needed; just round for a tidy 2-decimal display. A previous
+			// version multiplied this by 1e6, producing meaningless
+			// multi-million-magnitude scores — that scaling was pure noise,
+			// not a normalization to any real range (BM25 has no fixed
+			// upper bound to normalize against in the first place).
+			m.Score = math.Round(m.Score*100) / 100
 		}
 		if !includeContent {
 			m.Content = ""

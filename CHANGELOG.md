@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.5] - 2026-08-03
+
+### Fix — `MemoSearch`/`harness memo` scores were multi-million-magnitude garbage (e.g. 7975273.5)
+- **Root cause**: `agent/memory/store.go`'s `Search` computed `m.Score = math.Round(m.Score*1e6*100) / 100` — multiplying SQLite FTS5's `-bm25(memories_fts)` value (already correct: positive, ordered descending by relevance, typically 0-15 for short documents) by an arbitrary `1e6` factor with no mathematical basis. BM25 has no fixed upper bound to normalize against in the first place, so this was never a real normalization — just noise inflating a perfectly sane value into meaningless multi-million-magnitude numbers.
+- **Investigation confirmed the fix requires no algorithm change**: `ORDER BY bm25(memories_fts)` in the SQL already sorts correctly (SQLite's `bm25()` convention is more-negative-is-better; the un-negated raw value sorts ascending = most relevant first). The `-bm25(...)` in the `SELECT` (a separate, deliberate negation only for the displayed `score` column) already produces a positive, descending, human-readable value on its own — verified against this project's own real `~/.harness/agent/memory.db` via `sqlite3` directly (e.g. query "harness" → raw scores `3.20, 3.15, 2.95, 2.90, 2.78, 2.42...`).
+- **Fix** (`agent/memory/store.go`) — removed the `*1e6` scaling entirely; the score is now just `math.Round(m.Score*100) / 100` (rounding the already-correct value to 2 decimals for tidy display, nothing more).
+- New test `TestSearchScoreIsRawBM25NotArbitrarilyScaled` (`agent/memory/store_test.go`) locks the score into a realistic range (positive, ≤ 1000) so the arbitrary multiplier can't silently come back; uses a 4-document corpus (1 match + 3 unrelated) so BM25's IDF term has real rarity to score against — a single- or uniform-document corpus produces a near-zero raw BM25 magnitude (~1e-6) that would make the assertion flaky for reasons unrelated to the fix. Full suite + `-race` green. Verified manually against the compiled binary and this project's own real memory database: `harness memo harness` now shows `(score 3.20)`, `(score 3.15)`, … instead of seven-digit numbers.
+
 ## [0.76.4] - 2026-08-02
 
 ### Add — `SlackAsk` now supports `<slack:uploadFile>` attachments, same as `SlackPost`

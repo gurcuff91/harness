@@ -167,6 +167,47 @@ func TestSearchRanking(t *testing.T) {
 	}
 }
 
+// TestSearchScoreIsRawBM25NotArbitrarilyScaled is the regression test for
+// the reported bug: a previous version multiplied -bm25(memories_fts) by
+// 1e6 before rounding, producing meaningless multi-million-magnitude scores
+// (e.g. 7975273.5) instead of the small, already-sane BM25 value SQLite
+// itself computes. BM25 has no fixed upper bound to normalize against, so
+// the fix is simply to stop scaling — the raw (negated) value is already
+// positive and ordered correctly on its own. This locks the score into a
+// realistic range for short documents like these, so the arbitrary scaling
+// can't silently come back.
+func TestSearchScoreIsRawBM25NotArbitrarilyScaled(t *testing.T) {
+	s := newTestStore(t)
+	// BM25's IDF term rewards RARITY — a query term needs some documents
+	// that DON'T contain it for a meaningfully non-zero score (with every
+	// document matching equally, as in TestSearchRanking's 2-memory corpus,
+	// the real BM25 magnitude here is ~1e-6, rounding to 0.00 and making
+	// this specific assertion flaky against realistic BM25 behavior, not
+	// against the fix under test). Adding unrelated documents gives
+	// "migration" real rarity to score against.
+	s.Write("/proj", "exact", "how to run database migrations safely, migration steps", false)
+	s.Write("/proj", "unrelated-1", "how to configure the deploy pipeline", false)
+	s.Write("/proj", "unrelated-2", "notes about the frontend build process", false)
+	s.Write("/proj", "unrelated-3", "meeting notes from last week's planning session", false)
+	res, err := s.Search("/proj", "migration", true, 0, 10)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(res.Results) == 0 {
+		t.Fatal("expected at least one result")
+	}
+	score := res.Results[0].Score
+	if score <= 0 {
+		t.Errorf("score = %v, want a positive value (higher = more relevant)", score)
+	}
+	// A short single-document match's BM25 magnitude is small — nowhere
+	// near the millions the old 1e6 scaling produced. 1000 is generous
+	// headroom while still catching a reintroduced arbitrary multiplier.
+	if score > 1000 {
+		t.Errorf("score = %v, suspiciously large for a raw BM25 value — looks like arbitrary scaling crept back in", score)
+	}
+}
+
 func TestListMode(t *testing.T) {
 	s := newTestStore(t)
 	// Small gaps so updated_at differs and the ordering is deterministic.
