@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.10] - 2026-08-03
+
+### Change — welcome banner's tip line now uses `⁘` instead of `·`
+- `internal/tui/banner.go` — the tip line's marker upgraded from a plain `·` bullet to `⁘` (U+2058 FOUR DOT PUNCTUATION), a more distinct mark while staying in the same monochrome-symbol family as the rest of the TUI's icons. New test `TestWelcomeBannerTipUsesFourDotIcon`.
+- Verified manually against the compiled binary: the banner now shows `⁘ <tip>`. Full suite + `-race` green.
+
+## [0.76.9] - 2026-08-03
+
+### Change — TUI startup warnings now render INSIDE the welcome banner, and the banner is always shown
+- **Reported issue**: a startup warning (e.g. "Model 'x' not available. Using first active model.") printed as its own bare notice ABOVE the banner, flush against the left edge — visually disconnected from the banner block it was actually about, and inconsistent with the banner's own indentation.
+- **Fix** (`internal/tui/banner.go`) — `welcomeBanner(warnings ...string) string` now accepts any number of startup warnings and renders them INSIDE the same block, right below the tip line: one blank line separates the tip from the warnings as a whole, but multiple warnings stack directly against each other with no gap between them (one compact block). Each warning is indented with the same 2-space prefix as the tip, using the same `⚠` marker and warn color as before.
+- **Bigger change, requested mid-design**: the banner — harness's identity — is now ALWAYS shown, even when startup couldn't fully succeed (server unreachable, no active providers at all, a requested `--resume` failing). Previously those three cases returned early with a bare `showWarn(...)` and the banner was skipped entirely. Now every problem collected during `autoConnect` (`internal/tui/session.go`) surfaces as a warning inside the one banner instead. When no model could be resolved at all (server unreachable / no providers), the tagline shows `-` in the model's place so the banner keeps the same shape either way, instead of silently omitting that segment.
+- New tests in `internal/tui/banner_test.go`: `TestWelcomeBannerShowsModelPlaceholderWhenEmpty`, `TestWelcomeBannerRendersWarningsInsideTheSameBlock`, `TestWelcomeBannerStacksMultipleWarningsWithNoGapBetweenThem` (multiple warnings stack with no gap between them, exactly one blank line before the block), `TestWelcomeBannerNoWarningsOmitsTheGapEntirely`. Verified manually against the compiled binary with a deliberately misconfigured `active_model` (temporarily edited `~/.harness/settings.json`, restored after): the warning rendered exactly where designed, inside the banner, right below the tip. Full suite + `-race` green.
+
 ## [0.76.8] - 2026-08-03
 
 ### Add — 5 new MK11/Outworld-themed spinner labels

@@ -13,60 +13,68 @@ import (
 
 // autoConnect resolves the model, creates or resumes a session, and opens SSE.
 // Port of transport/tui's autoConnect, adapted to the v3 render model.
+//
+// The banner is harness's identity and is ALWAYS shown exactly once, even
+// when startup can't fully succeed (server unreachable, no active
+// providers, a requested resume failing, …) — every problem along the way
+// is collected into `warnings` and surfaces INSIDE the single banner block
+// (see welcomeBanner) instead of a bare warning printed on its own with no
+// banner above it, or the banner being skipped entirely.
 func (t *TUI) autoConnect(ctx context.Context) {
+	var warnings []string
+
 	models, err := t.client.ListModels()
-	if err != nil {
-		t.showWarn("Failed to reach server. Is harness running?")
-		return
-	}
-	if len(models) == 0 {
-		t.showWarn("No active providers. Use /connect to add one.")
-		return
-	}
-
-	available := map[string]bool{}
-	for _, m := range models {
-		if m.Model != "" {
-			available[m.Model] = true
-		}
-	}
-
-	var settingsModel, settingsThinking string
-	if s, err := t.client.GetSettings(); err == nil {
-		settingsModel = s.ActiveModel
-		settingsThinking = s.ThinkingLevel
-	}
-
 	switch {
-	case t.overrideModel != "" && available[t.overrideModel]:
-		t.model = t.overrideModel
-	case settingsModel != "" && available[settingsModel]:
-		t.model = settingsModel
+	case err != nil:
+		warnings = append(warnings, "Failed to reach server. Is harness running?")
+	case len(models) == 0:
+		warnings = append(warnings, "No active providers. Use /connect to add one.")
 	default:
-		if settingsModel != "" {
-			t.showWarn(fmt.Sprintf("Model '%s' not available. Using first active model.", settingsModel))
+		available := map[string]bool{}
+		for _, m := range models {
+			if m.Model != "" {
+				available[m.Model] = true
+			}
 		}
-		t.model = models[0].Model
-	}
-	t.thinking = settingsThinking
-	if t.overrideThinking != "" {
-		t.thinking = t.overrideThinking
-	}
 
-	for _, m := range models {
-		if m.Model == t.model {
-			t.isSubscription = m.IsSubscription
-			break
+		var settingsModel, settingsThinking string
+		if s, err := t.client.GetSettings(); err == nil {
+			settingsModel = s.ActiveModel
+			settingsThinking = s.ThinkingLevel
+		}
+
+		switch {
+		case t.overrideModel != "" && available[t.overrideModel]:
+			t.model = t.overrideModel
+		case settingsModel != "" && available[settingsModel]:
+			t.model = settingsModel
+		default:
+			if settingsModel != "" {
+				warnings = append(warnings, fmt.Sprintf("Model '%s' not available. Using first active model.", settingsModel))
+			}
+			t.model = models[0].Model
+		}
+		t.thinking = settingsThinking
+		if t.overrideThinking != "" {
+			t.thinking = t.overrideThinking
+		}
+
+		for _, m := range models {
+			if m.Model == t.model {
+				t.isSubscription = m.IsSubscription
+				break
+			}
 		}
 	}
 
 	cwd, _ := os.Getwd()
 
-	// Resume path.
-	if t.resumeID != "" {
-		t.addRaw(ansi.Dimmed("── resuming session ──"))
+	// Resume path — only attempted when a model was actually resolved above
+	// (t.model != "" implies the "no providers"/"server unreachable" cases
+	// didn't happen, since those never assign it).
+	if t.resumeID != "" && t.model != "" {
 		if sess, err := t.client.ResumeSession(t.resumeID); err != nil {
-			t.showWarn(fmt.Sprintf("Failed to resume: %s", err.Error()))
+			warnings = append(warnings, fmt.Sprintf("Failed to resume: %s", err.Error()))
 		} else {
 			t.sessionID = sess.ID
 			t.sessionName = sess.Name
@@ -83,6 +91,7 @@ func (t *TUI) autoConnect(ctx context.Context) {
 			}
 			t.loadStatsFromSession(sess)
 			t.loadSessionCommands()
+			t.addRaw(ansi.Dimmed(fmt.Sprintf("── resumed: %s ──", t.sessionName)))
 			t.renderHistory()
 			t.updateInfo()
 			t.startSSE(ctx)
@@ -90,9 +99,18 @@ func (t *TUI) autoConnect(ctx context.Context) {
 		}
 	}
 
-	// New session: show the welcome banner (only here — never on resume, which
-	// already replays history).
-	t.addRaw(t.welcomeBanner())
+	// The banner — shown exactly once here, whether or not everything above
+	// succeeded. Never shown on a successful resume (which already replayed
+	// history above and returned) — only on a fresh session, or when startup
+	// couldn't get far enough to create one at all.
+	t.addRaw(t.welcomeBanner(warnings...))
+
+	if t.model == "" {
+		// No model could be resolved (server unreachable / no active
+		// providers) — the banner above already explains why; nothing left
+		// to do without one.
+		return
+	}
 
 	// Create new session.
 	sess, err := t.client.CreateSession(t.model, cwd, "")
