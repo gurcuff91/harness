@@ -302,6 +302,121 @@ func TestSpinnerOffAfterCompactEndThenTurnEnd(t *testing.T) {
 	}
 }
 
+// TestSpinnerStaysOnAfterMaxIterationsReachedFollowingMidTurnCompact is the
+// regression test for the reported bug: the agent reaches its per-turn
+// ReAct iteration cap right after an auto-compact fired on the LAST regular
+// iteration (session.go's promptSync — ContextUsage >= 0.98 triggers
+// compact() between iterations). The real fix lives in session.go: the
+// reserved "summarize progress" iteration now emits its OWN loop_start
+// right before max_iterations_reached, exactly like every other loop
+// iteration — instead of the old asymmetric sequence (a bare loop_end, then
+// max_iterations_reached, with no loop_start of its own). That loop_start
+// is what re-arms the spinner (same mechanism TestSpinnerStaysOnAfterMidTurnCompact
+// covers for the "compact then keep looping" case) — without it, an
+// auto-compact on the LAST regular iteration left the spinner off with
+// nothing left in the event stream to turn it back on, making the turn
+// look frozen right at the "reached the N-iteration limit" warning even
+// though requestProgressUpdate's summary was still streaming in right
+// behind it. (An earlier version of this fix patched the TUI's spinner
+// directly in the max_iterations_reached case instead of fixing this
+// missing loop_start/loop_end symmetry in session.go — reverted in favor
+// of the structural fix, which also fixes the footer's
+// "(turn/max_iterations)" counter below.)
+func TestSpinnerStaysOnAfterMaxIterationsReachedFollowingMidTurnCompact(t *testing.T) {
+	tui := newTestTUIForEvents()
+	events := []client.Event{
+		{Type: "turn_start"},
+		{Type: "loop_start"},
+		{Type: "tool_start", ToolID: "t1", ToolName: "Bash"},
+		{Type: "tool_call", ToolID: "t1", ToolArgs: `{"command":"ls"}`},
+		{Type: "tool_result", ToolID: "t1", Output: "x", IsError: false},
+		{Type: "loop_end"},
+		{Type: "compact_start"},
+		{Type: "compact_end", Summary: "…"},
+		{Type: "loop_end"},
+		// session.go now emits the reserved iteration's own loop_start here,
+		// right before max_iterations_reached — this is the fix.
+		{Type: "loop_start"},
+		{Type: "max_iterations_reached", MaxIterations: 50},
+	}
+
+	// Same technique as TestSpinnerStaysOnAfterMidTurnCompact: leave the
+	// channel open and don't cancel ctx until after asserting, so
+	// consumeEvents' unconditional "stream ended" spinner-off on exit
+	// doesn't mask the bug.
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := feed(events)
+	done := make(chan struct{})
+	go func() {
+		tui.consumeEvents(ctx, ch)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(ch) > 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	spinning := tui.isSpinning()
+
+	cancel()
+	<-done
+
+	if !spinning {
+		t.Error("spinner should be back on after the reserved iteration's loop_start (emitted right before " +
+			"max_iterations_reached) — requestProgressUpdate's LLM call is still in flight (its text streams " +
+			"in right after), and this loop_start should have re-armed it after compact_end turned it off")
+	}
+}
+
+// TestSummaryTextRendersAfterMaxIterationsReached answers the follow-up
+// question this bug raised: does the max-iterations SUMMARY text (streamed
+// as ordinary text/text_end events right after max_iterations_reached, per
+// session.go's requestProgressUpdate) actually reach the history, or does
+// something ALSO swallow it, independent of the spinner? Answer: the "text"
+// case in consumeEvents has no dependency on spinner state at all — it only
+// checks whether a live Markdown block already exists, so the summary DOES
+// get appended and rendered correctly regardless of the spinner bug fixed
+// above. This test locks that in as a real regression guard, not just an
+// inference from reading the code.
+func TestSummaryTextRendersAfterMaxIterationsReached(t *testing.T) {
+	tui := newTestTUIForEvents()
+	events := []client.Event{
+		{Type: "turn_start"},
+		{Type: "loop_start"},
+		{Type: "tool_start", ToolID: "t1", ToolName: "Bash"},
+		{Type: "tool_call", ToolID: "t1", ToolArgs: `{"command":"ls"}`},
+		{Type: "tool_result", ToolID: "t1", Output: "x", IsError: false},
+		{Type: "loop_end"},
+		{Type: "compact_start"},
+		{Type: "compact_end", Summary: "…"},
+		{Type: "loop_end"},
+		// The reserved iteration's own loop_start, emitted right before
+		// max_iterations_reached (session.go's fix).
+		{Type: "loop_start"},
+		{Type: "max_iterations_reached", MaxIterations: 50},
+		// requestProgressUpdate's LLM call, streamed exactly like any other
+		// turn's response.
+		{Type: "text", Delta: "Here's what I got done so far: "},
+		{Type: "text", Delta: "created the file and ran the tests."},
+		{Type: "text_end"},
+		{Type: "loop_end"},
+		{Type: "turn_end"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ch := feed(events)
+	close(ch)
+	tui.consumeEvents(ctx, ch)
+
+	summary := strings.Join(blockSummary(tui), " | ")
+	if !strings.Contains(summary, "created the file and ran the tests") {
+		t.Errorf("summary text never reached history — blocks: %s", summary)
+	}
+}
+
 // infoText renders the footer's info line (path • session (turn/max) [queued])
 // as a plain string, for assertions.
 func infoText(tui *TUI) string {
@@ -330,7 +445,7 @@ func TestTurnCounterShownWhileWorkingOnly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := feed([]client.Event{
 		{Type: "turn_start"},
-		{Type: "loop_start"}, // 1st iteration
+		{Type: "loop_start", Loop: 0}, // 1st iteration — agent's own 0-based index
 	})
 	done := make(chan struct{})
 	go func() { tui.consumeEvents(ctx, ch); close(done) }()
@@ -343,9 +458,11 @@ func TestTurnCounterShownWhileWorkingOnly(t *testing.T) {
 		t.Errorf("after 1st loop_start, want \"(1/50)\" in info line, got: %q", got)
 	}
 
-	// A second iteration (e.g. after a tool call) increments the counter.
+	// A second iteration (e.g. after a tool call) increments the counter —
+	// read directly from the agent's own Loop index (1), not a client-side
+	// increment.
 	ch2 := make(chan client.Event, 1)
-	ch2 <- client.Event{Type: "loop_start"}
+	ch2 <- client.Event{Type: "loop_start", Loop: 1}
 	cancel()
 	<-done
 
@@ -377,25 +494,60 @@ func TestTurnCounterShownWhileWorkingOnly(t *testing.T) {
 	}
 }
 
-// TestTurnCounterResetsOnNewTurn verifies a fresh turn_start resets the
-// counter to 0 (so the first loop_start of the new turn shows "(1/max)", not
-// a continuation of the previous turn's count).
-func TestTurnCounterResetsOnNewTurn(t *testing.T) {
+// TestTurnCounterSetFromLoopStartsOwnIndexNotAStaleCarry verifies the
+// counter is SET directly from each loop_start event's own Loop index
+// (evt.Loop + 1), not incremented from whatever the previous turn/session
+// left behind — a stale currTurn (e.g. left over from a prior turn, or from
+// resuming a session) must not leak into the new turn's display; the first
+// loop_start of a turn always shows exactly its own agent-reported index.
+func TestTurnCounterSetFromLoopStartsOwnIndexNotAStaleCarry(t *testing.T) {
 	tui := newTestTUIForEvents()
 	tui.sessionName = "s"
 	tui.maxIterations = 10
-	tui.currTurn = 7 // simulate a previous turn that reached iteration 7
+	tui.currTurn = 7 // stale value from... anything — must not influence the next assignment
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	ch := feed([]client.Event{
 		{Type: "turn_start"},
-		{Type: "loop_start"},
+		{Type: "loop_start", Loop: 0}, // agent's own first iteration of this turn
 	})
 	close(ch)
 	tui.consumeEvents(ctx, ch)
 
 	if got := infoText(tui); !strings.Contains(got, "(1/10)") {
-		t.Errorf("new turn's first loop_start should show \"(1/10)\", got: %q", got)
+		t.Errorf("loop_start with Loop=0 should show \"(1/10)\" regardless of any stale prior value, got: %q", got)
+	}
+}
+
+// TestTurnCounterIncrementsForReservedMaxIterationsLoop verifies the OTHER
+// half of session.go's structural fix: the reserved "summarize progress"
+// iteration's own loop_start (emitted right before max_iterations_reached,
+// carrying Loop: maxIterations-1 — see session.go) drives the footer's
+// "(turn/max_iterations)" counter exactly like any other iteration — before
+// the fix, that counter simply never advanced for this iteration (it only
+// ever incremented on loop_start, which this exit path never emitted),
+// silently under-reporting how many iterations the turn actually used.
+func TestTurnCounterIncrementsForReservedMaxIterationsLoop(t *testing.T) {
+	tui := newTestTUIForEvents()
+	tui.sessionName = "s"
+	tui.maxIterations = 3
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ch := feed([]client.Event{
+		{Type: "turn_start"},
+		{Type: "loop_start", Loop: 0}, // iteration 1 (0-based index 0)
+		{Type: "loop_end", Loop: 0},
+		// The reserved iteration's own loop_start — this is what the fix
+		// adds. maxIterations=3, so the reserved index is maxIterations-1=2.
+		{Type: "loop_start", Loop: 2}, // iteration 2 (0-based index 2, the reserved summarize-progress one)
+		{Type: "max_iterations_reached", MaxIterations: 3},
+	})
+	close(ch)
+	tui.consumeEvents(ctx, ch)
+
+	if got := infoText(tui); !strings.Contains(got, "(3/3)") {
+		t.Errorf("reserved iteration's loop_start (Loop=2) should show \"(3/3)\", got: %q", got)
 	}
 }

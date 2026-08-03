@@ -43,6 +43,42 @@ func TestStreamEventsDecodesEvents(t *testing.T) {
 	}
 }
 
+// TestStreamEventsDecodesLoopIndexIncludingZero verifies client.Event.Loop
+// decodes correctly from a real SSE line for both loop_start/loop_end — and
+// specifically that Loop: 0 (the first ReAct iteration) round-trips as 0,
+// not as a missing/default value indistinguishable from any other event
+// type that never sets Loop at all. Loop has no `omitempty` on either side
+// (server or client) precisely so 0 is never ambiguous with "absent".
+func TestStreamEventsDecodesLoopIndexIncludingZero(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fl := w.(http.Flusher)
+		fmt.Fprint(w, `data: {"type":"loop_start","loop":0}`+"\n\n")
+		fmt.Fprint(w, `data: {"type":"loop_end","loop":0}`+"\n\n")
+		fmt.Fprint(w, `data: {"type":"loop_start","loop":49}`+"\n\n")
+		fl.Flush()
+	}))
+	defer srv.Close()
+
+	c := New(srv.Listener.Addr().String())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	events, err := c.StreamEvents(ctx, "sess-1")
+	if err != nil {
+		t.Fatalf("StreamEvents: %v", err)
+	}
+
+	var got []int
+	for e := range events {
+		got = append(got, e.Loop)
+	}
+	if len(got) != 3 || got[0] != 0 || got[1] != 0 || got[2] != 49 {
+		t.Errorf("got Loop values %v, want [0 0 49]", got)
+	}
+}
+
 // TestStreamEventsHandlesLargeLine is the regression test for the bug this
 // package's unification fixed: the CLI's pre-unification `-p` client used
 // bufio.Scanner with NO explicit Buffer() call, defaulting to a 64KB max line

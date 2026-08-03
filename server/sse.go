@@ -15,9 +15,15 @@ func formatEvent(e types.Event) []byte {
 
 	switch e.Type {
 	case types.EventLoopStart:
-		payload = map[string]any{"type": "loop_start"}
+		// loop is the 0-based ReAct iteration index (see agent/session.go's
+		// promptSync) — the SAME value on both loop_start and loop_end for a
+		// given iteration (they're a matched open/close pair, not two
+		// separate counters). Always included, never omitted, even for
+		// iteration 0 — omitempty on a plain int would drop it exactly when
+		// it's 0, indistinguishable on the wire from "field absent".
+		payload = map[string]any{"type": "loop_start", "loop": e.Loop}
 	case types.EventLoopEnd:
-		payload = map[string]any{"type": "loop_end"}
+		payload = map[string]any{"type": "loop_end", "loop": e.Loop}
 	case types.EventStreamThinkingDelta:
 		payload = map[string]any{"type": "thinking", "delta": e.Delta}
 	case types.EventStreamThinkingEnd:

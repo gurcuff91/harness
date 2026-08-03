@@ -13,6 +13,14 @@ import "encoding/json"
 type Event struct {
 	Type string `json:"type"`
 
+	// Loop is the 0-based ReAct iteration index — present on loop_start and
+	// loop_end (the SAME value on both: they're a matched open/close pair
+	// for one iteration, not two separate counters). Deliberately no
+	// omitempty: 0 is iteration 1 (the first one) and a perfectly valid,
+	// common value — omitting it would make "iteration 0" indistinguishable
+	// from "field absent" on any consumer that checks for zero-value.
+	Loop int `json:"loop"`
+
 	// Streaming deltas — thinking / text / tool_args all use "delta".
 	Delta string `json:"delta,omitempty"`
 

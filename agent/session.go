@@ -539,15 +539,33 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 		}
 	}
 
-	// Max iterations reached while still executing tools.
-	// Ask the LLM to summarize progress and let the user decide what to do next.
-	// EventMaxIterationsReached fires BEFORE the summary request so the TUI's
-	// "⚠ reached the N-iteration limit — summarizing progress" arrives as a
-	// forewarning, not an afterword. The error, if any, is propagated up
-	// so drainFollowUps emits an EventError (we don't double-emit here).
-	s.emit(types.Event{Type: types.EventLoopEnd})
+	// Max iterations reached while still executing tools. This is the ONE
+	// iteration reserved by "for i := range s.maxIterations - 1" above — it
+	// gets its own LoopStart/LoopEnd, exactly like every other iteration in
+	// the loop, instead of running requestProgressUpdate's LLM call as a gap
+	// between the last real loop_end and turn_end with no loop_start of its
+	// own. That asymmetry (a real bug, not just a TUI cosmetic issue) meant
+	// clients that re-arm per-turn state on loop_start specifically — the
+	// TUI's spinner (re-armed on loop_start after a mid-turn auto-compact
+	// turns it off in compact_end, see internal/tui/events.go) and its
+	// "(turn/max_iterations)" footer counter (incremented only on
+	// loop_start) — never fired for this reserved iteration. If the
+	// PREVIOUS iteration's auto-compact (ContextUsage >= 0.98, right above)
+	// happened to be the very last one before hitting the cap, the spinner
+	// was left off with nothing left in the event stream to turn it back on
+	// — making the turn look frozen right at the "reached the N-iteration
+	// limit" warning even though the summary was still streaming in right
+	// behind it.
+	//
+	// EventMaxIterationsReached fires right after LoopStart (before the
+	// summary request) so the TUI's "⚠ reached the N-iteration limit —
+	// summarizing progress" arrives as a forewarning, not an afterword. The
+	// error, if any, is propagated up so drainFollowUps emits an EventError
+	// (we don't double-emit here).
+	s.emit(types.Event{Type: types.EventLoopStart, Loop: s.maxIterations - 1})
 	s.emit(types.Event{Type: types.EventMaxIterationsReached, MaxIterations: s.maxIterations})
 	summary, err := s.requestProgressUpdate(ctx)
+	s.emit(types.Event{Type: types.EventLoopEnd, Loop: s.maxIterations - 1})
 	// turn_end is handled by defer emitTurnEnd() on the way out.
 	return summary, err
 }

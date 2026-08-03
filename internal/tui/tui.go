@@ -99,7 +99,7 @@ type TUI struct {
 	stats        tokensInfo
 	spinning     bool
 	queueCount   int
-	currTurn     int // ReAct iteration counter, incremented on loop_start; reset on turn_start
+	currTurn     int // 1-based ReAct iteration for the footer display, set from each loop_start event's own Loop index (+1) — see events.go
 	compactStart time.Time
 	lastTurnText strings.Builder
 

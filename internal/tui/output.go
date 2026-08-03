@@ -105,11 +105,11 @@ func (t *TUI) updateInfo() {
 	if name == "" {
 		name = "No session"
 	}
-	// Turn progress: only meaningful while the agent is actively working — shown
-	// from turn_start (reset to 0, then incremented per loop_start) and hidden
-	// again on turn_end. maxIterations > 0 guard covers a session whose info
-	// hasn't loaded max_iterations yet (e.g. very first render before
-	// autoConnect resolves).
+	// Turn progress: only meaningful while the agent is actively working — set
+	// directly from each loop_start event's own 0-based Loop index (+1 for
+	// this 1-based display; see events.go) and hidden again on turn_end.
+	// maxIterations > 0 guard covers a session whose info hasn't loaded
+	// max_iterations yet (e.g. very first render before autoConnect resolves).
 	turn := ""
 	if t.isSpinning() && t.maxIterations > 0 {
 		turn = fmt.Sprintf(" (%d/%d)", t.currTurn, t.maxIterations)

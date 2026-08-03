@@ -53,7 +53,6 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 				t.liveMD = nil
 				t.mu.Unlock()
 				thinkBlk, thinkBuf, thinkingFrozen = nil, "", false
-				t.currTurn = 0 // new turn — reset the "(turn/max_iterations)" footer counter
 				t.setSpinning(true)
 				t.updateInfo()
 
@@ -70,10 +69,13 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 				// one where a mid-turn event silences it) without needing every
 				// such event to know to turn it back on individually.
 				t.setSpinning(true)
-				// Count iterations for the footer "(turn/max_iterations)" indicator —
-				// only meaningful while the agent is working, shown/hidden by
-				// turn_start/turn_end (see updateInfo).
-				t.currTurn++
+				// evt.Loop is the agent's own 0-based iteration index (the SAME
+				// value loop_end for this iteration will carry — they're a
+				// matched pair) — read directly instead of a client-side counter
+				// this transport used to maintain by hand (currTurn++ on every
+				// loop_start), which could drift from the agent's real count.
+				// +1 for the footer's "(turn/max_iterations)" 1-based display.
+				t.currTurn = evt.Loop + 1
 				t.updateInfo()
 
 			case "thinking":
@@ -273,6 +275,14 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 			case "max_iterations_reached":
 				// The agent hit its per-turn ReAct cap while still working. Tell the
 				// user so the (summarized) result isn't mistaken for a normal finish.
+				// session.go now emits this INSIDE the reserved iteration's own
+				// loop_start/loop_end (like any other iteration), so the spinner is
+				// already re-armed by loop_start above by the time this fires — no
+				// spinner handling needed here. (A previous version of this fix
+				// patched the spinner directly in this case instead of fixing the
+				// missing loop_start/loop_end symmetry in session.go — reverted in
+				// favor of the structural fix, which also fixes the footer's
+				// "(turn/max_iterations)" counter, driven by loop_start alone.)
 				t.addRaw(ansi.Warn(fmt.Sprintf("⚠ reached the %d-iteration limit — summarizing progress", evt.MaxIterations)))
 
 			case "error":
