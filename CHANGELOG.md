@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.14] - 2026-08-04
+
+### Fix — max-iterations summary failed with Anthropic HTTP 400 on image-heavy turns (`agent/session.go`)
+- **Reported issue** (surfaced by 0.76.13's fix, which made this error visible instead of swallowing it): after `⚠ reached the 120-iteration limit — summarizing progress`, the summary failed with `anthropic API error 400 — "At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels"`. Previously this exact error was the thing being silently discarded; now that it's reported, the actual cause was diagnosable.
+- **Root cause**: `requestProgressUpdate` built its request with `s.store.Messages()` **verbatim** — every inline image in the history at full size. `generateCompactionSummary` already solved this identical problem with `stripImages` (its comment documents this exact Anthropic error), but the fix was never ported to the summary path.
+- **Why this path was the MOST exposed of the three**: the ReAct loop uses `stripOldTurnImages`, which deliberately PRESERVES the current turn's images so the model can see what was just shared. After ~120 iterations that single "current turn" can have accumulated many large images — and the final summary call shipped all of them at once, which is precisely the many-image condition Anthropic rejects.
+- **Fix**: `requestProgressUpdate` now sends `stripImages(s.store.Messages())`, replacing every image with a `[image: <mime>]` placeholder — a summary needs text only, and the placeholder still tells the model an image was there. The on-disk store is never modified (wire payload only). Audited all three provider-bound `Messages:` constructions in `agent/`: ReAct loop → `stripOldTurnImages` (partial, by design), compaction → `stripImages`, summary → `stripImages` (this fix). No other path lacks stripping.
+- New tests (`agent/strip_images_test.go` — `stripImages` had NO coverage at all before): `TestStripImagesRemovesEveryBase64Payload` (no payload survives, both top-level image parts and tool-result images), `TestStripImagesKeepsStructureAndSignalsImagePresence` (text/tool output preserved, one mime-named placeholder per image, tool-result ID intact so tool_use↔tool_result correlation survives), `TestStripImagesDoesNotMutateTheOriginal` (guards against permanently destroying the session's on-disk images), `TestStripImagesPreservesSystemGeneratedMeta` (the injected max-iterations prompt keeps `IsSystemGenerated`, so the TUI doesn't replay it as a fake user prompt). Verified in both directions: the un-stripped fixture ships 3 large payloads, the stripped one ships 0. Full suite + `-race` green.
+
 ## [0.76.13] - 2026-08-04
 
 ### Fix — max-iterations progress summary silently lost, and the error that caused it swallowed (`agent/session.go`)

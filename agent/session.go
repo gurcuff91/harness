@@ -1090,11 +1090,29 @@ func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	// LLM call with no tools — pure text response
+	// LLM call with no tools — pure text response.
+	//
+	// Strip inline images from the history first, for exactly the reason
+	// generateCompactionSummary already does (see its own comment): a summary
+	// only needs TEXT, and Anthropic rejects a request whose history carries
+	// several large images together with
+	//   "At least one of the image dimensions exceed max allowed size for
+	//    many-image requests: 2000 pixels" (HTTP 400).
+	// stripImages replaces every image with a "[image: <mime>]" placeholder,
+	// preserving the conversational structure (and the fact that an image was
+	// there) without shipping any base64 payload. The on-disk store is never
+	// modified — this only shapes the wire payload.
+	//
+	// This path is MORE exposed to the limit than any other, which is why it
+	// was the one failing in the field: the ReAct loop above uses
+	// stripOldTurnImages, which deliberately PRESERVES the current turn's
+	// images so the model can see what was just shared. After ~120 iterations
+	// the "current turn" can have accumulated many of them, and this final
+	// call used to send every single one at full size.
 	req := &types.Request{
 		SystemPrompt: s.systemPrompt,
 		Model:        s.modelID,
-		Messages:     s.store.Messages(),
+		Messages:     stripImages(s.store.Messages()),
 		Tools:        nil, // no tools — force text response
 		MaxTokens:    s.maxTokens,
 	}
