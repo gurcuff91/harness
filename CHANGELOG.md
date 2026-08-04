@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.16] - 2026-08-04
+
+### Fix — Slack replies could leak the transport's inbound context tags (`transports/slack/`)
+- **Reported issue**: a channel reply arrived in Slack containing the raw context tags the transport injects into the prompt: `<slack:channel>C0AJJG0LL5D</slack:channel> <slack:user>U09TTE266LF</slack:user>`.
+- **Root cause**: of the four `<slack:...>` tags in this transport, three are INBOUND (`channel`, `user`, `attach` — context injected into the prompt by `buildPrompt`) and one is OUTBOUND (`uploadFile` — emitted by the model to attach a file). The outbound path (`extractUploads`) only ever knew about `uploadFile`, so any inbound tag the model echoed back passed through to Slack untouched. All three send paths were affected: the pump's streamed replies, `SlackPost`, and `SlackAsk`.
+- **Why the model echoed them**: the directive asks it to read a user ID out of `<slack:user>` and re-emit it in Slack's own `<@U...>` mention syntax. That format transformation is easy to slip on, and the transport had no safety net for it — the design relied on the model never getting it wrong.
+- **Fix** — new `stripInboundTags` in `transports/slack/upload.go`, called at the top of `extractUploads` (the single funnel all three outbound paths already go through, so one place covers all of them). Removes each inbound tag with its contents. Deliberately an **explicit list of the three known tags**, not a `<slack:*>` wildcard: a future inbound tag should be a conscious addition here rather than silently swept up by a pattern — and critically, a wildcard would also eat `<slack:uploadFile>`, which `extractUploads` still needs to find in the same pass to upload attachments.
+- **What is deliberately preserved**: `<@U...>` — Slack's own mention markup and the correct output form — is left completely untouched; the leak was the input tags, not the mention. A malformed tag (no closing half) drops just the opening tag and keeps the message text, rather than swallowing the rest of the reply. A reply consisting only of leaked tags cleans to empty, so the send paths skip it instead of posting a blank message.
+- **Defense in depth**: the directive now states explicitly that these tags are input-only and must never be copied into a reply, addressing the cause at the source as well as sanitizing the output.
+- Audited the one send path that does NOT go through `extractUploads` (`send`/`sendLogged`, used for system messages — compaction notices, errors, command replies): every caller passes transport-constructed text, never model output, so no tag can appear there. Telegram was checked too and injects no context tags at all, so it never had this exposure.
+- New tests (`transports/slack/strip_tags_test.go`): the exact reported leak verbatim, each tag individually, repeated occurrences, real mentions surviving, the outbound `uploadFile` tag surviving, malformed tags not swallowing the message, and the `extractUploads` wiring (strip + upload extraction in one pass). Verified in both directions: reverting the one-line call reproduces the leak exactly as reported. Full suite + `-race` green.
+
 ## [0.76.15] - 2026-08-04
 
 ### Fix — context-usage gauge under-counted by omitting cache writes (`agent/session.go`)
