@@ -36,15 +36,25 @@ type Event struct {
 	Text   string `json:"text,omitempty"`
 	Origin string `json:"origin,omitempty"`
 
-	// Tokens (EventTokens). Zero values are meaningful here (e.g. 0 cache), so
-	// consumers read them unconditionally on a "tokens" event.
-	Input         int     `json:"input,omitempty"`
-	TotalOutput   int     `json:"total_output,omitempty"`
-	CacheRead     int     `json:"cache_read,omitempty"`
-	CacheWrite    int     `json:"cache_write,omitempty"`
-	CostUSD       float64 `json:"cost_usd,omitempty"`
-	ContextUsage  float64 `json:"context_usage,omitempty"`
-	ContextWindow int     `json:"context_window,omitempty"`
+	// Tokens (EventTokens) — see types.TokenUsage for the full contract. Two
+	// semantics on purpose: live context (input/context_usage/context_window,
+	// which shrink after a compaction) and session history (total_*/cache_*/
+	// cost_usd, which only grow and mirror the persisted SessionStats).
+	//
+	// NONE of these carry omitempty, deliberately: a zero is MEANINGFUL here
+	// (0 cache reads on a turn, 0.0 context usage right after a compaction),
+	// and omitempty would drop it on re-encode — making "zero" and "absent"
+	// indistinguishable for any consumer that re-serializes the event (the
+	// CLI's json/json-stream output modes do exactly that). Same reasoning as
+	// the "loop" field on loop_start/loop_end.
+	Input         int     `json:"input"`
+	ContextUsage  float64 `json:"context_usage"`
+	ContextWindow int     `json:"context_window"`
+	TotalInput    int     `json:"total_input"`
+	TotalOutput   int     `json:"total_output"`
+	CacheRead     int     `json:"cache_read"`
+	CacheWrite    int     `json:"cache_write"`
+	CostUSD       float64 `json:"cost_usd"`
 
 	// Errors (EventError).
 	Message string         `json:"message,omitempty"`

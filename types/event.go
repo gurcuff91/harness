@@ -48,20 +48,44 @@ const (
 )
 
 // TokenUsage carries token counts and derived metrics for an EventTokens event.
+//
+// Every field has exactly ONE semantic, stated below, and at least one real
+// consumer. Two semantics coexist here on purpose, for two genuinely
+// different questions:
+//
+//   - LIVE CONTEXT ("how full is the model's window right now?") — Input,
+//     ContextUsage, ContextWindow. These shrink after a compaction and are
+//     the basis for the auto-compact trigger.
+//   - SESSION HISTORY ("what has this session consumed in total?") —
+//     TotalInput, TotalOutput, CacheRead, CacheWrite, CostUSD. These only
+//     ever grow, mirror SessionStats on disk 1:1, and are what a footer or
+//     billing view should show.
+//
+// The history fields deliberately carry the SAME values SessionStats
+// persists, so a client that loads stats on resume and then consumes this
+// event never sees a value change meaning underneath it (a real bug before:
+// the footer showed the session total on resume, then dropped to the current
+// turn's numbers on the first event).
 type TokenUsage struct {
-	// Per-turn (from the last StreamUsage)
-	Input      int // tokens sent this turn (= current context size)
-	Output     int // tokens generated this turn
-	CacheRead  int // cache tokens read this turn
-	CacheWrite int // cache tokens written this turn
-	// Accumulated output across the session (input not accumulated — see SessionStats)
-	TotalOutput     int
-	TotalCacheRead  int
-	TotalCacheWrite int
-	// Derived — calculated by the session
-	CostUSD       float64 // accumulated USD cost for the session
-	ContextUsage  float64 // last input / context window (0.0–1.0)
+	// ── Live context (per-turn; shrinks on compaction) ──────────────────
+	// Input is the total context sent to the model on the last request:
+	// fresh + cache-read + cache-write tokens. ContextUsage is that same
+	// number over ContextWindow — one truth, two presentations, because ACP's
+	// usage_update takes raw tokens (used/size) while the TUI footer takes
+	// the ratio.
+	Input         int     // tokens sent last request (= current context size)
+	ContextUsage  float64 // Input / ContextWindow (0.0–1.0)
 	ContextWindow int     // model context window size (tokens)
+
+	// ── Session history (accumulated; mirrors SessionStats on disk) ─────
+	// CacheRead/CacheWrite are accumulated (not per-turn) so they match
+	// TotalInput/TotalOutput's semantic — they're named without the Total
+	// prefix only because that's the wire name clients already consume.
+	TotalInput  int     // = SessionStats.InputTokens
+	TotalOutput int     // = SessionStats.OutputTokens
+	CacheRead   int     // = SessionStats.CacheRead (accumulated)
+	CacheWrite  int     // = SessionStats.CacheWrite (accumulated)
+	CostUSD     float64 // = SessionStats.CostUSD (accumulated)
 }
 
 // Event carries information about what's happening in the agent loop.

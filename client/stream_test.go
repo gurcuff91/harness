@@ -152,3 +152,39 @@ func TestStreamEventsRespectsContextCancellation(t *testing.T) {
 		t.Fatal("channel did not close within 2s of ctx cancellation")
 	}
 }
+
+// TestEventTokensZeroesSurviveReEncode is the regression test for omitempty on
+// the tokens fields: they used to carry `json:"...,omitempty"` despite the
+// struct's own comment stating zeroes are meaningful, so re-encoding a decoded
+// event silently DROPPED every zero — making "0 cache reads" and "0.0% context
+// right after a compaction" indistinguishable from "field not reported". The
+// CLI's json/json-stream output modes re-serialize events, so this was a real
+// data-loss path, not a theoretical one. Same class of bug as the "loop" field.
+func TestEventTokensZeroesSurviveReEncode(t *testing.T) {
+	wire := `{"type":"tokens","input":0,"context_usage":0,"context_window":1000000,` +
+		`"total_input":5000,"total_output":1000,"cache_read":0,"cache_write":0,"cost_usd":0}`
+
+	var evt Event
+	if err := json.Unmarshal([]byte(wire), &evt); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	out, err := json.Marshal(evt)
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	var round map[string]any
+	if err := json.Unmarshal(out, &round); err != nil {
+		t.Fatalf("decode round-trip: %v", err)
+	}
+
+	for _, field := range []string{"input", "context_usage", "cache_read", "cache_write", "cost_usd"} {
+		if _, ok := round[field]; !ok {
+			t.Errorf("%q vanished on re-encode — omitempty must not be set on tokens fields", field)
+		}
+	}
+	// And the non-zero ones must obviously survive too.
+	if round["total_input"] != float64(5000) {
+		t.Errorf("total_input = %v, want 5000", round["total_input"])
+	}
+}

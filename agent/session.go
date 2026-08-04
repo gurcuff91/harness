@@ -707,6 +707,26 @@ func (s *Session) compact(ctx context.Context) error {
 	s.store.UpdateMeta(meta)
 
 	s.emit(types.Event{Type: types.EventCompactEnd, Summary: summary})
+
+	// Publish the reset context gauge immediately, rather than leaving clients
+	// showing the pre-compaction figure until the NEXT turn happens to emit
+	// one. EventTokens is reused for this on purpose (instead of adding stats
+	// fields to compact_end): it's already the one event that carries usage,
+	// every client already handles it, and the values below are exactly what
+	// was just persisted — live context zeroed, session history untouched.
+	s.emit(types.Event{
+		Type: types.EventTokens,
+		Tokens: types.TokenUsage{
+			Input:         0, // context was just reclaimed
+			ContextUsage:  0,
+			ContextWindow: s.contextWindow,
+			TotalInput:    s.stats.InputTokens,
+			TotalOutput:   s.stats.OutputTokens,
+			CacheRead:     s.stats.CacheRead,
+			CacheWrite:    s.stats.CacheWrite,
+			CostUSD:       s.stats.CostUSD,
+		},
+	})
 	return nil
 }
 
@@ -1045,9 +1065,27 @@ func (s *Session) updateStats(se types.StreamEvent) {
 		float64(se.CacheWrite)*s.pricing.CacheWrite) / 1_000_000
 	s.stats.CostUSD += turnCost
 
-	// Context usage = (fresh input + cache reads) / context window
-	// Cache reads count because they were sent to the model as context
-	s.lastInputTokens = se.InputTokens + se.CacheRead
+	// Context usage = (fresh input + cache reads + cache writes) / context window.
+	//
+	// All three count because all three were sent to the model as context on
+	// this request — they're just billed differently. Anthropic's own field
+	// name says it outright: cache_creation_input_tokens (our CacheWrite) is
+	// INPUT that was additionally written to the cache.
+	//
+	// CacheWrite was missing here, and it was not a cosmetic bug: on a turn
+	// that (re)writes the cache — the norm right after a compaction, a model
+	// switch, or any system-prompt change — Anthropic reports nearly the whole
+	// context as cache_creation and only a handful of fresh input tokens. A
+	// real field report showed 2 fresh + 0 read + 827.6k written on a 1M
+	// window: this formula produced 0.0002% (footer read "0.0%") while the
+	// true occupancy was 82.8%, matching the 82.7% persisted from the turn
+	// before — the context had not shrunk at all, the accounting had lost it.
+	//
+	// Because ContextUsage >= 0.98 is what triggers the mid-turn auto-compact
+	// (see promptSync), under-counting here meant the guard could stay silent
+	// while the real context ran to the window limit — losing the turn to a
+	// provider overflow error instead of compacting in time.
+	s.lastInputTokens = se.InputTokens + se.CacheRead + se.CacheWrite
 	s.stats.ContextWindow = s.contextWindow // persist current model's context window
 	if s.contextWindow > 0 {
 		s.stats.ContextUsage = float64(s.lastInputTokens) / float64(s.contextWindow)
@@ -1063,16 +1101,20 @@ func (s *Session) updateStats(se types.StreamEvent) {
 	s.emit(types.Event{
 		Type: types.EventTokens,
 		Tokens: types.TokenUsage{
-			Input:           s.lastInputTokens, // fresh + cache = total context sent
-			Output:          se.OutputTokens,
-			CacheRead:       se.CacheRead,
-			CacheWrite:      se.CacheWrite,
-			TotalOutput:     s.stats.OutputTokens,
-			TotalCacheRead:  s.stats.CacheRead,
-			TotalCacheWrite: s.stats.CacheWrite,
-			CostUSD:         s.stats.CostUSD,
-			ContextUsage:    s.stats.ContextUsage,
-			ContextWindow:   s.contextWindow,
+			// Live context: raw tokens for ACP's usage_update{used,size}, the
+			// same number as a ratio for the TUI footer's "%/window".
+			Input:         s.lastInputTokens, // fresh + cache read + cache write
+			ContextUsage:  s.stats.ContextUsage,
+			ContextWindow: s.contextWindow,
+			// Session history: the SAME values SessionStats persists, so a
+			// client that loaded stats on resume keeps seeing that semantic
+			// (per-turn values here used to silently replace the session
+			// totals a resuming footer had just loaded).
+			TotalInput:  s.stats.InputTokens,
+			TotalOutput: s.stats.OutputTokens,
+			CacheRead:   s.stats.CacheRead,
+			CacheWrite:  s.stats.CacheWrite,
+			CostUSD:     s.stats.CostUSD,
 		},
 	})
 }

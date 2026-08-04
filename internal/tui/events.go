@@ -221,7 +221,18 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 				t.setSpinning(false)
 
 			case "tokens":
-				t.stats.input = evt.Input
+				// The footer's ↑ ↓ R W $ are SESSION TOTALS, so they read the
+				// accumulated fields — the same values loadStatsFromSession
+				// loads from the persisted SessionStats on resume. Before this,
+				// input/cacheRead/cacheWrite read the PER-TURN fields instead,
+				// so resuming a session showed its lifetime totals and then the
+				// first event silently replaced them with just that turn's
+				// numbers (e.g. ↑112.6M → ↑2, R2141.0M → R0).
+				//
+				// Only the context gauge (%/window) is live-context data: it
+				// shrinks after a compaction, which is exactly what it should
+				// report.
+				t.stats.input = evt.TotalInput
 				t.stats.output = evt.TotalOutput
 				t.stats.cacheRead = evt.CacheRead
 				t.stats.cacheWrite = evt.CacheWrite

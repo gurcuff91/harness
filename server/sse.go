@@ -62,15 +62,24 @@ func formatEvent(e types.Event) []byte {
 	case types.EventTurnEnd:
 		payload = map[string]any{"type": "turn_end"}
 	case types.EventTokens:
+		// Two semantics, both intentional (see types.TokenUsage):
+		//   live context  → input, context_usage, context_window
+		//   session total → total_input, total_output, cache_read,
+		//                   cache_write, cost_usd
+		// A plain map (not a struct with omitempty) so a zero is always sent
+		// explicitly: 0 cache reads or 0.0 usage right after a compaction are
+		// MEANINGFUL, and dropping them would be indistinguishable on the wire
+		// from "the field wasn't reported".
 		payload = map[string]any{
 			"type":           "tokens",
 			"input":          e.Tokens.Input,
+			"context_usage":  e.Tokens.ContextUsage,
+			"context_window": e.Tokens.ContextWindow,
+			"total_input":    e.Tokens.TotalInput,
 			"total_output":   e.Tokens.TotalOutput,
 			"cache_read":     e.Tokens.CacheRead,
 			"cache_write":    e.Tokens.CacheWrite,
 			"cost_usd":       e.Tokens.CostUSD,
-			"context_usage":  e.Tokens.ContextUsage,
-			"context_window": e.Tokens.ContextWindow,
 		}
 	case types.EventError:
 		p := map[string]any{"type": "error", "message": e.Message}
