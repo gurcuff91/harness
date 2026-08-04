@@ -421,8 +421,31 @@ func (s *Session) drainFollowUps() {
 		first = false
 
 		result, err := s.promptSync(ctx, fu.text, fu.images)
+
+		// Capture whether the turn was cancelled BEFORE releasing ctx below.
+		// This ordering is the whole point: cancel() is unconditional (it's
+		// this turn's resource cleanup), so reading ctx.Err() AFTER it always
+		// reports context.Canceled — our own cancellation, indistinguishable
+		// from a user Stop(). The check below used to do exactly that, which
+		// made the s.emit(errorEvent(err)) branch DEAD CODE that never ran
+		// once: every turn, error or not, looked "cancelled" to it.
+		//
+		// That silently broke the contract two callers explicitly rely on —
+		// requestProgressUpdate's failure path and its empty-summary guard
+		// both return their error up here precisely so this is the one place
+		// that reports it (they deliberately don't emit themselves, to avoid
+		// a duplicate). The result in the field: hitting the max-iteration
+		// cap and then failing to produce the summary showed the user NOTHING
+		// — no summary, no error, just a turn that ended. (Errors raised
+		// INSIDE the ReAct for-loop were unaffected: they emit their own
+		// EventError before returning, which is why only this path went
+		// silent.)
+		wasCancelled := ctx.Err() != nil
 		cancel() // always release resources
-		if err != nil && ctx.Err() == nil {
+		// A user Stop() already produced EventStop — staying quiet there is
+		// intentional (Stop means stop, nothing more to report). Any OTHER
+		// failure must be visible.
+		if err != nil && !wasCancelled {
 			s.emit(errorEvent(err))
 		}
 		// Deliver the outcome to a PromptAndWait caller, if any.
@@ -559,14 +582,34 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 	//
 	// EventMaxIterationsReached fires right after LoopStart (before the
 	// summary request) so the TUI's "⚠ reached the N-iteration limit —
-	// summarizing progress" arrives as a forewarning, not an afterword. The
-	// error, if any, is propagated up so drainFollowUps emits an EventError
-	// (we don't double-emit here).
+	// summarizing progress" arrives as a forewarning, not an afterword.
+	//
+	// Entry guard, mirroring the one at the top of every for-loop iteration
+	// above: if the user already pressed Stop, this reserved iteration must
+	// behave like any other — emit EventStop and leave, rather than firing a
+	// "summarizing progress" warning it can't honour (the LLM call below
+	// would fail on the cancelled ctx immediately). A user Stop stops
+	// everything, summary included.
+	if ctx.Err() != nil {
+		s.emit(types.Event{Type: types.EventStop})
+		return "", nil // turn_end via defer
+	}
+
 	s.emit(types.Event{Type: types.EventLoopStart, Loop: s.maxIterations - 1})
 	s.emit(types.Event{Type: types.EventMaxIterationsReached, MaxIterations: s.maxIterations})
 	summary, err := s.requestProgressUpdate(ctx)
 	s.emit(types.Event{Type: types.EventLoopEnd, Loop: s.maxIterations - 1})
-	// turn_end is handled by defer emitTurnEnd() on the way out.
+
+	// Cancelled MID-summary (Stop pressed while the summary was streaming):
+	// same symmetry as the for-loop's post-runStream check — report it as a
+	// stop, not as an error, and swallow the ctx error itself.
+	if err != nil && ctx.Err() != nil {
+		s.emit(types.Event{Type: types.EventStop})
+		return "", nil
+	}
+	// Any other failure propagates up to drainFollowUps, which emits the
+	// EventError (it no longer swallows it — see the wasCancelled note
+	// there). turn_end is handled by defer emitTurnEnd() on the way out.
 	return summary, err
 }
 
@@ -1056,9 +1099,51 @@ func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 		MaxTokens:    s.maxTokens,
 	}
 
-	resp, _, err := s.runStream(ctx, req)
-	if err != nil {
-		return "", err
+	// Retry the summary call, same 3-attempts-with-backoff shape
+	// generateCompactionSummary already uses (see its loop) — and for the same
+	// reason: this is a single, unrepeatable LLM call at the very end of a
+	// long turn, so a transient failure (OAuth token refresh landing mid-call,
+	// a 429, a dropped connection) permanently costs the user the ONLY report
+	// of ~120 iterations of work. It used to have no retry at all, which is
+	// exactly how a summary went missing in the field while the
+	// "reached the N-iteration limit" warning had already been shown.
+	//
+	// A retry is safe here even though this call STREAMS to the transport
+	// (unlike generateCompactionSummary, which accumulates silently): a
+	// failed attempt emits at most a partial text run, and the transports
+	// append streamed deltas into the live block, so a retry continues in the
+	// same block rather than corrupting state. Losing the summary entirely is
+	// strictly worse than a rare duplicated fragment.
+	const maxSummaryAttempts = 3
+	backoff := 2 * time.Second
+	var (
+		resp    *types.Response
+		lastErr error
+	)
+	for attempt := 0; attempt < maxSummaryAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+		}
+		var err error
+		resp, _, err = s.runStream(ctx, req)
+		if err == nil {
+			lastErr = nil
+			break
+		}
+		lastErr = err
+		// A cancelled ctx (user Stop) is final — retrying can't succeed and
+		// would just burn the backoff waiting. Surface it immediately.
+		if ctx.Err() != nil {
+			return "", err
+		}
+	}
+	if lastErr != nil {
+		return "", lastErr
 	}
 
 	if err := s.store.AddMessage(resp.Message); err != nil {
