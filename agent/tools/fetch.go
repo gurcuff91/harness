@@ -24,7 +24,7 @@ type fetchFile struct {
 }
 
 type fetchInput struct {
-	URL     string            `json:"url"`
+	URL     string            `json:"url" validate:"required"`
 	Method  string            `json:"method,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
 	// Body helpers — mutually exclusive (raw body OR json OR form; files may
@@ -82,6 +82,9 @@ func Fetch() Tool {
 			var args fetchInput
 			if err := json.Unmarshal(input, &args); err != nil {
 				return fmt.Sprintf("Error parsing input: %v", err), err
+			}
+			if err := requireFields(&args); err != nil {
+				return err.Error(), err
 			}
 
 			method := strings.ToUpper(args.Method)

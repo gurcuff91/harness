@@ -44,13 +44,20 @@ func Schedule(store ScheduleStore, owner string) Tool {
 		},
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
 			var p struct {
-				Slug   string `json:"slug"`
-				Cron   string `json:"cron"`
-				Prompt string `json:"prompt"`
+				Slug   string `json:"slug" validate:"required"`
+				Cron   string `json:"cron" validate:"required"`
+				Prompt string `json:"prompt" validate:"required"`
 			}
 			if err := json.Unmarshal(input, &p); err != nil {
 				return fmt.Sprintf("Error parsing input: %v", err), err
 			}
+			if err := requireFields(&p); err != nil {
+				return err.Error(), err
+			}
+			// store.Set independently re-validates slug/prompt presence and the
+			// cron expression itself (ValidateCron) — that business validation
+			// stays there; requireFields above only closes the presence gap
+			// the tool itself never checked before this migration.
 			if err := store.Set(p.Slug, p.Cron, p.Prompt, owner); err != nil {
 				return "", err
 			}
@@ -93,10 +100,13 @@ func ScheduleDelete(store ScheduleStore, owner string) Tool {
 		},
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
 			var p struct {
-				Slug string `json:"slug"`
+				Slug string `json:"slug" validate:"required"`
 			}
 			if err := json.Unmarshal(input, &p); err != nil {
 				return fmt.Sprintf("Error parsing input: %v", err), err
+			}
+			if err := requireFields(&p); err != nil {
+				return err.Error(), err
 			}
 			ok, err := store.Delete(p.Slug, owner)
 			if err != nil {

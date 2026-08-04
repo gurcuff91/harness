@@ -20,7 +20,12 @@ type editEntry struct {
 // required by the schema; Execute validates that exactly one shape is present
 // and folds the flat form into a one-element array.
 type editInput struct {
-	Path    string      `json:"path"`
+	Path string `json:"path" validate:"required"`
+	// Edits/OldText/NewText deliberately carry NO validate:"required" tag —
+	// they form an XOR (exactly one of the flat pair or the array), a
+	// structural rule requireFields' simple presence check can't express and
+	// isn't meant to. That rule stays exactly where it already lived, right
+	// below, in Go.
 	Edits   []editEntry `json:"edits,omitempty"`
 	OldText string      `json:"old_text,omitempty"`
 	NewText string      `json:"new_text,omitempty"`
@@ -57,6 +62,9 @@ func Edit() Tool {
 			var args editInput
 			if err := json.Unmarshal(input, &args); err != nil {
 				return fmt.Sprintf("Error parsing input: %v", err), err
+			}
+			if err := requireFields(&args); err != nil {
+				return err.Error(), err
 			}
 			// Dual shape: fold a flat old_text/new_text into the edits array. Reject
 			// mixing both forms, or supplying neither.

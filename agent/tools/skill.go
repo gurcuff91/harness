@@ -20,10 +20,13 @@ func Skill(readFn func(name string) (content string, dir string, err error)) Too
 		},
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
 			var params struct {
-				Name string `json:"name"`
+				Name string `json:"name" validate:"required"`
 			}
 			if err := json.Unmarshal(input, &params); err != nil {
 				return fmt.Sprintf("Error parsing input: %v", err), err
+			}
+			if err := requireFields(&params); err != nil {
+				return err.Error(), err
 			}
 			content, dir, err := readFn(params.Name)
 			if err != nil {

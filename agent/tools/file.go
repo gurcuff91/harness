@@ -28,7 +28,7 @@ func isImagePath(path string) bool {
 }
 
 type readFileInput struct {
-	Path   string `json:"path"`
+	Path   string `json:"path" validate:"required"`
 	Offset int    `json:"offset,omitempty"`
 	Limit  int    `json:"limit,omitempty"`
 }
@@ -52,6 +52,9 @@ func ReadFile() Tool {
 			var args readFileInput
 			if err := json.Unmarshal(input, &args); err != nil {
 				return fmt.Sprintf("Error parsing input: %v", err), nil, err
+			}
+			if err := requireFields(&args); err != nil {
+				return err.Error(), nil, err
 			}
 
 			// Image file — return as ImageData
@@ -98,7 +101,9 @@ func ReadFile() Tool {
 }
 
 type writeFileInput struct {
-	Path    string `json:"path"`
+	Path string `json:"path" validate:"required"`
+	// Content deliberately has NO validate:"required" tag — an empty string
+	// is a legitimate call (create an empty file), unlike Path.
 	Content string `json:"content"`
 }
 
@@ -120,6 +125,9 @@ func WriteFile() Tool {
 			var args writeFileInput
 			if err := json.Unmarshal(input, &args); err != nil {
 				return fmt.Sprintf("Error parsing input: %v", err), err
+			}
+			if err := requireFields(&args); err != nil {
+				return err.Error(), err
 			}
 			if err := os.MkdirAll(filepath.Dir(args.Path), 0755); err != nil {
 				return fmt.Sprintf("Error creating directory: %v", err), err

@@ -16,7 +16,7 @@ import (
 const bashTimeout = 30 * time.Second
 
 type bashInput struct {
-	Command    string `json:"command"`
+	Command    string `json:"command" validate:"required"`
 	Timeout    int    `json:"timeout,omitempty"`
 	Background bool   `json:"background,omitempty"`
 }
@@ -40,6 +40,9 @@ func Bash() Tool {
 			var args bashInput
 			if err := json.Unmarshal(input, &args); err != nil {
 				return fmt.Sprintf("Error parsing input: %v", err), err
+			}
+			if err := requireFields(&args); err != nil {
+				return err.Error(), err
 			}
 			if args.Background {
 				return runBashBackground(args.Command)

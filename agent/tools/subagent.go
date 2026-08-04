@@ -16,8 +16,14 @@ import (
 type SubagentExecutor func(ctx context.Context, prompt string) (string, error)
 
 // subagentInput is the JSON input schema for the Subagent tool.
+//
+// Prompt carries validate:"required" (checked via requireFields) AND its own
+// explicit strings.TrimSpace check below — the tag only catches "absent",
+// not "all whitespace"; both are kept together deliberately (see
+// requireFields' doc comment on why the tag alone isn't the stronger
+// guarantee this field already had before that helper existed).
 type subagentInput struct {
-	Prompt     string `json:"prompt"`
+	Prompt     string `json:"prompt" validate:"required"`
 	Timeout    int    `json:"timeout,omitempty"`
 	Background bool   `json:"background,omitempty"`
 }
@@ -67,6 +73,9 @@ func Subagent(executor SubagentExecutor) Tool {
 			var req subagentInput
 			if err := json.Unmarshal(input, &req); err != nil {
 				return fmt.Sprintf("Error parsing input: %v", err), err
+			}
+			if err := requireFields(&req); err != nil {
+				return err.Error(), err
 			}
 			if strings.TrimSpace(req.Prompt) == "" {
 				err := fmt.Errorf("subagent: prompt is required")

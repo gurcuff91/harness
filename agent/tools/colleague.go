@@ -135,9 +135,14 @@ func ColleagueList() Tool {
 // ── ColleagueAsk ───────────────────────────────────────────────────────────
 
 // colleagueAskInput is the JSON input schema for the ColleagueAsk tool.
+//
+// Colleague and Prompt carry validate:"required" (checked via
+// requireFields) AND their own explicit strings.TrimSpace checks below —
+// same reasoning as Subagent.Prompt: the tag only catches "absent", not
+// "all whitespace".
 type colleagueAskInput struct {
-	Colleague  string   `json:"colleague"`
-	Prompt     string   `json:"prompt"`
+	Colleague  string   `json:"colleague" validate:"required"`
+	Prompt     string   `json:"prompt" validate:"required"`
 	Images     []string `json:"images,omitempty"`
 	Timeout    int      `json:"timeout,omitempty"`
 	Background bool     `json:"background,omitempty"`
@@ -182,6 +187,9 @@ func ColleagueAsk() Tool {
 			var args colleagueAskInput
 			if err := json.Unmarshal(input, &args); err != nil {
 				return fmt.Sprintf("Error parsing input: %v", err), err
+			}
+			if err := requireFields(&args); err != nil {
+				return err.Error(), err
 			}
 			if strings.TrimSpace(args.Colleague) == "" {
 				err := fmt.Errorf("colleague: name is required")

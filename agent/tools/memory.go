@@ -48,15 +48,15 @@ func MemoWrite(store MemoryStore, cwd string) Tool {
 		},
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
 			var p struct {
-				Slug    string `json:"slug"`
-				Content string `json:"content"`
+				Slug    string `json:"slug" validate:"required"`
+				Content string `json:"content" validate:"required"`
 				Global  bool   `json:"global"`
 			}
 			if err := json.Unmarshal(input, &p); err != nil {
 				return fmt.Sprintf("Error parsing input: %v", err), err
 			}
-			if p.Slug == "" || p.Content == "" {
-				return "MemoWrite: slug and content are required", fmt.Errorf("slug and content are required")
+			if err := requireFields(&p); err != nil {
+				return err.Error(), err
 			}
 			created, err := store.Write(cwd, p.Slug, p.Content, p.Global)
 			if err != nil {
@@ -122,11 +122,14 @@ func MemoDelete(store MemoryStore, cwd string) Tool {
 		},
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
 			var p struct {
-				Slug   string `json:"slug"`
+				Slug   string `json:"slug" validate:"required"`
 				Global bool   `json:"global"`
 			}
 			if err := json.Unmarshal(input, &p); err != nil {
 				return fmt.Sprintf("Error parsing input: %v", err), err
+			}
+			if err := requireFields(&p); err != nil {
+				return err.Error(), err
 			}
 			ok, err := store.Delete(cwd, p.Slug, p.Global)
 			if err != nil {
