@@ -21,7 +21,7 @@ func contextTokens(freshInput, cacheRead, cacheWrite int) int {
 // from the turn before, proving the context had not shrunk at all; the
 // accounting had simply dropped it.
 //
-// This is not cosmetic: ContextUsage >= 0.98 is what triggers the mid-turn
+// This is not cosmetic: ContextUsage >= autoCompactThreshold is what triggers the mid-turn
 // auto-compact, so under-counting could leave that guard silent while the
 // real context ran to the window limit.
 func TestContextUsageIncludesCacheWrite(t *testing.T) {
@@ -92,11 +92,12 @@ func TestContextUsageFormulaCases(t *testing.T) {
 
 // TestAutoCompactThresholdReachableWithCacheWrites verifies the practical
 // consequence of the fix: a turn dominated by cache WRITES can now cross the
-// 0.98 auto-compact threshold. Under the old formula such a turn reported
-// ~0% no matter how full the context actually was, so the guard never fired.
+// auto-compact threshold. Under the old formula such a turn reported ~0% no
+// matter how full the context actually was, so the guard never fired. Uses
+// the real package-level autoCompactThreshold so it can't drift from what
+// promptSync actually checks.
 func TestAutoCompactThresholdReachableWithCacheWrites(t *testing.T) {
 	const window = 1_000_000
-	const autoCompactThreshold = 0.98 // see promptSync
 
 	// A nearly-full context, reported almost entirely as cache writes.
 	fresh, cacheRead, cacheWrite := 10, 0, 985_000
@@ -113,4 +114,16 @@ func TestAutoCompactThresholdReachableWithCacheWrites(t *testing.T) {
 	}
 	t.Logf("old formula: %.4f%% (auto-compact silent) → fixed: %.1f%% (auto-compact fires)",
 		oldUsage*100, newUsage*100)
+}
+
+// TestAutoCompactThresholdValue pins the threshold as a deliberate product
+// decision (like TestDefaultMaxIterations pins the iteration cap). It was
+// tightened FROM 0.98 TO 0.95 after a field overflow: a single iteration can
+// jump usage by more than the old 2% margin (a large response plus several
+// parallel tool results landing at once), letting the next request cross 100%
+// before the check ran again. Changing this requires touching this test too.
+func TestAutoCompactThresholdValue(t *testing.T) {
+	if autoCompactThreshold != 0.95 {
+		t.Errorf("autoCompactThreshold = %v, want 0.95 — if this change is intentional, update this test and confirm the headroom reasoning still holds", autoCompactThreshold)
+	}
 }

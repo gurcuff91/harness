@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.19] - 2026-08-05
+
+### Fix — context overflow: auto-compact fired too late, and compaction itself could overflow (`agent/session.go`)
+- **Reported issue**: a session at 99.5% usage showed TWO consecutive compaction attempts both failing with `prompt is too long: 1,012,151 tokens > 1,000,000 maximum` (and `1,028,692` on the retry) — the rescue mechanism dying of the exact disease it exists to cure. Session `kaiban-api-v2`, a 1M-window model.
+- **Root cause — four compounding problems**:
+  1. **Margin too tight**: the auto-compact threshold was 0.98, leaving only a ~2% (20k-token) cushion. A single iteration can jump usage by more than that in one step (a large model response plus several parallel tool results landing at once), so the *next* request could cross 100% before the check ran again.
+  2. **Check in the wrong place**: the threshold was only evaluated at the END of an iteration that ran tool calls. A turn resuming an already-near-full session fired its very first request with no compaction check at all (the request that overflowed), and a text-only iteration skipped the check entirely.
+  3. **Compaction inherited the overflow**: `generateCompactionSummary` sent the full history (`s.store.Messages()`, images stripped but no size bound) — so once the context had already crossed the window, the summary request itself overflowed with the same 400.
+  4. **Blind retry of a deterministic error**: that summary call retries 3× with backoff; a "prompt is too long" error is deterministic, so it re-sent the same doomed oversized request three times.
+- **Fixes**:
+  1. Threshold lowered to **0.95** (`autoCompactThreshold` constant, pinned by `TestAutoCompactThresholdValue`).
+  2. The auto-compact check **moved to the TOP of the ReAct loop**, so it runs before EVERY request — including a turn's first request and text-only iterations — not just after tool results.
+  3. **Emergency prune** in `generateCompactionSummary`: if the history to summarize already exceeds a character budget (`compactionCharBudget`), whole turns are dropped oldest-first (`pruneOldestTurns`) until it fits, with a notice injected recording how many turns were omitted so the summary doesn't feign continuity it no longer has. Turns are the **atomic unit** (`turnStarts`/`isToolResultOnly`): dropping is only ever done on turn boundaries — a real user prompt, never a tool-result-only user message — so a `tool_call` and its matching `tool_result` are never separated (a shape every provider rejects). The last turn is never dropped (indivisible minimum); the extreme case of a single turn larger than the whole budget is deliberately left to fail rather than split a turn or truncate tool output — a lot of machinery for a case that shouldn't occur on a real large-window model (explicit design decision).
+     - **The budget targets 0.95 of the window (the same `autoCompactThreshold`) and is CALIBRATED to the session's real chars-per-token ratio**, not a fixed guess. `pruneOldestTurns`/`approxSize` work in characters, but the window is in tokens, so the token budget is converted to chars via `approxSize(history) / lastInputTokens` — the actual ratio this session exhibits (the provider's real token count for the same history we measured in chars). A real field study of the stuck `kaiban-api-v2` session (99.5% full, 2,226,183 chars = 995,087 tokens) measured **2.237 chars/token** — where the original fixed `window*4/2` budget (2M chars, ~50% of the window) would have thrown away far more context than necessary, and a naive fixed-4 budget at 95% (3.8M chars) would have **exceeded the real history and pruned nothing — re-overflowing**. The calibrated budget (≈2.125M chars) prunes just 6 of 88 turns, keeping ~94% of the context. Falls back to a fixed 4 chars/token only when there's no real measurement yet (`lastInputTokens == 0`, e.g. a resumed session before its first turn).
+  4. `generateCompactionSummary` now stops immediately on a `isContextOverflowError` (deterministic size error — matched across Anthropic/OpenAI wordings) instead of burning the backoff on two more identical doomed requests; transient errors (network, 429, token refresh) still retry as before.
+- New tests: `agent/compaction_prune_test.go` (turn-boundary detection, tool_call/tool_result never split, oldest-first eviction, last-turn-never-dropped, no-op when it fits, overflow-vs-transient error classification, conservative budget) and `agent/token_stats_test.go`'s `TestAutoCompactThresholdValue`. Full suite + `-race` green.
+
 ## [0.76.18] - 2026-08-04
 
 ### Fix — `reportedErr` wrapper (v0.76.17) leaked past `drainFollowUps` into `PromptAndWait`

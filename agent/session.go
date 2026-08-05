@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -109,6 +110,17 @@ const (
 	OriginUser      = "user"
 	OriginScheduled = "scheduled"
 )
+
+// autoCompactThreshold is the fraction of the context window at which the
+// ReAct loop compacts automatically. 0.95 (not a tighter 0.98) leaves a ~5%
+// headroom cushion: a single iteration can jump usage by more than 2% in one
+// step (a large model response plus several parallel tool results all land at
+// once), so a 2% margin could let the NEXT request cross 100% before the
+// check runs again — the exact "prompt is too long" overflow seen in the
+// field. Checked at the TOP of every iteration (not just after tool results),
+// so a turn resuming an already-near-full session compacts BEFORE its first
+// request, not after it has already overflowed.
+const autoCompactThreshold = 0.95
 
 // PromptOption configures a Prompt / PromptAndWait call.
 type PromptOption func(*promptConfig)
@@ -545,6 +557,22 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 			return "", nil // turn_end via defer
 		}
 
+		// Auto-compact BEFORE building the request, whenever context usage has
+		// crossed the threshold. Placing this at the TOP of the loop (rather
+		// than only after tool results, as before) closes two gaps that caused
+		// real "prompt is too long" overflows: (1) a turn resuming an
+		// already-near-full session used to fire its very first request
+		// without any compaction check — the request that overflowed; (2) a
+		// text-only iteration (no tool calls) skipped the old end-of-loop
+		// check entirely. compact() is a no-op-safe unguarded call here
+		// (we're mid-turn/busy, which public Compact would reject, but between
+		// requests is the safe point). Its own error is already emitted as
+		// EventError; we continue either way — a failed compaction shouldn't
+		// abort a turn that might still fit.
+		if s.stats.ContextUsage >= autoCompactThreshold {
+			s.compact(ctx) //nolint:errcheck — error already emitted as EventError
+		}
+
 		// Strip images from all turns except the current one before sending to
 		// the provider. Providers like Anthropic reject requests with multiple
 		// large images (>2000px) across the full history. Images in the current
@@ -606,15 +634,12 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 		}
 
 		// This iteration ran tools and will loop again — close it so LoopStart and
-		// LoopEnd stay balanced across iterations.
+		// LoopEnd stay balanced across iterations. The auto-compact check moved
+		// to the TOP of the loop (see the comment there), so the NEXT iteration
+		// will compact before its request if this one pushed usage over the
+		// threshold — including the very common case of a large tool result
+		// landing here.
 		s.emit(types.Event{Type: types.EventLoopEnd, Loop: i})
-
-		// Auto-compact at 98% context usage before next iteration. Uses the
-		// unguarded compact: we're mid-turn (busy), which the public Compact would
-		// reject, but here it's the safe between-iterations point.
-		if s.stats.ContextUsage >= 0.98 {
-			s.compact(ctx) //nolint:errcheck — error already emitted as EventError
-		}
 	}
 
 	// Max iterations reached while still executing tools. This is the ONE
@@ -628,7 +653,7 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 	// turns it off in compact_end, see internal/tui/events.go) and its
 	// "(turn/max_iterations)" footer counter (incremented only on
 	// loop_start) — never fired for this reserved iteration. If the
-	// PREVIOUS iteration's auto-compact (ContextUsage >= 0.98, right above)
+	// PREVIOUS iteration's auto-compact (ContextUsage >= autoCompactThreshold)
 	// happened to be the very last one before hitting the cap, the spinner
 	// was left off with nothing left in the event stream to turn it back on
 	// — making the turn look frozen right at the "reached the N-iteration
@@ -791,18 +816,39 @@ func (s *Session) compact(ctx context.Context) error {
 // Retries up to 3 times with exponential backoff to handle transient token
 // refresh failures or network errors during compact.
 func (s *Session) generateCompactionSummary(ctx context.Context) (string, error) {
-	// Append a user message asking for the summary. Besides making the request
-	// explicit, it guarantees the conversation ends with a user turn — required by
-	// providers that reject assistant-message prefill (e.g. Claude subscription),
-	// since the working set may otherwise end on an assistant message.
-	//
 	// Strip inline images from the history before sending to the compaction
 	// model: the LLM only needs text to produce a summary, and providers like
 	// Anthropic reject requests with many large images (>2000px) when they appear
 	// together in a single request (error: "image dimensions exceed max allowed
 	// size for many-image requests"). Replacing each image part with a placeholder
 	// text preserves the conversational structure without triggering the limit.
-	messages := append(stripImages(s.store.Messages()), types.NewUserTextMessage(compactRequestPrompt))
+	history := stripImages(s.store.Messages())
+
+	// Emergency prune: if the history to summarize is ITSELF already too large
+	// for the model's window, the summary request would fail with the very
+	// same "prompt is too long" overflow it exists to fix — the rescue
+	// mechanism dying of the disease it treats (seen in the field: two
+	// consecutive compaction attempts both 400'd at >1M tokens). Drop whole
+	// turns oldest-first until the history fits the budget, so this request
+	// essentially always succeeds. A notice records how many turns were
+	// dropped so the summary doesn't pretend continuity it no longer has.
+	chars := approxSize(history)
+	if budget := s.compactionCharBudget(chars); chars > budget {
+		var dropped int
+		history, dropped = pruneOldestTurns(history, budget)
+		if dropped > 0 {
+			notice := types.NewUserTextMessage(fmt.Sprintf(
+				"[Note: %d earlier conversation turn(s) were omitted here because the "+
+					"context grew too large to compact in full. Summarize what remains.]", dropped))
+			history = append([]types.Message{notice}, history...)
+		}
+	}
+
+	// Append a user message asking for the summary. Besides making the request
+	// explicit, it guarantees the conversation ends with a user turn — required by
+	// providers that reject assistant-message prefill (e.g. Claude subscription),
+	// since the working set may otherwise end on an assistant message.
+	messages := append(history, types.NewUserTextMessage(compactRequestPrompt))
 	req := &types.Request{
 		SystemPrompt: compactSystemPrompt,
 		Model:        s.modelID,
@@ -834,10 +880,160 @@ func (s *Session) generateCompactionSummary(ctx context.Context) (string, error)
 			return summaryText, nil
 		}
 		lastErr = err
+		// A "prompt is too long" / context-overflow error is DETERMINISTIC:
+		// retrying the identical oversized request cannot succeed, it just
+		// burns the backoff (and, on a subscription, quota). The prune above
+		// should prevent ever reaching it, but if it somehow still overflows,
+		// stop immediately rather than hammer the same doomed request twice
+		// more. Transient errors (network, 429, token refresh) fall through
+		// to the retry, which is what the backoff loop is actually for.
+		if isContextOverflowError(err) {
+			return "", err
+		}
 	}
 
 	// All attempts exhausted — return the last error.
 	return "", lastErr
+}
+
+// fallbackCharsPerToken is the chars-per-token ratio used ONLY when the
+// session has no real measurement yet (lastInputTokens == 0, e.g. a resumed
+// session that hasn't run a turn). 4 is the classic English-prose estimate —
+// deliberately on the HIGH side so, absent real data, the budget errs toward
+// keeping fewer chars (safer against overflow) rather than more.
+const fallbackCharsPerToken = 4.0
+
+// compactionCharBudget returns the CHARACTER budget for the emergency prune in
+// generateCompactionSummary, targeting autoCompactThreshold (0.95) of the
+// model's context window.
+//
+// The subtlety: pruneOldestTurns/approxSize work in CHARS, but the window is
+// in TOKENS, so the token budget must be converted to chars — and the
+// chars-per-token ratio is NOT a constant. It swings from ~2.2 for dense
+// code/JSON (this codebase's own sessions) to ~4 for prose. A fixed ratio is
+// unsafe: a real field study of the stuck kaiban-api-v2 session measured
+// 2.237 chars/token, where a fixed-4 budget (3.8M chars) would have exceeded
+// the actual history (2.22M chars) and pruned NOTHING — sending all 995k
+// tokens and overflowing exactly as before.
+//
+// So calibrate against THIS session's real ratio: approxSize(history) chars
+// over lastInputTokens tokens (the token count the provider actually reported
+// for that same history). currentChars is approxSize(history), passed in so
+// it isn't computed twice. Falls back to fallbackCharsPerToken only when
+// there's no real token measurement yet.
+func (s *Session) compactionCharBudget(currentChars int) int {
+	window := s.contextWindow
+	if window <= 0 {
+		window = 128000 // conservative default when unknown
+	}
+	budgetTokens := autoCompactThreshold * float64(window)
+
+	ratio := fallbackCharsPerToken
+	if s.lastInputTokens > 0 && currentChars > 0 {
+		ratio = float64(currentChars) / float64(s.lastInputTokens)
+	}
+	return int(budgetTokens * ratio)
+}
+
+// approxSize is a cheap, provider-agnostic estimate of a history's size in
+// characters. It does NOT need to be exact — pruneOldestTurns only needs a
+// consistent, monotonic measure to decide "keep dropping or does it fit now".
+func approxSize(msgs []types.Message) int {
+	n := 0
+	for _, m := range msgs {
+		for _, p := range m.Parts {
+			n += len(p.Text)
+			if p.ToolCall != nil {
+				n += len(p.ToolCall.Name) + len(p.ToolCall.Input)
+			}
+			if p.ToolResult != nil {
+				n += len(p.ToolResult.Output)
+			}
+			if p.Thinking != nil {
+				n += len(p.Thinking.Content)
+			}
+			// Images are already stripped to placeholders before this runs;
+			// their base64 payload doesn't count here.
+		}
+	}
+	return n
+}
+
+// turnStarts returns the indices where each conversation turn begins, oldest
+// first. A turn begins at a "real" user message — a user prompt, NOT a
+// user-role message that only carries tool_results (those belong to the
+// assistant turn that requested them). This is the boundary that keeps a
+// tool_call and its matching tool_result together: dropping is only ever done
+// on these boundaries, never mid-turn, so a request can never be left with a
+// tool_use whose tool_result was pruned (or vice versa), which every provider
+// rejects.
+func turnStarts(msgs []types.Message) []int {
+	var starts []int
+	for i, m := range msgs {
+		if m.Role == types.RoleUser && !isToolResultOnly(m) {
+			starts = append(starts, i)
+		}
+	}
+	return starts
+}
+
+// isToolResultOnly reports whether a user-role message consists solely of
+// tool_result parts (i.e. it's the transport of tool outputs back to the
+// model, not a fresh human prompt). Such a message continues the assistant's
+// turn; it does not start a new one.
+func isToolResultOnly(m types.Message) bool {
+	if m.Role != types.RoleUser || len(m.Parts) == 0 {
+		return false
+	}
+	for _, p := range m.Parts {
+		if p.ToolResult == nil {
+			return false
+		}
+	}
+	return true
+}
+
+// pruneOldestTurns drops whole turns from the front (oldest first) until the
+// remaining history fits budget characters, returning the kept slice and how
+// many turns were dropped. It NEVER drops the last turn — a single turn is the
+// indivisible minimum (see the design note: an extreme case where even one
+// turn exceeds the budget is left to fail rather than split a turn or truncate
+// tool output, which would be a lot of machinery for a case that shouldn't
+// happen on a real 1M-window model). Turns are the atomic unit precisely so a
+// tool_call and its tool_result are never separated.
+func pruneOldestTurns(msgs []types.Message, budget int) (kept []types.Message, dropped int) {
+	starts := turnStarts(msgs)
+	if len(starts) <= 1 {
+		return msgs, 0 // one turn (or none) — indivisible, nothing to prune
+	}
+	idx := 0
+	for idx < len(starts)-1 { // always keep at least the last turn intact
+		if approxSize(msgs[starts[idx]:]) <= budget {
+			break
+		}
+		idx++
+	}
+	return msgs[starts[idx]:], idx
+}
+
+// isContextOverflowError reports whether err is a deterministic
+// prompt-too-long / context-window-exceeded error, as opposed to a transient
+// failure worth retrying. Matched on message substrings because providers
+// don't share a typed error for this (Anthropic: "prompt is too long",
+// OpenAI: "maximum context length", plus the generic "context ... exceed"
+// wording). Retrying one of these against the same oversized request can
+// never succeed.
+func isContextOverflowError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "prompt is too long") ||
+		strings.Contains(msg, "maximum context length") ||
+		strings.Contains(msg, "context length exceeded") ||
+		strings.Contains(msg, "context_length_exceeded") ||
+		(strings.Contains(msg, "context") && strings.Contains(msg, "exceed")) ||
+		(strings.Contains(msg, "token") && strings.Contains(msg, "maximum"))
 }
 
 // ID returns the session's unique identifier.
@@ -1136,8 +1332,8 @@ func (s *Session) updateStats(se types.StreamEvent) {
 	// true occupancy was 82.8%, matching the 82.7% persisted from the turn
 	// before — the context had not shrunk at all, the accounting had lost it.
 	//
-	// Because ContextUsage >= 0.98 is what triggers the mid-turn auto-compact
-	// (see promptSync), under-counting here meant the guard could stay silent
+	// Because ContextUsage >= autoCompactThreshold is what triggers the
+	// mid-turn auto-compact (see promptSync), under-counting here meant the guard could stay silent
 	// while the real context ran to the window limit — losing the turn to a
 	// provider overflow error instead of compacting in time.
 	s.lastInputTokens = se.InputTokens + se.CacheRead + se.CacheWrite
