@@ -270,6 +270,39 @@ func (s *Session) IsBusy() bool {
 // ErrBusy is returned by Compact when a turn is in flight.
 var ErrBusy = errors.New("session is busy; try again when the current turn finishes")
 
+// reportedErr wraps an error that has ALREADY been emitted as an EventError at
+// its point of failure (inside the ReAct for-loop — stream/provider errors,
+// store errors saving the assistant message or tool results — see promptSync).
+// It exists to prevent a real double-emit bug: those three sites both emit
+// locally AND return the error so the turn unwinds; without this wrapper,
+// drainFollowUps (which emits EventError for any error a turn returns, so
+// requestProgressUpdate's failure — which does NOT emit locally — is reported
+// at all) had no way to tell "already told the user" apart from "never told
+// the user", and reported the SAME error a second time.
+//
+// Unwrap() means errors.Is/errors.As (e.g. errorEvent's own ProviderAPIError
+// unwrap below) still see straight through the wrapper — wrapping only adds a
+// "was this reported already?" bit, it never changes what the error actually
+// is.
+//
+// Deliberately NOT solved by moving the loop's emit calls out to
+// drainFollowUps (a single emission point, no wrapper needed): that would
+// invert the wire order from error→loop_end to loop_end→error. No client
+// today has a loop_end handler to notice, but that's exactly the kind of
+// implicit contract change ("here's what actually failed" arriving AFTER
+// "this iteration is closed") a future SSE consumer reading the raw event
+// order could reasonably depend on. This wrapper keeps the existing order
+// (emit right next to its own return, auditable in place) while still
+// guaranteeing exactly one EventError per failure.
+type reportedErr struct{ err error }
+
+func (r *reportedErr) Error() string { return r.err.Error() }
+func (r *reportedErr) Unwrap() error { return r.err }
+
+// reported marks err as already-emitted — call at every site inside the
+// for-loop that both s.emit(errorEvent(err)) and returns the error.
+func reported(err error) error { return &reportedErr{err} }
+
 // errorEvent builds an EventError from an error, lifting a provider ProviderAPIError's
 // structured details into the event so transports can render them richly.
 func errorEvent(err error) types.Event {
@@ -444,9 +477,29 @@ func (s *Session) drainFollowUps() {
 		cancel() // always release resources
 		// A user Stop() already produced EventStop — staying quiet there is
 		// intentional (Stop means stop, nothing more to report). Any OTHER
-		// failure must be visible.
-		if err != nil && !wasCancelled {
+		// failure must be visible — UNLESS the for-loop already emitted it
+		// itself and wrapped it with reported() (see reportedErr's doc
+		// comment): this is the single point that reports a turn's error for
+		// callers that don't emit locally (requestProgressUpdate's failure
+		// path), so it must not blindly re-emit one that already went out.
+		var already *reportedErr
+		if err != nil && !wasCancelled && !errors.As(err, &already) {
 			s.emit(errorEvent(err))
+		}
+		// If the loop already wrapped err in reported() to steer the emit
+		// decision above, unwrap it back to the real underlying error before
+		// handing the result to a PromptAndWait caller — that wrapper is an
+		// internal bookkeeping detail of THIS function; it has no reason to
+		// leak past it. Without this, PromptAndWait callers (including the
+		// public SDK — internal/cli.go's client.Ask, server.go's
+		// handlePrompt) would receive *reportedErr instead of the real error,
+		// which still behaves correctly under errors.Is/errors.As (Unwrap()
+		// sees through it) but would silently break any caller doing a plain
+		// type assertion (err.(*types.ProviderAPIError)) instead of the
+		// idiomatic errors.As — an avoidable footgun for zero benefit, since
+		// nothing outside this function needs to know "was this reported".
+		if already != nil {
+			err = already.Unwrap()
 		}
 		// Deliver the outcome to a PromptAndWait caller, if any.
 		if fu.done != nil {
@@ -519,10 +572,12 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 		}
 		if err != nil {
 			// Provider/stream error — emit error + loop_end.
-			// turn_end is handled by defer emitTurnEnd().
+			// turn_end is handled by defer emitTurnEnd(). reported() marks
+			// this err as already told to the user, so drainFollowUps
+			// doesn't emit it again (see reportedErr's doc comment).
 			s.emit(errorEvent(err))
 			s.emit(types.Event{Type: types.EventLoopEnd, Loop: i})
-			return "", err
+			return "", reported(err)
 		}
 
 		if err := s.store.AddMessage(resp.Message); err != nil {
@@ -531,7 +586,7 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 			storeErr := fmt.Errorf("store assistant: %w", err)
 			s.emit(errorEvent(storeErr))
 			s.emit(types.Event{Type: types.EventLoopEnd, Loop: i})
-			return "", storeErr
+			return "", reported(storeErr)
 		}
 
 		if len(resp.ToolCalls) == 0 {
@@ -546,7 +601,7 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 				storeErr := fmt.Errorf("store tool results: %w", err)
 				s.emit(errorEvent(storeErr))
 				s.emit(types.Event{Type: types.EventLoopEnd, Loop: i})
-				return "", storeErr
+				return "", reported(storeErr)
 			}
 		}
 

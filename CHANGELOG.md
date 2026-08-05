@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.18] - 2026-08-04
+
+### Fix — `reportedErr` wrapper (v0.76.17) leaked past `drainFollowUps` into `PromptAndWait`
+- **Follow-up refinement, not a field bug**: v0.76.17's `reportedErr` wrapper — used to prevent a loop error from being emitted twice — was correctly recognized by `errors.As`/`errors.Is` (so `PromptAndWait`'s existing callers, `client.Ask` and `server.go`'s `handlePrompt`, both of which already inspect errors idiomatically via `errors.As`, were never actually affected) but was never explicitly unwrapped before being handed to a `PromptAndWait` caller via `promptResult`.
+- **Why it mattered anyway**: `reportedErr` is an internal bookkeeping detail of `drainFollowUps` — nothing outside that function needs to know "was this error already reported". Leaving the wrapper on the value handed to callers was an avoidable footgun for zero benefit: a future caller (internal or an SDK consumer) doing a plain type assertion (`err.(*types.ProviderAPIError)`) instead of the idiomatic `errors.As` would silently get `ok == false` even though the real error underneath genuinely is that type.
+- **Fix**: `drainFollowUps` now unwraps (`already.Unwrap()`) immediately after using the wrapper to decide whether to emit, so `promptResult.err` — and therefore everything `PromptAndWait` returns — is always the real underlying error, never `*reportedErr`.
+- New test: `agent/drain_error_test.go`'s `TestReportedErrPreventsDoubleEmit/the_wrapper_is_unwrapped_before_reaching_a_PromptAndWait_caller`. Verified in the opposite direction: reverting the unwrap line reproduced a leaked `*agent.reportedErr` reaching the result exactly as described. Full suite + `-race` green.
+
+## [0.76.17] - 2026-08-04
+
+### Fix — the same turn error rendered twice in the TUI (regression from v0.76.13's own fix)
+- **Reported issue**: the exact same Anthropic API error (same `request_id`) appeared twice in the TUI's scrollback for one failure.
+- **Root cause**: three sites inside `promptSync`'s ReAct for-loop (a stream/provider error, and the two `store.AddMessage` failure checks) already call `s.emit(errorEvent(err))` locally right before returning the error. `requestProgressUpdate`'s failure path (fixed in v0.76.13) does the opposite — it never emits locally, relying entirely on `drainFollowUps` to report it. Before v0.76.13, `drainFollowUps`'s own emit was dead code (see that version's fix), so the loop's local emits never collided with anything. Fixing that dead code reactivated the emit for EVERY error a turn returns — including the three that had already reported themselves, producing a duplicate.
+- **Fix** — `reportedErr`/`reported(err)` (`agent/session.go`): a thin `Unwrap()`-preserving wrapper marking "this error was already emitted at its point of failure". The three loop sites now return `reported(err)` instead of the bare error; `drainFollowUps` checks `errors.As(err, &reportedErr{})` and skips re-emitting when it matches, while `requestProgressUpdate`'s (unwrapped) errors still get reported exactly as v0.76.13 intended. `.Error()` and `errors.Is`/`errors.As` on the underlying error are completely unaffected — `PromptAndWait` callers (including SDK consumers) see the identical message and can still unwrap to a `*ProviderAPIError` etc.
+- **Design alternative considered and rejected**: moving the loop's three emit calls out of the loop entirely (a single emission point in `drainFollowUps`, no wrapper needed) would have inverted the wire order from `error → loop_end` to `loop_end → error`. No client today has a `loop_end` handler to notice, but that's exactly the kind of implicit contract change a future raw-SSE consumer could reasonably depend on — the wrapper preserves the existing order while still guaranteeing exactly one `EventError` per failure.
+- New tests: `agent/drain_error_test.go`'s `TestReportedErrPreventsDoubleEmit` (message preserved, `errors.As` recognizes the wrapper, `errors.Is` still sees through to the original error, a plain non-wrapped error is NOT mistaken for already-reported — the exact v0.76.13 case — and the extended drainFollowUps decision table). Verified in the opposite direction too: temporarily reverting the `errors.As` guard reproduced the double emit exactly (2 emits for 1 error). Full suite + `-race` green.
+
 ## [0.76.16] - 2026-08-04
 
 ### Fix — Slack replies could leak the transport's inbound context tags (`transports/slack/`)
