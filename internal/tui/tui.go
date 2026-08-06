@@ -22,6 +22,7 @@ import (
 
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/client"
+	"github.com/gurcuff91/harness/internal/oauthflow"
 	"github.com/gurcuff91/harness/internal/tui/ansi"
 	"github.com/gurcuff91/harness/internal/tui/components"
 	"github.com/gurcuff91/harness/internal/tui/render"
@@ -118,6 +119,11 @@ type TUI struct {
 type pendingValue struct {
 	cmd  string   // command to run once the value is captured
 	args []string // args already collected (the value is appended)
+	// oauthFlow, when set, means the captured value is an OAuth authorization
+	// code to hand to this in-progress flow's Exchange — not a plain command
+	// argument. Set by cmdConnect for subscription providers after the browser
+	// is opened; consumed in captureValue.
+	oauthFlow oauthflow.OauthFlow
 }
 
 // New creates a TUI for the given agent.

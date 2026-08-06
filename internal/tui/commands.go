@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/gurcuff91/harness/client"
-	"github.com/gurcuff91/harness/internal/providers/authflow"
+	"github.com/gurcuff91/harness/internal/oauthflow"
 	"github.com/gurcuff91/harness/internal/tui/ansi"
 	"github.com/gurcuff91/harness/internal/tui/components"
 )
@@ -168,7 +168,34 @@ func (t *TUI) captureValue(value string) {
 		t.tui.RequestRender(false)
 		return
 	}
+
+	// OAuth code capture (phase two of the native flow started in cmdConnect):
+	// the value is an authorization code, not a command argument. Exchange it
+	// for tokens and connect. Done off the event goroutine — Exchange makes an
+	// HTTP call — so the UI stays responsive.
+	if p.oauthFlow != nil {
+		provider := p.args[0]
+		go t.completeOAuthConnect(provider, p.oauthFlow, value)
+		return
+	}
+
 	t.runCommand(p.cmd, append(p.args, value))
+}
+
+// completeOAuthConnect finishes the native OAuth flow: exchange the pasted
+// code for credentials, then connect the provider. Runs on its own goroutine.
+func (t *TUI) completeOAuthConnect(provider string, flow oauthflow.OauthFlow, code string) {
+	creds, err := flow.Exchange(code)
+	if err != nil {
+		t.showWarn(fmt.Sprintf("connect %s: %s", provider, err.Error()))
+		return
+	}
+	if _, err := t.client.ConnectProviderWithCreds(provider, creds); err != nil {
+		t.showWarn(fmt.Sprintf("connect %s: %s", provider, err.Error()))
+		return
+	}
+	t.loadSessionCommands()
+	t.addRaw(ansi.Accent("✔") + " " + ansi.Dimmed("connected "+provider))
 }
 
 // submitPrompt sends a prompt to the session, queueing it locally if a turn is
@@ -313,21 +340,31 @@ func (t *TUI) cmdConnect(args []string) {
 	}
 
 	// Subscription/OAuth providers (e.g. claude-oauth) authenticate via the
-	// OAuth flow, not a typed key: run it locally and send the obtained tokens.
+	// native OAuth PKCE flow: open the browser now, then drop into value
+	// capture so the user pastes back the authorization code. Phase two
+	// (Exchange) runs in captureValue — same two-phase split the CLI uses,
+	// both resolving the provider's flow via oauthflow.For (the one place that
+	// maps provider→flow) and driving oauthflow.OauthFlow's Start/Exchange.
+	// Nothing here spawns a subprocess or leaves raw mode; opening a browser
+	// and capturing a pasted value is exactly what the API-key path already
+	// does. Provider-agnostic — a new OAuth provider needs no change here.
 	if t.providerIsSubscription(provider) {
-		go func() {
-			creds, err := authflow.ObtainOAuthCredentials(provider)
-			if err != nil {
-				t.showWarn(fmt.Sprintf("connect %s: %s", provider, err.Error()))
-				return
-			}
-			if _, err := t.client.ConnectProviderWithCreds(provider, creds); err != nil {
-				t.showWarn(fmt.Sprintf("connect %s: %s", provider, err.Error()))
-				return
-			}
-			t.loadSessionCommands()
-			t.addRaw(ansi.Accent("✔") + " " + ansi.Dimmed("connected "+provider))
-		}()
+		flow, err := oauthflow.For(provider)
+		if err != nil {
+			t.showWarn(fmt.Sprintf("connect %s: %s", provider, err.Error()))
+			return
+		}
+		authURL, err := flow.Start()
+		if err != nil {
+			t.showWarn(fmt.Sprintf("connect %s: %s", provider, err.Error()))
+			return
+		}
+		t.addRaw(ansi.Dimmed("Opening your browser to authenticate…\n" +
+			"If it doesn't open, paste this URL manually:\n" + authURL))
+		t.pending = &pendingValue{cmd: "connect", args: []string{provider}, oauthFlow: flow}
+		t.editor.Clear()
+		t.editor.SetPlaceholder("Paste the authorization code from your browser and press Enter (Esc to cancel)")
+		t.tui.RequestRender(false)
 		return
 	}
 

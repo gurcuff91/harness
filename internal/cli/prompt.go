@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"os"
@@ -29,4 +30,22 @@ func PromptSecret(label string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(b)), nil
+}
+
+// PromptLine reads a single visible line from the terminal (the value IS
+// echoed — unlike PromptSecret). Used for values the user pastes and wants to
+// see, e.g. the OAuth authorization code. Requires an interactive TTY;
+// returns ErrNoTTY otherwise so the caller can print a clean message instead
+// of blocking on input that will never arrive.
+func PromptLine(label string) (string, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return "", ErrNoTTY
+	}
+	fmt.Print(label)
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && line == "" {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
 }

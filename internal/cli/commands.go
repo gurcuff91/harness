@@ -81,10 +81,12 @@ func RunConnect(ctx context.Context, a *agent.Agent, name, apiKey, output string
 	// Branch on the credential type the provider actually needs.
 	switch credType {
 	case "oauth":
-		// Silent-only: read tokens from the keychain / credentials file. If none
-		// exist, ObtainOAuthCredentials returns an actionable "run claude auth
-		// login" error (we don't spawn the interactive login — same as the TUI).
-		creds, err := ObtainOAuthCredentials(name)
+		// Native OAuth PKCE flow: open the browser, let the user log in, and
+		// exchange the pasted code for tokens — no Claude Code install or
+		// keychain read required (see internal/oauthflow). RunOAuth resolves
+		// the provider's specific flow by name (oauthflow.For), so this branch
+		// stays provider-agnostic — a new OAuth provider needs no change here.
+		creds, err := RunOAuth(name)
 		if err != nil {
 			return fmt.Errorf("OAuth: %w", err)
 		}

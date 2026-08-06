@@ -62,8 +62,8 @@ cmd/harness/main.go             ← executable entry point (package main) — ju
     ├── providers/              ← LLM provider layer (Resolve, streaming)
     │   ├── provider.go / anthropic.go / claude_oauth.go / openai.go
     │   ├── ollama*.go / opencode_go.go / minimax.go / registry.go / status.go
-    │   ├── authflow/           ← shared OAuth flow (keychain → file → login)
     │   └── llm/                ← core LLM types, metadata cascade, model registry
+    ├── oauthflow/              ← native OAuth PKCE login flows. OauthFlow interface (Start→browser, Exchange→creds) + shared PKCE/browser/token-POST + For(provider) dispatch in oauthflow.go; one file per provider (claude.go), each implementing OauthFlow. Add a provider = one new file + one For() case, no call-site changes.
     ├── config/                 ← typed settings + credentials managers
     │   ├── settings.go / credentials.go / manager.go
     ├── version/                ← build version (ldflags target)
@@ -207,7 +207,7 @@ make install              # build + install to ~/go/bin
 3. Add constructor to `internal/providers/registry.go` in the `Resolve()` switch
 4. Register the provider key + status in `internal/providers/status.go`
 5. Add credential handling (`config/credentials.go` is the store; api-key providers use `resolveAPIKey`)
-6. Add a connect handler in `internal/cli/cli.go` and, if OAuth, wire `internal/providers/authflow`
+6. Add a connect handler in `internal/cli/cli.go` and, if OAuth, add an `OauthFlow` implementation in `internal/oauthflow/<provider>.go` (one file implementing the `OauthFlow` interface — see `claude.go`)
 
 ### Adding a New Tool
 
