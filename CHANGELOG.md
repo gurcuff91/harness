@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [0.76.20] - 2026-08-06
 
+### Fix — Bash tool: models kept passing `timeout` alongside `background:true` (where it's ignored)
+- **Observed**: when calling Bash with `background:true`, models frequently also sent `timeout` (often high, e.g. `timeout:120`) — pointless, since a background process returns immediately and the timeout is silently discarded (`runBashBackground` returns before `timeout` is ever read).
+- **Root cause**: the `timeout` FIELD description said only "Increase for long-running commands" — nothing about background ignoring it. A model choosing a timeout reads the `timeout` field, not the `background` one (which did mention "no timeout applies"), so the disambiguation was in the wrong place. `Subagent` and `ColleagueAsk` already say "Ignored when background is true" ON the timeout field itself — Bash was the only one of the three that didn't.
+- **Fix** (`agent/tools/bash.go`, description only — no behavior change): the `timeout` field now says "Ignored when background is true — a background process has no timeout, so do NOT pass timeout together with background", and the main description's Background paragraph reinforces it. Aligns Bash with the Subagent/ColleagueAsk pattern.
+
 ### Add — native Claude OAuth login (no Claude Code install required)
 - `harness connect claude-oauth` (CLI) and `/connect claude-oauth` (TUI) now perform the **OAuth PKCE flow themselves** — open the browser, let the user log in, and exchange the pasted authorization code for tokens — instead of reading Claude Code's keychain / credentials file. Harness no longer depends on Claude Code being installed to use a Claude subscription.
 - Viability was proven first with an isolated PoC (`~/Workspace/claude-oauth-test`, adapted from `claude-oauth-proxy-master`): a token harness obtains itself is accepted by Anthropic identically to one from Claude Code's keychain — `GET /v1/models` → 200 (10 models), `POST /v1/messages` → 200. The Jan-2026 "OAuth blocked outside Claude.ai/Claude Code" restriction did not apply, since harness masquerades as Claude Code (same public `client_id`, scopes, and identity headers as `claude_oauth.go`'s `buildCCHeaders`).
