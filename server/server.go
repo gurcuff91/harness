@@ -103,9 +103,6 @@ func (s *Server) handler() http.Handler {
 	r.Get("/api/docs/openapi.json", s.handleOpenAPISpec)
 	r.Get("/api/settings", s.handleSettings)
 	r.Patch("/api/settings", s.handlePatchSettings)
-	r.Get("/api/settings/providers", s.handleListProviderConfigs)
-	r.Put("/api/settings/providers/{name}", s.handlePutProviderConfig)
-	r.Delete("/api/settings/providers/{name}", s.handleDeleteProviderConfig)
 	r.Get("/api/settings/mcp", s.handleListMCPServers)
 	r.Put("/api/settings/mcp/{name}", s.handlePutMCPServer)
 	r.Delete("/api/settings/mcp/{name}", s.handleDeleteMCPServer)
@@ -364,45 +361,6 @@ func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 		thinking = "off"
 	}
 	writeJSON(w, http.StatusOK, SettingsDTO{ActiveModel: sm.ActiveModel(), ThinkingLevel: thinking})
-}
-
-// ── Provider configs (settings collection) ────────────────────────────────
-
-// handleListProviderConfigs returns the whole provider-config collection.
-func (s *Server) handleListProviderConfigs(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, config.GetSettingsManager().Providers())
-}
-
-// handlePutProviderConfig stores (or replaces) one provider's config. The name
-// is in the URL; the ProviderConfig is the body. Pass-through: any validation
-// lives in the SettingsManager's setter, not here.
-func (s *Server) handlePutProviderConfig(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	var cfg config.ProviderConfig
-	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
-		return
-	}
-	if err := config.GetSettingsManager().SetProvider(name, cfg); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, cfg)
-}
-
-// handleDeleteProviderConfig removes one provider's config, 404 if absent.
-func (s *Server) handleDeleteProviderConfig(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	sm := config.GetSettingsManager()
-	if _, ok := sm.Provider(name); !ok {
-		writeError(w, http.StatusNotFound, "provider config not found: "+name, nil)
-		return
-	}
-	if err := sm.DeleteProvider(name); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeStatus(w, http.StatusOK, "deleted", "")
 }
 
 // ── MCP servers (settings collection) ───────────────────────────────────

@@ -107,49 +107,6 @@ func bumpSettingsMtime(t *testing.T, path string, delta time.Duration) {
 	}
 }
 
-// TestProvidersCollection verifies provider configs round-trip and delete.
-func TestProvidersCollection(t *testing.T) {
-	m := newTestSettings(t, `{"active_model":"m","thinking_level":"low","providers":{"ollama":{"url":"http://x"}}}`)
-	if cfg, ok := m.Provider("ollama"); !ok || cfg.URL != "http://x" {
-		t.Errorf("provider load lost: %+v ok=%v", cfg, ok)
-	}
-	// Set a new provider (exercises lazy-init when the map already exists).
-	if err := m.SetProvider("ollama-cloud", ProviderConfig{URL: "http://y"}); err != nil {
-		t.Fatalf("set: %v", err)
-	}
-	// Reload from disk and confirm both persist.
-	m2 := newTestSettings(t, "")
-	m2.path = m.path
-	m2.load()
-	if cfg, _ := m2.Provider("ollama"); cfg.URL != "http://x" {
-		t.Errorf("ollama not persisted: %q", cfg.URL)
-	}
-	if cfg, _ := m2.Provider("ollama-cloud"); cfg.URL != "http://y" {
-		t.Errorf("ollama-cloud not persisted: %q", cfg.URL)
-	}
-	// Delete and confirm gone.
-	if err := m2.DeleteProvider("ollama"); err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	if _, ok := m2.Provider("ollama"); ok {
-		t.Errorf("ollama still present after delete")
-	}
-}
-
-// TestProvidersDefensiveCopy verifies Providers() returns a copy, not the map.
-func TestProvidersDefensiveCopy(t *testing.T) {
-	m := newTestSettings(t, `{"providers":{"ollama":{"url":"http://x"}}}`)
-	copy := m.Providers()
-	copy["ollama"] = ProviderConfig{URL: "MUTATED"}
-	copy["injected"] = ProviderConfig{URL: "z"}
-	if cfg, _ := m.Provider("ollama"); cfg.URL != "http://x" {
-		t.Errorf("internal map mutated via Providers() copy: %q", cfg.URL)
-	}
-	if _, ok := m.Provider("injected"); ok {
-		t.Errorf("injected key leaked into internal map")
-	}
-}
-
 // TestThinkingLevelValidation verifies SetThinkingLevel accepts only canonical
 // levels and rejects anything else without persisting.
 func TestThinkingLevelValidation(t *testing.T) {

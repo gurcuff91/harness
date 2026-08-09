@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gurcuff91/harness/internal/config"
 	llm "github.com/gurcuff91/harness/internal/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
@@ -19,15 +18,12 @@ const (
 	ollamaURLDefault = "http://localhost:11434"
 )
 
-// getOllamaURL resolves the Ollama base URL. The cascade lives HERE, in the
-// provider (env → stored config → default) — the SettingsManager only stores the
-// raw ProviderConfig; it knows nothing about Ollama.
+// getOllamaURL resolves the Ollama base URL: env var → default. It no longer
+// consults stored provider config in settings.json — the URL is driven purely
+// by the OLLAMA_URL environment variable, falling back to the local default.
 func getOllamaURL() string {
 	if v := os.Getenv(ollamaURLEnv); v != "" {
 		return v
-	}
-	if cfg, ok := config.GetSettingsManager().Provider("ollama"); ok && cfg.URL != "" {
-		return cfg.URL
 	}
 	return ollamaURLDefault
 }

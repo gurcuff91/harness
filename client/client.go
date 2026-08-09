@@ -153,24 +153,6 @@ func (c *Client) PatchSettings(fields map[string]any) (*Settings, error) {
 	return ptr(decode[Settings](c, "PATCH", "/api/settings", fields))
 }
 
-// ── Provider configs (settings collection) ──────────────────────────────
-
-// GetProviderConfigs returns the whole provider-config collection, keyed by
-// provider name.
-func (c *Client) GetProviderConfigs() (map[string]ProviderConfig, error) {
-	return decode[map[string]ProviderConfig](c, "GET", "/api/settings/providers", nil)
-}
-
-// PutProviderConfig stores (or replaces) one provider's config.
-func (c *Client) PutProviderConfig(name string, cfg ProviderConfig) (*ProviderConfig, error) {
-	return ptr(decode[ProviderConfig](c, "PUT", "/api/settings/providers/"+name, cfg))
-}
-
-// DeleteProviderConfig removes one provider's config.
-func (c *Client) DeleteProviderConfig(name string) (*Status, error) {
-	return c.decodeStatus("DELETE", "/api/settings/providers/"+name, nil)
-}
-
 // ── Providers (live state) ───────────────────────────────────────────────
 
 // GetProviders returns all registered providers and their live activation state.

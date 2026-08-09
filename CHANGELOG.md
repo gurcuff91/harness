@@ -2,7 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.76.22] - 2026-08-06
+## [0.76.24] - 2026-08-06
+
+### Change — Ollama Cloud URL is now fixed (no `OLLAMA_CLOUD_URL` env var)
+- `internal/providers/ollama_cloud.go` — dropped the `OLLAMA_CLOUD_URL` environment-variable override; the base URL is now the fixed `https://ollama.com/v1` constant. Ollama Cloud is a single hosted endpoint, so there's nothing to vary — unlike LOCAL Ollama, whose host legitimately differs per machine and keeps its `OLLAMA_URL` env var (→ default) cascade. Removed the now-unused `getOllamaCloudURL` helper and `os` import.
+
+## [0.76.23] - 2026-08-06
+
+### Remove — provider-config storage (dead surface after Ollama stopped reading it)
+- The only consumers of the per-provider config store (`settings.json`'s `providers` map) were `getOllamaURL`/`getOllamaCloudURL`, whose resolution cascade was just simplified to **env var → default** (dropping the stored-config middle step). That left the entire provider-config read/write surface with no consumers — a store nothing read and an HTTP/SDK API nothing called.
+- **Purged end to end**:
+  - `internal/providers/{ollama,ollama_cloud}.go` — the `config.GetSettingsManager().Provider(...)` lookups (and the now-unused `internal/config` import in each).
+  - `internal/config/settings.go` — the `Provider`/`Providers`/`SetProvider`/`DeleteProvider` methods, the `settingsData.Providers` field, and the `ProviderConfig` alias.
+  - `server/server.go` — the `GET/PUT/DELETE /api/settings/providers[/{name}]` routes and their three handlers; `server/server_docs.go` — their OpenAPI entries.
+  - `client/client.go` — `GetProviderConfigs`/`PutProviderConfig`/`DeleteProviderConfig`; `client/types.go` — the `ProviderConfig` alias.
+  - `types/config.go` — the `ProviderConfig` type itself.
+  - `internal/config/settings_test.go` — `TestProvidersCollection`/`TestProvidersDefensiveCopy`.
+- Verified: no residual reference to any removed symbol anywhere in the tree; the OpenAPI spec still parses and the provider-config paths are gone while `/api/settings/mcp` is untouched. `SettingsManager` now owns exactly two things — the core singletons (active model, thinking level) and the MCP-server collection. Ollama/Ollama-Cloud URLs are driven purely by `OLLAMA_URL`/`OLLAMA_CLOUD_URL` (→ default). No CLI/TUI/Slack/Telegram/ACP path used the removed client methods. Full suite + `-race` green.
 
 ### Fix — TUI markdown: code fences of 4+ backticks broke rendering
 - **Reported (with screenshots)**: a fenced code block opened with 4 backticks (```` ```` ````) rendered wrong — the block lost its styling and the markdown that followed (starting with an inline `` `code` `` span) got swept into it. Diagnosis (correct): the closing fence and the inline code that followed got confused.

@@ -1,18 +1,5 @@
 package types
 
-// ProviderConfig is the generic, per-provider configuration harness stores
-// verbatim (see internal/config.SettingsManager). Fields are optional; a zero
-// value means "not configured" and the owning provider should fall back to
-// its own default. Grows on demand — only add a field when a provider
-// actually consumes it.
-//
-// Lives in types (not internal/config) because it's part of the public HTTP
-// API contract — the client SDK (client.ProviderConfig) needs it without
-// pulling in the config package.
-type ProviderConfig struct {
-	URL string `json:"url,omitempty"`
-}
-
 // MCPServer is the configuration of one MCP (Model Context Protocol) server.
 // The transport is INFERRED, not declared: a server with a Command is local
 // (spawns a process); a server with a URL is remote (dials HTTP). Declaring
@@ -25,7 +12,8 @@ type ProviderConfig struct {
 //	remote: { "url": "https://…/mcp", "headers": {...} }
 //	off:    add "disabled": true to either
 //
-// Lives in types (not internal/config) for the same reason as ProviderConfig.
+// Lives in types (not internal/config) because it's part of the public HTTP
+// API contract — the client SDK needs it without pulling in the config package.
 type MCPServer struct {
 	Command  string            `json:"command,omitempty"`  // local: executable
 	Args     []string          `json:"args,omitempty"`     // local: arguments

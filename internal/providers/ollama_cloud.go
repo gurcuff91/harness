@@ -6,33 +6,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/gurcuff91/harness/internal/config"
 	llm "github.com/gurcuff91/harness/internal/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
 
 const (
-	ollamaCloudAPIKeyEnv  = "OLLAMA_CLOUD_API_KEY"
-	ollamaCloudURLEnv     = "OLLAMA_CLOUD_URL"
-	ollamaCloudURLDefault = "https://ollama.com/v1"
+	ollamaCloudAPIKeyEnv = "OLLAMA_CLOUD_API_KEY"
+	// ollamaCloudURL is fixed — Ollama Cloud is a single hosted endpoint, so
+	// there is no env var or stored-config override (unlike local Ollama,
+	// whose host varies per machine via OLLAMA_URL).
+	ollamaCloudURL = "https://ollama.com/v1"
 )
-
-// getOllamaCloudURL resolves the Ollama Cloud base URL. As with local Ollama,
-// the env → stored config → default cascade is the provider's responsibility.
-func getOllamaCloudURL() string {
-	if v := os.Getenv(ollamaCloudURLEnv); v != "" {
-		return v
-	}
-	if cfg, ok := config.GetSettingsManager().Provider("ollama-cloud"); ok && cfg.URL != "" {
-		return cfg.URL
-	}
-	return ollamaCloudURLDefault
-}
 
 type OllamaCloud struct {
 	apiKey  string
@@ -47,7 +35,7 @@ func NewOllamaCloud() *OllamaCloud {
 		client: &http.Client{},
 		cache:  make(map[string]types.ModelMeta),
 	}
-	o.baseURL = getOllamaCloudURL()
+	o.baseURL = ollamaCloudURL
 	o.ResolveCredentials() //nolint:errcheck
 	return o
 }

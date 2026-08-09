@@ -94,33 +94,6 @@ const openAPISpecTemplate = `{
         }
       }
     },
-    "/api/settings/providers": {
-      "get": {
-        "tags": ["settings"],
-        "summary": "List provider configs",
-        "operationId": "listProviderConfigs",
-        "responses": {
-          "200": { "description": "Provider configuration map", "content": { "application/json": { "schema": { "type": "object" } } } }
-        }
-      }
-    },
-    "/api/settings/providers/{name}": {
-      "put": {
-        "tags": ["settings"],
-        "summary": "Upsert provider config",
-        "operationId": "putProviderConfig",
-        "parameters": [{ "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }],
-        "requestBody": { "content": { "application/json": { "schema": { "type": "object" } } } },
-        "responses": { "200": { "description": "Saved config" } }
-      },
-      "delete": {
-        "tags": ["settings"],
-        "summary": "Delete provider config",
-        "operationId": "deleteProviderConfig",
-        "parameters": [{ "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }],
-        "responses": { "200": { "description": "Deleted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } } }
-      }
-    },
     "/api/settings/mcp": {
       "get": {
         "tags": ["settings"],

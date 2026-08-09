@@ -141,13 +141,10 @@ type SessionInfo struct {
 	ScheduleCount int `json:"schedule_count"`
 }
 
-// ProviderConfig and MCPServer are the settings-collection payloads. They reuse
-// types' own shapes (stdlib-only) verbatim: the endpoints pass them straight
-// through the SettingsManager, so this is the same struct end to end.
-type (
-	ProviderConfig = types.ProviderConfig
-	MCPServer      = types.MCPServer
-)
+// MCPServer is the settings-collection payload. It reuses types' own shape
+// (stdlib-only) verbatim: the endpoints pass it straight through the
+// SettingsManager, so this is the same struct end to end.
+type MCPServer = types.MCPServer
 
 // MCPStatus is one element of GET /api/mcp/status — a configured MCP server's
 // live connection state. Mirrors mcp.Status locally (rather than importing the

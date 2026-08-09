@@ -12,14 +12,11 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
-// ProviderConfig and MCPServer are aliases of the public types.* shapes — they
-// live in types/ so the client SDK can use them without importing this
-// internal package. This file remains the domain owner (validation,
-// persistence); the shape itself is defined once, in types.
-type (
-	ProviderConfig = types.ProviderConfig
-	MCPServer      = types.MCPServer
-)
+// MCPServer is an alias of the public types.* shape — it lives in types/ so
+// the client SDK can use it without importing this internal package. This file
+// remains the domain owner (validation, persistence); the shape itself is
+// defined once, in types.
+type MCPServer = types.MCPServer
 
 // ErrInvalidMCPServer is returned by SetMCPServer when the server config fails
 // validation. Callers (e.g. the HTTP API) can detect it with errors.Is to map
@@ -46,9 +43,8 @@ var thinkingLevels = map[string]bool{
 // Design: the manager is an AGNOSTIC typed store. It exposes methods only for
 // GENERAL, known settings — core singletons (ActiveModel, ThinkingLevel) and
 // keyed collections (Providers, MCP servers). It never contains logic specific
-// to a concrete provider (e.g. "ollama"). Interpreting a ProviderConfig —
-// applying env-var cascades, defaults, etc. — is the responsibility of the
-// provider itself. The manager just stores and returns typed values by name.
+// to a concrete provider. The manager just stores and returns typed values by
+// name.
 type SettingsManager struct {
 	mu       sync.RWMutex
 	path     string
@@ -63,9 +59,8 @@ type settingsData struct {
 	ActiveModel   string `json:"active_model,omitempty"`
 	ThinkingLevel string `json:"thinking_level,omitempty"`
 
-	// Keyed collections (dynamic entries by name).
-	Providers map[string]ProviderConfig `json:"providers,omitempty"` // key = provider name
-	MCP       map[string]MCPServer      `json:"mcp,omitempty"`       // key = server name
+	// Keyed collection (dynamic entries by name).
+	MCP map[string]MCPServer `json:"mcp,omitempty"` // key = server name
 }
 
 func newSettingsManager() *SettingsManager {
@@ -119,9 +114,9 @@ func (m *SettingsManager) ActiveModel() string {
 	return m.data.ActiveModel
 }
 
-// SetActiveModel persists the active model. Locked cross-process (see
-// SetProvider's comment) — re-reads the latest disk state first so a
-// concurrent write to an unrelated field is never discarded.
+// SetActiveModel persists the active model. Locked cross-process — re-reads
+// the latest disk state first so a concurrent write to an unrelated field is
+// never discarded (see SetMCPServer's comment for the full rationale).
 func (m *SettingsManager) SetActiveModel(model string) error {
 	release, err := acquireFileLock(m.path)
 	if err != nil {
@@ -166,72 +161,8 @@ func (m *SettingsManager) SetThinkingLevel(level string) error {
 	return m.save()
 }
 
-// ── Providers collection ─────────────────────────────────────────────────
-// The manager stores ProviderConfig verbatim by name. It applies NO cascade,
-// env logic, or defaults — that is the owning provider's job.
-
-// Provider returns the stored config for a provider by name.
-func (m *SettingsManager) Provider(name string) (ProviderConfig, bool) {
-	m.reloadIfStale()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	cfg, ok := m.data.Providers[name]
-	return cfg, ok
-}
-
-// Providers returns a defensive copy of the whole providers collection.
-func (m *SettingsManager) Providers() map[string]ProviderConfig {
-	m.reloadIfStale()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make(map[string]ProviderConfig, len(m.data.Providers))
-	for k, v := range m.data.Providers {
-		out[k] = v
-	}
-	return out
-}
-
-// SetProvider stores (or replaces) a provider's config. Locked cross-process:
-// re-reads the latest disk state first (another process may have changed an
-// unrelated setting since this manager's in-memory copy was last synced),
-// applies this change on top, then persists — so a concurrent writer's
-// update is never silently discarded (the same pattern credentials.go's
-// SetCredential already used; settings.json had no such lock until now).
-func (m *SettingsManager) SetProvider(name string, cfg ProviderConfig) error {
-	release, err := acquireFileLock(m.path)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.load()
-	if m.data.Providers == nil {
-		m.data.Providers = make(map[string]ProviderConfig)
-	}
-	m.data.Providers[name] = cfg
-	return m.save()
-}
-
-// DeleteProvider removes a provider's config. Same lock-then-reload pattern
-// as SetProvider.
-func (m *SettingsManager) DeleteProvider(name string) error {
-	release, err := acquireFileLock(m.path)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.load()
-	delete(m.data.Providers, name)
-	return m.save()
-}
-
 // ── MCP servers collection ───────────────────────────────────────────────
-// Same agnostic pattern as Providers: keyed by server name, stored verbatim.
+// Agnostic pattern: keyed by server name, stored verbatim.
 
 // MCPServer returns the stored config for an MCP server by name.
 func (m *SettingsManager) MCPServer(name string) (MCPServer, bool) {
@@ -272,7 +203,10 @@ func validateMCPServer(srv MCPServer) error {
 
 // SetMCPServer validates and stores (or replaces) an MCP server's config. The
 // transport is inferred from which of command/url is set. Locked
-// cross-process — see SetProvider's comment.
+// cross-process: re-reads the latest disk state first (another process may
+// have changed an unrelated setting since this manager's in-memory copy was
+// last synced), applies this change on top, then persists — so a concurrent
+// writer's update is never silently discarded.
 func (m *SettingsManager) SetMCPServer(name string, srv MCPServer) error {
 	if err := validateMCPServer(srv); err != nil {
 		return err
