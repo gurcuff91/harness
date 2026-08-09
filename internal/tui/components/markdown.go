@@ -787,7 +787,7 @@ func isTableSeparator(line string) bool {
 }
 
 func splitTableCells(line string) []string {
-	parts := strings.Split(line, "|")
+	parts := splitTablePipes(line)
 	if len(parts) > 0 && strings.TrimSpace(parts[0]) == "" {
 		parts = parts[1:]
 	}
@@ -798,6 +798,68 @@ func splitTableCells(line string) []string {
 	for i, p := range parts {
 		cells[i] = strings.TrimSpace(p)
 	}
+	return cells
+}
+
+// splitTablePipes splits a table row on its COLUMN-separating '|' only —
+// pipes that are escaped ("\|") or that fall INSIDE an inline code span
+// (delimited by backticks) are NOT column separators and stay in the cell.
+// This matches GitHub-Flavored Markdown: a cell like `off|low|high` renders
+// as ONE cell, not four columns. A plain strings.Split(line, "|") — what this
+// replaced — was blind to both, so a model emitting an inline-code value with
+// pipes (e.g. the thinking levels `off|low|medium|high|xhigh`) produced phantom
+// unheadered columns.
+//
+// Code-span tracking mirrors CommonMark's rule loosely but sufficiently for a
+// single row: a run of N backticks opens a span that only a run of exactly N
+// backticks closes. That means a '|' between matched backticks is literal.
+func splitTablePipes(line string) []string {
+	var cells []string
+	var cur strings.Builder
+	runes := []rune(line)
+	backtickRun := 0 // length of the code-span fence currently open; 0 = outside
+
+	for i := 0; i < len(runes); i++ {
+		ch := runes[i]
+
+		// Backslash-escaped pipe: emit a literal '|' and skip the escape.
+		// (Only meaningful outside a code span, where '\' isn't special — but
+		// treating "\|" as literal everywhere is harmless and simpler.)
+		if ch == '\\' && i+1 < len(runes) && runes[i+1] == '|' {
+			cur.WriteRune('|')
+			i++
+			continue
+		}
+
+		if ch == '`' {
+			// Count the length of this backtick run.
+			n := 1
+			for i+n < len(runes) && runes[i+n] == '`' {
+				n++
+			}
+			switch {
+			case backtickRun == 0:
+				backtickRun = n // opening a code span
+			case backtickRun == n:
+				backtickRun = 0 // closing it (fence lengths must match)
+			}
+			// Preserve the backticks verbatim so inline-code rendering still
+			// sees them when the cell is rendered later.
+			for k := 0; k < n; k++ {
+				cur.WriteRune('`')
+			}
+			i += n - 1
+			continue
+		}
+
+		if ch == '|' && backtickRun == 0 {
+			cells = append(cells, cur.String())
+			cur.Reset()
+			continue
+		}
+		cur.WriteRune(ch)
+	}
+	cells = append(cells, cur.String())
 	return cells
 }
 

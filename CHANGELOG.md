@@ -2,7 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.76.20] - 2026-08-06
+## [0.76.21] - 2026-08-06
+
+### Fix — TUI markdown tables: `|` inside inline code created phantom columns
+- **Reported (with a screenshot)**: a table whose cell held an inline-code value with pipes — e.g. the thinking levels `` `off|low|medium|high|xhigh` `` — rendered with extra, unheadered columns (`low`, `medium`, `high`, `xhigh` each became their own column). A 5-column table blew up to 9.
+- **Root cause** (`internal/tui/components/markdown.go`): `splitTableCells` used `strings.Split(line, "|")`, which is blind to backticks and backslash escapes — every `|` was treated as a column separator, including those inside an inline-code span. This is exactly the GitHub-Flavored-Markdown rule harness was violating: a `|` inside a code span (or escaped as `\|`) is literal, not a column boundary.
+- **Fix**: new `splitTablePipes` splits a row on column-separating `|` ONLY — it tracks inline-code spans (a run of N backticks opens a span that only a matching run of N backticks closes) and treats `\|` as a literal pipe, so pipes inside code stay in their cell. Backticks are preserved verbatim so the cell still renders as inline code. `splitTableCells` now uses it.
+- New tests (`internal/tui/components/markdown_test.go`): `TestSplitTablePipesIgnoresPipesInCodeSpan` (code-span pipes, escaped pipes, reopening spans), `TestSplitTableCellsCodeSpanColumnCount` (a code-span cell no longer inflates the column count), `TestMarkdownTableWithCodeSpanPipesRendersOneColumn` (end-to-end: every rendered row has the same separator count). Verified in both directions — reverting to `strings.Split` reproduces the reported 9-column blow-up exactly. Full suite + `-race` green.
 
 ### Fix — Bash tool: models kept passing `timeout` alongside `background:true` (where it's ignored)
 - **Observed**: when calling Bash with `background:true`, models frequently also sent `timeout` (often high, e.g. `timeout:120`) — pointless, since a background process returns immediately and the timeout is silently discarded (`runBashBackground` returns before `timeout` is ever read).

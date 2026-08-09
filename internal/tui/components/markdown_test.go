@@ -567,3 +567,99 @@ func TestMarkdownTableEmojiMixedWidths(t *testing.T) {
 		}
 	}
 }
+
+// TestSplitTablePipesIgnoresPipesInCodeSpan is the regression test for phantom
+// columns: a table cell containing inline code with pipes — e.g.
+// `off|low|medium|high|xhigh` — must stay ONE cell, not split into five. A
+// plain strings.Split(line, "|") (what this replaced) was blind to backticks
+// and produced unheadered phantom columns in the rendered table.
+func TestSplitTablePipesIgnoresPipesInCodeSpan(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		want []string
+	}{
+		{
+			name: "pipes inside inline code",
+			line: "| level | `off|low|medium|high|xhigh` |",
+			want: []string{"", " level ", " `off|low|medium|high|xhigh` ", ""},
+		},
+		{
+			name: "plain row unaffected",
+			line: "| a | b | c |",
+			want: []string{"", " a ", " b ", " c ", ""},
+		},
+		{
+			name: "escaped pipe is literal",
+			line: "| a\\|b | c |",
+			want: []string{"", " a|b ", " c ", ""},
+		},
+		{
+			name: "code span reopens after closing",
+			line: "| `x|y` | `z|w` |",
+			want: []string{"", " `x|y` ", " `z|w` ", ""},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := splitTablePipes(c.line)
+			if len(got) != len(c.want) {
+				t.Fatalf("got %d parts %q, want %d %q", len(got), got, len(c.want), c.want)
+			}
+			for i := range c.want {
+				if got[i] != c.want[i] {
+					t.Errorf("part[%d] = %q, want %q", i, got[i], c.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestSplitTableCellsCodeSpanColumnCount verifies the column COUNT a real
+// table row yields: the reported bug had a "Validación" cell of
+// `off|low|medium|high|xhigh` inflate a 5-column table into 9 columns.
+func TestSplitTableCellsCodeSpanColumnCount(t *testing.T) {
+	header := splitTableCells("| Grupo | Lectura | Escritura | Validación | Extra |")
+	row := splitTableCells("| ThinkingLevel | Thinking() | SetThinking() | `off|low|medium|high|xhigh` | ok |")
+	if len(header) != 5 {
+		t.Fatalf("header cell count = %d, want 5", len(header))
+	}
+	if len(row) != len(header) {
+		t.Errorf("row cell count = %d, want %d (matching header) — code-span pipes leaked as columns", len(row), len(header))
+	}
+	// The code-span cell must survive intact.
+	if row[3] != "`off|low|medium|high|xhigh`" {
+		t.Errorf("code-span cell mangled: %q", row[3])
+	}
+}
+
+// TestMarkdownTableWithCodeSpanPipesRendersOneColumn is the end-to-end guard:
+// the streamed renderer must not emit phantom columns for the pipes inside an
+// inline-code cell. A correct 2-column table has exactly the header cells; the
+// bug produced extra separators for low/medium/high/xhigh.
+func TestMarkdownTableWithCodeSpanPipesRendersOneColumn(t *testing.T) {
+	table := "| level | values |\n|---|---|\n| thinking | `off|low|medium|high|xhigh` |\n"
+	out := feedAll(table)
+	stripped := stripANSIForTest(out)
+
+	// Every content line must have the SAME number of column separators (│).
+	var counts []int
+	for _, ln := range strings.Split(stripped, "\n") {
+		if strings.Contains(ln, "│") {
+			counts = append(counts, strings.Count(ln, "│"))
+		}
+	}
+	if len(counts) == 0 {
+		t.Fatalf("no table rows rendered: %q", stripped)
+	}
+	for i, c := range counts {
+		if c != counts[0] {
+			t.Errorf("row %d has %d separators, first row has %d — ragged columns from code-span pipes:\n%s",
+				i, c, counts[0], stripped)
+		}
+	}
+	// The values must remain together on one line (not split across cells).
+	if !strings.Contains(stripped, "off|low|medium|high|xhigh") {
+		t.Errorf("inline-code value was split apart: %q", stripped)
+	}
+}
