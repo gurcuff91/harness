@@ -663,3 +663,92 @@ func TestMarkdownTableWithCodeSpanPipesRendersOneColumn(t *testing.T) {
 		t.Errorf("inline-code value was split apart: %q", stripped)
 	}
 }
+
+// codeGreen is the ANSI prefix code-block/inline-code content is styled with
+// (accent fg + italic). Used to assert whether text was rendered AS code.
+const codeGreen = "\x1b[38;2;200;217;106m\x1b[3m"
+
+// TestCodeFenceFourBackticks is the regression test for the reported bug: a
+// code fence opened with 4 backticks (````) desynced the parser — it opened on
+// the first 3 and leaked the 4th, so the closing fence looked shorter than the
+// opening one and the following markdown was mis-rendered. Per CommonMark a
+// fence is 3 OR MORE backticks and the close must be at least as long as the
+// open.
+func TestCodeFenceFourBackticks(t *testing.T) {
+	md := "````go\ncode line\n````\ntexto `inline` despues\n"
+	out := feedAll(md)
+	stripped := stripANSIForTest(out)
+
+	// The opening and closing fences must have the SAME backtick count (4).
+	if !strings.Contains(stripped, "````go") {
+		t.Errorf("opening fence lost its 4 backticks: %q", stripped)
+	}
+	// Count "````" occurrences (open + close) — must be exactly 2 fences of 4.
+	if n := strings.Count(stripped, "````"); n != 2 {
+		t.Errorf("expected 2 four-backtick fences (open+close), got %d:\n%s", n, stripped)
+	}
+	// The text after the block must NOT be styled as code (parser not trapped).
+	if strings.Contains(out, codeGreen+"texto") {
+		t.Errorf("text after a 4-backtick block was trapped as code:\n%s", stripped)
+	}
+}
+
+// TestCodeFenceFiveBackticks verifies the general N>=3 rule with a 5-backtick
+// fence.
+func TestCodeFenceFiveBackticks(t *testing.T) {
+	out := feedAll("`````\ncode\n`````\nafter\n")
+	stripped := stripANSIForTest(out)
+	if n := strings.Count(stripped, "`````"); n != 2 {
+		t.Errorf("expected 2 five-backtick fences, got %d:\n%s", n, stripped)
+	}
+	if strings.Contains(out, codeGreen+"after") {
+		t.Errorf("text after a 5-backtick block was trapped as code:\n%s", stripped)
+	}
+}
+
+// TestCodeFenceLongerFenceHoldsShorterBackticksAsContent is the whole POINT of
+// longer fences: a ```` block can contain a ``` line as literal content
+// without closing early (that's why models emit 4 backticks — the code inside
+// has 3). The inner ``` must stay part of the code, and the block must close
+// only on the matching 4-backtick fence.
+func TestCodeFenceLongerFenceHoldsShorterBackticksAsContent(t *testing.T) {
+	md := "````\nx := \"```\"\n````\nafter\n"
+	out := feedAll(md)
+	stripped := stripANSIForTest(out)
+
+	// The inner ``` must survive as content (still present, block didn't end there).
+	if !strings.Contains(stripped, "```\"") {
+		t.Errorf("inner ``` was not preserved as code content:\n%s", stripped)
+	}
+	if strings.Contains(out, codeGreen+"after") {
+		t.Errorf("text after the block was trapped as code — inner ``` closed it early:\n%s", stripped)
+	}
+}
+
+// TestCodeFenceCloseAtLeastAsLongAsOpen verifies a close fence LONGER than the
+// open (5 closing a 3-open) still closes — CommonMark requires close >= open,
+// not close == open.
+func TestCodeFenceCloseAtLeastAsLongAsOpen(t *testing.T) {
+	out := feedAll("```\ncode\n`````\nafter\n")
+	if strings.Contains(out, codeGreen+"after") {
+		t.Errorf("a longer closing fence failed to close a shorter-opened block:\n%s", stripANSIForTest(out))
+	}
+}
+
+// TestCodeFenceThreeStillWorks guards against regression in the common 3-
+// backtick path.
+func TestCodeFenceThreeBackticksStillWorks(t *testing.T) {
+	out := feedAll("```go\nfmt.Println()\n```\nplain text after\n")
+	stripped := stripANSIForTest(out)
+	if !strings.Contains(stripped, "fmt.Println()") {
+		t.Errorf("3-backtick code content lost: %q", stripped)
+	}
+	if strings.Contains(out, codeGreen+"plain") {
+		t.Errorf("text after a 3-backtick block was trapped as code:\n%s", stripped)
+	}
+	// Inline code after the block must still render as code.
+	out2 := feedAll("```\nx\n```\n`inline` after\n")
+	if !strings.Contains(out2, codeGreen+"inline") {
+		t.Errorf("inline code after a block did not render as code: %q", stripANSIForTest(out2))
+	}
+}

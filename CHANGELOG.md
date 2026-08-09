@@ -2,7 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.76.21] - 2026-08-06
+## [0.76.22] - 2026-08-06
+
+### Fix — TUI markdown: code fences of 4+ backticks broke rendering
+- **Reported (with screenshots)**: a fenced code block opened with 4 backticks (```` ```` ````) rendered wrong — the block lost its styling and the markdown that followed (starting with an inline `` `code` `` span) got swept into it. Diagnosis (correct): the closing fence and the inline code that followed got confused.
+- **Root cause** (`internal/tui/components/markdown.go`): the streaming parser recognized code fences of EXACTLY 3 backticks (`m.tickBuf == "```"`). CommonMark allows a fence of 3 OR MORE backticks — used precisely when the code inside contains a ```` ``` ```` — and the closing fence must be at least as long as the opening one. With a 4-backtick fence the parser opened on the first 3 and leaked the 4th, then closed on 3 and left the 4th dangling, desyncing the block: the opening (```` ```` ````) and closing (```` ``` ````) were unbalanced and following content was mis-parsed.
+- **Fix**: the parser now buffers the ENTIRE backtick run before deciding what it is — a run of ≥3 opens a fenced block and remembers its length (`fenceLen`); the block closes only on a line-start run of ≥`fenceLen` backticks (a shorter run is literal content, so a ```` ``` ```` inside a ```` ```` ```` block stays part of the code); a run of 1 opens an inline span; 2 is an empty span. New `fenceLen`/`atCodeLineStart` state tracks this. `Flush` resolves a trailing run correctly for the in-code case.
+- New tests (`internal/tui/components/markdown_test.go`): `TestCodeFenceFourBackticks`, `TestCodeFenceFiveBackticks`, `TestCodeFenceLongerFenceHoldsShorterBackticksAsContent` (the real reason long fences exist — inner ```` ``` ```` stays content), `TestCodeFenceCloseAtLeastAsLongAsOpen` (close ≥ open, not ==), `TestCodeFenceThreeBackticksStillWorks` (no regression on the common path). All existing markdown tests still pass. Full suite + `-race` green.
 
 ### Fix — TUI markdown tables: `|` inside inline code created phantom columns
 - **Reported (with a screenshot)**: a table whose cell held an inline-code value with pipes — e.g. the thinking levels `` `off|low|medium|high|xhigh` `` — rendered with extra, unheadered columns (`low`, `medium`, `high`, `xhigh` each became their own column). A 5-column table blew up to 9.

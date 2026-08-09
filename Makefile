@@ -10,7 +10,7 @@ INSTALL_DIR=$(HOME)/go/bin
 GO=go
 
 # Build flags
-VERSION=v0.76.21
+VERSION=v0.76.22
 LDFLAGS=-ldflags "-s -w -X github.com/gurcuff91/harness/internal/version.Version=$(VERSION)"
 
 # Default target

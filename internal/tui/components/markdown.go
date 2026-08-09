@@ -28,6 +28,15 @@ type MarkdownStream struct {
 	codeLangDone bool
 	codeLineBuf  string
 	tickBuf      string
+	// fenceLen is the backtick count of the OPENING fence of the current code
+	// block (>= 3, per CommonMark). The block only closes on a fence run of at
+	// least this many backticks — a shorter run is literal content. 0 when not
+	// in a code block.
+	fenceLen int
+	// atCodeLineStart is true at the start of a line INSIDE a code block, used
+	// to recognize that a backtick run is a potential closing fence (which must
+	// be at line start) rather than mid-line literal backticks.
+	atCodeLineStart bool
 
 	inInlineCode  bool
 	inlineCodeBuf string
@@ -188,16 +197,38 @@ func (m *MarkdownStream) Flush() string {
 		m.tildeBuf = ""
 	}
 	if m.inCodeBlock {
-		if m.codeLineBuf != "" {
-			if !m.codeLangDone {
-				out += m.codeLineBuf + ansi.Reset
+		// A backtick run left buffered at EOF inside a code block: if it's a
+		// valid closing fence (at line start, length >= the opening fence),
+		// close the block with it; otherwise it's literal code content.
+		if m.tickBuf != "" {
+			run := m.tickBuf
+			m.tickBuf = ""
+			if m.atCodeLineStart && len(run) >= m.fenceLen {
+				if m.codeLineBuf != "" {
+					out += codeBlockLine(m.codeLineBuf)
+					m.codeLineBuf = ""
+				}
+				out += ansi.Dim + run + ansi.Reset
+				m.inCodeBlock = false
+				m.codeLangDone = false
+				m.fenceLen = 0
 			} else {
-				out += codeBlockLine(m.codeLineBuf)
+				m.codeLineBuf += run
 			}
-			m.codeLineBuf = ""
 		}
-		m.inCodeBlock = false
-		m.codeLangDone = false
+		if m.inCodeBlock {
+			if m.codeLineBuf != "" {
+				if !m.codeLangDone {
+					out += m.codeLineBuf + ansi.Reset
+				} else {
+					out += codeBlockLine(m.codeLineBuf)
+				}
+				m.codeLineBuf = ""
+			}
+			m.inCodeBlock = false
+			m.codeLangDone = false
+			m.fenceLen = 0
+		}
 	}
 	if m.inInlineCode {
 		if m.inlineCodeBuf != "" {
@@ -240,24 +271,39 @@ func (m *MarkdownStream) processChar(ch rune) string {
 	// Fenced code block.
 	if m.inCodeBlock {
 		if ch == '`' {
+			// Accumulate the whole backtick run (don't decide at 3 — a closing
+			// fence must be >= the opening fence's length, and CommonMark
+			// allows longer fences). We resolve when the run ends.
 			m.tickBuf += "`"
-			if m.tickBuf == "```" {
+			return ""
+		}
+		// A backtick run just ended (ch is the first non-backtick).
+		if m.tickBuf != "" {
+			run := m.tickBuf
+			m.tickBuf = ""
+			// A closing fence must be at the START of a line and at least as
+			// long as the opening fence. Otherwise the backticks are literal
+			// content of the code block.
+			if m.atCodeLineStart && len(run) >= m.fenceLen {
 				out := ""
 				if m.codeLineBuf != "" {
 					out += codeBlockLine(m.codeLineBuf)
 					m.codeLineBuf = ""
 				}
-				m.tickBuf = ""
 				m.inCodeBlock = false
-				return out + ansi.Dim + "```" + ansi.Reset
+				m.fenceLen = 0
+				closed := out + ansi.Dim + run + ansi.Reset
+				// ch is the first char after the fence — reprocess it normally
+				// (usually '\n'). atCodeLineStart no longer applies; we're out.
+				m.atCodeLineStart = false
+				return closed + m.processChar(ch)
 			}
-			return ""
+			// Not a closing fence: the run is literal code content.
+			m.codeLineBuf += run
 		}
-		if m.tickBuf != "" {
-			m.codeLineBuf += m.tickBuf
-			m.tickBuf = ""
-		}
+		m.atCodeLineStart = false
 		if ch == '\n' {
+			m.atCodeLineStart = true
 			if !m.codeLangDone {
 				out := m.codeLineBuf + ansi.Reset + "\n"
 				m.codeLineBuf = ""
@@ -310,7 +356,14 @@ func (m *MarkdownStream) processChar(ch rune) string {
 		}
 	}
 
-	// Backtick accumulation.
+	// Backtick accumulation. We buffer the ENTIRE run of backticks and only
+	// decide what it means when a non-backtick arrives: a run of >= 3 opens a
+	// fenced code block (remembering the run length so the close must match or
+	// exceed it — CommonMark allows fences longer than 3, used when the code
+	// itself contains ```), a run of exactly 1 opens an inline code span, and
+	// a run of 2 is an empty inline span (``). Deciding rigidly at 3 was the
+	// old bug: a 4-backtick fence (````) opened on the first 3 and leaked the
+	// 4th, desyncing the whole block.
 	if ch == '`' || m.tickBuf != "" {
 		// Line-start text may still be buffered in linePrefix (accumulated while
 		// waiting to recognize a heading/list prefix). Emit it BEFORE the inline
@@ -322,38 +375,40 @@ func (m *MarkdownStream) processChar(ch rune) string {
 		}
 		if ch == '`' {
 			m.tickBuf += "`"
+			if pre != "" {
+				return pre
+			}
+			return "" // keep accumulating until the run ends
 		}
-		if m.tickBuf == "```" {
-			m.tickBuf = ""
-			// Resolve any pending ** / * (e.g. "**```") into real bold/italic
-			// state before opening the code block, so markers never leak.
+
+		// ch is NOT a backtick: the run has ended, resolve it by length.
+		run := m.tickBuf
+		m.tickBuf = ""
+
+		if len(run) >= 3 {
+			// Open a fenced code block. Resolve any pending ** / * (e.g.
+			// "**```") into real bold/italic state before opening, so markers
+			// never leak.
 			out := m.resolvePendingStars() + m.closeInline()
 			m.inCodeBlock = true
 			m.codeLangDone = false
+			m.fenceLen = len(run)
 			m.atLineStart = false
-			return pre + out + ansi.Dim + "```"
+			m.atCodeLineStart = false
+			// ch is the first char of the info string (e.g. the "g" of "go")
+			// or a newline — it belongs to the code block, reprocess it there.
+			return pre + out + ansi.Dim + run + m.processChar(ch)
 		}
-		if m.tickBuf == "`" && ch != '`' {
-			m.tickBuf = ""
-			// Resolve pending emphasis (e.g. "**`code`**") before the inline
-			// code span opens, otherwise the ** would print literally.
+		if len(run) == 1 {
+			// Inline code span. ch is its first content character.
 			out := m.resolvePendingStars()
 			m.inInlineCode = true
 			m.inlineCodeBuf = string(ch)
 			return pre + out
 		}
-		if pre != "" {
-			return pre
-		}
-		if len(m.tickBuf) == 2 {
-			return ""
-		}
-		if ch != '`' {
-			t := m.tickBuf
-			m.tickBuf = ""
-			return t + m.processNormal(ch)
-		}
-		return ""
+		// len(run) == 2: an empty inline code span "``" — emit nothing for it,
+		// then process ch normally.
+		return pre + m.processNormal(ch)
 	}
 
 	return m.processNormal(ch)
