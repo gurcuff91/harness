@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.25] - 2026-08-06
+
+### Remove — dead `NewOpenAIWithConfig` constructor
+- `internal/providers/openai.go` — removed the exported `NewOpenAIWithConfig(apiKey, baseURL)` constructor, which had zero call sites anywhere in the tree. Its intended use (an OpenAI provider pointed at a custom base URL) doesn't match how harness actually models OpenAI-compatible endpoints — each one (minimax, opencode-go, ollama, ollama-cloud) is its own registered provider invoking `llm.DoOpenAIStream` with its own fixed URL, not a reconfigurable generic OpenAI. The live path (`NewOpenAI()`, fixed `api.openai.com`) is untouched.
+
 ## [0.76.24] - 2026-08-06
 
 ### Change — Ollama Cloud URL is now fixed (no `OLLAMA_CLOUD_URL` env var)

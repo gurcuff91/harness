@@ -74,15 +74,6 @@ func (o *OpenAI) Disconnect() error {
 	return deleteCredential("openai")
 }
 
-func NewOpenAIWithConfig(apiKey, baseURL string) *OpenAI {
-	return &OpenAI{
-		apiKey:  apiKey,
-		baseURL: baseURL,
-		client:  &http.Client{},
-		cache:   make(map[string]types.ModelMeta),
-	}
-}
-
 func (o *OpenAI) Name() string        { return "openai" }
 func (o *OpenAI) DisplayName() string { return "OpenAI" }
 func (o *OpenAI) Description() string { return describeState(o) }
