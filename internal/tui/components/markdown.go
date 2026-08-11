@@ -35,8 +35,12 @@ type MarkdownStream struct {
 	fenceLen int
 	// atCodeLineStart is true at the start of a line INSIDE a code block, used
 	// to recognize that a backtick run is a potential closing fence (which must
-	// be at line start) rather than mid-line literal backticks.
-	atCodeLineStart bool
+	// be at line start) rather than mid-line literal backticks. Up to 3 leading
+	// spaces of indentation keep it true (CommonMark allows a closing fence to
+	// be indented up to 3 spaces) — codeIndentSpaces counts them so those
+	// spaces are preserved as content if the run turns out NOT to be a fence.
+	atCodeLineStart  bool
+	codeIndentSpaces int
 
 	inInlineCode  bool
 	inlineCodeBuf string
@@ -198,8 +202,9 @@ func (m *MarkdownStream) Flush() string {
 	}
 	if m.inCodeBlock {
 		// A backtick run left buffered at EOF inside a code block: if it's a
-		// valid closing fence (at line start, length >= the opening fence),
-		// close the block with it; otherwise it's literal code content.
+		// valid closing fence (at line start, up to 3 spaces of indentation,
+		// length >= the opening fence), close the block with it; otherwise the
+		// withheld indentation + run are literal code content.
 		if m.tickBuf != "" {
 			run := m.tickBuf
 			m.tickBuf = ""
@@ -208,13 +213,18 @@ func (m *MarkdownStream) Flush() string {
 					out += codeBlockLine(m.codeLineBuf)
 					m.codeLineBuf = ""
 				}
-				out += ansi.Dim + run + ansi.Reset
+				out += ansi.Dim + strings.Repeat(" ", m.codeIndentSpaces) + run + ansi.Reset
+				m.codeIndentSpaces = 0
 				m.inCodeBlock = false
 				m.codeLangDone = false
 				m.fenceLen = 0
 			} else {
-				m.codeLineBuf += run
+				m.codeLineBuf += strings.Repeat(" ", m.codeIndentSpaces) + run
+				m.codeIndentSpaces = 0
 			}
+		} else if m.codeIndentSpaces > 0 {
+			m.codeLineBuf += strings.Repeat(" ", m.codeIndentSpaces)
+			m.codeIndentSpaces = 0
 		}
 		if m.inCodeBlock {
 			if m.codeLineBuf != "" {
@@ -270,6 +280,15 @@ func (m *MarkdownStream) Flush() string {
 func (m *MarkdownStream) processChar(ch rune) string {
 	// Fenced code block.
 	if m.inCodeBlock {
+		// Leading indentation (up to 3 spaces) at the start of a line keeps the
+		// line eligible to hold a CLOSING fence — CommonMark allows a closing
+		// fence indented up to 3 spaces (common when the fence sits inside a
+		// list item). Count them without clearing atCodeLineStart. A 4th space,
+		// or any non-space, ends the "still at line start" window below.
+		if ch == ' ' && m.atCodeLineStart && m.tickBuf == "" && m.codeIndentSpaces < 3 {
+			m.codeIndentSpaces++
+			return ""
+		}
 		if ch == '`' {
 			// Accumulate the whole backtick run (don't decide at 3 — a closing
 			// fence must be >= the opening fence's length, and CommonMark
@@ -281,9 +300,9 @@ func (m *MarkdownStream) processChar(ch rune) string {
 		if m.tickBuf != "" {
 			run := m.tickBuf
 			m.tickBuf = ""
-			// A closing fence must be at the START of a line and at least as
-			// long as the opening fence. Otherwise the backticks are literal
-			// content of the code block.
+			// A closing fence must be at the START of a line (up to 3 spaces of
+			// indentation allowed, tracked above) and at least as long as the
+			// opening fence. Otherwise the backticks are literal content.
 			if m.atCodeLineStart && len(run) >= m.fenceLen {
 				out := ""
 				if m.codeLineBuf != "" {
@@ -292,18 +311,32 @@ func (m *MarkdownStream) processChar(ch rune) string {
 				}
 				m.inCodeBlock = false
 				m.fenceLen = 0
-				closed := out + ansi.Dim + run + ansi.Reset
+				// Preserve the closing fence's own indentation (up to 3 spaces).
+				indent := strings.Repeat(" ", m.codeIndentSpaces)
+				m.codeIndentSpaces = 0
+				closed := out + ansi.Dim + indent + run + ansi.Reset
 				// ch is the first char after the fence — reprocess it normally
 				// (usually '\n'). atCodeLineStart no longer applies; we're out.
 				m.atCodeLineStart = false
 				return closed + m.processChar(ch)
 			}
-			// Not a closing fence: the run is literal code content.
+			// Not a closing fence: the leading spaces we withheld plus the run
+			// are literal code content.
+			if m.codeIndentSpaces > 0 {
+				m.codeLineBuf += strings.Repeat(" ", m.codeIndentSpaces)
+				m.codeIndentSpaces = 0
+			}
 			m.codeLineBuf += run
+		} else if m.codeIndentSpaces > 0 {
+			// Indentation spaces that weren't followed by a closing fence are
+			// literal content (e.g. an indented code line).
+			m.codeLineBuf += strings.Repeat(" ", m.codeIndentSpaces)
+			m.codeIndentSpaces = 0
 		}
 		m.atCodeLineStart = false
 		if ch == '\n' {
 			m.atCodeLineStart = true
+			m.codeIndentSpaces = 0
 			if !m.codeLangDone {
 				out := m.codeLineBuf + ansi.Reset + "\n"
 				m.codeLineBuf = ""

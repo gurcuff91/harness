@@ -2,7 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.76.25] - 2026-08-06
+## [0.76.26] - 2026-08-06
+
+### Fix — TUI markdown: an INDENTED closing code fence wasn't recognized
+- **Reported (with screenshots + the raw session JSONL, which confirmed the model emitted 4 correct 3-backtick fences — the parser was at fault)**: a code block whose fences were indented (because it sat inside a numbered list item, so both ``` lines had 3 leading spaces) never closed — every line after it, including the list's next item and its `**bold**`, was swept into the block and styled as code.
+- **Root cause** (`internal/tui/components/markdown.go`): while inside a code block, the parser cleared its "at line start" flag on the FIRST non-backtick character — including a leading indentation space. So an indented closing fence (`   ```) arrived with the flag already false and wasn't recognized as a close. CommonMark allows a closing fence to be indented up to 3 spaces.
+- **Fix**: leading spaces (up to 3) at the start of a line inside a code block now keep the line eligible to hold a closing fence — tracked in a new `codeIndentSpaces` counter that preserves them as content if the run turns out not to be a fence, and preserves the fence's own indentation when it does close. A 4th space (indented code, per CommonMark) correctly does NOT close.
+- New tests: `TestCodeFenceIndentedInsideList` (the exact field case — close recognized, following bold renders, content and indentation preserved) and `TestCodeFenceIndentedFourSpacesNotAClose` (the 4-space boundary). Verified against the actual reported session message (raw JSONL, 151 lines, multiple indented fences): renders with no trapped blocks and all paragraph bold intact. Full suite + `-race` green.
 
 ### Remove — dead `NewOpenAIWithConfig` constructor
 - `internal/providers/openai.go` — removed the exported `NewOpenAIWithConfig(apiKey, baseURL)` constructor, which had zero call sites anywhere in the tree. Its intended use (an OpenAI provider pointed at a custom base URL) doesn't match how harness actually models OpenAI-compatible endpoints — each one (minimax, opencode-go, ollama, ollama-cloud) is its own registered provider invoking `llm.DoOpenAIStream` with its own fixed URL, not a reconfigurable generic OpenAI. The live path (`NewOpenAI()`, fixed `api.openai.com`) is untouched.

@@ -752,3 +752,50 @@ func TestCodeFenceThreeBackticksStillWorks(t *testing.T) {
 		t.Errorf("inline code after a block did not render as code: %q", stripANSIForTest(out2))
 	}
 }
+
+// TestCodeFenceIndentedInsideList is the regression test for a fence that
+// closes while INDENTED — the exact field case: a code block inside a numbered
+// list item, so both its opening and closing ``` are indented 3 spaces. The
+// closing fence must still be recognized (CommonMark allows a closing fence
+// indented up to 3 spaces); before this, leading indentation cleared the
+// "at line start" flag, so the close was missed and every following line
+// (including the list's next item and its **bold**) was swept into the block.
+func TestCodeFenceIndentedInsideList(t *testing.T) {
+	md := "3. Query:\n" +
+		"   ```\n" +
+		"   object_id: { $in: [\"x\", \"*\"] }\n" +
+		"   ```\n" +
+		"4. **allow** or **deny**.\n"
+	out := feedAll(md)
+	stripped := stripANSIForTest(out)
+
+	// The text after the block must NOT be styled as code.
+	if strings.Contains(out, codeGreen+"4.") {
+		t.Errorf("text after an indented-fence block was trapped as code:\n%s", stripped)
+	}
+	// Bold after the block must render (parser not stuck in code mode).
+	if strings.Contains(stripped, "**allow**") {
+		t.Errorf("**bold** after the block rendered literally — parser stuck in code mode:\n%s", stripped)
+	}
+	// The code content must still be present.
+	if !strings.Contains(stripped, "object_id:") {
+		t.Errorf("code content lost:\n%s", stripped)
+	}
+	// The closing fence's 3-space indentation is preserved.
+	if !strings.Contains(stripped, "   ```") {
+		t.Errorf("closing fence lost its indentation:\n%s", stripped)
+	}
+}
+
+// TestCodeFenceIndentedFourSpacesNotAClose verifies the CommonMark boundary:
+// 4+ spaces of indentation is NOT a valid closing fence (it's indented code),
+// so those backticks stay literal content rather than closing the block early.
+func TestCodeFenceIndentedFourSpacesNotAClose(t *testing.T) {
+	// Open at col 0, then a 4-space-indented ``` (should NOT close), then a real
+	// close at col 0.
+	md := "```\nline1\n    ```\nstill code\n```\nafter\n"
+	out := feedAll(md)
+	if strings.Contains(out, codeGreen+"after") {
+		t.Errorf("a 4-space-indented ``` wrongly closed the block:\n%s", stripANSIForTest(out))
+	}
+}
