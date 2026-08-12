@@ -85,7 +85,8 @@ func writeSlackJSON(path string, s slackJSON) error {
 // ── Admin management ─────────────────────────────────────────────────────
 
 // IsAdmin reports whether userID is in the admin list.
-// Returns true if admins list is empty (open mode — no admins configured yet).
+// Returns false when the list is empty (fail-closed — admins must be
+// bootstrapped from the host via `harness slack admin add <userID>`).
 func IsAdmin(userID string) (bool, error) {
 	path, err := slackJSONPath()
 	if err != nil {

@@ -498,8 +498,14 @@ func (t *Transport) handleCommand(ctx context.Context, channelID, senderID, text
 	cmd := strings.TrimPrefix(fields[0], "/")
 	t.logger.Info("slack", "command", "channel", channelID, "user", senderID, "name", cmd)
 
-	// Admin-only commands require the sender to be in the admin list.
-	if adminOnlyCommands[cmd] {
+	// Admin-only commands require the sender to be in the admin list — but
+	// only in shared spaces. A DM (channel ID starts with "D") is 1-to-1
+	// with a single user, so there's nobody to protect against: the sender
+	// is the sole interlocutor and may run any command freely. Every other
+	// space (public/private channel "C", multi-person group DM "G") is
+	// shared, so one user's /reset or /model would affect everyone else —
+	// there the admin gate stays enforced.
+	if adminOnlyCommands[cmd] && !strings.HasPrefix(channelID, "D") {
 		ok, err := IsAdmin(senderID)
 		if err != nil || !ok {
 			t.send(ctx, channelID, fmt.Sprintf(

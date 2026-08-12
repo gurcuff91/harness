@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.30] - 2026-08-06
+
+### Change — Slack admin gate no longer applies in 1-to-1 DMs
+- `transports/slack/slack.go` — admin-only commands (`/stop`, `/compact`, `/reset`, `/thinking`, `/model`) were enforced everywhere, including a user's own DM with the bot. That made no sense in a 1-to-1 DM: the sender is the sole interlocutor, so there's nobody to protect against. The gate now fires only in shared spaces (`if adminOnlyCommands[cmd] && !strings.HasPrefix(channelID, "D")`), where one user's `/reset` or `/model` would affect everyone else. Uses `!HasPrefix("D")` (everything that is NOT a 1-to-1 DM) rather than `HasPrefix("C")` so multi-person group DMs (`G`) — also shared spaces — stay enforced.
+- `transports/slack/creds.go` — corrected the `IsAdmin` docstring, which wrongly claimed "open mode — returns true when the list is empty". The real behavior is fail-closed: it returns `false` for an empty list, and the first admin must be bootstrapped from the host via `harness slack admin add <userID>`.
+
+### Change — Slack directive now documents the `G` (group DM) channel-ID prefix
+- `transports/slack/directive.go` — the system-prompt directive described only `C` (channel) and `D` (DM) prefixes, leaving the model blind to `G` (multi-person group DM). As a result Rule 5 (@mention in channels) said "when the channel ID starts with C", so in a group DM — a shared space with several people — the model would mention nobody. Rule 5 now covers shared spaces `C` **or** `G`, and the context-tag section documents the full taxonomy: `C` channel, `G` group DM (both shared), `D` 1-to-1 DM. This aligns the directive with what the transport code already did (`<slack:channel>` tag is emitted for `C`/`G`, suppressed only for `D`).
+
 ## [0.76.29] - 2026-08-06
 
 ### Fix — parallel `Memo*` writes failed with "database is locked (SQLITE_BUSY)"
