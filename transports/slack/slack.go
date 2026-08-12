@@ -35,11 +35,9 @@ type Options struct {
 	// empty means the server-wide default active model. Named to make clear
 	// this configures per-CHANNEL sessions, not the agent passed to Run.
 	SessionModel string
-	// SessionThinking overrides the thinking level for sessions this
-	// transport creates. NOTE: currently unused — kept for API parity with
-	// SessionModel and to preserve the CLI flag it was already threading
-	// through, but nothing in this package reads it yet (a preexisting gap,
-	// not something introduced by this rename).
+	// SessionThinking overrides the thinking level for sessions this transport
+	// creates or resumes (from the --thinking launch flag). Applied via
+	// applySessionOverrides, alongside SessionModel.
 	SessionThinking string
 
 	// logger is set via WithLogger — unexported since Options is otherwise a
@@ -78,8 +76,7 @@ func WithSessionModel(model string) Option {
 }
 
 // WithSessionThinking overrides the thinking level for sessions this
-// transport creates. See Options.SessionThinking's doc comment — currently
-// unused internally, kept for API parity with WithSessionModel.
+// transport creates or resumes (applied alongside WithSessionModel).
 func WithSessionThinking(level string) Option {
 	return func(o *Options) { o.SessionThinking = level }
 }
@@ -200,17 +197,20 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 		pendingAsks: make(map[string]chan askReply),
 	}
 
-	// Resolve model.
-	if err := t.resolveModel(); err != nil {
-		return err
-	}
-
-	// Verify tokens and get our user ID (needed to detect @mentions).
+	// Verify tokens FIRST (and get our user ID for @mention detection) — bad
+	// credentials are the most fundamental prerequisite, so they surface
+	// "invalid tokens" rather than being masked by an unrelated "no active
+	// providers" from resolveModel below.
 	me, err := t.bot.AuthTest(ctx)
 	if err != nil {
 		return fmt.Errorf("slack: invalid tokens: %w", err)
 	}
 	t.myID = me.UserID
+
+	// Resolve model.
+	if err := t.resolveModel(); err != nil {
+		return err
+	}
 	// "scheduler" reflects the AGENT's own construction-time config
 	// (agent.AgentOptions.EnableScheduler, decided by the caller before Run
 	// was ever invoked — see Options' doc comment for why there's no

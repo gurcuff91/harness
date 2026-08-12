@@ -31,11 +31,9 @@ type Options struct {
 	// empty means the server-wide default active model. Named to make clear
 	// this configures per-CHAT sessions, not the agent passed to Run.
 	SessionModel string
-	// SessionThinking overrides the thinking level for sessions this
-	// transport creates. NOTE: currently unused — kept for API parity with
-	// SessionModel and to preserve the CLI flag it was already threading
-	// through, but nothing in this package reads it yet (a preexisting gap,
-	// not something introduced by this rename).
+	// SessionThinking overrides the thinking level for sessions this transport
+	// creates or resumes (from the --thinking launch flag). Applied via
+	// applySessionOverrides, alongside SessionModel.
 	SessionThinking string
 	AllowUnpair     bool // auto-pair: accept any chat, adding it to the allowlist on first contact
 
@@ -62,8 +60,7 @@ func WithSessionModel(model string) Option {
 }
 
 // WithSessionThinking overrides the thinking level for sessions this
-// transport creates. See Options.SessionThinking's doc comment — currently
-// unused internally, kept for API parity with WithSessionModel.
+// transport creates or resumes (applied alongside WithSessionModel).
 func WithSessionThinking(level string) Option {
 	return func(o *Options) { o.SessionThinking = level }
 }
@@ -170,15 +167,17 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 		pendingAlbums: newAlbums(),
 	}
 
-	// Resolve the model once (shared by all chats).
-	if err := t.resolveModel(); err != nil {
-		return err
-	}
-
-	// Verify the token before entering the loop.
+	// Verify the token FIRST — it's the most fundamental prerequisite, so a bad
+	// token surfaces "invalid token" (the actionable error) rather than being
+	// masked by an unrelated "no active providers" from resolveModel below.
 	me, err := t.bot.GetMe(ctx)
 	if err != nil {
 		return fmt.Errorf("telegram: invalid token or unreachable API: %w", err)
+	}
+
+	// Resolve the model once (shared by all chats).
+	if err := t.resolveModel(); err != nil {
+		return err
 	}
 	// default_model is what new sessions get; a resumed chat keeps its own model
 	// unless --model was passed. The per-prompt log reports the real model in use.

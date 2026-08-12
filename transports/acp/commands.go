@@ -12,12 +12,19 @@ import (
 // for a model selector; "model_config" is reserved for model-related
 // PARAMETERS like context size, not the selector itself) and the thinking
 // level (category "thought_level", ACP's dedicated category for a
-// reasoning-level selector). Both are read fresh from the server so a
-// freshly created/loaded session always reports its true current values.
-func buildConfigOptions(c *client.Client) ([]sessionConfigOption, error) {
-	settings, err := c.GetSettings()
+// reasoning-level selector).
+//
+// The currentValue of each is read from THE SESSION (GetSession), not the
+// global settings default — ACP config options are per-session (each ACP
+// session carries its own model/thinking), and a session's /model or
+// /thinking command changes only that session, never the global default. (It
+// used to read settings.ActiveModel/ThinkingLevel, which only happened to be
+// right while the session command also wrote the global default — a coupling
+// since removed.)
+func buildConfigOptions(c *client.Client, sessionID string) ([]sessionConfigOption, error) {
+	sess, err := c.GetSession(sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("acp: get settings: %w", err)
+		return nil, fmt.Errorf("acp: get session: %w", err)
 	}
 	models, err := c.ListModels()
 	if err != nil {
@@ -39,13 +46,18 @@ func buildConfigOptions(c *client.Client) ([]sessionConfigOption, error) {
 		{Value: "xhigh", Name: "XHigh"},
 	}
 
+	thinking := sess.Thinking
+	if thinking == "" {
+		thinking = "off"
+	}
+
 	return []sessionConfigOption{
 		{
 			ID:           "model",
 			Category:     "model",
 			Name:         "Model",
 			Type:         "select",
-			CurrentValue: settings.ActiveModel,
+			CurrentValue: sess.Model,
 			Options:      modelValues,
 		},
 		{
@@ -53,7 +65,7 @@ func buildConfigOptions(c *client.Client) ([]sessionConfigOption, error) {
 			Category:     "thought_level",
 			Name:         "Thinking",
 			Type:         "select",
-			CurrentValue: settings.ThinkingLevel,
+			CurrentValue: thinking,
 			Options:      thinkingValues,
 		},
 	}, nil

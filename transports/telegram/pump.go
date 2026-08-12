@@ -125,13 +125,10 @@ func (t *Transport) pumpFor(ctx context.Context, chatID int64) (*chatPump, error
 func (t *Transport) acquireSession(chatID int64) (string, error) {
 	if id, ok := t.store.sessionFor(chatID); ok {
 		if _, err := t.api.ResumeSession(id); err == nil {
-			// A resumed session keeps its own model, exactly like the TUI — unless
-			// the bot was launched with an explicit --model, which overrides it.
-			if t.opts.SessionModel != "" {
-				if _, err := t.api.ExecCommand(id, "model", map[string]any{"model": t.opts.SessionModel}); err != nil {
-					t.logger.Warn("telegram", "override_model", "chat", chatID, "error", err.Error())
-				}
-			}
+			// A resumed session keeps its own model/thinking, exactly like the
+			// TUI — unless the bot was launched with an explicit --model /
+			// --thinking, which override them.
+			t.applySessionOverrides(chatID, id)
 			return id, nil
 		}
 		// Stored session is gone or failed to resume — fall through to create.
@@ -140,10 +137,31 @@ func (t *Transport) acquireSession(chatID int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// The model is already set via CreateSession(t.model, ...); a --thinking
+	// override still needs to be applied on the fresh session.
+	t.applySessionOverrides(chatID, sess.ID)
 	if err := t.store.bind(chatID, sess.ID); err != nil {
 		t.logger.Error("telegram", "persist_mapping", "chat", chatID, "error", err.Error())
 	}
 	return sess.ID, nil
+}
+
+// applySessionOverrides applies the bot's launch-time --model / --thinking
+// flags to a session (freshly created or just resumed). Each is best-effort:
+// a failure is logged but doesn't abort — the session is still usable with its
+// own values. On a fresh session the model is already set by CreateSession, so
+// re-applying it is a harmless no-op; on a resumed session it overrides.
+func (t *Transport) applySessionOverrides(chatID int64, sessionID string) {
+	if t.opts.SessionModel != "" {
+		if _, err := t.api.ExecCommand(sessionID, "model", map[string]any{"model": t.opts.SessionModel}); err != nil {
+			t.logger.Warn("telegram", "override_model", "chat", chatID, "error", err.Error())
+		}
+	}
+	if t.opts.SessionThinking != "" {
+		if _, err := t.api.ExecCommand(sessionID, "thinking", map[string]any{"level": t.opts.SessionThinking}); err != nil {
+			t.logger.Warn("telegram", "override_thinking", "chat", chatID, "error", err.Error())
+		}
+	}
 }
 
 // resetChat closes the chat's current session and clears its mapping, so the

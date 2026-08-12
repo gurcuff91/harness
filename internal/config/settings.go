@@ -37,6 +37,15 @@ var thinkingLevels = map[string]bool{
 	"xhigh":  true,
 }
 
+// ValidThinkingLevel reports whether level is an accepted thinking level
+// (off|low|medium|high|xhigh). Exposed so callers can VALIDATE a level without
+// persisting it — e.g. a session's /thinking command applies the level to the
+// live session only, and must reject an invalid value first without touching
+// the global default that SetThinkingLevel would write.
+func ValidThinkingLevel(level string) bool {
+	return thinkingLevels[level]
+}
+
 // SettingsManager is a thread-safe store for harness settings.
 // Backed by ~/.harness/settings.json.
 //

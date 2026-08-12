@@ -157,7 +157,7 @@ func (h *handler) registerSession(c *conn, harnessID string) (newSessionResult, 
 	h.sessions[harnessID] = &acpSession{harnessID: harnessID}
 	h.mu.Unlock()
 
-	opts, err := buildConfigOptions(h.api)
+	opts, err := buildConfigOptions(h.api, harnessID)
 	if err != nil {
 		return newSessionResult{}, internalErr("build config options", err)
 	}
@@ -226,7 +226,7 @@ func (h *handler) handleSetConfigOption(p setConfigOptionParams) (setConfigOptio
 		return setConfigOptionResult{}, internalErr("set "+p.ConfigID, err)
 	}
 
-	opts, err := buildConfigOptions(h.api)
+	opts, err := buildConfigOptions(h.api, p.SessionID)
 	if err != nil {
 		return setConfigOptionResult{}, internalErr("build config options", err)
 	}

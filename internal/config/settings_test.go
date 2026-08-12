@@ -269,3 +269,20 @@ func TestMCPArgv(t *testing.T) {
 		})
 	}
 }
+
+// TestValidThinkingLevel covers the pure validator exposed so callers can
+// check a level WITHOUT persisting it (e.g. a session's /thinking command,
+// which must reject an invalid value before applying it to the live session,
+// without writing the global default).
+func TestValidThinkingLevel(t *testing.T) {
+	for _, ok := range []string{"off", "low", "medium", "high", "xhigh"} {
+		if !ValidThinkingLevel(ok) {
+			t.Errorf("ValidThinkingLevel(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{"", "OFF", "none", "max", "xxhigh", " high"} {
+		if ValidThinkingLevel(bad) {
+			t.Errorf("ValidThinkingLevel(%q) = true, want false", bad)
+		}
+	}
+}

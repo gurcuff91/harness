@@ -445,10 +445,9 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 	}
 
 	now := time.Now()
-	thinking := a.thinkingLevel
-	if thinking == "" {
-		thinking = "off"
-	}
+	// a.thinkingLevel is guaranteed non-empty: agent.New resolves it to the
+	// configured level or "off" (the single entry point for every caller), so
+	// no fallback is needed here.
 	// The id is generated first so the session's Schedule tool can capture it as
 	// the owner for any schedules it creates.
 	sessionID := uuid.New().String()
@@ -464,7 +463,7 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 		CWD:          cwd,
 		Name:         defaultSessionName(now),
 		Model:        model,
-		Thinking:     thinking,
+		Thinking:     a.thinkingLevel,
 		CreatedAt:    now,
 		LastActiveAt: now,
 	}

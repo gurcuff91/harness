@@ -2,7 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.76.26] - 2026-08-06
+## [0.76.28] - 2026-08-06
+
+### Change — `Session.SwitchThinking` now validates the level instead of coercing empty to "off"
+- `agent/session.go` — `SwitchThinking` used to silently rewrite an empty level to `"off"`; it now validates via `config.ValidThinkingLevel` and returns `ErrInvalidThinkingLevel` for any invalid value (the empty string included), so a caller passing a bad level fails loudly rather than masking a bug. The server's `/thinking` exec command drops its now-duplicate pre-check and maps the returned error to 422, keeping the same HTTP status. The other caller (applying a persisted level from settings on session creation) is unaffected — settings only ever hold validated levels, and it already ignored the error.
+
+### Fix — Telegram/Slack `Run` reported "no active providers" when the real problem was a bad token
+- `transports/telegram/telegram.go`, `transports/slack/slack.go` — both resolved the model (which calls `ListModels`) BEFORE verifying the bot token/credentials, so launching a bot with an invalid token AND no active provider surfaced the unrelated "no active providers — connect one first" instead of the actionable "invalid token". Credential verification (`GetMe`/`AuthTest`) now runs first — it's the more fundamental prerequisite. This also de-flakes `TestRunFallsBackToSavedToken`, which asserts the saved-token fallback reaches the token-verification step (it couldn't when model resolution failed first in an environment with no active providers).
+
+## [0.76.27] - 2026-08-06
+
+### Change — a session's `/model` and `/thinking` no longer rewrite the global default
+- **The change**: the session exec commands `model` and `thinking` (`server/server.go`) used to ALSO persist the value to the global `settings.json` default (`SetActiveModel`/`SetThinkingLevel`) as a side effect. They now change ONLY the live session. Changing a session's model/thinking shouldn't silently re-configure every FUTURE session — and, since credentials/settings became cross-process fresh (v0.76.11), every OTHER running instance too. Use `harness settings set model|thinking` (→ `PATCH /api/settings`) to change the global default; that path already correctly does NOT touch live sessions, so the two directions are now symmetric.
+- Added `config.ValidThinkingLevel(level)` — validates a level WITHOUT persisting, so the `/thinking` command can still reject an invalid value before applying it to the session (previously the validation was a side effect of the now-removed `SetThinkingLevel` call). `SwitchModel` already validates the model itself.
+- **Removed a redundant fallback**: `agent.NewSession` no longer re-defaults `thinking` to `"off"` — `agent.New` (the single entry point for every caller) already resolves `a.thinkingLevel` to the configured level or `"off"`, so it can never be empty here.
+
+### Fix — ACP config options reported the GLOBAL default instead of the session's value
+- Uncovered by the change above (which had been masking it): `buildConfigOptions` (`transports/acp/commands.go`) read `settings.ActiveModel`/`ThinkingLevel` for each option's `currentValue` — but ACP config options are per-session, and it only looked correct while the session command also wrote the global default. Now reads the value from the SESSION (`GetSession`), so Zed shows the actual model/thinking of the current ACP session. Callers pass the session id through.
+
+### Fix — `--thinking` launch flag was silently ignored by the Telegram and Slack bots
+- Both transports accepted `--thinking` (threaded through as `WithSessionThinking`/`SessionThinking`) but never applied it — only `--model` was honored, on Telegram, and Slack didn't even apply `--model` on a resumed session. New `applySessionOverrides` (in each transport's `pump.go`) applies BOTH the model and the thinking override consistently, on freshly created and resumed sessions alike, via `ExecCommand`. Stale "currently unused" doc comments on the option/constructor updated.
+- New test: `internal/config/settings_test.go`'s `TestValidThinkingLevel`. The ACP fix is covered by `TestSetConfigOptionThinking` (now asserting the session's value, which failed before the fix). Full suite + `-race` green.
 
 ### Fix — TUI markdown: an INDENTED closing code fence wasn't recognized
 - **Reported (with screenshots + the raw session JSONL, which confirmed the model emitted 4 correct 3-backtick fences — the parser was at fault)**: a code block whose fences were indented (because it sat inside a numbered list item, so both ``` lines had 3 leading spaces) never closed — every line after it, including the list's next item and its `**bold**`, was swept into the block and styled as code.

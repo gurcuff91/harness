@@ -1229,18 +1229,19 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "param 'level' is required", nil)
 			return
 		}
-		// Validate + persist FIRST. Only if the level is accepted do we apply it
-		// to the live session, so an invalid value never mutates session state.
-		if err := config.GetSettingsManager().SetThinkingLevel(level); err != nil {
+		// This command changes ONLY the live session — it deliberately does
+		// NOT write the global default (settings.json). Changing a session's
+		// thinking shouldn't silently re-configure every FUTURE session (and,
+		// cross-process, every other running instance); use
+		// `harness settings set thinking` for that. SwitchThinking validates
+		// the level and returns ErrInvalidThinkingLevel (mapped to 422) for a
+		// bad value, before any session state is touched.
+		if err := proxy.session.SwitchThinking(level); err != nil {
 			status := http.StatusInternalServerError
 			if errors.Is(err, config.ErrInvalidThinkingLevel) {
 				status = http.StatusUnprocessableEntity
 			}
 			writeErr(w, status, err)
-			return
-		}
-		if err := proxy.session.SwitchThinking(level); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
 		writeStatus(w, http.StatusOK, "ok", "")
@@ -1251,12 +1252,14 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "param 'model' is required", nil)
 			return
 		}
+		// Changes ONLY the live session — like the thinking command above, it
+		// does NOT write the global default. SwitchModel validates the model
+		// (provider active + model exists) and returns an error if not, so an
+		// invalid model never mutates session state.
 		if err := proxy.session.SwitchModel(context.Background(), model); err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		// Persist to settings
-		_ = config.GetSettingsManager().SetActiveModel(model)
 		writeStatus(w, http.StatusOK, "ok", "")
 
 	case "compact":

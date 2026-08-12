@@ -75,6 +75,9 @@ func (t *Transport) pumpFor(ctx context.Context, channelID string) (*channelPump
 func (t *Transport) acquireSession(channelID string) (string, error) {
 	if id, ok := t.store.sessionFor(channelID); ok {
 		if _, err := t.api.ResumeSession(id); err == nil {
+			// A resumed session keeps its own model/thinking unless the bot was
+			// launched with an explicit --model / --thinking override.
+			t.applySessionOverrides(channelID, id)
 			return id, nil
 		}
 		// Stored session gone — fall through to create a new one.
@@ -85,10 +88,31 @@ func (t *Transport) acquireSession(channelID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Model is already set via CreateSession; a --thinking override still needs
+	// applying on the fresh session.
+	t.applySessionOverrides(channelID, sess.ID)
 	if err := t.store.bind(channelID, sess.ID); err != nil {
 		t.logger.Error("slack", "persist_mapping", "channel", channelID, "error", err.Error())
 	}
 	return sess.ID, nil
+}
+
+// applySessionOverrides applies the bot's launch-time --model / --thinking
+// flags to a session (freshly created or just resumed). Best-effort: a failure
+// is logged but doesn't abort. On a fresh session re-applying the model is a
+// harmless no-op (CreateSession already set it); on a resumed session it
+// overrides.
+func (t *Transport) applySessionOverrides(channelID, sessionID string) {
+	if t.opts.SessionModel != "" {
+		if _, err := t.api.ExecCommand(sessionID, "model", map[string]any{"model": t.opts.SessionModel}); err != nil {
+			t.logger.Warn("slack", "override_model", "channel", channelID, "error", err.Error())
+		}
+	}
+	if t.opts.SessionThinking != "" {
+		if _, err := t.api.ExecCommand(sessionID, "thinking", map[string]any{"level": t.opts.SessionThinking}); err != nil {
+			t.logger.Warn("slack", "override_thinking", "channel", channelID, "error", err.Error())
+		}
+	}
 }
 
 // resetChannel closes the channel's current session and clears its mapping so
