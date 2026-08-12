@@ -1,7 +1,9 @@
 package memory
 
 import (
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -368,5 +370,110 @@ func TestSearchSanitizesFTSSyntax(t *testing.T) {
 		if _, err := s.Search("/proj", q, true, 0, 10); err != nil {
 			t.Errorf("query %q should not error: %v", q, err)
 		}
+	}
+}
+
+// TestConcurrentWritesNoBusyError is the regression test for the reported
+// "database is locked (SQLITE_BUSY)" errors: the ReAct loop runs tool calls
+// in PARALLEL, so a model firing several Memo* writes at once had them hit the
+// single-writer SQLite lock simultaneously — and, without a busy_timeout, the
+// losers failed INSTANTLY instead of waiting. With busy_timeout(5000) + WAL
+// (set on the DSN in Open), the concurrent writers now serialize by waiting
+// for the lock, so every write succeeds.
+func TestConcurrentWritesNoBusyError(t *testing.T) {
+	s := newTestStore(t)
+	const n = 16
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = s.Write("/cwd", fmt.Sprintf("slug-%d", i), "content", false)
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("concurrent Write[%d] failed: %v", i, err)
+		}
+	}
+	// All n memories must be present.
+	res, err := s.Search("/cwd", "", false, 0, 100)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if res.Total != n {
+		t.Errorf("expected %d memories after concurrent writes, got %d", n, res.Total)
+	}
+}
+
+// TestConcurrentDeletesNoBusyError mirrors the exact reported scenario:
+// several MemoDelete calls in parallel (the field report showed 5 of them all
+// erroring with SQLITE_BUSY except one). All deletes must now succeed.
+func TestConcurrentDeletesNoBusyError(t *testing.T) {
+	s := newTestStore(t)
+	const n = 16
+	for i := 0; i < n; i++ {
+		if _, err := s.Write("/cwd", fmt.Sprintf("slug-%d", i), "content", false); err != nil {
+			t.Fatalf("seed write %d: %v", i, err)
+		}
+	}
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	oks := make([]bool, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			oks[i], errs[i] = s.Delete("/cwd", fmt.Sprintf("slug-%d", i), false)
+		}(i)
+	}
+	wg.Wait()
+	for i := range errs {
+		if errs[i] != nil {
+			t.Errorf("concurrent Delete[%d] failed: %v", i, errs[i])
+		}
+		if !oks[i] {
+			t.Errorf("concurrent Delete[%d] reported no row deleted", i)
+		}
+	}
+	res, _ := s.Search("/cwd", "", false, 0, 100)
+	if res.Total != 0 {
+		t.Errorf("expected 0 memories after deleting all, got %d", res.Total)
+	}
+}
+
+// TestConcurrentReadsWithWritesNoBusyError verifies the WAL benefit: reads
+// (Search) running concurrently with writes never error — WAL allows a reader
+// alongside the single writer.
+func TestConcurrentReadsWithWritesNoBusyError(t *testing.T) {
+	s := newTestStore(t)
+	var wg sync.WaitGroup
+	errCh := make(chan error, 64)
+	// Writers.
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if _, err := s.Write("/cwd", fmt.Sprintf("w-%d", i), "content", false); err != nil {
+				errCh <- fmt.Errorf("write %d: %w", i, err)
+			}
+		}(i)
+	}
+	// Readers, interleaved.
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := s.Search("/cwd", "", false, 0, 50); err != nil {
+				errCh <- fmt.Errorf("search: %w", err)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Errorf("concurrent read/write errored: %v", err)
 	}
 }

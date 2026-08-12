@@ -68,7 +68,25 @@ func Open(path string) (*Store, error) {
 		path = filepath.Join(dir, "memory.db")
 	}
 
-	db, err := sql.Open("sqlite", path)
+	// Concurrency pragmas, applied to every connection via the DSN:
+	//   - busy_timeout(5000): on a locked DB, block and retry for up to 5s
+	//     instead of failing instantly with SQLITE_BUSY. This is what fixes
+	//     the "database is locked" errors when the model fires several Memo*
+	//     writes in PARALLEL (the ReAct loop runs tool calls concurrently) —
+	//     SQLite allows one writer at a time, and the losers now WAIT for the
+	//     lock rather than erroring. Also works across multiple harness
+	//     PROCESSES sharing this file, which an in-process mutex could not.
+	//   - journal_mode(WAL): Write-Ahead Logging lets readers run concurrently
+	//     with a writer, so a MemoSearch never blocks (or is blocked by) a
+	//     concurrent MemoWrite/MemoDelete. Creates sidecar files (memory.db-wal,
+	//     memory.db-shm) next to the DB.
+	// Order matters: busy_timeout must be set before switching to WAL (the
+	// connection needs to block-on-busy before the WAL switch, in case another
+	// connection is mid-switch). The pure-Go modernc.org/sqlite driver reads
+	// pragmas from the DSN via the _pragma= syntax (the CGO-style
+	// _busy_timeout= params are silently ignored by this driver).
+	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("memory: open db: %w", err)
 	}

@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.29] - 2026-08-06
+
+### Fix — parallel `Memo*` writes failed with "database is locked (SQLITE_BUSY)"
+- **Reported**: firing several `MemoDelete` (or `MemoWrite`) calls at once — which happens because the ReAct loop executes a turn's tool calls in PARALLEL — produced `memory: delete: database is locked (5) (SQLITE_BUSY)` on all but one; only a single write survived, the rest had to be retried manually.
+- **Root cause** (`agent/memory/store.go`): the SQLite connection was opened with no concurrency pragmas. SQLite allows only one writer at a time, and without a `busy_timeout` the losing writers failed INSTANTLY (the `[4ms]`/`[7ms]` in the report) instead of waiting for the lock.
+- **Fix** (SQLite's own native mechanism — no Go-side mutex needed): open the DB with `?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)`.
+  - `busy_timeout(5000)` — a writer that finds the DB locked now blocks and retries for up to 5s instead of erroring, so concurrent writers serialize by waiting. Works across multiple harness PROCESSES sharing the file too, which an in-process mutex could not.
+  - `journal_mode(WAL)` — Write-Ahead Logging lets readers run concurrently with the writer, so a `MemoSearch` never blocks (or is blocked by) a concurrent write. Creates `memory.db-wal`/`memory.db-shm` sidecar files (managed automatically by SQLite). Order matters — `busy_timeout` before the WAL switch — and the pure-Go `modernc.org/sqlite` driver reads pragmas via the `_pragma=` DSN syntax (the CGO-style `_busy_timeout=` params it silently ignores).
+- New tests (`agent/memory/store_test.go`, all `-race`): `TestConcurrentWritesNoBusyError` (16 parallel writes all succeed), `TestConcurrentDeletesNoBusyError` (the exact reported scenario — 16 parallel deletes), `TestConcurrentReadsWithWritesNoBusyError` (WAL: interleaved reads + writes, no errors). Verified in both directions: reverting the pragmas reproduces the exact field error (`database is locked (5) (SQLITE_BUSY)` on all but one delete). Full suite + `-race` green.
 ## [0.76.28] - 2026-08-06
 
 ### Change — `Session.SwitchThinking` now validates the level instead of coercing empty to "off"
