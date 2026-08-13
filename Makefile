@@ -30,7 +30,7 @@ help:
 	@echo "Usage:"
 	@echo "  make build          # builds ./harness"
 	@echo "  make install        # builds and installs to ~/go/bin"
-	@echo "  HARNESS_MODEL=anthropic/claude-sonnet-4-20250514 make run"
+	@echo "  make run            # builds and runs ./harness"
 
 # Build the binary
 build:
@@ -106,11 +106,6 @@ release-push:
 run: build
 	@echo "Running $(BINARY_NAME)..."
 	@./$(BINARY_NAME)
-
-# Build and run with environment
-run-model: build
-	@echo "Running with model: $(HARNESS_MODEL)..."
-	HARNESS_MODEL=$(HARNESS_MODEL) ./$(BINARY_NAME)
 
 # Clean artifacts
 clean:
