@@ -1,7 +1,7 @@
 # Makefile for Harness
 # A minimal AI agent harness built in pure Go.
 
-.PHONY: build install clean test vet lint run help
+.PHONY: build install clean test vet lint run help release release-push
 
 # Binary name and paths
 BINARY_NAME=harness
@@ -25,6 +25,7 @@ help:
 	@echo "  make vet       - Run go vet"
 	@echo "  make fmt       - Format code"
 	@echo "  make deps      - Download dependencies"
+	@echo "  make release   - Tag HEAD as \$$(VERSION) and push it (vet+test first)"
 	@echo ""
 	@echo "Usage:"
 	@echo "  make build          # builds ./harness"
@@ -63,6 +64,43 @@ install: build
 	@codesign -f -s - $(INSTALL_DIR)/$(BINARY_NAME) 2>/dev/null || true
 	@echo "✅ Installed to $(INSTALL_DIR)/$(BINARY_NAME)"
 	@echo "Run 'harness' to start"
+
+# Cut a release: tag HEAD as $(VERSION) and push the tag.
+# Guards, in order — each aborts before anything is tagged/pushed:
+#   1. working tree must be clean (no uncommitted changes)
+#   2. VERSION must not already exist as a tag (never overwrite a release)
+#   3. CHANGELOG.md must have an entry for this version
+#   4. vet + tests must pass
+# The annotated tag's message is this version's CHANGELOG section.
+release: vet test
+	@echo "Preparing release $(VERSION)..."
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		echo "❌ Working tree is dirty — commit or stash first:"; \
+		git status --short; \
+		exit 1; \
+	fi
+	@if git rev-parse -q --verify "refs/tags/$(VERSION)" >/dev/null; then \
+		echo "❌ Tag $(VERSION) already exists — bump VERSION in the Makefile first."; \
+		exit 1; \
+	fi
+	@if ! grep -q "\[$(VERSION:v%=%)\]" CHANGELOG.md; then \
+		echo "❌ No CHANGELOG.md entry for $(VERSION:v%=%) — document the release first."; \
+		exit 1; \
+	fi
+	@echo "Tagging $(VERSION) at $$(git rev-parse --short HEAD)..."
+	@awk '/^## \[$(VERSION:v%=%)\]/{f=1;print;next} /^## \[/{f=0} f' CHANGELOG.md \
+		| git tag -a "$(VERSION)" -F -
+	@echo "✅ Tagged $(VERSION). Push it with: make release-push"
+
+# Push the release tag to origin (separate step so tagging can be reviewed first).
+release-push:
+	@if ! git rev-parse -q --verify "refs/tags/$(VERSION)" >/dev/null; then \
+		echo "❌ Tag $(VERSION) doesn't exist yet — run 'make release' first."; \
+		exit 1; \
+	fi
+	@echo "Pushing $(VERSION) to origin..."
+	git push origin "$(VERSION)"
+	@echo "✅ Released $(VERSION)"
 
 # Build and run
 run: build
