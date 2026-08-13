@@ -664,6 +664,36 @@ type toolLens struct {
 // session itself worked fine (it reads its own live s.modelID every turn),
 // only Subagent was stuck, because its closure had captured a plain string
 // once and never looked at it again.
+// awaitSubagentResult waits for a sub-agent turn to finish and returns its
+// accumulated text plus the error the Subagent tool should act on.
+//
+// done is fed by the executor's event subscription: nil on EventTurnEnd, a
+// non-nil error on EventError. The subtlety it guards is a race on TIMEOUT:
+// when the sub-agent's ctx deadline expires, the session cancels its own turn
+// and (via a defer) still emits EventTurnEnd — which this subscription maps to
+// done<-nil — at essentially the same moment ctx.Done() closes. A naive select
+// would then pick the <-done branch at random and return a NIL error, so the
+// Subagent tool's isTimeout() would never fire and the deadline would be
+// silently reported as a successful partial result.
+//
+// The guard: a TurnEnd(nil) that arrives with ctx already cancelled is a
+// timeout in disguise, not a success — so whenever ctx.Err() is set, it wins,
+// carrying the context.DeadlineExceeded (timeout) or context.Canceled (user
+// Stop) that the caller needs to classify the outcome correctly. A genuine
+// success (TurnEnd with ctx still live) returns nil as before.
+func awaitSubagentResult(ctx context.Context, done <-chan error, textBuf *strings.Builder) (string, error) {
+	text := func() string { return strings.TrimSpace(textBuf.String()) }
+	select {
+	case err := <-done:
+		if err == nil && ctx.Err() != nil {
+			return text(), ctx.Err()
+		}
+		return text(), err
+	case <-ctx.Done():
+		return text(), ctx.Err()
+	}
+}
+
 func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res *resources.Resources, loader resources.ResourceLoader) (*tools.Registry, toolLens) {
 	reg := tools.NewRegistry()
 	for _, def := range a.toolReg.Definitions() {
@@ -790,12 +820,7 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 				}
 			})
 			sess.Prompt(ctx, prompt)
-			select {
-			case err := <-done:
-				return strings.TrimSpace(textBuf.String()), err
-			case <-ctx.Done():
-				return strings.TrimSpace(textBuf.String()), ctx.Err()
-			}
+			return awaitSubagentResult(ctx, done, &textBuf)
 		}
 		reg.Register(tools.Subagent(executor))
 	}

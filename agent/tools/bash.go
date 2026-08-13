@@ -96,8 +96,14 @@ func Bash() Tool {
 			result = ApplyTruncation("bash", result, false)
 
 			if timedOut {
+				// Bash is the deliberate exception to the "no partial on timeout"
+				// rule the other tools follow: its partial is raw PROCESS output
+				// (the test that hung, the build step that never returned), which
+				// is self-contained and genuinely diagnostic — unlike an LLM
+				// sub-agent cut off mid-reasoning. So we keep the partial AND make
+				// the header actionable.
 				err := fmt.Errorf("timeout after %v", timeout)
-				return fmt.Sprintf("Timeout after %v:\n%s", timeout, result), err
+				return fmt.Sprintf("Timeout after %v — retry with a larger 'timeout', or 'background: true' for a long-running process. Partial output below:\n%s", timeout, result), err
 			}
 			if cancelled {
 				return "(stopped)", ctx.Err()

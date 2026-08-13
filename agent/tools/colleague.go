@@ -288,6 +288,12 @@ func askColleague(url, prompt string, images []types.ImageData, timeout time.Dur
 		text, ask = c.Ask(sess.ID, prompt, timeout)
 	}
 	if ask != nil {
+		// A timeout gets a clean, actionable message (no partial exists anyway —
+		// the colleague runs in a separate process, nothing streamed back here).
+		if isTimeout(ask) {
+			msg := fmt.Sprintf("Timeout after %v — retry with a larger 'timeout', or 'background: true' for a genuinely slow task.", timeout)
+			return msg, ask
+		}
 		return fmt.Sprintf("Colleague error: %v", ask), ask
 	}
 	return text, nil

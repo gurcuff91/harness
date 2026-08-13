@@ -100,7 +100,18 @@ func Subagent(executor SubagentExecutor) Tool {
 			// Combine caller ctx (Stop cancellation) + timeout.
 			ctx2, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
-			return executor(ctx2, req.Prompt)
+			out, err := executor(ctx2, req.Prompt)
+			// On timeout, discard any partial output: a sub-agent cut off
+			// mid-inference may have produced misleading, half-formed reasoning
+			// that would contaminate the parent's context if surfaced. Return a
+			// clean, actionable timeout instead so the parent simply retries.
+			// (A user Stop is context.Canceled, not a timeout — left untouched;
+			// session.go skips emitting its result anyway.)
+			if isTimeout(err) {
+				msg := fmt.Sprintf("Timeout after %v — retry with a larger 'timeout', or 'background: true' for a genuinely slow task.", timeout)
+				return msg, err
+			}
+			return out, err
 		},
 	}
 }

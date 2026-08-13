@@ -28,6 +28,27 @@ func TestBashTimeoutKillsBackgroundChild(t *testing.T) {
 	t.Logf("returned in %v with: %q", elapsed.Round(time.Millisecond), out)
 }
 
+// Bash is the deliberate exception to the "no partial on timeout" rule: on
+// timeout it must STILL surface the partial process output (diagnostic — the
+// step that hung), and its message must be actionable (suggest a larger
+// timeout / background).
+func TestBashTimeoutKeepsPartialAndIsActionable(t *testing.T) {
+	bash := Bash()
+	// Emit a line, then hang — the emitted line is the "partial" we must keep.
+	input, _ := json.Marshal(bashInput{Command: "echo diagnostic-marker; sleep 10", Timeout: 2})
+
+	out, err := bash.Execute(context.Background(), input)
+	if err == nil || !strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("expected timeout error, got err=%v", err)
+	}
+	if !strings.Contains(out, "diagnostic-marker") {
+		t.Errorf("Bash must keep partial output on timeout; got %q", out)
+	}
+	if !strings.Contains(out, "Timeout after") || !strings.Contains(out, "'timeout'") {
+		t.Errorf("Bash timeout message must be actionable; got %q", out)
+	}
+}
+
 // A fast command must still return normally (no timeout regression).
 func TestBashNormalCompletion(t *testing.T) {
 	bash := Bash()

@@ -124,6 +124,13 @@ func Fetch() Tool {
 			}
 			resp, err := client.Do(req)
 			if err != nil {
+				// A timeout gets a clean, actionable message. Fetch has no
+				// background mode, so we only suggest a larger timeout (never
+				// 'background: true', which this tool doesn't support).
+				if isTimeout(err) {
+					msg := fmt.Sprintf("Timeout after %v — retry with a larger 'timeout'.", timeout)
+					return msg, err
+				}
 				return fmt.Sprintf("Error: %v", err), err
 			}
 			defer resp.Body.Close()

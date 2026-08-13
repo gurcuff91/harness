@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.37] - 2026-08-06
+
+### Fix — Subagent timeout could be silently reported as success (race between deadline and end-of-turn)
+- Follow-up to v0.76.36, which added the clean timeout message but left a race that could bypass it. The Subagent executor (`agent/agent.go`) waited on `select { case <-done; case <-ctx.Done() }`, where `done` is fed by the sub-agent session's events (nil on `EventTurnEnd`). On a timeout the session cancels its turn and STILL emits `EventTurnEnd` via defer — mapped here to `done<-nil` — at essentially the same instant `ctx.Done()` closes. `select` then picked a ready branch at RANDOM: if `<-done` won, the executor returned a **nil** error, so `isTimeout()` never fired and the deadline surfaced as a *successful* partial result — exactly the mute-partial bug v0.76.36 set out to kill, sneaking back through the race.
+- **Fix**: extracted the wait into a pure helper `awaitSubagentResult(ctx, done, textBuf)` with a race guard — a `TurnEnd(nil)` that arrives with `ctx.Err() != nil` is a timeout in disguise, so `ctx.Err()` wins (carrying `DeadlineExceeded` for a timeout, or `Canceled` for a user Stop). A genuine finish (TurnEnd with a live ctx) still returns nil.
+- Tests (`agent/subagent_await_test.go`, `-race`): clean success → nil; explicit error propagates; **deadline + racing TurnEnd(nil) → DeadlineExceeded** (the regression); user Stop → Canceled and NOT classified as a timeout; pure deadline via the `ctx.Done()` branch. Full `agent/...` + `agent/tools` suites green under `-race`.
+
+## [0.76.36] - 2026-08-06
+
+### Fix — tool timeouts now report a clean, actionable message instead of mute partial output
+- **Problem** (`Subagent`): when a foreground sub-agent hit its timeout (default 120s), the executor returned `(partialText, context.DeadlineExceeded)`. But the ReAct loop only injects an error into the tool result when the output is EMPTY (`session.go`: `if isErr && output == ""`), so the partial text won an `IsErr:true` result with the timeout message SILENTLY DROPPED. The parent agent saw `✘ [120.0s] (87 lines)` — flagged as an error, yet with no indication it was a timeout — and had to GUESS from the content that the sub-agent was truncated, rather than being told to retry. Worse, a sub-agent cut off mid-inference can emit half-formed, misleading reasoning that contaminates the parent's context.
+- **Fix** — a shared `isTimeout(err)` helper (`agent/tools/timeout.go`, keyed on the `net.Error` contract so it uniformly catches `context.DeadlineExceeded` AND `http.Client` deadline errors, while correctly treating a user Stop / `context.Canceled` as NOT a timeout). On timeout the tools now return a clean, actionable message and discard the partial:
+  - `Subagent` / `ColleagueAsk`: `Timeout after <d> — retry with a larger 'timeout', or 'background: true' for a genuinely slow task.`
+  - `Fetch` (no background mode): `Timeout after <d> — retry with a larger 'timeout'.`
+- **Deliberate exception — `Bash`**: its partial output is raw PROCESS output (the test that hung, the build step that never returned) — self-contained and genuinely diagnostic, unlike an LLM's interrupted reasoning. So Bash KEEPS the partial and only gains an actionable header: `Timeout after <d> — retry with a larger 'timeout', or 'background: true' for a long-running process. Partial output below:\n<partial>`.
+- Tests (`agent/tools/timeout_test.go`): `isTimeout` across nil / DeadlineExceeded / Canceled / plain / `net.Error` / `url.Error` / `%w`-wrapped shapes, plus a guard that the stdlib sentinels keep satisfying `net.Error`. `bash_timeout_test.go` gains a case asserting Bash keeps its partial and the message is actionable. Full `agent/tools` suite + `go vet ./...` green.
+
 ## [0.76.35] - 2026-08-06
 
 ### Cleanup — removed the legacy disk/keychain OAuth fallback from `internal/oauthflow/claude.go`
