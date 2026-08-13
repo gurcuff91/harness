@@ -28,57 +28,72 @@ Providers can also be connected from inside the TUI command palette.
 
 ## Features
 
-- **Streaming-first** — all providers stream token-by-token
+- **Streaming-first** — all providers stream token-by-token; there is no non-streaming path
 - **Multi-provider** — Claude OAuth, Anthropic, OpenAI, OpenCode Go, Ollama Cloud, Ollama local, MiniMax
-- **Thinking support** — extended thinking with configurable levels (off/low/medium/high/xhigh)
-- **Tool execution** — Bash, Read, Write, Edit, Fetch, Skill, Subagent
+- **Thinking support** — extended thinking with configurable levels (off/low/medium/high/xhigh), mapped per-provider
+- **Tool execution** — Bash, Read, Write, Edit, Fetch, Skill, Subagent — plus tool calls run in parallel within a turn
 - **MCP** — external tools via Model Context Protocol (local stdio + remote HTTP servers)
 - **Persistent memory** — project-scoped + global memories (SQLite + FTS5), recalled across sessions
+- **Scheduled prompts** — cron-scheduled prompts that fire back into the session that created them
+- **Colleagues** — discover other running harness instances on the machine and delegate prompts to them
+- **Multiple frontends** — interactive TUI, one-shot CLI, HTTP/SSE server, Telegram bot, Slack bot, ACP agent (Zed)
 - **Vision** — image support via file paths or clipboard image paste (Ctrl+V in the TUI)
 - **Pure-Go TUI** — from-scratch terminal UI, zero external TUI libraries
-- **Auto-detection** — Ollama local auto-connects, models fetched from APIs
-- **Zero config** — works with just `harness`, configure via `harness connect`
-- **Single binary** — `go build` produces one executable, ~9MB
+- **Auto-detection** — Ollama local auto-connects, models fetched from provider APIs
+- **Zero config** — works with just `harness`; configure via `harness connect`
+- **Embeddable SDK** — the agent, server, and every transport are importable Go packages
+- **Single binary** — `go build` produces one executable, no runtime dependencies
 
 ## Architecture
 
-The **agent is the SDK**. Public packages form the embeddable surface; everything
-under `internal/` is implementation detail the Go compiler forbids third parties
-from importing. A thin `harness.go` facade at the root re-exports the essentials,
-and the binary lives in `cmd/harness/`.
+The **agent is the SDK**. Public packages form the embeddable surface — this
+includes the core agent, the HTTP/SSE `server`, and the `transports/*`, so an
+SDK consumer can programmatically run any frontend on top of an embedded agent.
+Everything under `internal/` is implementation detail the Go compiler forbids
+third parties from importing. A thin `harness.go` facade at the root re-exports
+the essentials, and the binary lives in `cmd/harness/`.
 
 ```
 harness/
-├── harness.go                # 🔓 SDK facade: New, Agent, Session, Options, Event
-├── cmd/harness/main.go       # Executable entry point (package main), CLI dispatch
+├── harness.go                # 🔓 SDK facade: NewAgent + AgentWith* (construction),
+│                             #    RunServer/RunTelegram/RunSlack/RunAcp + their
+│                             #    XxxWith* (transport runners), Client/NewClient
+├── cmd/harness/main.go       # Executable entry point (package main) — calls cli.Main
 │
 ├── agent/                    # 🔓 Core ReAct loop — the SDK
-│   ├── agent.go              # Chat loop, tool execution, MCP + memory wiring, Close()
-│   ├── session.go            # Session lifecycle, history, tool pairing
+│   ├── agent.go              # Chat loop, tool execution, MCP + memory + scheduler wiring
+│   ├── session.go            # Session lifecycle, ReAct loop, history, tool pairing
 │   ├── prompts.go            # System prompt assembly
-│   ├── store/                # Session persistence — implement custom stores here
+│   ├── store/                # Session persistence (JSONL per cwd) — custom stores here
 │   ├── resources/            # Skill/resource discovery — custom loaders here
 │   ├── memory/               # Persistent memory (SQLite + FTS5, cwd + global)
-│   └── tools/                # Built-in tools — implement custom tools here
+│   └── tools/                # Built-in tools — custom tools here
 │       ├── bash.go / file.go / edit.go / fetch.go / skill.go
 │       └── memory.go / truncate.go / names.go
-├── mcp/                      # 🔓 Model Context Protocol client (stdlib)
+├── mcp/                       # 🔓 Model Context Protocol client (stdlib)
 │   └── jsonrpc.go / stdio.go / http.go / client.go / manager.go
+├── client/                   # 🔓 Typed HTTP/SSE client over the server API
+│   └── client.go / types.go / event.go / error.go / stream.go
+├── server/                   # 🔓 HTTP/SSE backend — the API all clients talk to
+│   └── server.go / sse.go / proxy.go / instances.go / run.go
+├── transports/               # 🔓 Interactive session frontends (each runs on server)
+│   ├── telegram/             # Telegram bot (stdlib Bot API; one session per chat)
+│   ├── slack/                # Slack user bot (one session per channel/DM)
+│   └── acp/                  # Agent Client Protocol agent (Zed and other ACP clients)
+├── logx/                     # 🔓 Logger contract (interface) + NewNilLogger
 ├── types/                    # 🔓 Shared types (Event, Message, ModelMeta)
 │
 └── internal/                 # 🔒 Implementation detail (not importable by third parties)
-    ├── providers/            # LLM provider layer
+    ├── providers/            # LLM provider layer (Resolve, streaming)
     │   ├── anthropic.go / claude_oauth.go / openai.go / ollama*.go
     │   ├── opencode_go.go / minimax.go / registry.go / status.go
-    │   ├── authflow/         # Shared OAuth flow (keychain → file → login)
     │   └── llm/              # Core LLM types + metadata cascade + model registry
+    ├── oauthflow/            # Native OAuth PKCE login flows (one file per provider)
     ├── config/               # Typed settings + credentials managers
+    ├── logx/                 # NewHarnessLogger() — the concrete line-format logger
     ├── version/              # Build version (ldflags target)
-    ├── server/               # HTTP/SSE backend (Serve(listener)) — the API all clients talk to
-    ├── cli/                  # CLI command handlers (a client of server)
-    └── transport/            # Interactive session frontends
-        ├── tui/              # Pure-Go terminal UI
-        └── telegram/         # Telegram bot (stdlib Bot API; one session per chat)
+    ├── tui/                  # Pure-Go terminal UI (stays internal — binary frontend)
+    └── cli/                  # CLI app: Kong grammar + Run() methods, agent builders
 ```
 
 ### Embedding the SDK
@@ -96,9 +111,10 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
-a := harness.New(
-	harness.WithThinking("medium"),
-	harness.WithMCPs(),
+a := harness.NewAgent(
+	harness.AgentWithThinking("medium"),
+	harness.AgentWithMCPs(),
+	harness.AgentWithMemory(),
 )
 defer a.Close()
 
@@ -110,7 +126,7 @@ for _, m := range a.Models() {
 sess, _ := a.NewSession(cwd, "anthropic/claude-sonnet-4-20250514")
 defer sess.Close()
 
-// Async + streaming (primary model): drive via events.
+// Async + streaming: drive via events.
 sess.Subscribe(func(e types.Event) {
 	if e.Type == types.EventStreamTextDelta {
 		fmt.Print(e.Delta)
@@ -119,8 +135,7 @@ sess.Subscribe(func(e types.Event) {
 sess.Prompt(context.Background(), "Hello!")
 
 // …or synchronous request/response (SDK convenience):
-answer, err := sess.PromptAndWait(context.Background(), "Explain goroutines, briefly.")
-_ = err
+answer, _ := sess.PromptAndWait(context.Background(), "Explain goroutines, briefly.")
 fmt.Println(answer)
 ```
 
@@ -129,21 +144,46 @@ fmt.Println(answer)
 `Agent.Providers()` and `Agent.Models()`. This keeps interactive flows (OAuth,
 secrets) out of embedded code.
 
-The agent is configured with functional options: `WithThinking`, `WithMCPs`,
-`WithMaxIterations`, `WithMaxTokens`, `WithSystemPrompt`, `WithTools`,
-`WithDisallowedTools`, `WithStore`, `WithResourceLoader`, `WithMemory` (and
-`WithOptions` to apply a pre-built config). `New()` with no options returns a
-sensible default agent.
+The agent is configured with functional options: `AgentWithThinking`,
+`AgentWithMCPs`, `AgentWithMemory`, `AgentWithScheduler`, `AgentWithColleagues`,
+`AgentWithMaxIterations`, `AgentWithMaxTokens`, `AgentWithSystemPrompt`,
+`AgentWithDirectives`, `AgentWithTools`, `AgentWithDisallowedTools`,
+`AgentWithStore`, `AgentWithResourceLoader` (and `AgentWithOptions` to apply a
+pre-built config). `NewAgent()` with no options returns a sensible default agent.
+
+### Running a transport on an embedded agent
+
+An already-built agent can be handed to a **runner** — a blocking call that
+serves it over a transport until the context is cancelled:
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+
+// HTTP/SSE server:
+harness.RunServer(ctx, a, harness.ServerWithAddr(":8080"))
+
+// …or a Telegram bot:
+harness.RunTelegram(ctx, a, harness.TelegramWithToken(token))
+
+// …or a Slack bot, or an ACP agent (RunSlack / RunAcp).
+```
+
+Each `RunX` is a thin alias over its package's own `Run`. A runner's options
+configure only the **transport** (listen address, bot credentials, per-session
+model/thinking overrides) — the agent itself is already fully configured by the
+time it's passed in.
 
 ## Providers
 
 | Provider | Auth | Models Source | Capabilities Source |
 |----------|------|---------------|---------------------|
-| `claude-oauth` | OAuth via `claude auth login` | Anthropic `/v1/models` API | API (context, vision, thinking) |
+| `claude-oauth` | Browser OAuth (PKCE) | Anthropic `/v1/models` API | API (context, vision, thinking) |
 | `anthropic` | `ANTHROPIC_API_KEY` | Anthropic `/v1/models` API | API |
 | `openai` | `OPENAI_API_KEY` | Static list | llm-registry (GitHub) |
 | `opencode-go` | `OPENCODE_GO_API_KEY` | `/v1/models` API | llm-registry + hardcoded |
-| `ollama-cloud` | `OLLAMA_API_KEY` | `/v1/models` + `/api/show` | `/api/show` (context, vision, thinking) |
+| `minimax` | `MINIMAX_API_KEY` | Static list | llm-registry + hardcoded |
+| `ollama-cloud` | `OLLAMA_CLOUD_API_KEY` | `/v1/models` + `/api/show` | `/api/show` (context, vision, thinking) |
 | `ollama` | None (auto-detect) | `/api/tags` + `/api/show` | `/api/show` |
 
 ## Commands
@@ -151,13 +191,26 @@ sensible default agent.
 Run `harness` for the interactive TUI, or use subcommands directly:
 
 ```
-harness                       — Interactive TUI
+harness                       — Interactive TUI (default)
 harness -p <prompt>           — Single-turn CLI (--model, --thinking, --output)
-harness serve <addr>          — HTTP/SSE server
 harness --resume <id>         — Resume a session in the TUI
+harness --scheduler           — Run the TUI with the cron scheduler engine
+
+harness serve <addr>          — HTTP/SSE server (headless transport)
+harness telegram              — Run as a Telegram bot (one session per chat)
+harness telegram pair <id>    — Allow a chat to use the bot
+harness telegram unpair <id>  — Revoke a chat
+harness telegram list         — List paired chats
+harness telegram token [tok]  — Save the bot token (or check it with --status)
+harness slack                 — Run as a Slack user bot (one session per channel/DM)
+harness slack login           — Authenticate interactively (saves to ~/.harness/slack.json)
+harness slack admin add <id>  — Add an admin (can run /reset /stop /compact /thinking /model)
+harness slack admin list      — List current admins
+harness slack admin remove    — Remove an admin
+harness acp                   — Run as an Agent Client Protocol agent over stdio (for Zed)
 
 harness providers             — List providers and status
-harness connect <name>        — Connect a provider (api_key optional)
+harness connect <name> [key]  — Connect a provider (key optional; omit for OAuth)
 harness disconnect <name>     — Disconnect a provider
 harness sessions [--all]      — List sessions (this cwd, or all)
 harness delete <id>           — Delete a session
@@ -165,12 +218,15 @@ harness delete <id>           — Delete a session
 harness settings              — Show core settings
 harness settings set <k> <v>  — Set model | thinking
 harness mcp [list]            — List MCP servers
-harness mcp add <name> ...    — Add MCP server (--local | --remote)
-harness mcp rm <name>         — Remove MCP server
+harness mcp add <name> ...    — Add an MCP server (--command → local, --url → remote)
+harness mcp rm <name>         — Remove an MCP server
+harness mcp enable <name>     — Enable a server
+harness mcp disable <name>    — Disable a server (keeps its config)
 
 harness memo [<query>]        — List (no query) or search memories
 harness memo <query> --all    — Search across ALL projects
 harness memo --global         — Only global (cross-project) memories
+harness schedules             — List cron-scheduled prompts (read-only)
 ```
 
 Inside the TUI, a command palette exposes session actions (model, thinking,
@@ -182,14 +238,18 @@ connect, resume, compact, skills, quit).
 ANTHROPIC_API_KEY       — Anthropic API key
 OPENAI_API_KEY          — OpenAI API key
 OPENCODE_GO_API_KEY     — OpenCode Go API key
-OLLAMA_API_KEY          — Ollama Cloud API key
+OLLAMA_CLOUD_API_KEY    — Ollama Cloud API key
 MINIMAX_API_KEY         — MiniMax API key
 OLLAMA_URL              — Ollama server URL (default: localhost:11434)
-HARNESS_MODEL           — Override default model (provider/model)
+TELEGRAM_BOT_TOKEN      — Telegram bot token (for `harness telegram`)
+SLACK_WORKSPACE         — Slack workspace URL (for `harness slack`)
+SLACK_XOXC              — Slack xoxc- session token
+SLACK_XOXD              — Slack xoxd- session cookie
 ```
 
-Thinking level is set via `--thinking` or `harness settings set thinking <level>`
-(`settings.json` is the single source of truth).
+Model and thinking level are set via `harness settings set model|thinking <value>`
+(or the `--model` / `--thinking` flags per invocation). `settings.json` is the
+single source of truth.
 
 ## Data
 
@@ -199,26 +259,37 @@ All data stored in `~/.harness/`:
 ~/.harness/
 ├── credentials.json        — API keys + OAuth tokens (0600)
 ├── settings.json           — Active model, thinking level, providers, MCP servers
+├── instances.json          — Registry of running server instances (for colleagues)
+├── schedules.json          — Cron-scheduled prompts
+├── telegram.json           — Telegram bot token + paired chats
+├── slack.json              — Slack credentials + admin list
 └── agent/
     ├── sessions/<cwd>/     — Session history (JSONL, partitioned by project)
-    └── memory.db           — Persistent memory (SQLite + FTS5)
+    ├── skills/             — Discovered skills
+    ├── memory.db           — Persistent memory (SQLite + FTS5, WAL mode)
+    └── SYSTEM.md           — Optional user-level system prompt addendum
 ```
 
 ## Tools
 
 | Tool | Description |
 |------|-------------|
-| `Bash` | Execute shell commands |
-| `Read` | Read files (supports offset/limit) |
+| `Bash` | Execute shell commands (with timeout + background support) |
+| `Read` | Read files/images (supports offset/limit) |
 | `Write` | Create/overwrite files |
-| `Edit` | Find/replace in files |
-| `Fetch` | HTTP requests (text + binary) |
-| `Skill` | Invoke a discovered skill |
-| `Subagent` | Spawn a scoped sub-agent |
+| `Edit` | Find/replace in files (single or batch edits) |
+| `Fetch` | HTTP requests (text + binary downloads) |
+| `Skill` | Load a discovered skill |
+| `Subagent` | Spawn a scoped autonomous sub-agent (parallelizable) |
 | `MemoWrite` / `MemoSearch` / `MemoDelete` | Persistent project + global memory |
+| `Schedule` / `ScheduleList` / `ScheduleDelete` | Cron-scheduled prompts |
+| `ColleagueList` / `ColleagueAsk` | Discover and delegate to other running instances |
 
-External tools can be added via **MCP** servers (`harness mcp add`), namespaced
-as `mcp__<server>__<tool>`.
+The memory tools require `AgentWithMemory` (or the CLI's memory-enabled path);
+`Schedule*` management tools are always available, while the engine that *fires*
+schedules requires `--scheduler` / `AgentWithScheduler`; `Colleague*` requires
+`AgentWithColleagues`. External tools can be added via **MCP** servers
+(`harness mcp add`), namespaced as `mcp__<server>__<tool>`.
 
 ## License
 

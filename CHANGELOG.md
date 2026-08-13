@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.35] - 2026-08-06
+
+### Cleanup — removed the legacy disk/keychain OAuth fallback from `internal/oauthflow/claude.go`
+- The file carried ~90 lines of commented-out code (`obtainClaudeOAuthFromDisk`, `readClaudeCredentialsFromKeychain`, `readKeychainItem`, `claudeCredentialsFilePath`, `readClaudeCredentialsFromFile`) — the pre-native path that read Claude Code's macOS keychain / `~/.claude/.credentials.json` (via `$CLAUDE_CONFIG_DIR`). It was kept as a revert-fast fallback while the native OAuth PKCE flow was on trial. That flow is now validated in the field and is what we use, so the dead block (and its explanatory note) is deleted. File shrank from 192 to 102 lines; `go build`, `go vet ./...`, and the package tests stay green.
+
+## [0.76.34] - 2026-08-06
+
+### Docs — README brought up to date with the current architecture and feature set
+- `README.md` was significantly stale. Rewritten to match reality:
+  - **SDK facade**: documented the current API (`NewAgent` + `AgentWith*`, the `RunServer`/`RunTelegram`/`RunSlack`/`RunAcp` runners + their `XxxWith*` options, `Client`/`NewClient`) — the old `New`/`WithThinking`/`Agent`/`Session` names no longer existed.
+  - **Architecture tree**: `server`, `transports/{telegram,slack,acp}`, `client`, and `logx` are now PUBLIC packages at the module root (not under `internal/transport/`); added `internal/oauthflow` and `internal/logx`. Fixed the old `internal/server`, `internal/cli`, `internal/transport/{tui,telegram}` layout.
+  - **Features/transports**: added Slack bot, ACP agent (Zed), cron-scheduled prompts, colleagues (cross-instance delegation), and parallel tool execution — none were mentioned.
+  - **Tools table**: added `Subagent`, `Schedule`/`ScheduleList`/`ScheduleDelete`, `ColleagueList`/`ColleagueAsk`, with a note on which options gate them.
+  - **Providers**: added `minimax`; corrected `claude-oauth` auth (native browser OAuth PKCE, not `claude auth login`).
+  - **Env vars**: corrected `OLLAMA_API_KEY` → `OLLAMA_CLOUD_API_KEY`; removed the non-existent `HARNESS_MODEL`; added `TELEGRAM_BOT_TOKEN`, `SLACK_WORKSPACE`/`SLACK_XOXC`/`SLACK_XOXD`.
+  - **Commands**: added the telegram/slack/acp subcommands and mcp enable/disable.
+  - **Data dir**: added `instances.json`, `schedules.json`, `telegram.json`, `slack.json`, `agent/skills/`, `agent/SYSTEM.md`, and noted memory.db runs in WAL mode.
+
 ## [0.76.33] - 2026-08-06
 
 ### Fix — resume history hint was in Spanish, inconsistent with the rest of the TUI
