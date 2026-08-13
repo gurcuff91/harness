@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.33] - 2026-08-06
+
+### Fix — resume history hint was in Spanish, inconsistent with the rest of the TUI
+- `internal/tui/session.go` — the trimmed-history hint read `↑ N mensajes anteriores ocultos`, the only Spanish string in a TUI that is otherwise all English (`── resumed: <name> ──`, `◎ Compacting`). Changed to `↑ N earlier messages hidden`.
+
+## [0.76.32] - 2026-08-06
+
+### Change — trimmed resume history no longer opens with a bare "◎ Compacting" marker
+- Follow-up to v0.76.31. `trimToRecentHistory` (`internal/tui/session.go`) cut exactly ON the second-to-last compaction checkpoint, so the replayed history's FIRST line was that checkpoint's "◎ Compacting (history)" marker — which looked odd sitting right under the `↑ N earlier messages hidden` hint. The cut is now one past that checkpoint (`marks[len-2] + 1`), so history opens on real content. The LAST checkpoint still falls inside the rendered range and shows normally, where it reads naturally. Resume now presents cleanly as `── resumed: <name> ──` then `↑ N earlier messages hidden` then the conversation.
+- Tests (`internal/tui/history_trim_test.go`) updated for the +1 cut (hidden counts shifted by one) and now assert the first kept message is NOT a compaction marker.
+
+## [0.76.31] - 2026-08-06
+
+### Change — TUI caps how much history it renders when resuming a long, compacted session
+- **Problem**: resuming a session that had been compacted several times took ~30s to become interactive. The bottleneck was never the fetch (in-process, instant) but the RENDER: `renderHistory` (`internal/tui/session.go`) replayed every message through the markdown engine (`markdown.go`, ~1130 lines of processing), including thousands of stale messages from days-old, already-compacted turns that nobody scrolls back to read.
+- **Fix** (pure TUI display decision — no API, `agent`, `client`, or `store` changes): new `trimToRecentHistory` helper caps replay. It scans the fetched history for compaction-checkpoint markers (`Meta.IsCompaction`) and, for a session compacted **at least twice**, renders only from the **second-to-last** checkpoint onward — the last pre-compaction block plus the current working set. That's enough recent context that a freshly-compacted session isn't visually empty, without paying to render the whole log. A session compacted 0 or 1 times renders unchanged. The full history still lives in the fetched slice (a future "scroll up to load older" needs no extra round-trip).
+- **Transparency**: when history is trimmed, a dimmed hint (`↑ N mensajes anteriores ocultos`) is shown above the replayed messages so the user knows older history exists and isn't lost.
+- Tests (`internal/tui/history_trim_test.go`): 0/1 markers → no trim; 2 markers → cut at second-to-last, correct hidden count; 3 markers → same; empty history. The kept slice always starts on a clean checkpoint boundary, so tool call/result pairs never split.
+
 ## [0.76.30] - 2026-08-06
 
 ### Change — Slack admin gate no longer applies in 1-to-1 DMs
