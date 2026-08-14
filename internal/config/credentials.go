@@ -204,6 +204,30 @@ func (m *CredentialsManager) SetCredential(provider string, cred ProviderCredent
 	return m.save()
 }
 
+// SetCredentialLocked is SetCredential for a caller that ALREADY holds the
+// cross-process file lock via WithLock. It does the exact same read-modify-write
+// (validate → reload latest disk → apply → persist) but does NOT call
+// acquireFileLock itself — the file lock is not re-entrant, so acquiring it a
+// second time from inside a WithLock closure deadlocks until it times out
+// (~2s), which caused the write to silently fail. That failure was catastrophic
+// for OAuth refresh: the single-use refresh token had already been redeemed on
+// the wire, but the rotated result never reached disk, so the next process read
+// the now-consumed old token and got a permanent invalid_grant. Callers NOT
+// already under WithLock must use SetCredential.
+func (m *CredentialsManager) SetCredentialLocked(provider string, cred ProviderCredential) error {
+	if err := validateCredential(cred); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.load()
+	if m.data.Providers == nil {
+		m.data.Providers = make(map[string]ProviderCredential)
+	}
+	m.data.Providers[provider] = cred
+	return m.save()
+}
+
 // DeleteCredential removes a provider's credential. Same lock-then-reload
 // pattern as SetCredential — see its comment.
 func (m *CredentialsManager) DeleteCredential(provider string) error {

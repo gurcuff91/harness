@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.39] - 2026-08-14
+
+### Fix — the REAL cause of claude-oauth `invalid_grant`: a re-entrant lock deadlock silently dropped the rotated token
+- v0.76.38 hardened the cross-process refresh but did NOT fix the actual poison (which predates it, from the original refresh-race commit): inside `getValidToken`'s `WithLock` closure, a successful refresh persisted via `persistOAuthCreds` → `CredentialsManager.SetCredential`, which calls `acquireFileLock` **a second time on the same `credentials.json.lock`**. The file lock is NOT re-entrant, so this re-acquisition blocked for the full retry budget (~2s) and failed with `timed out waiting for lock`. `persistOAuthCreds` ignores that error (`_ =`), so the write was **silently dropped**.
+- **Why it produced `invalid_grant`**: the single-use refresh token had ALREADY been redeemed on the wire (server rotated `X → X'` and killed `X`), but the rotated `X'` never reached disk because of the dropped write. The next process/turn read the stale, now-consumed `X` from disk and refreshed with it → permanent `invalid_grant`. We were poisoning our own token. Reproduced deterministically: re-acquiring the lock from inside `WithLock` hangs ~2.09s then times out.
+- **Fix**: added `CredentialsManager.SetCredentialLocked` — the same validate → reload → apply → persist as `SetCredential` but WITHOUT `acquireFileLock`, for callers already inside `WithLock`. `getValidToken`'s refresh now persists via `persistOAuthCredsLocked` (the lock is already held); `Connect()` and all other callers keep using the lock-taking `SetCredential`/`persistOAuthCreds`.
+- Tests (`internal/config/credentials_locked_test.go`, `-race`): `SetCredentialLocked` inside a `WithLock` returns in <1s (was a ~2s deadlock) AND actually persists the rotated creds; standalone use still works. Full `internal/config` + `internal/providers` suites green under `-race`; `go vet ./...` clean.
+
 ## [0.76.38] - 2026-08-13
 
 ### Fix — claude-oauth intermittently died with permanent `invalid_grant` during active multi-instance use

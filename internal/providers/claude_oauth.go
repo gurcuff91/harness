@@ -654,7 +654,14 @@ func (tm *tokenManager) getValidToken() (string, error) {
 				return nil
 			}
 			tm.creds = refreshed
-			persistOAuthCreds(refreshed)
+			// Persist WITHOUT re-taking the file lock: we're already inside
+			// WithLock. persistOAuthCreds → SetCredential would call
+			// acquireFileLock a second time, which is not re-entrant and
+			// deadlocks until it times out (~2s), silently dropping the write —
+			// leaving the just-consumed old refresh token on disk and poisoning
+			// the next refresh with invalid_grant. persistOAuthCredsLocked skips
+			// the lock we already hold.
+			persistOAuthCredsLocked(refreshed)
 			accessToken = refreshed.AccessToken
 			return nil
 		})
@@ -753,13 +760,26 @@ func (tm *tokenManager) refresh(refreshToken string) (*types.Credentials, error)
 // ── Credential persistence ───────────────────────────────────────────────
 
 func persistOAuthCreds(creds *types.Credentials) {
-	_ = config.GetCredentialsManager().SetCredential("claude-oauth", config.ProviderCredential{
+	_ = config.GetCredentialsManager().SetCredential("claude-oauth", oauthProviderCredential(creds))
+}
+
+// persistOAuthCredsLocked persists creds when the caller ALREADY holds the
+// credentials file lock (i.e. from inside CredentialsManager.WithLock). Using
+// the plain persistOAuthCreds there would re-acquire the non-re-entrant file
+// lock and deadlock — see SetCredentialLocked's doc comment for the full
+// failure it caused (a silently-dropped write of a freshly-rotated OAuth token).
+func persistOAuthCredsLocked(creds *types.Credentials) {
+	_ = config.GetCredentialsManager().SetCredentialLocked("claude-oauth", oauthProviderCredential(creds))
+}
+
+func oauthProviderCredential(creds *types.Credentials) config.ProviderCredential {
+	return config.ProviderCredential{
 		Type:             "oauth",
 		AccessToken:      creds.AccessToken,
 		RefreshToken:     creds.RefreshToken,
 		ExpiresAt:        creds.ExpiresAt,
 		SubscriptionType: creds.SubscriptionType,
-	})
+	}
 }
 
 // ── Utilities ────────────────────────────────────────────────────────────
