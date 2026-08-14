@@ -608,65 +608,61 @@ func (tm *tokenManager) getValidToken() (string, error) {
 	// Token is expired — refresh. Anthropic refresh tokens are SINGLE-USE: if
 	// another harness process is refreshing this same account at the same
 	// moment, both would read the same refresh_token and try to redeem it —
-	// only one succeeds, the other gets a permanent invalid_grant. The
-	// cross-process file lock serializes ONE re-check-then-refresh-then-persist
-	// attempt so that can't happen: whoever gets the lock either finds a fresh
-	// token already written by the other process (and just uses it) or is the
-	// one that actually calls the provider — never both.
+	// only one succeeds, the other gets a permanent invalid_grant.
+	// UpdateCredential serializes ONE re-check-then-refresh-then-persist
+	// attempt, atomically and under a SINGLE lock acquisition it owns
+	// internally — see its doc comment for why the lock is never handed to us
+	// directly: whoever gets it either finds a fresh token already written by
+	// another process (and just uses it, no write) or is the one that
+	// actually calls the provider and persists the result — never both, and
+	// never a second, re-entrant lock acquisition from inside the callback.
 	//
-	// Retry/backoff lives OUT here, around the lock — NOT inside it. The lock is
-	// taken and released once per attempt, so its hold time is one bounded
-	// refresh (≤30s via oauthRefreshClient), never the multi-second backoff
-	// sleeps. Holding the lock across the sleeps was the bug: a refresh whose
-	// hold exceeded staleFileLockAge let another process reclaim the lock as
-	// "abandoned" and redeem the same token concurrently. Releasing between
-	// attempts also lets a peer make progress instead of blocking on our sleep.
+	// Retry/backoff lives OUT here, around the call — NOT inside it. Each
+	// UpdateCredential call takes and releases the lock once, so its hold time
+	// is one bounded refresh (≤30s via oauthRefreshClient), never the
+	// multi-second backoff sleeps. Holding the lock across sleeps was the
+	// original bug: a refresh whose hold exceeded staleFileLockAge let another
+	// process reclaim the lock as "abandoned" and redeem the same token
+	// concurrently. Releasing between attempts also lets a peer make progress
+	// instead of blocking on our sleep.
 	const maxAttempts = 3
 	backoff := time.Second
 	var accessToken string
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
-			time.Sleep(backoff) // OUTSIDE the lock — nobody holds it while we wait
+			time.Sleep(backoff) // nobody holds the lock while we wait
 			backoff *= 2
 		}
 
 		permanent := false
-		lockErr := config.GetCredentialsManager().WithLock(func() error {
-			// Re-check under the lock — another process may have refreshed
-			// while we waited for it (or during our own backoff). If so, use
-			// the fresh disk token and skip the refresh entirely: this is the
-			// safety net that prevents a double redemption.
-			if !tm.validating {
-				tm.syncFromDisk()
-				if tm.creds.ExpiresAt > time.Now().UnixMilli()+expiryBufferMs {
-					accessToken = tm.creds.AccessToken
-					return nil
+		updateErr := config.GetCredentialsManager().UpdateCredential("claude-oauth",
+			func(cur config.ProviderCredential, ok bool) (config.ProviderCredential, bool, error) {
+				// Re-check with the freshest disk state — another process may
+				// have refreshed while we waited for the lock or slept through
+				// a backoff. If so, use it and skip the refresh entirely: this
+				// is the safety net that prevents a double redemption.
+				if !tm.validating && ok && cur.ExpiresAt > time.Now().UnixMilli()+expiryBufferMs {
+					accessToken = cur.AccessToken
+					synced := credFromDisk(cur)
+					tm.creds = &synced
+					return cur, false, nil
 				}
-			}
-			refreshed, err := tm.refresh(tm.creds.RefreshToken)
-			if err != nil {
-				lastErr = err
-				// Auth errors (invalid_grant, revoked, 401, 403) are permanent —
-				// no point retrying, and retrying a single-use token that was
-				// actually consumed only muddies diagnosis.
-				permanent = isAuthError(err)
-				return nil
-			}
-			tm.creds = refreshed
-			// Persist WITHOUT re-taking the file lock: we're already inside
-			// WithLock. persistOAuthCreds → SetCredential would call
-			// acquireFileLock a second time, which is not re-entrant and
-			// deadlocks until it times out (~2s), silently dropping the write —
-			// leaving the just-consumed old refresh token on disk and poisoning
-			// the next refresh with invalid_grant. persistOAuthCredsLocked skips
-			// the lock we already hold.
-			persistOAuthCredsLocked(refreshed)
-			accessToken = refreshed.AccessToken
-			return nil
-		})
-		if lockErr != nil {
-			return "", fmt.Errorf("token refresh: %w", lockErr)
+				refreshed, err := tm.refresh(tm.creds.RefreshToken)
+				if err != nil {
+					lastErr = err
+					// Auth errors (invalid_grant, revoked, 401, 403) are
+					// permanent — no point retrying, and retrying a single-use
+					// token that was actually consumed only muddies diagnosis.
+					permanent = isAuthError(err)
+					return cur, false, err
+				}
+				tm.creds = refreshed
+				accessToken = refreshed.AccessToken
+				return oauthProviderCredential(refreshed), true, nil
+			})
+		if updateErr != nil && !permanent {
+			return "", fmt.Errorf("token refresh: %w", updateErr)
 		}
 		if accessToken != "" {
 			return accessToken, nil
@@ -689,8 +685,14 @@ func (tm *tokenManager) syncFromDisk() {
 	if !ok || cred.AccessToken == "" {
 		return
 	}
-	synced := types.OAuthCredentials(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType)
+	synced := credFromDisk(cred)
 	tm.creds = &synced
+}
+
+// credFromDisk converts the on-disk credential shape to the provider-facing
+// types.Credentials shape. The inverse of oauthProviderCredential.
+func credFromDisk(cred config.ProviderCredential) types.Credentials {
+	return types.OAuthCredentials(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType)
 }
 
 // isAuthError reports whether a refresh error is an authentication failure
@@ -763,15 +765,8 @@ func persistOAuthCreds(creds *types.Credentials) {
 	_ = config.GetCredentialsManager().SetCredential("claude-oauth", oauthProviderCredential(creds))
 }
 
-// persistOAuthCredsLocked persists creds when the caller ALREADY holds the
-// credentials file lock (i.e. from inside CredentialsManager.WithLock). Using
-// the plain persistOAuthCreds there would re-acquire the non-re-entrant file
-// lock and deadlock — see SetCredentialLocked's doc comment for the full
-// failure it caused (a silently-dropped write of a freshly-rotated OAuth token).
-func persistOAuthCredsLocked(creds *types.Credentials) {
-	_ = config.GetCredentialsManager().SetCredentialLocked("claude-oauth", oauthProviderCredential(creds))
-}
-
+// oauthProviderCredential converts the provider-facing types.Credentials shape
+// to the on-disk shape. The inverse of credFromDisk.
 func oauthProviderCredential(creds *types.Credentials) config.ProviderCredential {
 	return config.ProviderCredential{
 		Type:             "oauth",

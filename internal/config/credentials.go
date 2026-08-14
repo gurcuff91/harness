@@ -91,31 +91,68 @@ func (m *CredentialsManager) reloadIfStale() {
 	}
 }
 
-// WithLock runs fn while holding the cross-process credentials.json lock —
-// use it to wrap a read-modify-write cycle that spans multiple manager calls
-// (e.g. "re-read the latest refresh_token, then redeem it, then persist the
-// result"), where locking only the final write would still leave the read
-// racing a concurrent writer. SetCredential/DeleteCredential already lock
-// internally for their own single read-modify-write; WithLock is for callers
-// (like claude_oauth's token refresh) that need the lock held across several
-// manager calls as one atomic unit.
+// UpdateCredential performs an atomic cross-process read-modify-write for one
+// provider's credential: it takes the file lock EXACTLY ONCE, re-reads the
+// latest on-disk state, hands it to fn to decide the outcome, and persists —
+// all inside that single acquisition. fn receives the freshest stored
+// credential (and whether one exists) and returns:
+//   - next:  the value to persist (ignored if write is false)
+//   - write: whether to persist next at all — return false to make this a
+//     pure read-then-decide with no write (e.g. "another process already
+//     refreshed for us, nothing to do")
+//   - err:   fn's own error (e.g. a refresh call failed); propagated to the
+//     caller, no write happens
 //
-// credentials.json is read and potentially rewritten on every LLM call whose
-// OAuth token is close to expiring (see claude_oauth.go's getValidToken), so
-// the read-check-refresh-write cycle races far more often than a one-shot
-// write like instances.json's. And OAuth refresh tokens are SINGLE-USE: if
-// two processes both read the same refresh_token before either writes the
-// new one, both attempt to redeem it — only one succeeds, the other gets a
-// permanent invalid_grant from the provider. This lock closes that window by
-// serializing the ENTIRE read-modify-write cycle across processes, not just
-// the final write.
-func (m *CredentialsManager) WithLock(fn func() error) error {
+// This is the ONLY way to do a multi-step credential update under the
+// cross-process lock. There is deliberately no lower-level "give me the lock"
+// primitive (no WithLock): exposing the raw lock invited exactly the bug this
+// replaced — a caller's fn calling BACK into SetCredential/DeleteCredential
+// (which each take the SAME lock themselves) reacquired a lock this process
+// already held. The file lock is not re-entrant, so that reacquisition simply
+// blocked until it timed out (~2s) and the write was silently dropped —
+// which is how a freshly-rotated OAuth refresh token failed to reach disk
+// while the OLD (already server-side-consumed) token stayed on disk, poisoning
+// the next refresh with a permanent invalid_grant. Collapsing the lock to
+// live ONLY here, with no way for fn to ask for it again, makes that class of
+// bug unrepresentable: fn never has a lock handle to misuse.
+//
+// Use case (see claude_oauth.go's getValidToken): re-check whether the token
+// is still valid — another process may have refreshed while THIS one was
+// waiting for the lock or sleeping through a retry backoff — and only refresh
+// (and persist) if it's genuinely still expired. OAuth refresh tokens are
+// SINGLE-USE: without this atomicity, two processes could both read the same
+// refresh_token and both redeem it — only one succeeds, the other gets a
+// permanent invalid_grant.
+func (m *CredentialsManager) UpdateCredential(
+	provider string,
+	fn func(current ProviderCredential, ok bool) (next ProviderCredential, write bool, err error),
+) error {
 	release, err := acquireFileLock(m.path)
 	if err != nil {
 		return err
 	}
 	defer release()
-	return fn()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.load() // the freshest state — another process may have written since we last synced
+
+	current, ok := m.data.Providers[provider]
+	next, write, fnErr := fn(current, ok)
+	if fnErr != nil {
+		return fnErr
+	}
+	if !write {
+		return nil
+	}
+	if err := validateCredential(next); err != nil {
+		return err
+	}
+	if m.data.Providers == nil {
+		m.data.Providers = make(map[string]ProviderCredential)
+	}
+	m.data.Providers[provider] = next
+	return m.save()
 }
 
 // validateCredential enforces the required fields per credential type: an
@@ -197,30 +234,6 @@ func (m *CredentialsManager) SetCredential(provider string, cred ProviderCredent
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.load() // pick up whatever the latest writer persisted before we overwrite
-	if m.data.Providers == nil {
-		m.data.Providers = make(map[string]ProviderCredential)
-	}
-	m.data.Providers[provider] = cred
-	return m.save()
-}
-
-// SetCredentialLocked is SetCredential for a caller that ALREADY holds the
-// cross-process file lock via WithLock. It does the exact same read-modify-write
-// (validate → reload latest disk → apply → persist) but does NOT call
-// acquireFileLock itself — the file lock is not re-entrant, so acquiring it a
-// second time from inside a WithLock closure deadlocks until it times out
-// (~2s), which caused the write to silently fail. That failure was catastrophic
-// for OAuth refresh: the single-use refresh token had already been redeemed on
-// the wire, but the rotated result never reached disk, so the next process read
-// the now-consumed old token and got a permanent invalid_grant. Callers NOT
-// already under WithLock must use SetCredential.
-func (m *CredentialsManager) SetCredentialLocked(provider string, cred ProviderCredential) error {
-	if err := validateCredential(cred); err != nil {
-		return err
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.load()
 	if m.data.Providers == nil {
 		m.data.Providers = make(map[string]ProviderCredential)
 	}

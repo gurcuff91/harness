@@ -132,3 +132,73 @@ endpoint (`console.anthropic.com`), confirming this path was reached.
 ## Out of scope
 - `instances.json` (already read fresh per access, no caching — unaffected).
 - SettingsManager semantics (only inherits the hardened `acquireFileLock`).
+
+## Addendum (2026-08-14) — a deeper bug, and a redesign
+
+### The bug v0.76.38 didn't fix
+`invalid_grant` recurred WITH v0.76.38 installed (confirmed live via the single
+`platform.claude.com` endpoint in the error). Root cause, predating v0.76.38
+(present since the original refresh-race commit): inside `getValidToken`'s
+`WithLock` closure, a successful refresh persisted via
+`persistOAuthCreds`→`SetCredential`, which called `acquireFileLock` a SECOND
+time on the same lockfile. The lock is not re-entrant, so this blocked for the
+full retry budget (~2s) and failed with a timeout — an error `persistOAuthCreds`
+silently swallowed (`_ =`). The freshly-rotated token (already redeemed
+server-side) never reached disk; the next reader used the stale, now-consumed
+token and got a permanent `invalid_grant`. Reproduced deterministically
+(re-acquiring the lock from inside itself hangs ~2.09s then errors).
+
+The immediate patch (v0.76.39) added `SetCredentialLocked` — a lock-free twin
+of `SetCredential` for callers already inside `WithLock`. It worked, but Gus
+correctly flagged the design smell: two parallel write APIs for the same
+resource (`SetCredential` / `SetCredentialLocked`) is exactly the kind of
+ambiguity that invites this class of bug again — nothing stops a future caller
+from picking the wrong one, or calling another lock-taking method from inside
+a `WithLock` closure.
+
+### The redesign (v0.76.40)
+Root problem: `WithLock(fn func() error)` exposed the raw cross-process lock as
+a primitive. Any callback could — accidentally, today or in the future — call
+back into a method that re-acquires it. The fix is architectural, not another
+guard: **remove the raw lock primitive entirely.** There is no `WithLock`
+anymore, and therefore no way for a caller's callback to misuse it.
+
+In its place: `CredentialsManager.UpdateCredential(provider, fn)` — the ONLY
+way to do a cross-process atomic read-modify-write on a credential. It takes
+the lock exactly once, internally, reloads the freshest on-disk state, and
+calls `fn(current, ok)`, which returns `(next, write, err)`:
+- `write=false` → pure read-then-decide, nothing persisted (the "someone else
+  already refreshed" case).
+- `write=true` → `next` is validated and persisted, still under the same lock
+  acquisition.
+- `err != nil` → propagated, no write.
+
+`getValidToken` was rewritten on top of `UpdateCredential`; the retry/backoff
+loop (2b) is unchanged in shape (it still lives OUTSIDE, calling
+`UpdateCredential` once per attempt) but the callback can no longer accidentally
+re-lock, because there is nothing to re-lock — `fn` never receives a lock
+handle. `SetCredentialLocked` and `persistOAuthCredsLocked` (the v0.76.39
+patch) were deleted; `SetCredential`/`DeleteCredential` are unchanged (still the
+right tool for "I already know the final value, just write it" — `Connect()`/
+`Disconnect()`).
+
+`SettingsManager` was audited the same way: every caller of its `Set*`/`Delete*`
+methods (server HTTP handlers, CLI) already knows the final value outright —
+none of them need a read-then-decide cycle — so it needed no `UpdateCredential`
+equivalent. It never had a `WithLock` either, so there was nothing to remove
+there; it already only exposed the safe, single-purpose `Set*`/`Delete*` API.
+The shared low-level primitive both managers depend on, `acquireFileLock`
+(`filelock.go`), is unchanged and still called exactly once per operation by
+each manager method.
+
+### Testing (redesign)
+`internal/config/update_credential_test.go`: missing credential reported via
+`ok=false`; `write` flag gates persistence; `fn`'s own error propagates and
+blocks the write; an invalid returned credential is rejected before writing;
+**a second manager instance sees the freshest disk state written by a first**
+(the double-redemption guard, at the API level); 10 concurrent
+`UpdateCredential` callers (separate manager instances, like separate
+processes) never overlap inside the critical section (`-race`). Full
+`internal/config` + `internal/providers` suites green under `-race`; `go vet
+./...` clean; no remaining references to the removed `WithLock`/
+`SetCredentialLocked` anywhere in the module.

@@ -36,8 +36,13 @@ const (
 
 // acquireFileLock creates path+".lock" exclusively, retrying with backoff if
 // another process holds it. Returns a release function the caller must call
-// once done. Shared by CredentialsManager.WithLock/SetCredential/
-// DeleteCredential and SettingsManager's Set*/Delete* methods.
+// once done. Called EXACTLY ONCE per logical operation — never exposed to
+// callers as a standalone primitive (see CredentialsManager.UpdateCredential's
+// doc comment for why a raw "give me the lock" API was removed). Used
+// internally by CredentialsManager.SetCredential/DeleteCredential/
+// UpdateCredential and SettingsManager's Set*/Delete* methods — each acquires
+// it once, for its own single read-modify-write, and releases before
+// returning.
 //
 // Ownership guard: the lockfile carries a unique token (a UUID) written at
 // creation. Both release AND stale-reclaim remove the lock ONLY if it still

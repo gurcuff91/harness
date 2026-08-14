@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.40] - 2026-08-14
+
+### Change — replaced the raw cross-process lock primitive with an atomic `UpdateCredential` (removes the design smell v0.76.39 introduced)
+- v0.76.39's fix (`SetCredentialLocked`, a lock-free twin of `SetCredential` for callers already inside `WithLock`) worked, but left two parallel write APIs for the same resource — exactly the ambiguity that invited the original re-entrant-lock deadlock in the first place. Nothing stopped a future caller from picking the wrong one, or calling another lock-taking method from inside a `WithLock` closure again.
+- **Redesign**: removed `CredentialsManager.WithLock` entirely — the raw "give me the lock" primitive is gone, so there is no way for a callback to misuse it. In its place, `UpdateCredential(provider, fn)` is now the ONLY way to do a cross-process atomic read-modify-write on a credential: it takes the lock exactly once, internally, reloads the freshest on-disk state, and calls `fn(current, ok) → (next, write, err)` — `write=false` for a pure read-then-decide (no persistence), `write=true` to validate-and-persist `next` under the SAME lock acquisition, `err` to abort with no write. `fn` never receives a lock handle, so the re-entrant-deadlock class of bug is now unrepresentable, not just guarded against.
+- `getValidToken` (`claude_oauth.go`) rewritten on top of `UpdateCredential`; the v0.76.38 retry/backoff-outside-the-lock shape is unchanged. Deleted `SetCredentialLocked` and `persistOAuthCredsLocked` (the v0.76.39 patch) — no longer needed.
+- `SettingsManager` was audited for the same smell: every caller of its `Set*`/`Delete*` (server HTTP handlers, CLI) already knows the final value outright, no read-then-decide cycle needed, and it never had a `WithLock` to begin with — nothing to change there. `Connect()`/`Disconnect()` keep using the unchanged `SetCredential`/`DeleteCredential` (still correct for "I already know the final value").
+- Tests (`internal/config/update_credential_test.go`, `-race`): missing-credential reporting, the `write` flag gating persistence, `fn`'s error aborting the write, invalid-credential rejection, **a second manager instance seeing the freshest disk state a first one just wrote** (the double-redemption guard at the API level), and 10 concurrent `UpdateCredential` callers never overlapping in the critical section. Full `-race` suites green; `go vet ./...` clean; zero remaining references to the removed APIs.
+
 ## [0.76.39] - 2026-08-14
 
 ### Fix — the REAL cause of claude-oauth `invalid_grant`: a re-entrant lock deadlock silently dropped the rotated token
