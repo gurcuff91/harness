@@ -131,62 +131,53 @@ type tokenResponse struct {
 	ErrorDesc    string `json:"error_description"`
 }
 
-// postToken POSTs a JSON OAuth token request to each endpoint in order,
-// returning the first success. A transport/HTTP error or a non-200 falls
-// through to the next endpoint (providers migrate endpoints over time); an
-// OAuth-level error field (bad code, etc.) is deterministic and returned
-// immediately without trying the rest. defaultExpiresIn is used when the
-// endpoint omits expires_in. subType is passed through onto the credentials
-// (providers that don't have one pass "").
-func postToken(endpoints []string, body map[string]string, defaultExpiresIn int, subType string) (*types.Credentials, error) {
+// postToken POSTs a JSON OAuth token request to a single endpoint and returns
+// the resulting credentials. No multi-endpoint fallback: the authorization code
+// (and a refresh token) is single-use, so retrying against a second endpoint
+// after the first may have already redeemed it is a double-redeem, not
+// resilience. defaultExpiresIn is used when the endpoint omits expires_in.
+// subType is passed through onto the credentials (providers that don't have one
+// pass "").
+func postToken(endpoint string, body map[string]string, defaultExpiresIn int, subType string) (*types.Credentials, error) {
 	payload, _ := json.Marshal(body)
 
-	var lastErr error
-	for _, endpoint := range endpoints {
-		req, err := http.NewRequest("POST", endpoint, bytes.NewReader(payload))
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
-		if err != nil {
-			lastErr = fmt.Errorf("token request (%s): %w", endpoint, err)
-			continue
-		}
-		data, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("token exchange HTTP %d (%s): %s", resp.StatusCode, endpoint, string(data))
-			continue
-		}
-
-		var tr tokenResponse
-		if err := json.Unmarshal(data, &tr); err != nil {
-			lastErr = fmt.Errorf("parse token response (%s): %w", endpoint, err)
-			continue
-		}
-		if tr.Error != "" {
-			return nil, fmt.Errorf("%s: %s", tr.Error, tr.ErrorDesc)
-		}
-		if tr.AccessToken == "" {
-			lastErr = fmt.Errorf("token response missing access_token (%s): %s", endpoint, string(data))
-			continue
-		}
-
-		expiresIn := tr.ExpiresIn
-		if expiresIn <= 0 {
-			expiresIn = defaultExpiresIn
-		}
-		creds := types.OAuthCredentials(
-			tr.AccessToken,
-			tr.RefreshToken,
-			time.Now().Add(time.Duration(expiresIn)*time.Second).UnixMilli(),
-			subType,
-		)
-		return &creds, nil
+	req, err := http.NewRequest("POST", endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
 	}
-	return nil, lastErr
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("token request (%s): %w", endpoint, err)
+	}
+	data, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("token exchange HTTP %d (%s): %s", resp.StatusCode, endpoint, string(data))
+	}
+
+	var tr tokenResponse
+	if err := json.Unmarshal(data, &tr); err != nil {
+		return nil, fmt.Errorf("parse token response (%s): %w", endpoint, err)
+	}
+	if tr.Error != "" {
+		return nil, fmt.Errorf("%s: %s", tr.Error, tr.ErrorDesc)
+	}
+	if tr.AccessToken == "" {
+		return nil, fmt.Errorf("token response missing access_token (%s): %s", endpoint, string(data))
+	}
+
+	expiresIn := tr.ExpiresIn
+	if expiresIn <= 0 {
+		expiresIn = defaultExpiresIn
+	}
+	creds := types.OAuthCredentials(
+		tr.AccessToken,
+		tr.RefreshToken,
+		time.Now().Add(time.Duration(expiresIn)*time.Second).UnixMilli(),
+		subType,
+	)
+	return &creds, nil
 }

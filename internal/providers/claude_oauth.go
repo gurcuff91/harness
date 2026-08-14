@@ -32,14 +32,25 @@ const (
 	mcpToolPrefix = "mcp__"    // any already-namespaced MCP tool (mcp__server__tool)
 )
 
-// oauthTokenURLs are the token endpoints, newest first. Anthropic migrated the
-// OAuth token endpoint over time (claude.ai → console.anthropic.com →
-// platform.claude.com); we try them in order so refresh keeps working across
-// the migration. Requests use JSON (the current wire format).
-var oauthTokenURLs = []string{
-	"https://platform.claude.com/v1/oauth/token",
-	"https://console.anthropic.com/v1/oauth/token",
-}
+// oauthTokenURL is the single OAuth token endpoint. Anthropic migrated it over
+// time (claude.ai → console.anthropic.com → platform.claude.com); we target
+// only the newest. An earlier version tried two endpoints in series as a
+// migration fallback, but with a SINGLE-USE refresh token that's a corruption
+// vector, not resilience: if the first endpoint redeems the token but its
+// response is lost (timeout/proxy), the fallback redeems the now-consumed token
+// again → permanent invalid_grant. Both endpoints were verified live and
+// identical at design time, so the fallback bought no real resilience anyway. If
+// this endpoint ever migrates, it's a one-line change plus a reconnect.
+const oauthTokenURL = "https://platform.claude.com/v1/oauth/token"
+
+// oauthRefreshClient is used ONLY for the refresh request. It has a bounded
+// timeout so a refresh can never hang indefinitely — critical because the
+// refresh runs while holding the cross-process credentials lock, and an
+// unbounded hang there would let the stale-lock reclaim (see filelock.go) steal
+// the lock from this still-alive process, causing a double redemption. Distinct
+// from c.client (5min, for streaming) and from http.DefaultClient (0 = infinite,
+// what this code used before).
+var oauthRefreshClient = &http.Client{Timeout: 30 * time.Second}
 
 var ccVersion = envOrDefault("ANTHROPIC_CLI_VERSION", "2.1.90")
 
@@ -598,54 +609,65 @@ func (tm *tokenManager) getValidToken() (string, error) {
 	// another harness process is refreshing this same account at the same
 	// moment, both would read the same refresh_token and try to redeem it —
 	// only one succeeds, the other gets a permanent invalid_grant. The
-	// cross-process file lock serializes the entire
-	// re-check-then-refresh-then-persist cycle so that can't happen: whoever
-	// gets the lock first either finds a fresh token already written by the
-	// other process (and just uses it) or is the one that actually calls the
-	// provider — never both.
+	// cross-process file lock serializes ONE re-check-then-refresh-then-persist
+	// attempt so that can't happen: whoever gets the lock either finds a fresh
+	// token already written by the other process (and just uses it) or is the
+	// one that actually calls the provider — never both.
+	//
+	// Retry/backoff lives OUT here, around the lock — NOT inside it. The lock is
+	// taken and released once per attempt, so its hold time is one bounded
+	// refresh (≤30s via oauthRefreshClient), never the multi-second backoff
+	// sleeps. Holding the lock across the sleeps was the bug: a refresh whose
+	// hold exceeded staleFileLockAge let another process reclaim the lock as
+	// "abandoned" and redeem the same token concurrently. Releasing between
+	// attempts also lets a peer make progress instead of blocking on our sleep.
+	const maxAttempts = 3
+	backoff := time.Second
 	var accessToken string
 	var lastErr error
-	lockErr := config.GetCredentialsManager().WithLock(func() error {
-		// Re-check after acquiring the lock — another process may have
-		// refreshed while we were waiting for it.
-		if !tm.validating {
-			tm.syncFromDisk()
-			if tm.creds.ExpiresAt > time.Now().UnixMilli()+expiryBufferMs {
-				accessToken = tm.creds.AccessToken
-				return nil
-			}
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(backoff) // OUTSIDE the lock — nobody holds it while we wait
+			backoff *= 2
 		}
 
-		// Retry up to 3 times with backoff: 1s, 2s, 4s.
-		const maxAttempts = 3
-		backoff := time.Second
-		for attempt := 0; attempt < maxAttempts; attempt++ {
-			if attempt > 0 {
-				time.Sleep(backoff)
-				backoff *= 2
+		permanent := false
+		lockErr := config.GetCredentialsManager().WithLock(func() error {
+			// Re-check under the lock — another process may have refreshed
+			// while we waited for it (or during our own backoff). If so, use
+			// the fresh disk token and skip the refresh entirely: this is the
+			// safety net that prevents a double redemption.
+			if !tm.validating {
+				tm.syncFromDisk()
+				if tm.creds.ExpiresAt > time.Now().UnixMilli()+expiryBufferMs {
+					accessToken = tm.creds.AccessToken
+					return nil
+				}
 			}
-
 			refreshed, err := tm.refresh(tm.creds.RefreshToken)
 			if err != nil {
 				lastErr = err
-				// Auth errors (invalid_grant, revoked, 401, 403) are permanent — no point retrying.
-				if isAuthError(err) {
-					return nil
-				}
-				continue // network/timeout — retry
+				// Auth errors (invalid_grant, revoked, 401, 403) are permanent —
+				// no point retrying, and retrying a single-use token that was
+				// actually consumed only muddies diagnosis.
+				permanent = isAuthError(err)
+				return nil
 			}
 			tm.creds = refreshed
 			persistOAuthCreds(refreshed)
 			accessToken = refreshed.AccessToken
 			return nil
+		})
+		if lockErr != nil {
+			return "", fmt.Errorf("token refresh: %w", lockErr)
 		}
-		return nil
-	})
-	if lockErr != nil {
-		return "", fmt.Errorf("token refresh: %w", lockErr)
-	}
-	if accessToken != "" {
-		return accessToken, nil
+		if accessToken != "" {
+			return accessToken, nil
+		}
+		if permanent {
+			break // don't retry a permanent auth failure
+		}
+		// network/timeout error — loop, releasing the lock during the backoff
 	}
 
 	// Surface the real error so it's diagnosable (not just "session expired").
@@ -689,28 +711,18 @@ func (tm *tokenManager) refresh(refreshToken string) (*types.Credentials, error)
 		"refresh_token": refreshToken,
 	})
 
-	// Try each endpoint in order; a network error or a non-OK response (e.g. a
-	// migrated/dead endpoint) falls through to the next one.
-	var body []byte
-	var lastErr error
-	ok := false
-	for _, endpoint := range oauthTokenURLs {
-		resp, err := http.Post(endpoint, "application/json", bytes.NewReader(payload))
-		if err != nil {
-			lastErr = fmt.Errorf("refresh request (%s): %w", endpoint, err)
-			continue
-		}
-		b, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			body = b
-			ok = true
-			break
-		}
-		lastErr = fmt.Errorf("refresh HTTP %d (%s): %s", resp.StatusCode, endpoint, string(b))
+	// Single bounded request to the one live endpoint (see oauthTokenURL /
+	// oauthRefreshClient). No multi-endpoint fallback: with a single-use refresh
+	// token, a retry against a second endpoint after the first may have already
+	// redeemed it is a double-redeem, not resilience.
+	resp, err := oauthRefreshClient.Post(oauthTokenURL, "application/json", bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("refresh request (%s): %w", oauthTokenURL, err)
 	}
-	if !ok {
-		return nil, lastErr
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("refresh HTTP %d (%s): %s", resp.StatusCode, oauthTokenURL, string(body))
 	}
 
 	var result struct {

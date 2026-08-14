@@ -107,9 +107,18 @@ endpoint (`console.anthropic.com`), confirming this path was reached.
 ## Testing
 
 - **(1)** unit: refresh targets only `platform.claude.com`; refresh client has 30s timeout.
-- **(2b)** unit (injectable refresh fn): transient network error retries 3×, lock
-  released between attempts; re-check uses a disk token that appeared during the
-  wait instead of refreshing; `invalid_grant` aborts immediately (no retry).
+- **(2b)** the full retry/re-check loop runs through the GLOBAL CredentialsManager
+  singleton (real `~/.harness/credentials.json`), so an end-to-end test would
+  write over the user's real creds and drop lock files next to the real file —
+  destructive. Making it injectable is a larger refactor (threading a manager
+  through `NewClaudeOAuth`) out of scope for this fix. Instead the aislable core
+  is unit-tested directly: `isAuthError` (the retry-vs-abort classifier that
+  decides whether a failure is a permanent auth error or a transient blip — the
+  heart of 2b's correctness), covering invalid_grant / 400 / 401 / 403 /
+  token_expired / revoked as permanent and timeout / 500 / 429 as retryable. The
+  lock-hold-time property that 2b delivers is covered structurally by the (3)
+  filelock tests plus the 45s threshold. Cross-process behavior is verified
+  manually (below).
 - **(3)** `filelock_test.go`: ownership (A reclaimed by B, A's release leaves B's
   lock intact — reproduces the cascade and proves it's gone); normal release
   removes own lock; compare-then-reclaim; `-race` stress with N goroutines and an

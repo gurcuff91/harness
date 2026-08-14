@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ── Cross-process file lock (shared by CredentialsManager and SettingsManager) ──
@@ -22,29 +24,67 @@ import (
 const (
 	fileLockRetryDelay  = 20 * time.Millisecond
 	fileLockMaxAttempts = 100
-	staleFileLockAge    = 5 * time.Second
+	// staleFileLockAge: a lock older than this is treated as abandoned (a
+	// crashed holder) and reclaimed. It MUST exceed the worst-case legitimate
+	// hold time, or an alive-but-slow holder gets its lock stolen mid-work —
+	// exactly the bug this file was hardened for. The longest a holder keeps
+	// the lock is claude_oauth's token refresh: with a 30s-bounded HTTP client
+	// and the retry/backoff moved OUTSIDE the lock (only ONE refresh runs under
+	// it, no sleeps), that worst case is ~30s. 45s = 30s + margin.
+	staleFileLockAge = 45 * time.Second
 )
 
 // acquireFileLock creates path+".lock" exclusively, retrying with backoff if
 // another process holds it. Returns a release function the caller must call
-// (removing the lock file) once done. Shared by CredentialsManager.WithLock/
-// SetCredential/DeleteCredential and SettingsManager's Set*/Delete* methods.
+// once done. Shared by CredentialsManager.WithLock/SetCredential/
+// DeleteCredential and SettingsManager's Set*/Delete* methods.
+//
+// Ownership guard: the lockfile carries a unique token (a UUID) written at
+// creation. Both release AND stale-reclaim remove the lock ONLY if it still
+// holds the token they expect — never a bare os.Remove. Without this, a holder
+// that was (rightly or wrongly) reclaimed while slow would, on finishing,
+// delete the RECLAIMER's freshly-created lock, letting a third party in while
+// the reclaimer still worked — two processes in the critical section, which for
+// a single-use OAuth refresh token means a double redemption and a permanent
+// invalid_grant. Compare-then-remove makes a reclaim (already rare) non-cascading.
 func acquireFileLock(path string) (release func(), err error) {
 	lockPath := path + ".lock"
+	token := uuid.NewString()
 	for attempt := 0; attempt < fileLockMaxAttempts; attempt++ {
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err == nil {
+			_, _ = f.WriteString(token)
 			f.Close()
-			return func() { _ = os.Remove(lockPath) }, nil
+			return func() { removeLockIfOwned(lockPath, token) }, nil
 		}
 		if !os.IsExist(err) {
 			return nil, fmt.Errorf("config: create lock %s: %w", lockPath, err)
 		}
+		// Held by someone else. If it looks abandoned (older than the stale
+		// threshold), reclaim it — but only by removing the SAME token we
+		// observed, so two processes reclaiming at once can't both win and a
+		// holder that revived in the meantime isn't stomped.
 		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > staleFileLockAge {
-			_ = os.Remove(lockPath)
+			if stale, readErr := os.ReadFile(lockPath); readErr == nil {
+				removeLockIfOwned(lockPath, string(stale))
+			}
 			continue
 		}
 		time.Sleep(fileLockRetryDelay)
 	}
 	return nil, fmt.Errorf("config: timed out waiting for lock: %s", lockPath)
+}
+
+// removeLockIfOwned removes lockPath only if its current contents still match
+// token. If the file was already reclaimed (different token) or deleted, it is
+// left untouched — we never remove a lock we don't still own. A read error is
+// treated as "not ours" and left alone.
+func removeLockIfOwned(lockPath, token string) {
+	cur, err := os.ReadFile(lockPath)
+	if err != nil {
+		return // already gone, or unreadable — nothing of ours to remove
+	}
+	if string(cur) == token {
+		_ = os.Remove(lockPath)
+	}
 }

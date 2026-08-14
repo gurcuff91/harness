@@ -27,13 +27,13 @@ const (
 	claudeDefaultExpiresIn = 28800
 )
 
-// claudeTokenURLs are the token endpoints, newest first — Anthropic migrated
-// the endpoint over time, so postToken tries them in order (same list, same
-// reason as internal/providers/claude_oauth.go's refresh path).
-var claudeTokenURLs = []string{
-	"https://platform.claude.com/v1/oauth/token",
-	"https://console.anthropic.com/v1/oauth/token",
-}
+// claudeTokenURL is the single OAuth token endpoint (same one, same reason as
+// internal/providers/claude_oauth.go's refresh path). An earlier version tried
+// two endpoints in series as a migration fallback, but the authorization code
+// is single-use: if the first endpoint redeems it and its response is lost, the
+// fallback redeems a consumed code and the login fails. Both endpoints were
+// verified live and identical, so the fallback bought no resilience anyway.
+const claudeTokenURL = "https://platform.claude.com/v1/oauth/token"
 
 // claudeOauthFlow implements OauthFlow for Claude. Unexported — callers get it
 // as an OauthFlow via NewClaudeOauthFlow.
@@ -87,7 +87,7 @@ func (f *claudeOauthFlow) Exchange(code string) (*types.Credentials, error) {
 	}
 
 	return postToken(
-		claudeTokenURLs,
+		claudeTokenURL,
 		map[string]string{
 			"grant_type":    "authorization_code",
 			"client_id":     claudeClientID,
