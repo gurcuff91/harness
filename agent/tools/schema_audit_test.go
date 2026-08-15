@@ -26,16 +26,17 @@ func (auditScheduleStore) Entries(owner string) []ScheduleEntry       { return n
 
 // allBuiltinTools returns every tool the agent can register, built with
 // minimal mocks where a constructor needs a store/executor. This is the same
-// set assembled by agent.defaultTools() (Bash/Read/Write/Edit/Fetch, always
-// on) plus the conditionally-registered ones (Skill, Memo*, Schedule*,
-// Subagent) from agent.buildSessionTools(). Kept in one place so a new tool
-// only needs to be added here to get the schema audit below for free.
+// set assembled across agent.defaultTools() (Fetch, always on) and
+// agent.buildSessionTools() — Bash/Read/Write/Edit (built per-session with
+// that session's cwd) plus the conditionally-registered ones (Skill, Memo*,
+// Schedule*, Subagent). Kept in one place so a new tool only needs to be
+// added here to get the schema audit below for free.
 func allBuiltinTools() []Tool {
 	return []Tool{
-		Bash(),
-		ReadFile(),
-		WriteFile(),
-		Edit(),
+		Bash("/tmp"),
+		ReadFile("/tmp"),
+		WriteFile("/tmp"),
+		Edit("/tmp"),
 		Fetch(),
 		Skill(func(name string) (string, string, error) { return "", "", nil }),
 		MemoWrite(auditMemoryStore{}, "/tmp"),

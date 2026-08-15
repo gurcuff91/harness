@@ -12,7 +12,7 @@ import (
 // CombinedOutput blocking far past the timeout. With process-group kill, the
 // timeout must return promptly (~2s), not wait for the child (10s).
 func TestBashTimeoutKillsBackgroundChild(t *testing.T) {
-	bash := Bash()
+	bash := Bash(t.TempDir())
 	input, _ := json.Marshal(bashInput{Command: "sleep 10 & echo started", Timeout: 2})
 
 	start := time.Now()
@@ -33,7 +33,7 @@ func TestBashTimeoutKillsBackgroundChild(t *testing.T) {
 // step that hung), and its message must be actionable (suggest a larger
 // timeout / background).
 func TestBashTimeoutKeepsPartialAndIsActionable(t *testing.T) {
-	bash := Bash()
+	bash := Bash(t.TempDir())
 	// Emit a line, then hang — the emitted line is the "partial" we must keep.
 	input, _ := json.Marshal(bashInput{Command: "echo diagnostic-marker; sleep 10", Timeout: 2})
 
@@ -51,7 +51,7 @@ func TestBashTimeoutKeepsPartialAndIsActionable(t *testing.T) {
 
 // A fast command must still return normally (no timeout regression).
 func TestBashNormalCompletion(t *testing.T) {
-	bash := Bash()
+	bash := Bash(t.TempDir())
 	input, _ := json.Marshal(bashInput{Command: "echo hello", Timeout: 5})
 	out, err := bash.Execute(context.Background(), input)
 	if err != nil {
@@ -64,7 +64,7 @@ func TestBashNormalCompletion(t *testing.T) {
 
 // Context cancellation (Stop) must return promptly too.
 func TestBashContextCancel(t *testing.T) {
-	bash := Bash()
+	bash := Bash(t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(500 * time.Millisecond); cancel() }()
 	input, _ := json.Marshal(bashInput{Command: "sleep 30", Timeout: 60})

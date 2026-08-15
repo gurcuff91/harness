@@ -13,7 +13,9 @@ func runEdit(t *testing.T, path string, in editInput) (string, error) {
 	t.Helper()
 	in.Path = path
 	b, _ := json.Marshal(in)
-	return Edit().Execute(context.Background(), b)
+	// path is always absolute here (see writeTmp) so the cwd passed to Edit is
+	// irrelevant to these tests — resolvePath respects an absolute path as-is.
+	return Edit(t.TempDir()).Execute(context.Background(), b)
 }
 
 func writeTmp(t *testing.T, content string) string {

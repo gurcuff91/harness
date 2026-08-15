@@ -33,7 +33,10 @@ type readFileInput struct {
 	Limit  int    `json:"limit,omitempty"`
 }
 
-func ReadFile() Tool {
+// ReadFile returns the Read tool. cwd is the session's logical working
+// directory — a relative path the model passes resolves against it (see
+// resolvePath); an absolute path is used as-is.
+func ReadFile(cwd string) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        "Read",
@@ -56,12 +59,13 @@ func ReadFile() Tool {
 			if err := requireFields(&args); err != nil {
 				return err.Error(), nil, err
 			}
+			path := resolvePath(cwd, args.Path)
 
 			// Image file — return as ImageData
-			if isImagePath(args.Path) {
-				ext := strings.ToLower(filepath.Ext(args.Path))
+			if isImagePath(path) {
+				ext := strings.ToLower(filepath.Ext(path))
 				mime := imageExtToMime[ext]
-				data, err := os.ReadFile(args.Path)
+				data, err := os.ReadFile(path)
 				if err != nil {
 					return fmt.Sprintf("Error reading image: %v", err), nil, err
 				}
@@ -69,11 +73,11 @@ func ReadFile() Tool {
 					MimeType: mime,
 					Base64:   base64.StdEncoding.EncodeToString(data),
 				}
-				return fmt.Sprintf("Image loaded: %s (%s, %d bytes)", args.Path, mime, len(data)), []types.ImageData{img}, nil
+				return fmt.Sprintf("Image loaded: %s (%s, %d bytes)", path, mime, len(data)), []types.ImageData{img}, nil
 			}
 
 			// Text file
-			data, err := os.ReadFile(args.Path)
+			data, err := os.ReadFile(path)
 			if err != nil {
 				return fmt.Sprintf("Error reading file: %v", err), nil, err
 			}
@@ -107,7 +111,10 @@ type writeFileInput struct {
 	Content string `json:"content"`
 }
 
-func WriteFile() Tool {
+// WriteFile returns the Write tool. cwd is the session's logical working
+// directory — a relative path the model passes resolves against it (see
+// resolvePath); an absolute path is used as-is.
+func WriteFile(cwd string) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        "Write",
@@ -129,13 +136,14 @@ func WriteFile() Tool {
 			if err := requireFields(&args); err != nil {
 				return err.Error(), err
 			}
-			if err := os.MkdirAll(filepath.Dir(args.Path), 0755); err != nil {
+			path := resolvePath(cwd, args.Path)
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 				return fmt.Sprintf("Error creating directory: %v", err), err
 			}
-			if err := os.WriteFile(args.Path, []byte(args.Content), 0644); err != nil {
+			if err := os.WriteFile(path, []byte(args.Content), 0644); err != nil {
 				return fmt.Sprintf("Error writing file: %v", err), err
 			}
-			return fmt.Sprintf("Wrote %d bytes to %s", len(args.Content), args.Path), nil
+			return fmt.Sprintf("Wrote %d bytes to %s", len(args.Content), path), nil
 		},
 	}
 }

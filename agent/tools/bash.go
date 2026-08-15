@@ -21,7 +21,11 @@ type bashInput struct {
 	Background bool   `json:"background,omitempty"`
 }
 
-func Bash() Tool {
+// Bash returns the Bash tool. cwd is the session's logical working directory —
+// the command runs with it as its process working directory (cmd.Dir), so a
+// relative path a command references (e.g. `cat file.txt`) resolves against
+// the session's cwd, not the hosting OS process's real one.
+func Bash(cwd string) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        "Bash",
@@ -45,7 +49,7 @@ func Bash() Tool {
 				return err.Error(), err
 			}
 			if args.Background {
-				return runBashBackground(args.Command)
+				return runBashBackground(cwd, args.Command)
 			}
 
 			timeout := bashTimeout
@@ -54,6 +58,7 @@ func Bash() Tool {
 			}
 
 			cmd := exec.Command("bash", "-c", args.Command)
+			cmd.Dir = cwd
 			// Run in its own process group so a timeout can kill the WHOLE tree,
 			// not just the direct `bash` child. Without this, background jobs
 			// (`cmd &`, nohup) survive, keep the output pipe open, and make the
@@ -126,7 +131,7 @@ func Bash() Tool {
 // agent can monitor (read the log) or stop it later (kill <pid>). No timeout
 // applies. This replaces the fragile "setsid/nohup &" dance callers had to hand-
 // roll (setsid(1) doesn't even exist on macOS).
-func runBashBackground(command string) (string, error) {
+func runBashBackground(cwd, command string) (string, error) {
 	logFile, err := os.CreateTemp("", "harness-bg-*.log")
 	if err != nil {
 		return fmt.Sprintf("Error creating log file: %v", err), err
@@ -134,6 +139,7 @@ func runBashBackground(command string) (string, error) {
 	logPath := logFile.Name()
 
 	cmd := exec.Command("bash", "-c", command)
+	cmd.Dir = cwd
 	if err := setDetached(cmd); err != nil { // new session — escapes the caller's group
 		logFile.Close()
 		os.Remove(logPath)

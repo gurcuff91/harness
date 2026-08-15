@@ -696,6 +696,23 @@ func awaitSubagentResult(ctx context.Context, done <-chan error, textBuf *string
 
 func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res *resources.Resources, loader resources.ResourceLoader) (*tools.Registry, toolLens) {
 	reg := tools.NewRegistry()
+	// Built one instance per session, bound to THIS session's cwd — see
+	// defaultTools' comment for why these can't live in the shared agent-level
+	// registry. A relative path/command resolves against this cwd (resolvePath
+	// for Read/Write/Edit, cmd.Dir for Bash), not the hosting OS process's real
+	// working directory.
+	if a.isToolAllowed(tools.ToolBash) {
+		reg.Register(tools.Bash(cwd))
+	}
+	if a.isToolAllowed(tools.ToolRead) {
+		reg.Register(tools.ReadFile(cwd))
+	}
+	if a.isToolAllowed(tools.ToolWrite) {
+		reg.Register(tools.WriteFile(cwd))
+	}
+	if a.isToolAllowed(tools.ToolEdit) {
+		reg.Register(tools.Edit(cwd))
+	}
 	for _, def := range a.toolReg.Definitions() {
 		if a.isToolAllowed(def.Name) {
 			reg.Register(a.toolReg.Get(def.Name))
@@ -903,7 +920,7 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) (string,
 		b.WriteString("\n\n## Colleagues\n\nYou are not the only agent running. Other colleague instances may be reachable right now, each with its own model, tools, and project context — use them instead of trying to do everything yourself.\n\nUse ColleagueList to see who's reachable, then ColleagueAsk to delegate to one by name. Each colleague has an environment (extra capabilities that colleague has, which you may not) and a working directory (the project it has context on):\n\n- Delegate by environment when the task needs a capability you don't have — a colleague's environment may let it do things you can't from here.\n- Delegate by working directory when the task belongs to a different project than yours. A colleague in the SAME project as you is also worth delegating to for a substantial, self-contained task — they're an independent agent that can co-work with you on it; each delegation is a fresh session, not a shared memory of past exchanges.\n\nNeither is restrictive — combine them. A colleague in a different project AND environment than yours can still be exactly the right one for the task.")
 	}
 
-	b.WriteString(fmt.Sprintf("\n\n## Working Directory\n\n%s\n", cwd))
+	b.WriteString(fmt.Sprintf("\n\n## Working Directory\n\n%s\n\nPrefer absolute paths when reading, writing, or editing files, and when running Bash commands that touch specific files. Relative paths resolve against this working directory, but an absolute path is unambiguous.\n", cwd))
 
 	if res.AgentsMD != "" {
 		b.WriteString("\n\n## Project Context\n\n")
@@ -931,12 +948,15 @@ func defaultSessionName(t time.Time) string {
 
 // isDefaultSessionName returns true if the name matches the auto-generated date format.
 
+// defaultTools seeds the AGENT-level registry (shared defaults, later filtered
+// per-session by isToolAllowed). Bash/Read/Write/Edit are deliberately NOT
+// registered here — they need the SESSION's cwd (each session can have a
+// different one), and this registry is built once in New(), before any
+// session or its cwd exists. buildSessionTools constructs them directly, one
+// instance per session, with that session's cwd. Fetch has no cwd dependency
+// (it makes HTTP requests, not local file/process access), so it stays here.
 func defaultTools() *tools.Registry {
 	r := tools.NewRegistry()
-	r.Register(tools.Bash())
-	r.Register(tools.ReadFile())
-	r.Register(tools.WriteFile())
-	r.Register(tools.Edit())
 	r.Register(tools.Fetch())
 	return r
 }

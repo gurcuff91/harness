@@ -31,7 +31,10 @@ type editInput struct {
 	NewText string      `json:"new_text,omitempty"`
 }
 
-func Edit() Tool {
+// Edit returns the Edit tool. cwd is the session's logical working directory —
+// a relative path the model passes resolves against it (see resolvePath); an
+// absolute path is used as-is.
+func Edit(cwd string) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        "Edit",
@@ -81,7 +84,8 @@ func Edit() Tool {
 				args.Edits = []editEntry{{OldText: args.OldText, NewText: args.NewText}}
 			}
 
-			data, err := os.ReadFile(args.Path)
+			path := resolvePath(cwd, args.Path)
+			data, err := os.ReadFile(path)
 			if err != nil {
 				return fmt.Sprintf("Error reading file: %v", err), err
 			}
@@ -96,7 +100,7 @@ func Edit() Tool {
 				reps[i] = editReplacement{OldText: e.OldText, NewText: e.NewText}
 			}
 
-			newNormalized, err := applyEdits(normalized, reps, args.Path)
+			newNormalized, err := applyEdits(normalized, reps, path)
 			if err != nil {
 				return err.Error(), err
 			}
@@ -104,10 +108,10 @@ func Edit() Tool {
 			final := bom + restoreLineEndings(newNormalized, ending)
 			// Preserve the original file mode instead of forcing 0644.
 			mode := os.FileMode(0644)
-			if info, statErr := os.Stat(args.Path); statErr == nil {
+			if info, statErr := os.Stat(path); statErr == nil {
 				mode = info.Mode()
 			}
-			if err := os.WriteFile(args.Path, []byte(final), mode); err != nil {
+			if err := os.WriteFile(path, []byte(final), mode); err != nil {
 				return fmt.Sprintf("Error writing file: %v", err), err
 			}
 
@@ -116,7 +120,7 @@ func Edit() Tool {
 			if n == 1 {
 				plural = ""
 			}
-			return fmt.Sprintf("Successfully replaced %d block%s in %s.", n, plural, args.Path), nil
+			return fmt.Sprintf("Successfully replaced %d block%s in %s.", n, plural, path), nil
 		},
 	}
 }

@@ -26,10 +26,10 @@ func TestRequiredFieldPresenceIsEnforced(t *testing.T) {
 	}{
 		// ── Tier 1: previously caught only by accident (an OS/network error
 		// that happened to also occur for an empty string) ──────────────────
-		{"Bash.command", Bash(), `{"command":""}`},
-		{"Read.path", ReadFile(), `{"path":""}`},
-		{"Write.path", WriteFile(), `{"path":"","content":"x"}`},
-		{"Edit.path", Edit(), `{"path":"","old_text":"a","new_text":"b"}`},
+		{"Bash.command", Bash("/tmp"), `{"command":""}`},
+		{"Read.path", ReadFile("/tmp"), `{"path":""}`},
+		{"Write.path", WriteFile("/tmp"), `{"path":"","content":"x"}`},
+		{"Edit.path", Edit("/tmp"), `{"path":"","old_text":"a","new_text":"b"}`},
 		{"Fetch.url", Fetch(), `{"url":""}`},
 
 		// ── Tier 2: previously fell through to a response that LOOKED like a
@@ -93,7 +93,7 @@ func TestRequiredFieldPresenceIsEnforced(t *testing.T) {
 func TestWriteContentEmptyIsStillLegitimate(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/empty.txt"
-	tool := WriteFile()
+	tool := WriteFile(dir)
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","content":""}`))
 	if err != nil {
 		t.Fatalf("expected empty content to be accepted, got error: %v (out=%q)", err, out)
