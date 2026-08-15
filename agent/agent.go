@@ -153,7 +153,13 @@ func New(opts AgentOptions) *Agent {
 		}
 	}
 
-	reg := defaultTools()
+	// Fetch is the only agent-level built-in seeded here: it has no cwd
+	// dependency (HTTP requests, not local file/process access), unlike
+	// Bash/Read/Write/Edit — those are built per-session, with that session's
+	// cwd, in buildSessionTools (the single place session-scoped tools come
+	// from; see its comment).
+	reg := tools.NewRegistry()
+	reg.Register(tools.Fetch())
 
 	// Connect configured MCP servers eagerly (root agent only). Their tools are
 	// registered alongside the built-ins and shared by every session. Failures
@@ -696,11 +702,12 @@ func awaitSubagentResult(ctx context.Context, done <-chan error, textBuf *string
 
 func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res *resources.Resources, loader resources.ResourceLoader) (*tools.Registry, toolLens) {
 	reg := tools.NewRegistry()
-	// Built one instance per session, bound to THIS session's cwd — see
-	// defaultTools' comment for why these can't live in the shared agent-level
-	// registry. A relative path/command resolves against this cwd (resolvePath
-	// for Read/Write/Edit, cmd.Dir for Bash), not the hosting OS process's real
-	// working directory.
+	// Built one instance per session, bound to THIS session's cwd — they can't
+	// live in the shared agent-level registry (a.toolReg, seeded once in New()
+	// before any session or its cwd exists) because each session can have a
+	// DIFFERENT cwd. A relative path/command resolves against this cwd
+	// (resolvePath for Read/Write/Edit, cmd.Dir for Bash), not the hosting OS
+	// process's real working directory.
 	if a.isToolAllowed(tools.ToolBash) {
 		reg.Register(tools.Bash(cwd))
 	}
@@ -947,16 +954,3 @@ func defaultSessionName(t time.Time) string {
 }
 
 // isDefaultSessionName returns true if the name matches the auto-generated date format.
-
-// defaultTools seeds the AGENT-level registry (shared defaults, later filtered
-// per-session by isToolAllowed). Bash/Read/Write/Edit are deliberately NOT
-// registered here — they need the SESSION's cwd (each session can have a
-// different one), and this registry is built once in New(), before any
-// session or its cwd exists. buildSessionTools constructs them directly, one
-// instance per session, with that session's cwd. Fetch has no cwd dependency
-// (it makes HTTP requests, not local file/process access), so it stays here.
-func defaultTools() *tools.Registry {
-	r := tools.NewRegistry()
-	r.Register(tools.Fetch())
-	return r
-}

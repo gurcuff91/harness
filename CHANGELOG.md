@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.42] - 2026-08-14
+
+### Cleanup — removed `defaultTools()`, a one-line wrapper left over from the previous fix
+- Follow-up to v0.76.41: after moving Bash/Read/Write/Edit into `buildSessionTools` (the single place session-scoped tools are built), `defaultTools()` existed only to seed `Fetch` into the agent-level registry — a needless indirection for one `tools.NewRegistry(); reg.Register(tools.Fetch())`. Inlined it directly into `New()`. No behavior change; `buildSessionTools` remains the one and only construction point for session-scoped tools, and the agent-level registry (`a.toolReg`) still exists for MCP tools, `AgentOptions.Tools`, and `RegisterTool` — only the now-redundant wrapper function is gone.
+
 ## [0.76.41] - 2026-08-14
 
 ### Fix — Bash/Read/Write/Edit ignored Session.CWD, breaking per-session isolation for multi-session SDK consumers
