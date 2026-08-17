@@ -127,7 +127,7 @@ func (m *SettingsManager) ActiveModel() string {
 // the latest disk state first so a concurrent write to an unrelated field is
 // never discarded (see SetMCPServer's comment for the full rationale).
 func (m *SettingsManager) SetActiveModel(model string) error {
-	release, err := acquireFileLock(m.path)
+	release, err := AcquireFileLock(m.path)
 	if err != nil {
 		return err
 	}
@@ -157,7 +157,7 @@ func (m *SettingsManager) SetThinkingLevel(level string) error {
 	if !thinkingLevels[level] {
 		return fmt.Errorf("%w: %q (want off|low|medium|high|xhigh)", ErrInvalidThinkingLevel, level)
 	}
-	release, err := acquireFileLock(m.path)
+	release, err := AcquireFileLock(m.path)
 	if err != nil {
 		return err
 	}
@@ -220,7 +220,7 @@ func (m *SettingsManager) SetMCPServer(name string, srv MCPServer) error {
 	if err := validateMCPServer(srv); err != nil {
 		return err
 	}
-	release, err := acquireFileLock(m.path)
+	release, err := AcquireFileLock(m.path)
 	if err != nil {
 		return err
 	}
@@ -239,7 +239,7 @@ func (m *SettingsManager) SetMCPServer(name string, srv MCPServer) error {
 // DeleteMCPServer removes an MCP server's config. Same lock-then-reload
 // pattern as SetMCPServer.
 func (m *SettingsManager) DeleteMCPServer(name string) error {
-	release, err := acquireFileLock(m.path)
+	release, err := AcquireFileLock(m.path)
 	if err != nil {
 		return err
 	}

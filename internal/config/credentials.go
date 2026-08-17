@@ -127,7 +127,7 @@ func (m *CredentialsManager) UpdateCredential(
 	provider string,
 	fn func(current ProviderCredential, ok bool) (next ProviderCredential, write bool, err error),
 ) error {
-	release, err := acquireFileLock(m.path)
+	release, err := AcquireFileLock(m.path)
 	if err != nil {
 		return err
 	}
@@ -225,7 +225,7 @@ func (m *CredentialsManager) SetCredential(provider string, cred ProviderCredent
 	if err := validateCredential(cred); err != nil {
 		return err
 	}
-	release, err := acquireFileLock(m.path)
+	release, err := AcquireFileLock(m.path)
 	if err != nil {
 		return err
 	}
@@ -244,7 +244,7 @@ func (m *CredentialsManager) SetCredential(provider string, cred ProviderCredent
 // DeleteCredential removes a provider's credential. Same lock-then-reload
 // pattern as SetCredential — see its comment.
 func (m *CredentialsManager) DeleteCredential(provider string) error {
-	release, err := acquireFileLock(m.path)
+	release, err := AcquireFileLock(m.path)
 	if err != nil {
 		return err
 	}

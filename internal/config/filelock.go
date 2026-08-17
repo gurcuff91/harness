@@ -34,15 +34,20 @@ const (
 	staleFileLockAge = 45 * time.Second
 )
 
-// acquireFileLock creates path+".lock" exclusively, retrying with backoff if
+// AcquireFileLock creates path+".lock" exclusively, retrying with backoff if
 // another process holds it. Returns a release function the caller must call
 // once done. Called EXACTLY ONCE per logical operation — never exposed to
-// callers as a standalone primitive (see CredentialsManager.UpdateCredential's
-// doc comment for why a raw "give me the lock" API was removed). Used
-// internally by CredentialsManager.SetCredential/DeleteCredential/
+// callers as a standalone primitive to hold across several steps (see
+// CredentialsManager.UpdateCredential's doc comment for why a raw "give me the
+// lock and let me call other locking methods inside" pattern was removed).
+// Used internally by CredentialsManager.SetCredential/DeleteCredential/
 // UpdateCredential and SettingsManager's Set*/Delete* methods — each acquires
 // it once, for its own single read-modify-write, and releases before
-// returning.
+// returning. Exported so agent/schedule.Store can use the SAME hardened
+// primitive for schedules.json (a sibling package within harness, not a
+// different module — the internal/ rule only blocks OTHER modules, so this
+// isn't a boundary violation, the same way agent/agent.go and
+// agent/session.go already import internal/config directly).
 //
 // Ownership guard: the lockfile carries a unique token (a UUID) written at
 // creation. Both release AND stale-reclaim remove the lock ONLY if it still
@@ -52,7 +57,7 @@ const (
 // the reclaimer still worked — two processes in the critical section, which for
 // a single-use OAuth refresh token means a double redemption and a permanent
 // invalid_grant. Compare-then-remove makes a reclaim (already rare) non-cascading.
-func acquireFileLock(path string) (release func(), err error) {
+func AcquireFileLock(path string) (release func(), err error) {
 	lockPath := path + ".lock"
 	token := uuid.NewString()
 	for attempt := 0; attempt < fileLockMaxAttempts; attempt++ {
