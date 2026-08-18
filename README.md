@@ -267,7 +267,9 @@ All data stored in `~/.harness/`:
     ├── sessions/<cwd>/     — Session history (JSONL, partitioned by project)
     ├── skills/             — Discovered skills
     ├── memory.db           — Persistent memory (SQLite + FTS5, WAL mode)
-    └── SYSTEM.md           — Optional user-level system prompt addendum
+    └── SYSTEM.md           — Optional user-level system prompt addendum — a
+                               project can override it entirely with its own
+                               <project>/.harness/agent/SYSTEM.md
 ```
 
 ## Tools

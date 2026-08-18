@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.44] - 2026-08-17
+
+### Change — `SYSTEM.md` can now be overridden per-project, falling back to the global one
+- **Before**: `FileResourceLoader` only ever read `~/.harness/agent/SYSTEM.md` (global-only, hardcoded to `home`) — there was no way to customize the system-prompt addendum per project, unlike `AGENTS.md` (already project-local, walking up from `cwd`) and skills (already merged global + project-local by precedence).
+- **Change** (`agent/resources/file.go`'s `Load()`): now checks `<cwd>/.harness/agent/SYSTEM.md` FIRST; if the project doesn't have one, falls back to the global `~/.harness/agent/SYSTEM.md`; if neither exists, `SystemMD` is simply empty — same no-op-safe behavior as before. This is a full REPLACEMENT when the project-local file exists (the global one is ignored entirely, not concatenated with it) — mirrors `buildSystemPrompt`'s own existing `SystemMD`-vs-base-prompt precedence (`agent.go`), which also replaces rather than merges.
+- **Docs fix in passing**: `Resources.SystemMD`'s comment claimed the content is "concatenated to the base system prompt" — it never was; `buildSystemPrompt` does an `if/else` replacement. Comment corrected to say so, alongside `FileResourceLoader`'s own doc comment describing the new precedence.
+- Tests (`agent/resources/system_md_test.go`): project-only is used; falls back to global when the project has none; project takes precedence over global with NO merging (asserted the global content never appears in the result); empty (no error) when neither exists. Full suite + `-race` + `go vet ./...` green.
+
 ## [0.76.43] - 2026-08-17
 
 ### Fix — schedule store (`schedules.json`) had none of the cross-process protections `credentials.json` got last week

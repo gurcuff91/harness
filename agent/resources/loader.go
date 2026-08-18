@@ -5,7 +5,7 @@ package resources
 
 // Resources holds all discovered context loaded by a ResourceLoader.
 type Resources struct {
-	SystemMD string      // content of SYSTEM.md — concatenated to the base system prompt
+	SystemMD string      // content of SYSTEM.md — REPLACES the base system prompt (see buildSystemPrompt), not concatenated to it
 	AgentsMD string      // content of AGENTS.md — project context
 	Skills   []SkillInfo // discovered skills (lightweight refs — content loaded lazily)
 }

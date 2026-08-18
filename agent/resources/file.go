@@ -10,7 +10,9 @@ import (
 // ── FileResourceLoader ───────────────────────────────────────────────────
 
 // FileResourceLoader discovers context from the filesystem:
-//   - SYSTEM.md:  ~/.harness/agent/SYSTEM.md (global only)
+//   - SYSTEM.md:  <cwd>/.harness/agent/SYSTEM.md, falling back to
+//     ~/.harness/agent/SYSTEM.md if the project doesn't have one (whichever is
+//     found REPLACES the other entirely — see Load()'s comment)
 //   - AGENTS.md:  <cwd>/AGENTS.md walking up to maxDepth levels
 //   - Skills:     loaded from 4 directories in precedence order:
 //     1. ~/.agents/skills/              (global system — lowest prio)
@@ -66,10 +68,20 @@ func (f *FileResourceLoader) Load() (*Resources, error) {
 
 	res := &Resources{}
 
-	// 1. SYSTEM.md — global only
-	res.SystemMD = readFileIfExists(
-		filepath.Join(home, ".harness", "agent", "SYSTEM.md"),
-	)
+	// 1. SYSTEM.md — project-local takes precedence over global. A project can
+	// override the user's default system-prompt addendum entirely by placing
+	// its own <cwd>/.harness/agent/SYSTEM.md; if it doesn't have one, the
+	// global ~/.harness/agent/SYSTEM.md is used instead; if neither exists,
+	// SystemMD is simply empty (no error, no fallback content) — same
+	// no-op-safe behavior as before this project-local override existed.
+	// This is a REPLACEMENT, not a merge: when the project-local file exists,
+	// the global one is ignored entirely, not concatenated with it — mirrors
+	// buildSystemPrompt's own SystemMD-vs-base-prompt precedence (agent.go),
+	// which also replaces rather than merges.
+	res.SystemMD = readFileIfExists(filepath.Join(f.cwd, ".harness", "agent", "SYSTEM.md"))
+	if res.SystemMD == "" {
+		res.SystemMD = readFileIfExists(filepath.Join(home, ".harness", "agent", "SYSTEM.md"))
+	}
 
 	// 2. AGENTS.md — walk up from cwd
 	res.AgentsMD = f.findAgentsMD()
