@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.47] - 2026-08-17
+
+### Change — Slack directive's Rule 6 made deployment-agnostic and general-purpose
+- Follow-up to v0.76.46 (Gus's own edit, reviewed here): trimmed deployment-specific asides from the new "never assume who you're talking to" rule — the parenthetical `(e.g. whoever owns or usually operates this bot)` referenced this project's own operator by implication, which doesn't generalize to another tenant running this same transport with a different setup; also dropped redundant wording ("their own context, their own history, their own permissions") that repeated "answer for THAT specific person" without adding instruction. The verification example was briefly narrowed to a software-dev domain (`project, pull request, code`) and then widened back to `(a project, a task, a prior conversation, an admin action)` so the rule reads as genuinely general-purpose — Slack transport use isn't assumed to be coding-specific.
+- Directive text only, no code change. Full `transports/slack` suite green.
+
 ## [0.76.46] - 2026-08-17
 
 ### Change — Slack directive now tells the model to identify and personalize per sender, not assume everyone is the same person
