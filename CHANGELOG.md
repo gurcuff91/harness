@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.46] - 2026-08-17
+
+### Change — Slack directive now tells the model to identify and personalize per sender, not assume everyone is the same person
+- **Reported by Gus**: the model was responding as if every Slack sender were the bot's usual operator (referred to as "the Khan" internally) — it never actually reasoned about *who* `<slack:user>` said was writing, especially in DMs, where there's no @mention rule forcing that check. The directive told the model how to use the `<slack:user>` tag mechanically (@mention in shared spaces, distinguish speakers in a channel) but never told it to resolve WHO that sender actually is and tailor the response to that specific person.
+- **Change** (`transports/slack/directive.go`): added Rule 6 — "Never assume who you're talking to" — to the inviolable rules list: resolve `<slack:user>` via `SlackListUsers` and answer for that specific sender's own context/history/permissions, explicitly calling out that this applies in DMs too (no @mention there to force the check, but "my task"/"remind me"/"as I said before" always refer to THIS sender). Also reinforced the "Sender and channel context" section where the tag's mechanics are explained, noting the same `<slack:user>` ID persists across a DM conversation and must not be substituted with an assumed identity just because a DM feels private/familiar.
+- No code change — directive text only (`AgentWithDirectives(slack.Directive)`, injected verbatim, no parsing). Full `transports/slack` suite green; no test depended on the directive's exact wording.
+
 ## [0.76.45] - 2026-08-17
 
 ### Fix — `POST /api/sessions` silently discarded an embedding Agent's own configured thinking level
