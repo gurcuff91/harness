@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.45] - 2026-08-17
+
+### Fix — `POST /api/sessions` silently discarded an embedding Agent's own configured thinking level
+- **Reported** by a third-party dev embedding harness as a library (jade-kaiban): a `*agent.Agent` built with `AgentWithThinking("low")` (different from the operator's global `~/.harness/settings.json` `thinking_level: "high"`), when used to create a session via `POST /api/sessions` / `client.CreateSession`, ended up with `thinking: "high"` on the resulting session — the Agent's own explicit configuration was silently overridden, with no error or log anywhere.
+- **Root cause** (`server/server.go`'s `handleCreateSession`): right after `s.agent.NewSession(...)` correctly resolved the session's thinking level from the calling Agent's own `a.thinkingLevel` (which `agent.New` — the single entry point for every caller — already resolves to either an explicit `AgentWithThinking(...)` or the global setting as a fallback, never both), a second block unconditionally called `sess.SwitchThinking(settingsManager.ThinkingLevel())`, discarding whatever `NewSession` had just set. `model` never got an equivalent second pass — the asymmetry was the tell that this was leftover from before `agent.New` centralized the fallback, not a deliberate default-application step.
+- **Fix**: removed the block entirely. `NewSession`'s own resolution is trusted — it already falls back to the global setting exactly when the Agent itself wasn't configured with an explicit thinking level, so nothing is lost for the common case (no `AgentWithThinking` at all); only the case of an embedder's deliberately different level is what stops being silently clobbered.
+- Test (`server/create_session_thinking_test.go`): builds an Agent with `ThinkingLevel: "low"` while the global setting is seeded to `"high"`, creates a session via a real `POST /api/sessions`, and asserts the session keeps `"low"`. Requires an active model/provider in the test environment (same `t.Skip` convention as the existing `agent/subagent_model_test.go` suite) — none was available in this session's sandbox, so it's written and verified by full manual code-path inspection (confirmed `SwitchThinking` no longer appears anywhere in `handleCreateSession`, only in the unrelated, legitimate `/thinking` exec-command path for an already-running session) rather than an actual green run here; it will exercise for real in any environment with a connected provider. Full suite + `-race` + `go vet ./...` otherwise green.
+
 ## [0.76.44] - 2026-08-17
 
 ### Change — `SYSTEM.md` can now be overridden per-project, falling back to the global one

@@ -660,11 +660,19 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		_ = sess.Rename(req.Name)
 	}
 
-	// Apply thinking level from settings
-	sm := config.GetSettingsManager()
-	if level := sm.ThinkingLevel(); level != "" && level != "off" {
-		_ = sess.SwitchThinking(level)
-	}
+	// Thinking level: NewSession above already resolved it correctly via the
+	// calling Agent's own a.thinkingLevel (agent.New's single entry point for
+	// every caller — CLI, TUI, and any SDK embedder's AgentWithThinking(...)).
+	// A second, unconditional re-application of the operator's global
+	// ~/.harness/settings.json thinking level used to live here — it silently
+	// discarded an embedding Agent's own explicitly-configured level (e.g.
+	// AgentWithThinking("low") got overwritten by a global "high") the moment
+	// a session was created via this endpoint, with no error or log anywhere.
+	// model never got an equivalent second pass here, which was the tell:
+	// this was leftover from before agent.New centralized the fallback, not a
+	// deliberate default-application step. Removed — trust NewSession's own
+	// resolution, which already falls back to the global setting exactly
+	// when the Agent itself wasn't configured with one.
 
 	proxy := newSessionProxy(sess, s.logger)
 
