@@ -77,7 +77,7 @@ func (r *Registry) Run(ctx context.Context, name string, input json.RawMessage) 
 		return err.Error(), nil, err
 	}
 	if _, wrapped := types.IsRawWrapper(input); wrapped {
-		err := fmt.Errorf("malformed tool arguments: Invalid JSON for this call — retry with corrected, valid JSON")
+		err := fmt.Errorf("invalid JSON in tool-call arguments — retry this call with a single, well-formed JSON object")
 		return err.Error(), nil, err
 	}
 	if t.ExecuteRich != nil {

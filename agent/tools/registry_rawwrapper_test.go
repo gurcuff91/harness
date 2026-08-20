@@ -46,8 +46,11 @@ func TestRegistryRun_RawWrapperGivesActionableError(t *testing.T) {
 	if strings.Contains(err.Error(), "missing required field") {
 		t.Errorf("error still looks like the OLD misdiagnosis: %q", err.Error())
 	}
-	if !strings.Contains(err.Error(), "malformed tool arguments") {
+	if !strings.Contains(err.Error(), "invalid JSON in tool-call arguments") {
 		t.Errorf("error should clearly name the real problem, got: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "single, well-formed JSON object") {
+		t.Errorf("error should name the specific fix (one object, not concatenated fragments), got: %q", err.Error())
 	}
 	if out != err.Error() {
 		t.Errorf("output = %q, want it to match the error message", out)
