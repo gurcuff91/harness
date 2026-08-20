@@ -46,7 +46,7 @@ func TestRegistryRun_RawWrapperGivesActionableError(t *testing.T) {
 	if strings.Contains(err.Error(), "missing required field") {
 		t.Errorf("error still looks like the OLD misdiagnosis: %q", err.Error())
 	}
-	if !strings.Contains(err.Error(), "malformed tool-call arguments") {
+	if !strings.Contains(err.Error(), "malformed tool arguments") {
 		t.Errorf("error should clearly name the real problem, got: %q", err.Error())
 	}
 	if out != err.Error() {
