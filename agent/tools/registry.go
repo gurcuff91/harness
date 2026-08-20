@@ -58,10 +58,26 @@ func (r *Registry) Get(name string) Tool {
 
 // Run executes a tool by name, passing ctx for cancellation.
 // Returns (output, images, error). Images is non-nil only for vision-capable tools.
+//
+// Before dispatching to the tool's own Execute/ExecuteRich, it checks whether
+// input is a types.RawWrapperKey wrapper — the provider streaming layer's
+// marker for "the model streamed malformed JSON as this call's arguments"
+// (see internal/providers/llm/{anthropic,openai}.go). Without this check,
+// {"_raw_": "<invalid JSON as a string>"} unmarshals successfully into any
+// tool's typed input struct (unknown JSON fields are silently ignored), so
+// every declared field reads as its zero value and the tool fails with a
+// misleading "missing required field: X" — as if the model had simply
+// omitted a field, when it actually emitted unparseable JSON. Centralized
+// here (rather than duplicated in every tool's Execute) so every tool, built-in
+// or MCP or SDK-custom, gets the correct diagnosis automatically.
 func (r *Registry) Run(ctx context.Context, name string, input json.RawMessage) (string, []types.ImageData, error) {
 	t, ok := r.tools[name]
 	if !ok {
 		err := fmt.Errorf("unknown tool: %s", name)
+		return err.Error(), nil, err
+	}
+	if _, wrapped := types.IsRawWrapper(input); wrapped {
+		err := fmt.Errorf("malformed tool arguments: Invalid JSON for this call — retry with corrected, valid JSON")
 		return err.Error(), nil, err
 	}
 	if t.ExecuteRich != nil {

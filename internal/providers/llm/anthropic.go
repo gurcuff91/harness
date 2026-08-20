@@ -289,10 +289,12 @@ func ParseAnthropicStream(ctx context.Context, body io.Reader, cb types.StreamCa
 				} else if !json.Valid(input) {
 					// Model streamed malformed JSON (e.g. missing key before a
 					// value). Wrap raw content so store.AddMessage never fails
-					// with a MarshalJSON error. The tool will fail at execution
-					// time with a clean "Error parsing input" message.
+					// with a MarshalJSON error. agent/tools.Registry.Run detects
+					// this wrapper (types.IsRawWrapper) and fails the call with
+					// a clean, actionable "malformed tool-call arguments"
+					// message before ever reaching the tool's own Execute.
 					raw, _ := json.Marshal(bs.toolJSON)
-					input = json.RawMessage(`{"_raw":` + string(raw) + `}`)
+					input = json.RawMessage(`{"` + types.RawWrapperKey + `":` + string(raw) + `}`)
 				}
 				// bs.toolID was already canonicalized at block_start (see
 				// the ToolIDFor call there), so the store persists a shape

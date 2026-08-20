@@ -362,10 +362,13 @@ func parseOpenAIStream(ctx context.Context, body io.Reader, cb types.StreamCallb
 		// Guard against malformed argument JSON from providers (e.g. minimax-m3
 		// sometimes streams concatenated JSON fragments). If the accumulated
 		// argsBuf is not valid JSON, wrap it in a string so the store can still
-		// marshal the Message without failing.
+		// marshal the Message without failing. agent/tools.Registry.Run detects
+		// this wrapper (types.IsRawWrapper) and fails the call with a clean,
+		// actionable "malformed tool-call arguments" message before ever
+		// reaching the tool's own Execute.
 		if !json.Valid(input) {
 			if safe, err := json.Marshal(ts.argsBuf); err == nil {
-				input = json.RawMessage(`{"_raw":` + string(safe) + `}`)
+				input = json.RawMessage(`{"` + types.RawWrapperKey + `":` + string(safe) + `}`)
 			} else {
 				input = json.RawMessage("{}")
 			}
