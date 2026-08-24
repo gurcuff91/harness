@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.50] - 2026-08-24
+
+### Fix — `Read` reading a large image could permanently corrupt the session's history
+- **Reported by Gus**: reading an 8.5MB PNG succeeded, but the resulting base64 payload (~11.35MB — base64 expands raw bytes by 4/3) exceeded Anthropic's 10MB `tool_result` image cap, producing an `anthropic API error 400`. Worse: the oversized base64 had already been persisted to the session's `.jsonl` history by the time the provider rejected it, so the session was permanently stuck — every future resume replays that same oversized `tool_result`, guaranteeing the same 400 forever.
+- **Fix** (`agent/tools/file.go`'s `ReadFile`): a new `maxImageFileBytes` guard (7.5MB raw — the largest raw file that can never base64-encode past 10MB, since 7.5MB × 4/3 = 10MB exactly) checked via `os.Stat` **before** the file is ever read into memory or base64-encoded. An over-limit image now fails immediately with an explicit `"image too large: N bytes exceeds the M byte limit ... resize or compress the image before reading it"` — no read, no encode, nothing ever reaches the session store. Non-image files and images at/under the limit are completely unaffected.
+- **Data recovery**: the real incident's session (`a69e7ade-6b55-44f1-b866-5a527d8366ca`, in `~/.harness/agent/sessions/<cwd>/`) had its corrupted `tool_result` entry manually repaired — the oversized `images` payload stripped, `output` rewritten to record what happened, `tool_call`↔`tool_result` pairing preserved. Every other line untouched. A backup of the original `.jsonl` was taken before editing.
+- Tests (`agent/tools/image_size_guard_test.go`): an image one byte over the limit is rejected with no read/encode (output asserted to not resemble a base64 payload); an image exactly at the limit still succeeds; a large non-image file is completely unaffected by the guard. Verified against the real incident's numbers: the actual 8,518,393-byte file's base64 expansion (11,357,860 bytes) matches the reported provider error exactly, and exceeds the new 7,864,320-byte raw threshold, confirming the guard would have caught it. Full suite + `-race` + `go vet ./...` green.
+
 ## [0.76.49] - 2026-08-17
 
 ### Change — refined the raw-tool-call-wrapper error message once more

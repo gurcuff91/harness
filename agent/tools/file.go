@@ -27,6 +27,21 @@ func isImagePath(path string) bool {
 	return ok
 }
 
+// maxImageFileBytes caps the RAW file size Read will base64-encode as an
+// image. Anthropic rejects a tool_result image whose base64 payload exceeds
+// 10MB (10_485_760 bytes) — base64 expands raw bytes by 4/3, so encoding is
+// rejected well before that cap unless the source file itself is bounded
+// well under it. 7.5MB * 4/3 = 10MB exactly, so this is the largest raw file
+// that can never produce an over-limit payload for ANY correctly-encoding
+// base64 implementation (padding only ever adds up to 2 extra bytes, not
+// enough to matter at this scale). Enforced via os.Stat BEFORE reading the
+// file into memory or encoding it — a provider 400 after committing an
+// 11MB+ base64 string to the session's persisted history is not just a
+// failed call, it corrupts that history file for every future turn (the
+// oversized tool_result is replayed on every resume, guaranteeing the same
+// 400 again) — this guard exists specifically to make that unrepresentable.
+const maxImageFileBytes = 10_485_760 * 3 / 4 // 7,864,320 bytes (7.5MB)
+
 type readFileInput struct {
 	Path   string `json:"path" validate:"required"`
 	Offset int    `json:"offset,omitempty"`
@@ -65,6 +80,15 @@ func ReadFile(cwd string) Tool {
 			if isImagePath(path) {
 				ext := strings.ToLower(filepath.Ext(path))
 				mime := imageExtToMime[ext]
+
+				// Check size via Stat BEFORE reading/encoding — see
+				// maxImageFileBytes' comment for why this must happen before
+				// the file is ever loaded into memory or base64-encoded.
+				if info, statErr := os.Stat(path); statErr == nil && info.Size() > maxImageFileBytes {
+					err := fmt.Errorf("image too large: %d bytes exceeds the %d byte limit (base64 encoding would exceed the provider's 10MB payload cap) — resize or compress the image before reading it", info.Size(), maxImageFileBytes)
+					return err.Error(), nil, err
+				}
+
 				data, err := os.ReadFile(path)
 				if err != nil {
 					return fmt.Sprintf("Error reading image: %v", err), nil, err
