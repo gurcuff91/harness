@@ -353,6 +353,44 @@ func TestFetchPromptInvokesSummarizerAndReturnsItsResult(t *testing.T) {
 	if !strings.Contains(gotContent, "lots of noisy content here") {
 		t.Errorf("summarizer should have received the fetched body, got %q", gotContent)
 	}
+	if strings.Contains(gotContent, "truncated") {
+		t.Errorf("small body must NOT carry a truncation note, got %q", gotContent)
+	}
+}
+
+// When the fetched body exceeds fetchSummarizeMaxBytes, the content handed to
+// the summarizer must be truncated AND carry an explicit note saying so —
+// without it, the summarizing sub-agent has no way to know its answer might
+// be missing information beyond the cutoff, and the calling agent (who never
+// sees the raw body) has no signal that the answer came from partial content.
+func TestFetchSummarizerReceivesTruncationNoteOnLargeBody(t *testing.T) {
+	big := strings.Repeat("x", fetchSummarizeMaxBytes+1000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(big))
+	}))
+	defer srv.Close()
+
+	var gotContent string
+	summarize := func(ctx context.Context, prompt, content string) (string, error) {
+		gotContent = content
+		return "condensed answer", nil
+	}
+
+	out, err := runFetchWith(summarize, fetchInput{URL: srv.URL, Prompt: "summarize"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != "condensed answer" {
+		t.Errorf("out = %q, want the summarizer's result", out)
+	}
+	if !strings.Contains(gotContent, "truncated") {
+		t.Errorf("summarizer content should carry an explicit truncation note, got a %d-byte string with no such note", len(gotContent))
+	}
+	// The actual page content handed over must be capped at the limit (plus
+	// the note's own length) — not the full oversized body.
+	if len(gotContent) > fetchSummarizeMaxBytes+500 {
+		t.Errorf("summarizer content len = %d, want it capped near fetchSummarizeMaxBytes (%d)", len(gotContent), fetchSummarizeMaxBytes)
+	}
 }
 
 // If the summarizer itself fails, Fetch must degrade to the raw (successful)

@@ -220,13 +220,24 @@ func Fetch(summarize FetchSummarizer) Tool {
 				// DISPLAY truncation above (result) — the raw body can be
 				// much larger than fetchSummarizeMaxBytes allows through, and
 				// feeding it whole risks overflowing the summarizer's own
-				// context. TruncateHead never errors; a truncated body still
-				// gives the summarizer something reasonable to work with.
+				// context. A truncated body still gives the summarizer
+				// something reasonable to work with.
 				toSummarize := body
-				if len(toSummarize) > fetchSummarizeMaxBytes {
+				truncated := len(toSummarize) > fetchSummarizeMaxBytes
+				if truncated {
 					toSummarize = toSummarize[:fetchSummarizeMaxBytes]
 				}
-				condensed, sumErr := summarize(ctx, args.Prompt, string(toSummarize))
+				content := string(toSummarize)
+				if truncated {
+					// Told explicitly to the summarizing sub-agent, not just
+					// silently cut — without this, it has no way to know its
+					// answer might be missing something and would report back
+					// with false confidence, and the calling agent (who never
+					// sees the raw body itself) would have no signal at all
+					// that the answer came from partial content.
+					content += fmt.Sprintf("\n\n[NOTE: this content was truncated to %d bytes — it may be missing information beyond that point. If relevant to the instruction, mention that your answer may be incomplete.]", fetchSummarizeMaxBytes)
+				}
+				condensed, sumErr := summarize(ctx, args.Prompt, content)
 				if sumErr != nil {
 					// Degrade to the raw (truncated-for-display) result rather
 					// than failing the whole Fetch call — the HTTP request itself

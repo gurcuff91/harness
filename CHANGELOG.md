@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.52] - 2026-08-24
+
+### Change — `Fetch`'s content-condensing sub-agent now knows when its input was truncated
+- **Reported by Gus**: follow-up to v0.76.51's `FetchSummarizer`. When the fetched body exceeds `fetchSummarizeMaxBytes` (200KB), the content handed to the summarizing sub-agent was silently cut — the sub-agent had no way to know its answer might be missing information beyond that point, and the calling agent (who never sees the raw body itself) had no signal at all that the condensed answer came from partial content.
+- **Change** (`agent/tools/fetch.go`): when the content handed to the summarizer is truncated, an explicit note is appended to it — `"[NOTE: this content was truncated to N bytes — it may be missing information beyond that point. If relevant to the instruction, mention that your answer may be incomplete.]"` — so the summarizing sub-agent can factor that into its response and flag it to the caller when it matters, instead of reporting with false confidence.
+- Test (`agent/tools/fetch_test.go`): a body over the limit produces a summarizer input carrying the truncation note and capped near the byte limit; the existing happy-path test now also asserts a small body carries NO such note. Full suite + `-race` + `go vet ./...` green.
+
 ## [0.76.51] - 2026-08-24
 
 ### Change — `Fetch` now actually implements the `prompt` argument the model kept sending it
