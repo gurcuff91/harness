@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.51] - 2026-08-24
+
+### Change — `Fetch` now actually implements the `prompt` argument the model kept sending it
+- **Reported by Gus**: models routinely sent a `prompt` argument to `Fetch` that our schema never declared and the tool silently ignored (`json.Unmarshal` drops unknown fields) — harmless, but wasted tokens on an instruction nobody read, every time it happened.
+- **Root cause**: under the `claude-oauth` provider, harness renames `Fetch` to `WebFetch` for identity/billing purposes (`internal/providers/claude_oauth.go`'s `ccOutbound` map) so its traffic is indistinguishable from Claude Code's. Anthropic's REAL `WebFetch` tool accepts a `prompt` argument that condenses the fetched page through a small model instead of returning raw HTML — the model, trained on that real tool's behavior, kept sending `prompt` under the borrowed name even though our `Fetch` never implemented it.
+- **Change**: implemented the real behavior instead of just tolerating the wasted tokens. `Fetch` now takes a `FetchSummarizer` (`agent/tools/fetch.go`) — `func(ctx, prompt, content) (string, error)` — injected by the Agent (never providers directly; `agent/tools` must never import `internal/providers`). When the model sets `prompt` on a successful text response, the fetched body (capped at 200KB, independent of the existing display truncation) is condensed through it instead of being returned raw.
+  - `agent.buildFetchSummarizer` (`agent/agent.go`) wires the real implementation: the same ephemeral, in-process sub-agent mechanism `Subagent`'s executor already uses (reads the session's CURRENT model via `sessRef`), but lighter — a dedicated single-purpose system prompt (`fetchSummarizeSystemPrompt`), a 5-iteration cap (`fetchSummarizeMaxIterations`, vs. Subagent's 50 — a condensing job is one-shot read-and-answer, never multi-step), **zero tools** (every built-in explicitly disallowed, not just a subset — this sub-agent's only input is the content `Fetch` already downloaded, handed to it as prompt text), and no shared memory (nothing to recall or persist for a one-shot call).
+  - Because it now needs the session's current model, `Fetch` moved from the agent-level registry (seeded once in `New()`, before any session/cwd exists) into `buildSessionTools` — built fresh per session, alongside `Bash`/`Read`/`Write`/`Edit`.
+  - Degrades safely in every direction: no `FetchSummarizer` wired (nil) → `prompt` silently ignored, raw response returned; no `prompt` set → summarizer never invoked; `download_to` (binary downloads) → `prompt` ignored, summarizer never invoked; a 4xx/5xx response → never summarized; the summarizer itself failing → falls back to the raw (truncated-for-display) result with an explicit note, never fails the whole `Fetch` call.
+- Tests (`agent/tools/fetch_test.go`): summarizer not invoked without `prompt`; `nil` summarizer + `prompt` set → raw response, no error; `prompt` reaches the summarizer and its result (not the raw body) is returned; summarizer error degrades to the raw result; `prompt` ignored with `download_to`; whitespace-only `prompt` ignored; error responses never summarized. Verified empirically (not just by inspection) that the summarizer's sub-agent has exactly zero registered tools, even with the parent Agent's `EnableMemory` on. Full suite + `-race` + `go vet ./...` green.
+
 ## [0.76.50] - 2026-08-24
 
 ### Fix — `Read` reading a large image could permanently corrupt the session's history

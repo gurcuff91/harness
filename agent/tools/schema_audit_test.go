@@ -38,7 +38,7 @@ func allBuiltinTools() []Tool {
 		ReadFile("/tmp"),
 		WriteFile("/tmp"),
 		Edit("/tmp"),
-		Fetch(),
+		Fetch(nil),
 		Skill(func(name string) (string, string, error) { return "", "", nil }),
 		MemoWrite(auditMemoryStore{}, "/tmp"),
 		MemoSearch(auditMemoryStore{}, "/tmp"),

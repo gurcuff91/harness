@@ -15,7 +15,14 @@ import (
 
 func runFetch(in fetchInput) (string, error) {
 	b, _ := json.Marshal(in)
-	return Fetch().Execute(context.Background(), b)
+	return Fetch(nil).Execute(context.Background(), b)
+}
+
+// runFetchWith runs Fetch with an explicit summarizer (nil-checked by the
+// caller as needed) — used by the 'prompt'/FetchSummarizer tests below.
+func runFetchWith(summarize FetchSummarizer, in fetchInput) (string, error) {
+	b, _ := json.Marshal(in)
+	return Fetch(summarize).Execute(context.Background(), b)
 }
 
 func TestFetchJSON(t *testing.T) {
@@ -261,5 +268,198 @@ func TestFetchCustomTimeout(t *testing.T) {
 	_, err := runFetch(fetchInput{URL: srv.URL, Timeout: 1})
 	if err != nil {
 		t.Errorf("1s timeout should allow a 500ms response: %v", err)
+	}
+}
+
+// ── 'prompt' / FetchSummarizer condensing ───────────────────────────────────
+//
+// See fetch.go's FetchSummarizer doc comment for the full backstory: the
+// model kept sending 'prompt' to Fetch (renamed "WebFetch" under
+// claude-oauth) matching Anthropic's real WebFetch tool, even though our
+// schema never declared or used it. These tests cover the field's actual
+// behavior end to end, using a nil summarize (no Agent wired one — the
+// documented, supported degradation) and a mock one (the Agent-wired case,
+// exercised without needing a live provider).
+
+// With summarize == nil (a nil FetchSummarizer — the state before any Agent
+// wires a real one, or an SDK consumer that never bothers), 'prompt' must be
+// silently ignored: the raw response comes back, no error.
+func TestFetchPromptIgnoredWhenNoSummarizer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("the raw body"))
+	}))
+	defer srv.Close()
+
+	out, err := runFetch(fetchInput{URL: srv.URL, Prompt: "summarize this"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "the raw body") {
+		t.Errorf("out = %q, want the raw response (prompt must be silently ignored with no summarizer)", out)
+	}
+}
+
+// Without 'prompt' set at all, the summarizer must NEVER be invoked — even
+// if the Agent wired one. No prompt means no condensing, full stop.
+func TestFetchSummarizerNotCalledWithoutPrompt(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("the raw body"))
+	}))
+	defer srv.Close()
+
+	called := false
+	summarize := func(ctx context.Context, prompt, content string) (string, error) {
+		called = true
+		return "should not happen", nil
+	}
+
+	out, err := runFetchWith(summarize, fetchInput{URL: srv.URL})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if called {
+		t.Error("summarizer must not be called when 'prompt' is not set")
+	}
+	if !strings.Contains(out, "the raw body") {
+		t.Errorf("out = %q, want the raw response", out)
+	}
+}
+
+// With a summarizer wired AND 'prompt' set, the fetched body must reach the
+// summarizer, and its result — not the raw response — is what Fetch returns.
+func TestFetchPromptInvokesSummarizerAndReturnsItsResult(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("<html><body>lots of noisy content here</body></html>"))
+	}))
+	defer srv.Close()
+
+	var gotPrompt, gotContent string
+	summarize := func(ctx context.Context, prompt, content string) (string, error) {
+		gotPrompt = prompt
+		gotContent = content
+		return "condensed answer", nil
+	}
+
+	out, err := runFetchWith(summarize, fetchInput{URL: srv.URL, Prompt: "extract the key info"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != "condensed answer" {
+		t.Errorf("out = %q, want the summarizer's result verbatim", out)
+	}
+	if gotPrompt != "extract the key info" {
+		t.Errorf("summarizer got prompt %q", gotPrompt)
+	}
+	if !strings.Contains(gotContent, "lots of noisy content here") {
+		t.Errorf("summarizer should have received the fetched body, got %q", gotContent)
+	}
+}
+
+// If the summarizer itself fails, Fetch must degrade to the raw (successful)
+// response rather than failing the whole call — the HTTP request succeeded;
+// only the optional condensing step didn't.
+func TestFetchSummarizerErrorDegradesToRawResult(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("the raw body"))
+	}))
+	defer srv.Close()
+
+	summarize := func(ctx context.Context, prompt, content string) (string, error) {
+		return "", context.DeadlineExceeded
+	}
+
+	out, err := runFetchWith(summarize, fetchInput{URL: srv.URL, Prompt: "summarize"})
+	if err != nil {
+		t.Fatalf("a summarizer failure must not fail the whole Fetch call: %v", err)
+	}
+	if !strings.Contains(out, "the raw body") {
+		t.Errorf("out = %q, want the raw response as a fallback", out)
+	}
+	if !strings.Contains(out, "condensing failed") {
+		t.Errorf("out = %q, want an explicit note that condensing failed", out)
+	}
+}
+
+// 'prompt' must be ignored when 'download_to' is set — binary downloads
+// aren't summarized, and the summarizer must not even be invoked.
+func TestFetchPromptIgnoredWithDownloadTo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("binary-data"))
+	}))
+	defer srv.Close()
+
+	called := false
+	summarize := func(ctx context.Context, prompt, content string) (string, error) {
+		called = true
+		return "should not happen", nil
+	}
+
+	dst := filepath.Join(t.TempDir(), "out.bin")
+	out, err := runFetchWith(summarize, fetchInput{URL: srv.URL, Prompt: "summarize", DownloadTo: dst})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if called {
+		t.Error("summarizer must not be called when download_to is set")
+	}
+	if !strings.Contains(out, "saved") {
+		t.Errorf("out = %q, want the normal download-mode message", out)
+	}
+	data, _ := os.ReadFile(dst)
+	if string(data) != "binary-data" {
+		t.Errorf("downloaded content wrong: %q", data)
+	}
+}
+
+// A whitespace-only prompt is the same as no prompt at all — must not
+// trigger the summarizer.
+func TestFetchWhitespaceOnlyPromptIgnored(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("the raw body"))
+	}))
+	defer srv.Close()
+
+	called := false
+	summarize := func(ctx context.Context, prompt, content string) (string, error) {
+		called = true
+		return "should not happen", nil
+	}
+
+	out, err := runFetchWith(summarize, fetchInput{URL: srv.URL, Prompt: "   \n\t  "})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if called {
+		t.Error("summarizer must not be called for a whitespace-only prompt")
+	}
+	if !strings.Contains(out, "the raw body") {
+		t.Errorf("out = %q, want the raw response", out)
+	}
+}
+
+// A failing (4xx/5xx) response must never reach the summarizer — nothing
+// worth condensing in an error page, and the error must still surface.
+func TestFetchErrorResponseNeverSummarized(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		w.Write([]byte("not found"))
+	}))
+	defer srv.Close()
+
+	called := false
+	summarize := func(ctx context.Context, prompt, content string) (string, error) {
+		called = true
+		return "should not happen", nil
+	}
+
+	out, err := runFetchWith(summarize, fetchInput{URL: srv.URL, Prompt: "summarize"})
+	if err == nil {
+		t.Error("4xx should still be reported as an error")
+	}
+	if called {
+		t.Error("summarizer must not be called for a 4xx/5xx response")
+	}
+	if !strings.Contains(out, "HTTP 404") {
+		t.Errorf("out = %q, want the error status shown", out)
 	}
 }

@@ -18,6 +18,13 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
+// fetchSummarizeMaxBytes caps the fetched body handed to FetchSummarizer,
+// independent of the display truncation ApplyTruncation applies to the raw
+// result. Generous enough to give the summarizer real content to work with,
+// bounded so an enormous page can't overflow the summarizing sub-agent's own
+// context window.
+const fetchSummarizeMaxBytes = 200 * 1024 // 200KB
+
 type fetchFile struct {
 	Field string `json:"field"`
 	Path  string `json:"path"`
@@ -38,9 +45,39 @@ type fetchInput struct {
 	FollowRedirects *bool `json:"follow_redirects,omitempty"` // default true; false returns the 3xx as-is
 	// Response destination.
 	DownloadTo string `json:"download_to,omitempty"` // save the response bytes to this path (binary-safe)
+	// Prompt, when set, condenses a successful text response through the
+	// FetchSummarizer instead of returning it raw — see Fetch's doc comment
+	// for the full story of why this field exists and how it degrades.
+	Prompt string `json:"prompt,omitempty"`
 }
 
-func Fetch() Tool {
+// FetchSummarizer condenses fetched text content according to prompt (e.g.
+// "extract the pricing table" or "summarize the key points"), returning the
+// condensed result. Injected by the Agent — Fetch itself has zero knowledge
+// of providers/LLMs (agent/tools must never import internal/providers; see
+// AGENTS.md's backend/frontend separation rule). A nil FetchSummarizer is a
+// valid, supported configuration: Fetch degrades to silently ignoring
+// 'prompt' and returning the raw body, exactly like before this field
+// existed — never an error, since summarization is a nice-to-have, not a
+// correctness requirement.
+type FetchSummarizer func(ctx context.Context, prompt, content string) (string, error)
+
+// Fetch returns the Fetch tool. summarize is optional (nil is valid — see
+// FetchSummarizer's doc comment); when non-nil and the caller sets 'prompt',
+// a successful text response is condensed through it instead of returned raw.
+//
+// Why this field exists: under the claude-oauth provider, harness renames
+// this tool to "WebFetch" for identity/billing purposes (see
+// internal/providers/claude_oauth.go's ccOutbound map) so its own traffic is
+// indistinguishable from Claude Code's. Anthropic's REAL WebFetch tool
+// accepts a 'prompt' argument that summarizes the fetched page through a
+// small model instead of returning raw HTML — and the model, trained on
+// that real tool's behavior, kept sending 'prompt' to OUR Fetch under that
+// borrowed name even though our schema never declared or used it (silently
+// dropped by json.Unmarshal, harmless but wasteful — tokens spent on an
+// instruction nobody read). Implementing the real behavior here closes that
+// gap instead of just tolerating the wasted tokens.
+func Fetch(summarize FetchSummarizer) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name: "Fetch",
@@ -49,7 +86,8 @@ func Fetch() Tool {
 				"Headers: pass 'headers' as an object; the Content-Type for json/form/files is set automatically.\n\n" +
 				"Behavior: 'timeout' sets the request timeout in seconds (default 30). Redirects are followed by default; set 'follow_redirects' to false to inspect a 3xx response (e.g. read its Location header) without following it.\n\n" +
 				"Download: set 'download_to' to save the raw response bytes to a local path (binary-safe — images, PDFs, ZIPs); parent dirs are created. Without it, the response is returned as text.\n\n" +
-				"Response: the result shows the status line, response headers, and body. 4xx/5xx statuses are reported as errors. Text output is truncated to the first 2000 lines or 50KB; when truncated, the full status+headers+body is saved to a temp file whose path is shown.",
+				"Response: the result shows the status line, response headers, and body. 4xx/5xx statuses are reported as errors. Text output is truncated to the first 2000 lines or 50KB; when truncated, the full status+headers+body is saved to a temp file whose path is shown.\n\n" +
+				"Condensing: set 'prompt' to condense a successful text response through an LLM according to that instruction (e.g. \"extract the pricing table\", \"summarize the key points\") instead of getting the raw status+headers+body back — costs one extra model call, so only use it for large or noisy pages where you genuinely want a distilled answer rather than the full content. Ignored when 'download_to' is set (binary responses aren't summarized).",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -73,7 +111,8 @@ func Fetch() Tool {
 					},
 					"timeout": {"type": "integer", "description": "Request timeout in seconds (default: 30)."},
 					"follow_redirects": {"type": "boolean", "description": "Follow HTTP redirects (default: true). Set false to inspect a 3xx response without following it."},
-					"download_to": {"type": "string", "description": "Save the raw response bytes to this local path (binary-safe). Creates parent dirs. Without it, the response is returned as text."}
+					"download_to": {"type": "string", "description": "Save the raw response bytes to this local path (binary-safe). Creates parent dirs. Without it, the response is returned as text."},
+					"prompt": {"type": "string", "description": "Condense a successful text response through an LLM according to this instruction instead of returning it raw. Costs one extra model call. Ignored when 'download_to' is set."}
 				},
 				"required": ["url"]
 			}`),
@@ -168,6 +207,33 @@ func Fetch() Tool {
 				// too many redirects or a missing Location — informational, not an
 				// error). Surface 4xx/5xx so the model knows the request failed.
 				return result, fmt.Errorf("HTTP %s", resp.Status)
+			}
+
+			// Condense through the summarizer if requested. Only on a SUCCESSFUL
+			// text response — an error result above already returned; nothing
+			// worth summarizing there. summarize==nil (no Agent-provided
+			// FetchSummarizer) or an empty/whitespace-only prompt both mean
+			// "not requested" — silently return the raw result, never an error;
+			// summarization is a nice-to-have, not a correctness requirement.
+			if summarize != nil && strings.TrimSpace(args.Prompt) != "" {
+				// Cap what we hand to the summarizer independently of the
+				// DISPLAY truncation above (result) — the raw body can be
+				// much larger than fetchSummarizeMaxBytes allows through, and
+				// feeding it whole risks overflowing the summarizer's own
+				// context. TruncateHead never errors; a truncated body still
+				// gives the summarizer something reasonable to work with.
+				toSummarize := body
+				if len(toSummarize) > fetchSummarizeMaxBytes {
+					toSummarize = toSummarize[:fetchSummarizeMaxBytes]
+				}
+				condensed, sumErr := summarize(ctx, args.Prompt, string(toSummarize))
+				if sumErr != nil {
+					// Degrade to the raw (truncated-for-display) result rather
+					// than failing the whole Fetch call — the HTTP request itself
+					// succeeded; only the optional condensing step failed.
+					return result + fmt.Sprintf("\n\n[condensing failed: %v — showing raw response instead]", sumErr), nil
+				}
+				return condensed, nil
 			}
 			return result, nil
 		},

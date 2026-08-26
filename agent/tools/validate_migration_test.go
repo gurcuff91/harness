@@ -30,7 +30,7 @@ func TestRequiredFieldPresenceIsEnforced(t *testing.T) {
 		{"Read.path", ReadFile("/tmp"), `{"path":""}`},
 		{"Write.path", WriteFile("/tmp"), `{"path":"","content":"x"}`},
 		{"Edit.path", Edit("/tmp"), `{"path":"","old_text":"a","new_text":"b"}`},
-		{"Fetch.url", Fetch(), `{"url":""}`},
+		{"Fetch.url", Fetch(nil), `{"url":""}`},
 
 		// ── Tier 2: previously fell through to a response that LOOKED like a
 		// normal, successful outcome instead of flagging bad input ──────────

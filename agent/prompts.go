@@ -7,6 +7,15 @@ const defaultSystemPrompt = `You are an expert coding agent working directly in 
 const subagentSystemPrompt = `You are a focused sub-agent. Execute the delegated task completely and autonomously.
 Make reasonable assumptions. Return full results — do not truncate. Never ask questions.`
 
+// fetchSummarizeSystemPrompt is the system prompt for the ephemeral, tool-less
+// sub-agent Fetch's FetchSummarizer spins up to condense fetched content
+// (agent.go's buildSessionTools wiring). Deliberately narrower than
+// subagentSystemPrompt: this sub-agent gets no tools at all (see
+// AgentOptions.DisallowedTools at the call site) — its only job is to read
+// the content it's handed and answer according to the instruction, in one
+// turn, never to go explore or fetch anything itself.
+const fetchSummarizeSystemPrompt = `You are given the text content of a web page or API response, and an instruction for what to extract or summarize from it. Respond with ONLY the requested information — no preamble, no meta-commentary about the page itself, no "Here is..." framing. If the requested information genuinely isn't present in the content, say so in one short sentence.`
+
 // compactSystemPrompt is used when generating a compaction summary of the conversation.
 // The summary replaces the full history when context usage reaches ~98%.
 const compactSystemPrompt = `Your task is to produce a concise but complete summary of the conversation so far.

@@ -124,6 +124,17 @@ const defaultMaxIterations = 50
 // finally returns.
 const subagentMaxIterations = 50
 
+// fetchSummarizeMaxIterations caps the ephemeral sub-agent Fetch's
+// FetchSummarizer spins up to condense content. It gets NO tools at all (see
+// the call site's DisallowedTools) and a single-turn job — read the content,
+// answer per the instruction — so it needs far less room than a general
+// Subagent call (which may explore, read files, run commands across many
+// iterations). A small budget here just means a model that somehow keeps
+// "thinking" without producing a final answer gets cut off promptly instead
+// of burning an oversized iteration budget on a task that should resolve in
+// one turn.
+const fetchSummarizeMaxIterations = 5
+
 // New creates a new Agent. Never fails — provider is resolved per session.
 func New(opts AgentOptions) *Agent {
 	if opts.MaxIterations <= 0 {
@@ -153,13 +164,13 @@ func New(opts AgentOptions) *Agent {
 		}
 	}
 
-	// Fetch is the only agent-level built-in seeded here: it has no cwd
-	// dependency (HTTP requests, not local file/process access), unlike
-	// Bash/Read/Write/Edit — those are built per-session, with that session's
-	// cwd, in buildSessionTools (the single place session-scoped tools come
-	// from; see its comment).
+	// No built-ins are seeded here anymore: Fetch moved to buildSessionTools
+	// alongside Bash/Read/Write/Edit — it now needs a per-session
+	// FetchSummarizer closure (reads the session's CURRENT model, like
+	// Subagent's executor does), which doesn't exist yet at this point in
+	// New(). This registry starts empty and only ever grows from MCP tools
+	// and AgentOptions.Tools below.
 	reg := tools.NewRegistry()
-	reg.Register(tools.Fetch())
 
 	// Connect configured MCP servers eagerly (root agent only). Their tools are
 	// registered alongside the built-ins and shared by every session. Failures
@@ -700,6 +711,82 @@ func awaitSubagentResult(ctx context.Context, done <-chan error, textBuf *string
 	}
 }
 
+// buildFetchSummarizer returns the FetchSummarizer closure the Fetch tool
+// uses to condense fetched content when the model sets 'prompt' — see
+// fetch.go's FetchSummarizer doc comment for why this exists at all (Fetch
+// gained this field because the model, seeing the tool renamed to "WebFetch"
+// under claude-oauth, kept sending a 'prompt' argument our schema never
+// declared or used, matching Anthropic's real WebFetch tool's behavior).
+//
+// This is deliberately the SAME mechanism as the Subagent tool's executor
+// (see buildSessionTools below) — an ephemeral, in-process sub-agent reading
+// the CURRENT session model at call time via sessRef — but several tiers
+// lighter: fetchSummarizeSystemPrompt (a narrower, single-purpose prompt
+// than subagentSystemPrompt), fetchSummarizeMaxIterations (5, not 50 — a
+// condensing job is a single-turn read-and-answer, never a multi-step task),
+// EVERY built-in tool disallowed (unlike Subagent's sub-agent, which keeps
+// most tools and only blocks recursion/write-memory/schedule-management),
+// and no sharedMemory at all — there is nothing to recall or persist for a
+// one-shot condensing call. Its only input is the content Fetch already
+// downloaded, handed to it as part of the prompt text, never re-fetched.
+func (a *Agent) buildFetchSummarizer(cwd string, loader resources.ResourceLoader, sessRef **Session) tools.FetchSummarizer {
+	parentA := a
+	return func(ctx context.Context, prompt, content string) (string, error) {
+		subAgent := New(AgentOptions{
+			ThinkingLevel:  parentA.thinkingLevel,
+			SystemPrompt:   fetchSummarizeSystemPrompt,
+			MaxIterations:  fetchSummarizeMaxIterations,
+			MaxTokens:      parentA.maxTokens,
+			Store:          store.NewInMemoryStore(),
+			ResourceLoader: loader.Copy(), // see Subagent's executor comment for why Copy(), not the parent's own instance
+			// TOOLLESS on purpose: this sub-agent's only input is the content
+			// Fetch already downloaded, handed to it as prompt text — it has
+			// nothing to read, write, run, or fetch, and no memory to recall
+			// (no sharedMemory below, so a.memStore stays nil and Memo* never
+			// registers regardless of this list). Every built-in name is
+			// listed explicitly rather than relying on the absence of
+			// EnableMCPs/EnableColleagues/EnableMemory/opts.Tools alone —
+			// defense in depth so a future default change elsewhere can't
+			// silently hand this single-purpose summarizer a tool it was
+			// never meant to have.
+			DisallowedTools: []string{
+				tools.ToolBash, tools.ToolRead, tools.ToolWrite, tools.ToolEdit, tools.ToolFetch,
+				tools.ToolSkill, tools.ToolSubagent,
+				tools.ToolMemoWrite, tools.ToolMemoSearch, tools.ToolMemoDelete,
+				tools.ToolSchedule, tools.ToolScheduleList, tools.ToolScheduleDelete,
+				tools.ToolColleagueList, tools.ToolColleagueAsk,
+			},
+		})
+		// Current model at call time, not whatever was active when this
+		// closure was built — same reasoning as Subagent's executor (see its
+		// comment on sessRef): a /model switch mid-session must be reflected
+		// in every subsequent Fetch condensing call too.
+		currentModel := (*sessRef).CurrentModel()
+		sess, err := subAgent.NewSession(cwd, currentModel)
+		if err != nil {
+			return "", fmt.Errorf("fetch summarizer: %w", err)
+		}
+		defer sess.Close()
+
+		fullPrompt := fmt.Sprintf("Instruction: %s\n\n--- Content ---\n%s", prompt, content)
+
+		var textBuf strings.Builder
+		done := make(chan error, 1)
+		sess.Subscribe(func(e types.Event) {
+			switch e.Type {
+			case types.EventStreamTextDelta:
+				textBuf.WriteString(e.Delta)
+			case types.EventTurnEnd:
+				done <- nil
+			case types.EventError:
+				done <- fmt.Errorf("%s", e.Message)
+			}
+		})
+		sess.Prompt(ctx, fullPrompt)
+		return awaitSubagentResult(ctx, done, &textBuf)
+	}
+}
+
 func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res *resources.Resources, loader resources.ResourceLoader) (*tools.Registry, toolLens) {
 	reg := tools.NewRegistry()
 	// Built one instance per session, bound to THIS session's cwd — they can't
@@ -719,6 +806,9 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 	}
 	if a.isToolAllowed(tools.ToolEdit) {
 		reg.Register(tools.Edit(cwd))
+	}
+	if a.isToolAllowed(tools.ToolFetch) {
+		reg.Register(tools.Fetch(a.buildFetchSummarizer(cwd, loader, sessRef)))
 	}
 	for _, def := range a.toolReg.Definitions() {
 		if a.isToolAllowed(def.Name) {
