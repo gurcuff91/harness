@@ -2,6 +2,8 @@ package llm
 
 import (
 	"context"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -282,5 +284,43 @@ func TestParseOpenAIStreamContextCancelUnblocks(t *testing.T) {
 		// Unblocked — the exact error doesn't matter here, just that it returned.
 	case <-time.After(2 * time.Second):
 		t.Fatal("parseOpenAIStream did not unblock within 2s of ctx cancellation")
+	}
+}
+
+// TestParseOpenAIStreamDroppedConnectionMidToolCallIsAnError mirrors the
+// Anthropic-side regression test: a real connection dropped while a
+// tool_calls delta's arguments were still streaming in — the model had
+// already announced the tool, but the connection broke (genuine I/O error,
+// NOT a ctx cancellation) before [DONE] ever arrived. Before this fix,
+// parseOpenAIStream returned (resp, nil) as if the turn had completed
+// normally. Now it must return a genuine error instead.
+func TestParseOpenAIStreamDroppedConnectionMidToolCallIsAnError(t *testing.T) {
+	raw := `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","function":{"name":"Bash","arguments":""}}]},"index":0}]}` + "\n\n" +
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"command\": \"ec"}}]},"index":0}]}` + "\n\n"
+		// Connection drops HERE — no further tool_calls delta, no [DONE].
+
+	sentinel := io.ErrUnexpectedEOF
+	r := &erroringReader{data: []byte(raw), err: sentinel}
+
+	resp, err := parseOpenAIStream(context.Background(), r, nil)
+	if err == nil {
+		t.Fatalf("expected an error for a connection dropped mid-tool-call, got a successful response: %+v", resp)
+	}
+	if !errors.Is(err, sentinel) {
+		t.Errorf("error = %v, want it to wrap the underlying read error %v", err, sentinel)
+	}
+}
+
+// TestParseOpenAIStreamCleanEOFBeforeDoneIsAnError covers the
+// EOF-without-[DONE] variant — the server closed the connection cleanly (no
+// read error) but never sent the [DONE] marker, e.g. a proxy terminating the
+// connection early.
+func TestParseOpenAIStreamCleanEOFBeforeDoneIsAnError(t *testing.T) {
+	raw := mkChunk("", "partial answ")
+	// staticReader hits a clean io.EOF right after — no [DONE] marker.
+
+	resp, err := parseOpenAIStream(context.Background(), &staticReader{data: []byte(raw)}, nil)
+	if err == nil {
+		t.Fatalf("expected an error for a stream that EOF'd before [DONE], got a successful response: %+v", resp)
 	}
 }

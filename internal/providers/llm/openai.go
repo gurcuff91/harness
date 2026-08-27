@@ -281,8 +281,11 @@ func parseOpenAIStream(ctx context.Context, body io.Reader, cb types.StreamCallb
 	toolsByIdx := map[int]*toolState{}
 	var textBuf, reasoningBuf string
 
-	for sse := range ParseSSE(ctx, body) {
+	var sawDone bool
+	sseCh, sseErr := ParseSSE(ctx, body)
+	for sse := range sseCh {
 		if sse.Data == "[DONE]" {
+			sawDone = true
 			break
 		}
 		var event map[string]any
@@ -378,6 +381,36 @@ func parseOpenAIStream(ctx context.Context, body io.Reader, cb types.StreamCallb
 		})
 		emit(types.StreamEvent{Type: types.StreamToolEnd, ToolID: ts.id, ToolName: ts.name, ToolArgs: input})
 	}
+
+	// On the [DONE] path, the loop above `break`s out WITHOUT draining sseCh
+	// to closure — ParseSSE's producer goroutine may still be running (it
+	// hasn't necessarily reached its own close(ch)/scanner.Err() yet, since
+	// the HTTP server that sent [DONE] may close the connection a moment
+	// later). sseErr() is only meaningful once that goroutine has actually
+	// finished (see its doc comment), so drain any remaining events before
+	// consulting it — normally zero or few, since [DONE] is the stream's own
+	// last real event.
+	for range sseCh {
+	}
+
+	// The channel closing/[DONE] is not by itself proof the response is
+	// complete — see ParseSSE's errFn doc comment. A dropped connection
+	// mid-stream (e.g. while a tool call's arguments were still being sent)
+	// used to fall through here silently: sseCh just stopped yielding events,
+	// the loop above exited normally without ever seeing [DONE], and this
+	// function returned resp, nil as if the model had genuinely finished —
+	// with whatever partial content had arrived by then, no error, no signal
+	// to the caller that anything went wrong. Both checks below turn that
+	// into a real error, which flows through the SAME path any other stream
+	// error already does (runStream returns it to promptSync, which emits
+	// EventError) — no changes needed anywhere else in the call chain.
+	if err := sseErr(); err != nil {
+		return nil, fmt.Errorf("stream connection lost: %w", err)
+	}
+	if !sawDone {
+		return nil, fmt.Errorf("stream ended unexpectedly before completion (no [DONE] marker received) — the connection likely dropped mid-response")
+	}
+
 	emit(types.StreamEvent{
 		Type: types.StreamUsage, InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens,
 	})

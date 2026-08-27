@@ -189,7 +189,9 @@ func ParseAnthropicStream(ctx context.Context, body io.Reader, cb types.StreamCa
 	}
 	blocks := make(map[int]*blockState)
 
-	for sse := range ParseSSE(ctx, body) {
+	var sawMessageStop bool
+	sseCh, sseErr := ParseSSE(ctx, body)
+	for sse := range sseCh {
 		if sse.Event == "error" {
 			emit(types.StreamEvent{Type: types.StreamError, Delta: sse.Data})
 			return nil, fmt.Errorf("stream error: %s", sse.Data)
@@ -315,11 +317,33 @@ func ParseAnthropicStream(ctx context.Context, body io.Reader, cb types.StreamCa
 				resp.Usage.CacheWrite = jsonInt(u, "cache_creation_input_tokens")
 			}
 		case "message_stop":
+			sawMessageStop = true
 			emit(types.StreamEvent{Type: types.StreamUsage, InputTokens: resp.Usage.InputTokens,
 				OutputTokens: resp.Usage.OutputTokens, CacheRead: resp.Usage.CacheRead,
 				CacheWrite: resp.Usage.CacheWrite})
 			emit(types.StreamEvent{Type: types.StreamDone})
 		}
+	}
+
+	// The channel closing is not by itself proof the response is complete —
+	// see ParseSSE's errFn doc comment. A dropped connection mid-stream (e.g.
+	// while a tool_use block's arguments were still being sent) used to fall
+	// through here silently: sseCh just stops yielding events, the loop above
+	// exits normally, and this function returned resp, nil as if the model
+	// had genuinely finished — with whatever partial content had arrived by
+	// then (often missing the very tool_use the model was mid-way through),
+	// no error, no signal to the caller that anything went wrong. The turn
+	// then looked "done" with no tool calls to run, and the UI was left
+	// showing the last event that DID arrive (typically EventToolStart) with
+	// nothing ever resolving it. Both checks below turn that into a real
+	// error, which flows through the SAME path any other stream error
+	// already does (runStream returns it to promptSync, which emits
+	// EventError) — no changes needed anywhere else in the call chain.
+	if err := sseErr(); err != nil {
+		return nil, fmt.Errorf("stream connection lost: %w", err)
+	}
+	if !sawMessageStop {
+		return nil, fmt.Errorf("stream ended unexpectedly before completion (no message_stop received) — the connection likely dropped mid-response")
 	}
 
 	resp.Message = types.NewAssistantToolCallMessage(resp.Text, thinkingBuf, lastThinkingSig, resp.ToolCalls)
