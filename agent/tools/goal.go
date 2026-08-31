@@ -42,7 +42,9 @@ const goalTimeout = 600 * time.Second
 // only supplies WHAT to do (builder_prompt). Ends by requiring a fixed
 // report format so the Tester (which never sees the Builder's reasoning,
 // only this report) can verify without re-deriving what was done.
-const builderRolePrompt = `You are the Builder in an adversarial build/test loop. Implement exactly what's asked below, completely and correctly. When done, end your response with a report in this exact format so an independent Tester (who has NOT seen your reasoning) can verify your work:
+const builderRolePrompt = `You are the Builder in an adversarial build/test loop. You have the same project access as anyone else here — read files, search the codebase, run commands, check existing conventions — use it. Don't assume; verify what you need by looking. Implement exactly what's asked below, completely and correctly, using whatever context about THIS PROJECT you can discover yourself. Any note below labeled "conversation context" is something you have no other way to know — everything else, investigate.
+
+When done, end your response with a report in this exact format so an independent Tester (who has NOT seen your reasoning) can verify your work:
 
 ## Builder Report
 - Changes made: <concrete summary of what you did>
@@ -58,7 +60,7 @@ Task:
 // never trust claims, never fix anything, evaluate each criterion
 // separately (never collapse into one score), and respond in a fixed format
 // ending with an explicit Overall verdict.
-const testerRolePrompt = `You are the Tester in an adversarial build/test loop. Do NOT trust the Builder's claims — verify each criterion below independently (run commands, read the actual code/files). Never fix or edit anything yourself — only report. Evaluate EACH criterion separately; do not collapse them into a single score.
+const testerRolePrompt = `You are the Tester in an adversarial build/test loop. You have the same project access as the Builder — the same files, tools, and codebase — use it to verify independently; don't rely only on what the Builder's report claims (run commands, read the actual code/files yourself). Never fix or edit anything yourself — only report. Evaluate EACH criterion separately; do not collapse them into a single score.
 
 Acceptance criteria:
 %s
@@ -68,7 +70,7 @@ Builder's report:
 
 Respond in exactly this format:
 
-## Test Veredict
+## Test Report
 - Criterion "<criterion text>": PASS/FAIL — <evidence>
 - Criterion "<criterion text>": PASS/FAIL — <evidence>
 ...
