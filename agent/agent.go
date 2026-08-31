@@ -1077,7 +1077,12 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 			if err != nil {
 				return "", fmt.Errorf("goal: tester round failed: %w", err)
 			}
-			return testerReport, nil
+			// Return BOTH reports — see GoalRoundResult's doc comment: the
+			// Builder's raw response is the only place a content-producing
+			// task's actual deliverable exists (it's never persisted to a
+			// file the caller could Read back later), so it must reach the
+			// caller alongside the Tester's verdict, not be discarded.
+			return tools.GoalRoundResult(builderReport, testerReport), nil
 		}
 		reg.Register(tools.Goal(executor))
 	}

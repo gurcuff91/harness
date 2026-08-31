@@ -235,3 +235,44 @@ func TestGoalTesterPromptIncludesCriteriaAndBuilderReportVerbatim(t *testing.T) 
 		t.Error("missing overall verdict format instructions")
 	}
 }
+
+// ── round result assembly ──────────────────────────────────────────────
+
+// TestGoalRoundResultIncludesBothReports is the regression test for the
+// content-loss bug: the tool used to return ONLY the Tester's report,
+// discarding the Builder's actual deliverable — fine for code (the caller
+// can Read the changed files back), but for content-producing tasks (a
+// written report, an analysis) the Builder's response is the ONLY place
+// that content exists. A caller receiving just the Tester's verdict had no
+// way to recover the real content short of guessing/hallucinating it.
+func TestGoalRoundResultIncludesBothReports(t *testing.T) {
+	result := GoalRoundResult(
+		"Here is the news report for 5 cities...\n\n## Builder Report\n- Changes made: wrote report",
+		"## Test Report\n- Criterion \"5 cities covered\": PASS\nOverall: PASS",
+	)
+	if !strings.Contains(result, "Here is the news report for 5 cities") {
+		t.Error("missing the Builder's actual deliverable content")
+	}
+	if !strings.Contains(result, "Overall: PASS") {
+		t.Error("missing the Tester's verdict")
+	}
+	if !strings.Contains(result, "## Builder Report") {
+		t.Error("missing the Builder's own report section")
+	}
+}
+
+// TestGoalRoundResultDoesNotAddAnExtraHeader guards against reintroducing a
+// redundant wrapping header: builderRolePrompt already instructs the
+// Builder to end its OWN response with a "## Builder Report" section, which
+// is already a clear enough delimiter — GoalRoundResult must not prepend
+// anything extra around it.
+func TestGoalRoundResultDoesNotAddAnExtraHeader(t *testing.T) {
+	builderResponse := "content here\n\n## Builder Report\n- Changes made: x"
+	result := GoalRoundResult(builderResponse, "## Test Report\nOverall: PASS")
+	if !strings.HasPrefix(result, builderResponse) {
+		t.Errorf("expected the result to start with the Builder's response verbatim (no extra header prepended), got: %q", result)
+	}
+	if strings.Count(result, "## Builder Report") != 1 {
+		t.Errorf("expected exactly ONE '## Builder Report' header (the Builder's own), got %d in: %q", strings.Count(result, "## Builder Report"), result)
+	}
+}

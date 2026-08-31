@@ -95,15 +95,40 @@ func GoalTesterPrompt(testerPrompt, builderReport string) string {
 	return fmt.Sprintf(testerRolePrompt, testerPrompt, builderReport)
 }
 
+// GoalRoundResult assembles what the Goal tool returns to the caller after
+// one round: BOTH the Builder's full raw response and the Tester's verdict,
+// clearly separated by a blank line. Originally the tool returned only the
+// Tester's report (the verdict is what decides whether to iterate) — but
+// for content-producing tasks (a written report, an analysis, anything that
+// isn't files the caller can just Read back later) the Builder's actual
+// deliverable only ever exists in its own response text. Discarding it
+// meant a caller who received an 'Overall: PASS' had the VERDICT but not
+// the actual content — observed in practice as a model trying to
+// reconstruct/guess the content from the Tester's summary instead of having
+// the real thing, a real hallucination risk. Returning both costs nothing
+// new: the Builder's response was already paid for in tokens once (it's
+// handed to the Tester as evidence) — surfacing it to the caller too is
+// free reuse, not a new call.
+//
+// No extra wrapping header is added around builderReport: per
+// builderRolePrompt, the Builder's own response already ends with its own
+// "## Builder Report" section (changes made / files touched / how to
+// verify), which is already a clear enough delimiter on its own — an
+// additional header here would be redundant.
+func GoalRoundResult(builderReport, testerReport string) string {
+	return builderReport + "\n\n" + testerReport
+}
+
 // Goal returns a Tool that runs one round of an adversarial build/test loop:
 // a Builder sub-agent implements 'builder_prompt', then a Tester sub-agent
 // independently verifies the result against the acceptance criteria in
 // 'tester_prompt' — without ever seeing the Builder's reasoning, only its
 // final report (see builderRolePrompt/testerRolePrompt). The tool returns
-// the Tester's full report; the CALLER decides whether to call Goal again
-// (refining builder_prompt from the specific failures) or the goal is met —
-// this tool deliberately does NOT parse the verdict or make that decision
-// itself. A FAIL verdict is a normal, successful tool result (valid business
+// BOTH the Builder's full response and the Tester's report (see
+// GoalRoundResult) — the CALLER decides whether to call Goal again (refining
+// builder_prompt from the specific failures) or the goal is met — this tool
+// deliberately does NOT parse the verdict or make that decision itself. A
+// FAIL verdict is a normal, successful tool result (valid business
 // information — the work isn't done yet), never a returned error: only a
 // genuine system failure (a sub-agent erroring, a timeout, ctx cancellation)
 // returns a non-nil error, exactly like Subagent/ColleagueAsk/Fetch.
@@ -126,12 +151,12 @@ func Goal(executor GoalExecutor) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name: ToolGoal,
-			Description: `Run one round of an adversarial build/test loop: a Builder sub-agent implements 'builder_prompt', then a Tester sub-agent independently verifies the result against the acceptance criteria in 'tester_prompt' — without seeing the builder's reasoning, only its final report. Returns the Tester's full report; read it to decide whether to call Goal again with a refined builder_prompt (if criteria failed) or the task is done (if all passed). Never invoke this tool on your own initiative — only when the user has explicitly requested this adversarial build/test workflow in their current message.`,
+			Description: `Run one round of an adversarial build/test loop: a Builder sub-agent implements 'builder_prompt', then a Tester sub-agent independently verifies the result against the acceptance criteria in 'tester_prompt' — without seeing the builder's reasoning, only its final report. The tool ALREADY establishes each sub-agent's role and behavior internally — 'builder_prompt'/'tester_prompt' must contain ONLY the operational content (what to do / what to check), never role-setting text, which the tool already provides and would otherwise be duplicated. Returns BOTH the Builder's full response (its actual deliverable — the only place that content exists if it wasn't saved to a file) and the Tester's verdict; read the verdict to decide whether to call Goal again with a refined builder_prompt (if criteria failed) or the task is done (if all passed) — and use the Builder's response as the real content when reporting back to the user, never reconstruct it from the Tester's summary. Never invoke this tool on your own initiative — only when the user has explicitly requested this adversarial build/test workflow in their current message.`,
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"builder_prompt": {"type": "string", "description": "What the Builder sub-agent should implement or change this round. Operational instructions — what to do, not how to behave as a role."},
-					"tester_prompt": {"type": "string", "description": "A list of specific, checkable acceptance criteria the builder's work must satisfy this round — not a vague instruction. Each criterion should be independently verifiable (a command to run, a file to check, a behavior to reproduce)."},
+					"builder_prompt": {"type": "string", "description": "What the Builder sub-agent should implement or change this round — operational instructions only (the task itself). Do NOT include role-setting text like 'You are the Builder...' — the tool already establishes that role internally; starting with it here duplicates it."},
+					"tester_prompt": {"type": "string", "description": "A list of specific, checkable acceptance criteria the builder's work must satisfy this round — not a vague instruction, and not role-setting text like 'You are the Tester...' (the tool already establishes that role internally). Each criterion should be independently verifiable (a command to run, a file to check, a behavior to reproduce)."},
 					"timeout": {"type": "integer", "description": "Seconds for the ENTIRE round — Builder run + Tester run, sequential, on one shared clock (default: 600). If the Builder uses most of it, the Tester gets whatever remains; the round fails with a timeout if that isn't enough."},
 					"max_iterations": {"type": "integer", "description": "Shared ReAct iteration budget for BOTH the Builder and the Tester sub-agent this round (default: 50, range 1-200 if set). Raise it for a genuinely large implementation or a thorough verification that the default would cut short."}
 				},

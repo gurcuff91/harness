@@ -75,6 +75,14 @@ func TestGoalToolRunsOneRoundAndReturnsTesterVerdict(t *testing.T) {
 		if !strings.Contains(goalResult, "## Test Report") {
 			t.Errorf("expected the Tester's report format in the tool output, got: %q", goalResult)
 		}
+		// Regression check: the tool must surface the Builder's own response
+		// too, not just the Tester's verdict — builderRolePrompt makes every
+		// Builder response end with its own fixed "## Builder Report"
+		// section, which GoalRoundResult preserves verbatim (no extra
+		// wrapping header) ahead of the Tester's separate "## Test Report".
+		if !strings.Contains(goalResult, "## Builder Report") {
+			t.Errorf("expected the Builder's response to be included alongside the Tester's verdict, got: %q", goalResult)
+		}
 	})
 
 	t.Run("unsatisfiable criterion produces a FAIL verdict, still not a tool error", func(t *testing.T) {
