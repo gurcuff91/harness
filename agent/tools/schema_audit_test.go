@@ -49,6 +49,7 @@ func allBuiltinTools() []Tool {
 		ColleagueList(),
 		ColleagueAsk(),
 		Subagent(func(ctx context.Context, prompt string, maxIterations int) (string, error) { return "", nil }),
+		Goal(func(ctx context.Context, builderPrompt, testerPrompt string, maxIterations int) (string, error) { return "", nil }),
 	}
 }
 

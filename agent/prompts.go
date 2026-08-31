@@ -63,3 +63,23 @@ func buildCompactionCheckpoint(summary string, hasMemory bool) string {
 const maxIterationsPrompt = "You've reached the maximum number of tool calls allowed for this turn. " +
 	"Please summarize: (1) what you have completed so far, (2) what still needs to be done, " +
 	"and (3) ask the user if they want you to continue or if they'd like to change direction."
+
+// GoalCommandPrompt builds the message injected into the session when the
+// user runs the /goal command — it does NOT implement the loop itself (that
+// stays the model's own ReAct loop, driven by repeated Goal tool calls); it
+// only explains the protocol at a high level and hands off the user's own
+// goal text. Exported (unlike the const prompts above) because it needs to
+// interpolate the user's goal — server.go's handleExecCommand composes it
+// for the "goal" command the same way it already composes the skill: prompt.
+func GoalCommandPrompt(userGoal string) string {
+	return "Use the Goal tool to drive an adversarial build/test loop toward this objective:\n\n" +
+		userGoal +
+		"\n\n" +
+		"Protocol:\n" +
+		"1. Compose this round's 'builder_prompt' from the objective above plus everything you already know about this project/conversation — the Builder sub-agent starts with NO context of its own.\n" +
+		"2. Compose 'tester_prompt' as a concrete, checkable list of acceptance criteria derived from the objective — not a vague instruction.\n" +
+		"3. Call the Goal tool. Read the Tester's report it returns.\n" +
+		"4. If 'Overall: PASS' — the goal is achieved. Stop and report success to the user.\n" +
+		"5. If 'Overall: FAIL' — refine 'builder_prompt' for the next round using the SPECIFIC per-criterion failures the Tester reported (not a generic \"try again\"), and call Goal again.\n" +
+		"6. If progress stalls (the same criteria keep failing across rounds with no improvement) or the objective turns out ambiguous or infeasible, STOP and ask the user rather than looping indefinitely."
+}

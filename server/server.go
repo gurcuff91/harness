@@ -1149,6 +1149,13 @@ var commands = []commandDef{
 		Description: "Wipe the session history and stats, starting fresh (preserves model, thinking, and name)",
 		Params:      []paramDef{},
 	},
+	{
+		Name:        "goal",
+		Description: "Drive an adversarial build/test loop toward a goal, using the Goal tool (Builder implements, Tester independently verifies, repeats on failure)",
+		Params: []paramDef{
+			{Name: "prompt", Type: "string", Required: true},
+		},
+	},
 }
 
 func (s *Server) handleListCommands(w http.ResponseWriter, r *http.Request) {
@@ -1292,6 +1299,32 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeStatus(w, http.StatusOK, "ok", "")
+
+	case "goal":
+		// Like "skill:<name>" below, this doesn't run a new server-side
+		// state machine — it composes one fixed prompt (agent.GoalCommandPrompt)
+		// explaining the adversarial build/test protocol and hands off the
+		// user's own goal text, then injects it via the session's normal
+		// Prompt() — the model's own ReAct loop (driven by repeated Goal
+		// tool calls) IS the round-trip loop from here on.
+		//
+		// PromptWithDisplayText keeps the full injected protocol prompt OUT
+		// of what gets echoed back to the user — a transport echoes just
+		// "Goal: <their own text>" instead of the entire fixed instructions
+		// the model needs. The model itself still receives the full prompt
+		// unchanged.
+		goalText, _ := req.Params["prompt"].(string)
+		if strings.TrimSpace(goalText) == "" {
+			writeError(w, http.StatusBadRequest, "param 'prompt' is required", nil)
+			return
+		}
+		ps := proxy.session.Prompt(context.Background(), agent.GoalCommandPrompt(goalText),
+			agent.PromptWithDisplayText("Goal: "+goalText))
+		status := "started"
+		if ps == types.PromptQueued {
+			status = "queued"
+		}
+		writeStatus(w, http.StatusAccepted, status, "")
 
 	default:
 		// Check if it's a skill command: skill:<name>

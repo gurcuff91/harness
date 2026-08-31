@@ -118,6 +118,11 @@ type followUp struct {
 	text   string
 	images []types.ImageData
 	origin string // where the prompt came from ("user", "scheduled", …); default "user"
+	// displayText, when non-empty, is what EventReceivedPrompt/EventFollowUpStart
+	// echo to transports INSTEAD of text — see PromptWithDisplayText's doc
+	// comment. The model always sees the full `text`; this only affects what
+	// gets echoed back to a human.
+	displayText string
 	// done, when non-nil, receives the turn's final text (or error) once this
 	// specific prompt finishes — used by PromptSync. nil for fire-and-forget.
 	done chan promptResult
@@ -147,13 +152,27 @@ const autoCompactThreshold = 0.95
 type PromptOption func(*promptConfig)
 
 type promptConfig struct {
-	images []types.ImageData
-	origin string
+	images      []types.ImageData
+	origin      string
+	displayText string
 }
 
 // PromptWithImages attaches images to the prompt (vision requests).
 func PromptWithImages(images ...types.ImageData) PromptOption {
 	return func(c *promptConfig) { c.images = append(c.images, images...) }
+}
+
+// PromptWithDisplayText overrides what EventReceivedPrompt/EventFollowUpStart
+// echo to transports, WITHOUT changing what the model actually receives (the
+// full `text` argument to Prompt/PromptAndWait is unaffected — this only
+// controls the human-facing echo). For a caller like server.go's "goal"
+// command handler, which composes a large fixed protocol prompt
+// (agent.GoalCommandPrompt) the model needs in full but a human never should
+// see verbatim, this lets it echo just "Goal: <user's own text>" instead of
+// the whole injected prompt. Left unset (the default), the echo is `text`
+// itself — today's behavior for every other caller.
+func PromptWithDisplayText(text string) PromptOption {
+	return func(c *promptConfig) { c.displayText = text }
 }
 
 // PromptWithOriginUser tags the prompt as user-originated (the default).
@@ -264,7 +283,7 @@ func (s *Session) loadModelMeta(modelID string) {
 func (s *Session) Prompt(ctx context.Context, text string, opts ...PromptOption) types.PromptStatus {
 	c := buildPromptConfig(opts)
 	s.followMu.Lock()
-	s.followUps = append(s.followUps, followUp{text: text, images: c.images, origin: c.origin})
+	s.followUps = append(s.followUps, followUp{text: text, images: c.images, origin: c.origin, displayText: c.displayText})
 	if !s.busy {
 		s.busy = true
 		s.followCtx = ctx // parent context for all turns
@@ -401,7 +420,7 @@ func (s *Session) PromptAndWait(ctx context.Context, text string, opts ...Prompt
 	c := buildPromptConfig(opts)
 	done := make(chan promptResult, 1)
 	s.followMu.Lock()
-	s.followUps = append(s.followUps, followUp{text: text, images: c.images, origin: c.origin, done: done})
+	s.followUps = append(s.followUps, followUp{text: text, images: c.images, origin: c.origin, displayText: c.displayText, done: done})
 	if !s.busy {
 		s.busy = true
 		s.followCtx = ctx
@@ -555,11 +574,18 @@ func (s *Session) drainFollowUps() {
 		// Echo the prompt to clients. The immediate (first) prompt gets a
 		// ReceivedPrompt event; queued ones get FollowUpStart. Both carry the text
 		// and origin so transports can render them (e.g. scheduled → clock icon)
-		// even though the client didn't originate the prompt.
+		// even though the client didn't originate the prompt. echoText is
+		// fu.displayText when the caller set one (PromptWithDisplayText) —
+		// the MODEL below always gets the full fu.text regardless; only the
+		// human-facing echo can differ.
+		echoText := fu.text
+		if fu.displayText != "" {
+			echoText = fu.displayText
+		}
 		if first {
-			s.emit(types.Event{Type: types.EventReceivedPrompt, Output: fu.text, Origin: fu.origin})
+			s.emit(types.Event{Type: types.EventReceivedPrompt, Output: echoText, Origin: fu.origin})
 		} else {
-			s.emit(types.Event{Type: types.EventFollowUpStart, Output: fu.text, Origin: fu.origin})
+			s.emit(types.Event{Type: types.EventFollowUpStart, Output: echoText, Origin: fu.origin})
 		}
 		first = false
 

@@ -758,7 +758,7 @@ func (a *Agent) buildFetchSummarizer(cwd string, loader resources.ResourceLoader
 			// never meant to have.
 			DisallowedTools: []string{
 				tools.ToolBash, tools.ToolRead, tools.ToolWrite, tools.ToolEdit, tools.ToolFetch,
-				tools.ToolSkill, tools.ToolSubagent,
+				tools.ToolSkill, tools.ToolSubagent, tools.ToolGoal,
 				tools.ToolMemoWrite, tools.ToolMemoSearch, tools.ToolMemoDelete,
 				tools.ToolSchedule, tools.ToolScheduleList, tools.ToolScheduleDelete,
 				tools.ToolColleagueList, tools.ToolColleagueAsk,
@@ -941,7 +941,7 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 				// to the root agent. Subagents get neither the engine (EnableScheduler
 				// stays false) nor the Schedule* tools (disallowed).
 				DisallowedTools: []string{
-					tools.ToolSubagent, tools.ToolMemoWrite, tools.ToolMemoDelete,
+					tools.ToolSubagent, tools.ToolGoal, tools.ToolMemoWrite, tools.ToolMemoDelete,
 					tools.ToolSchedule, tools.ToolScheduleList, tools.ToolScheduleDelete,
 				},
 				Tools:        parentA.MCPTools(),
@@ -990,6 +990,96 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 			return awaitSubagentResult(ctx, done, &textBuf)
 		}
 		reg.Register(tools.Subagent(executor))
+	}
+
+	// Goal tool — one round of an adversarial build/test loop (only if
+	// allowed; excluded for sub-agents themselves, same as Subagent).
+	if a.isToolAllowed(tools.ToolGoal) {
+		parentA := a
+		executor := func(ctx context.Context, builderPrompt, testerPrompt string, requestedMaxIterations int) (string, error) {
+			// Same semantics as Subagent's own override: 0 = use the
+			// default, already validated within range by the tool. Shared
+			// by BOTH the builder and tester sub-agent below — a round that
+			// needs a bigger budget needs it for both roles roughly
+			// together (a large implementation needs a thorough
+			// verification to match).
+			maxIter := subagentMaxIterations
+			if requestedMaxIterations > 0 {
+				maxIter = requestedMaxIterations
+			}
+			currentModel := (*sessRef).CurrentModel()
+
+			// runRole spins up one ephemeral sub-agent with the given extra
+			// tool restrictions (on top of the recursion/memory/schedule
+			// ones every Goal sub-agent gets, same as Subagent's), prompts
+			// it, folds its delegated cost into the parent, and returns its
+			// final text. Shared between the Builder and Tester calls below
+			// — they differ only in role prompt and extra restrictions.
+			runRole := func(extraDisallowed []string, prompt string) (string, error) {
+				subAgent := New(AgentOptions{
+					ThinkingLevel:  parentA.thinkingLevel,
+					SystemPrompt:   subagentSystemPrompt,
+					MaxIterations:  maxIter,
+					MaxTokens:      parentA.maxTokens,
+					Store:          store.NewInMemoryStore(),
+					ResourceLoader: loader.Copy(), // see Subagent's executor comment for why Copy(), not the parent's own instance
+					DisallowedTools: append([]string{
+						tools.ToolSubagent, tools.ToolGoal, tools.ToolMemoWrite, tools.ToolMemoDelete,
+						tools.ToolSchedule, tools.ToolScheduleList, tools.ToolScheduleDelete,
+					}, extraDisallowed...),
+					Tools:        parentA.MCPTools(),
+					sharedMemory: parentA.memStore,
+				})
+				sess, err := subAgent.NewSession(cwd, currentModel)
+				if err != nil {
+					return "", fmt.Errorf("goal: %w", err)
+				}
+				defer func() {
+					if parent := *sessRef; parent != nil {
+						parent.addDelegatedCost(sess.Stats())
+					}
+					sess.Close()
+				}()
+				var textBuf strings.Builder
+				done := make(chan error, 1)
+				sess.Subscribe(func(e types.Event) {
+					switch e.Type {
+					case types.EventStreamTextDelta:
+						textBuf.WriteString(e.Delta)
+					case types.EventTurnEnd:
+						done <- nil
+					case types.EventError:
+						done <- fmt.Errorf("%s", e.Message)
+					}
+				})
+				sess.Prompt(ctx, prompt)
+				return awaitSubagentResult(ctx, done, &textBuf)
+			}
+
+			// Builder: full tool access (same restrictions as a normal
+			// Subagent), run first — the Tester needs its finished report
+			// as input, so this is strictly sequential, never parallel.
+			builderReport, err := runRole(nil, tools.GoalBuilderPrompt(builderPrompt))
+			if err != nil {
+				return "", fmt.Errorf("goal: builder round failed: %w", err)
+			}
+
+			// Tester: same restrictions as the Builder PLUS no Write/Edit —
+			// separation of duties. A tester that can edit stops being an
+			// independent judge and starts silently "fixing" instead of
+			// reporting, defeating the point of adversarial verification.
+			// Receives the acceptance criteria plus the Builder's RAW report
+			// verbatim — this handoff is never summarized or altered.
+			testerReport, err := runRole(
+				[]string{tools.ToolWrite, tools.ToolEdit},
+				tools.GoalTesterPrompt(testerPrompt, builderReport),
+			)
+			if err != nil {
+				return "", fmt.Errorf("goal: tester round failed: %w", err)
+			}
+			return testerReport, nil
+		}
+		reg.Register(tools.Goal(executor))
 	}
 
 	// Measure the total raw byte size of all tool schema JSON. Stored as bytes

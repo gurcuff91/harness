@@ -11,6 +11,7 @@ const (
 	ToolFetch          = "Fetch"
 	ToolSkill          = "Skill"
 	ToolSubagent       = "Subagent"
+	ToolGoal           = "Goal"
 	ToolMemoWrite      = "MemoWrite"
 	ToolMemoSearch     = "MemoSearch"
 	ToolMemoDelete     = "MemoDelete"
