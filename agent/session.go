@@ -58,6 +58,26 @@ type Session struct {
 	contextWindow   int // from model meta, updated on SwitchModel
 	pricing         modelPricing
 
+	// pendingDelegatedCost accumulates token/cost accounting handed back by
+	// delegated executions (a Subagent call, or Fetch's prompt-condensing
+	// sub-agent) — see addDelegatedCost's doc comment for what this
+	// represents and why it exists. Stored as atomics (Int64 cents-of-a-
+	// millionth-of-a-dollar for the float-valued CostUSD; plain Int64 for
+	// token counts) so addDelegatedCost is entirely lock-free: same reasoning
+	// as modelStr above — it's called from a Subagent/Fetch tool's executor,
+	// which runs INSIDE a turn while promptSync holds s.mu for the whole
+	// turn (including parallel tool execution), so taking s.mu there would
+	// deadlock exactly like the bug CurrentModel() was fixed for (see
+	// modelStr's comment, and the subagent-timeout-background project
+	// memory). updateStats (which DOES run under s.mu, on the main turn
+	// goroutine, never inside a tool) drains and folds this into s.stats on
+	// the very next turn — see its own comment for the drain.
+	pendingDelegatedInput      atomic.Int64
+	pendingDelegatedOutput     atomic.Int64
+	pendingDelegatedCacheRead  atomic.Int64
+	pendingDelegatedCacheWrite atomic.Int64
+	pendingDelegatedCostMicros atomic.Int64 // CostUSD * 1_000_000, to keep this an integer-only atomic
+
 	// Context breakdown lens — set once at construction, never mutated.
 	// Byte lengths; ContextBreakdown() divides by the active provider's
 	// chars-per-token at query time (Anthropic=6, OpenAI=4).
@@ -434,6 +454,83 @@ func (s *Session) CurrentModel() string {
 		return v.(string)
 	}
 	return "" // unreachable: modelStr is set in newSession before the session escapes
+}
+
+// addDelegatedCost folds token/cost accounting from a delegated execution —
+// a Subagent call, or Fetch's prompt-condensing sub-agent — into this
+// session's own accumulated totals. The work happened in a separate,
+// ephemeral *Session with its own isolated context window (its own
+// in-memory store, its own s.stats, discarded on Close()), but the tokens
+// were genuinely spent on this session's behalf, so the spend should be
+// visible in ITS reported totals rather than vanishing when the ephemeral
+// session closes.
+//
+// Deliberately does NOT touch ContextUsage/ContextWindow, and deliberately
+// does NOT write to s.stats or the store directly. ContextUsage is computed
+// SOLELY from s.lastInputTokens — the token count of THIS session's own most
+// recent provider call (see updateStats) — and a delegated sub-agent's
+// tokens were never part of that call, so they must never influence
+// auto-compact or the context% shown to the user. Not writing to s.stats
+// directly is what makes this lock-free (see pendingDelegatedInput's own
+// field comment for why that matters: this is called from inside a tool's
+// executor, which runs while promptSync already holds s.mu for the whole
+// turn — taking s.mu here would deadlock). Values queue up in the
+// pendingDelegated* atomics and are folded into s.stats by updateStats on
+// the session's own next turn (drainPendingDelegatedCost).
+func (s *Session) addDelegatedCost(delta types.SessionStats) {
+	s.pendingDelegatedInput.Add(int64(delta.InputTokens))
+	s.pendingDelegatedOutput.Add(int64(delta.OutputTokens))
+	s.pendingDelegatedCacheRead.Add(int64(delta.CacheRead))
+	s.pendingDelegatedCacheWrite.Add(int64(delta.CacheWrite))
+	s.pendingDelegatedCostMicros.Add(int64(delta.CostUSD * 1_000_000))
+}
+
+// drainPendingDelegatedCost atomically takes (reads-then-zeros) whatever
+// addDelegatedCost has queued up since the last drain, folding it into
+// s.stats, and reports whether anything was actually folded in. Callers MUST
+// already hold s.mu — this only mutates s.stats, never takes a lock itself,
+// so it's safe from updateStats (the main turn goroutine) as well as from
+// Stats()/Meta() (see their own comments for why THEY also need to drain).
+// Swap-to-zero (not just Load) so a concurrent addDelegatedCost racing this
+// drain is never double-counted or dropped: whichever value Swap observes is
+// exactly what gets folded in here, and anything added after the Swap starts
+// a fresh pending total for the NEXT drain rather than being lost.
+func (s *Session) drainPendingDelegatedCost() (changed bool) {
+	if in := s.pendingDelegatedInput.Swap(0); in != 0 {
+		s.stats.InputTokens += int(in)
+		changed = true
+	}
+	if out := s.pendingDelegatedOutput.Swap(0); out != 0 {
+		s.stats.OutputTokens += int(out)
+		changed = true
+	}
+	if cr := s.pendingDelegatedCacheRead.Swap(0); cr != 0 {
+		s.stats.CacheRead += int(cr)
+		changed = true
+	}
+	if cw := s.pendingDelegatedCacheWrite.Swap(0); cw != 0 {
+		s.stats.CacheWrite += int(cw)
+		changed = true
+	}
+	if cm := s.pendingDelegatedCostMicros.Swap(0); cm != 0 {
+		s.stats.CostUSD += float64(cm) / 1_000_000
+		changed = true
+	}
+	return changed
+}
+
+// persistStatsLocked writes s.stats to the store's persisted meta. Caller
+// must already hold s.mu (the "Locked" suffix documents the requirement,
+// not that this function itself takes a lock) — s.store has its own,
+// separate internal lock (agent/store.Session.mu), so calling it doesn't
+// risk the promptSync/s.mu deadlock class of bug (see modelStr's and
+// addDelegatedCost's comments); the requirement here is only that s.stats
+// itself isn't read mid-mutation by a concurrent caller.
+func (s *Session) persistStatsLocked() {
+	meta := s.store.Meta()
+	meta.Stats = s.stats
+	meta.LastActiveAt = time.Now()
+	s.store.UpdateMeta(meta)
 }
 
 func (s *Session) drainFollowUps() {
@@ -1064,6 +1161,14 @@ func (s *Session) Rename(name string) error {
 func (s *Session) Stats() types.SessionStats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Drain any delegated cost (Subagent/Fetch condensing) that finished in
+	// the BACKGROUND after this session's last turn already ended — nothing
+	// else would ever fold it into s.stats otherwise (updateStats only runs
+	// during a turn). Persist it here too so Meta()/a resumed session's disk
+	// state doesn't lag behind what this call just reported.
+	if s.drainPendingDelegatedCost() {
+		s.persistStatsLocked()
+	}
 	return s.stats
 }
 
@@ -1160,6 +1265,17 @@ func (s *Session) AllMessages() []types.Message {
 // Meta returns the full session metadata from the store.
 // Includes: id, cwd, name, model, thinking, stats, timestamps.
 func (s *Session) Meta() store.SessionMeta {
+	// Drain any delegated cost (Subagent/Fetch condensing) that finished in
+	// the background after this session's last turn — see Stats()'s comment
+	// for why this matters. Meta() (not Stats()) is the one server/server.go
+	// and every transport actually call for session info / the API's
+	// SessionMeta response, so it needs the same drain-and-persist.
+	s.mu.Lock()
+	if s.drainPendingDelegatedCost() {
+		s.persistStatsLocked()
+	}
+	s.mu.Unlock()
+
 	m := s.store.Meta()
 	// Always inject current context window so it's available before the first turn
 	if s.contextWindow > 0 && m.Stats.ContextWindow == 0 {
@@ -1307,6 +1423,11 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 // updateStats accumulates token counts, calculates cost and context%, then emits EventTokens.
 // Called on StreamUsage. Must be called while mu is held (we're inside Prompt's lock).
 func (s *Session) updateStats(se types.StreamEvent) {
+	// Fold in whatever delegated cost (Subagent/Fetch condensing) queued up
+	// since the last turn — see addDelegatedCost's doc comment. Harmless
+	// no-op when nothing is pending.
+	s.drainPendingDelegatedCost()
+
 	// Accumulate
 	s.stats.InputTokens += se.InputTokens
 	s.stats.OutputTokens += se.OutputTokens
@@ -1347,10 +1468,7 @@ func (s *Session) updateStats(se types.StreamEvent) {
 	}
 
 	// Persist stats to store
-	meta := s.store.Meta()
-	meta.Stats = s.stats
-	meta.LastActiveAt = time.Now()
-	s.store.UpdateMeta(meta)
+	s.persistStatsLocked()
 
 	// Emit enriched EventTokens to handler
 	s.emit(types.Event{

@@ -766,7 +766,20 @@ func (a *Agent) buildFetchSummarizer(cwd string, loader resources.ResourceLoader
 		if err != nil {
 			return "", fmt.Errorf("fetch summarizer: %w", err)
 		}
-		defer sess.Close()
+		// Fold this ephemeral sub-agent's token/cost spend into the PARENT
+		// session's own totals before it's discarded — see
+		// Session.addDelegatedCost's doc comment for the full reasoning
+		// (billing visibility without ever touching the parent's
+		// ContextUsage/context window). Runs before Close() so Stats() is
+		// captured while still populated; order in this defer chain doesn't
+		// matter for correctness (addDelegatedCost is lock-free), only that
+		// both happen.
+		defer func() {
+			if parent := *sessRef; parent != nil {
+				parent.addDelegatedCost(sess.Stats())
+			}
+			sess.Close()
+		}()
 
 		fullPrompt := fmt.Sprintf("Instruction: %s\n\n--- Content ---\n%s", prompt, content)
 
@@ -920,7 +933,21 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 			if err != nil {
 				return "", fmt.Errorf("sub-agent: %w", err)
 			}
-			defer sess.Close()
+			// Fold this ephemeral sub-agent's token/cost spend into the
+			// PARENT session's own totals before it's discarded — see
+			// Session.addDelegatedCost's doc comment. Works identically for
+			// the background path too: that goroutine runs this whole
+			// executor closure independently (see runSubagentBackground),
+			// so this defer still fires there, on whatever session *sessRef
+			// points at when the background call eventually finishes — the
+			// parent session is still alive (it owns the sessRef), even if
+			// the TURN that launched the background call already ended.
+			defer func() {
+				if parent := *sessRef; parent != nil {
+					parent.addDelegatedCost(sess.Stats())
+				}
+				sess.Close()
+			}()
 			var textBuf strings.Builder
 			done := make(chan error, 1)
 			sess.Subscribe(func(e types.Event) {
