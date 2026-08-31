@@ -114,14 +114,21 @@ type AgentOptions struct {
 // subagentMaxIterations (see the Subagent tool wiring below).
 const defaultMaxIterations = 50
 
-// subagentMaxIterations caps a subagent's ReAct iterations regardless of the
-// parent's own limit. A subagent is a focused, delegated task (see
-// subagentSystemPrompt), not the primary agent driving a long, multi-part
-// session — it shouldn't need as much room as a parent running with
-// interactiveMaxIterations (120), and capping it means a runaway subagent
-// gets cut off (with the usual progress-summary fallback) well before it
-// burns through a comparable budget without the parent knowing until it
-// finally returns.
+// subagentMaxIterations is the DEFAULT iteration budget for a subagent —
+// used when the Subagent tool's caller doesn't request an override via its
+// optional 'max_iterations' param (see tools.subagentMinIterations/
+// subagentMaxIterationsCeiling, and the Subagent executor closure below). A
+// subagent is a focused, delegated task (see subagentSystemPrompt), not the
+// primary agent driving a long, multi-part session — it shouldn't need as
+// much room as a parent running with interactiveMaxIterations (120) by
+// default, and capping it means a runaway subagent gets cut off (with the
+// usual progress-summary fallback) well before it burns through a comparable
+// budget without the parent knowing until it finally returns. Deliberately
+// NOT capped by the parent's OWN maxIterations (min() against it used to
+// happen here, removed): the model can explicitly ask for a larger budget,
+// up to tools.subagentMaxIterationsCeiling (200), for a genuinely large or
+// multi-step delegated task — independent of however modest the parent
+// session's own interactive budget happens to be.
 const subagentMaxIterations = 50
 
 // fetchSummarizeMaxIterations caps the ephemeral sub-agent Fetch's
@@ -880,7 +887,26 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 	if a.isToolAllowed(tools.ToolSubagent) {
 		// Capture current settings in a closure — Agent has zero knowledge of sub-agent mechanics
 		parentA := a
-		executor := func(ctx context.Context, prompt string) (string, error) {
+		executor := func(ctx context.Context, prompt string, requestedMaxIterations int) (string, error) {
+			// requestedMaxIterations is the caller's optional override (the
+			// Subagent tool's own 'max_iterations' param) — 0 means "not
+			// requested, use the default". Already validated by the tool to
+			// be within [subagentMinIterations, subagentMaxIterationsCeiling]
+			// when non-zero, so no further bounds-checking is needed here.
+			//
+			// Deliberately NOT capped by parentA.maxIterations (the earlier
+			// behavior, via min(parentA.maxIterations, subagentMaxIterations)):
+			// a sub-agent is an independent, separately-budgeted execution —
+			// often deliberately delegated via 'background: true' precisely
+			// so it can run a large, multi-phase task the PARENT's own
+			// (possibly modest, interactive) iteration budget was never meant
+			// to bound. The only ceiling that still applies is the tool's own
+			// absolute safety limit (subagentMaxIterationsCeiling), already
+			// enforced by the tool before this closure ever runs.
+			maxIter := subagentMaxIterations
+			if requestedMaxIterations > 0 {
+				maxIter = requestedMaxIterations
+			}
 			// Create ephemeral sub-agent inheriting parent settings. It reuses the
 			// parent's MCP tools (via Tools) WITHOUT spawning its own MCP processes
 			// (EnableMCPs stays false). It is forbidden from launching further
@@ -888,7 +914,7 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 			subAgent := New(AgentOptions{
 				ThinkingLevel: parentA.thinkingLevel,
 				SystemPrompt:  subagentSystemPrompt,
-				MaxIterations: min(parentA.maxIterations, subagentMaxIterations),
+				MaxIterations: maxIter,
 				MaxTokens:     parentA.maxTokens,
 				Store:         store.NewInMemoryStore(),
 				// Each subagent gets its OWN loader instance, via Copy() — never

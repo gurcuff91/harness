@@ -27,7 +27,7 @@ func callSubagentWithContext(t *testing.T, ctx context.Context, executor Subagen
 }
 
 func TestSubagentMissingPromptErrors(t *testing.T) {
-	_, err := callSubagent(t, func(ctx context.Context, prompt string) (string, error) {
+	_, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
 		return "should not be called", nil
 	}, map[string]any{})
 	if err == nil {
@@ -36,7 +36,7 @@ func TestSubagentMissingPromptErrors(t *testing.T) {
 }
 
 func TestSubagentForegroundReturnsExecutorResult(t *testing.T) {
-	out, err := callSubagent(t, func(ctx context.Context, prompt string) (string, error) {
+	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
 		return "the answer for: " + prompt, nil
 	}, map[string]any{"prompt": "what is 2+2"})
 	if err != nil {
@@ -50,7 +50,7 @@ func TestSubagentForegroundReturnsExecutorResult(t *testing.T) {
 func TestSubagentForegroundDefaultTimeoutDoesNotCutAFastCall(t *testing.T) {
 	// No "timeout" in input — must fall back to subagentTimeout (5 min), not
 	// something so short a normal test call would spuriously fail.
-	out, err := callSubagent(t, func(ctx context.Context, prompt string) (string, error) {
+	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
 		if _, ok := ctx.Deadline(); !ok {
 			t.Error("expected the foreground path to set a deadline on ctx")
 		}
@@ -62,7 +62,7 @@ func TestSubagentForegroundDefaultTimeoutDoesNotCutAFastCall(t *testing.T) {
 }
 
 func TestSubagentForegroundCustomTimeoutIsApplied(t *testing.T) {
-	out, err := callSubagent(t, func(ctx context.Context, prompt string) (string, error) {
+	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
 		deadline, ok := ctx.Deadline()
 		if !ok {
 			t.Fatal("expected a deadline")
@@ -78,7 +78,7 @@ func TestSubagentForegroundCustomTimeoutIsApplied(t *testing.T) {
 }
 
 func TestSubagentForegroundTimeoutExpires(t *testing.T) {
-	_, err := callSubagent(t, func(ctx context.Context, prompt string) (string, error) {
+	_, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
 		<-ctx.Done()
 		return "", ctx.Err()
 	}, map[string]any{"prompt": "hi", "timeout": 1})
@@ -89,7 +89,7 @@ func TestSubagentForegroundTimeoutExpires(t *testing.T) {
 
 func TestSubagentBackgroundReturnsImmediatelyWithFilePath(t *testing.T) {
 	release := make(chan struct{})
-	out, err := callSubagent(t, func(ctx context.Context, prompt string) (string, error) {
+	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
 		<-release // would hang forever if this ever ran synchronously
 		return "background result", nil
 	}, map[string]any{"prompt": "hi", "background": true})
@@ -103,7 +103,7 @@ func TestSubagentBackgroundReturnsImmediatelyWithFilePath(t *testing.T) {
 }
 
 func TestSubagentBackgroundWritesResultToFile(t *testing.T) {
-	out, err := callSubagent(t, func(ctx context.Context, prompt string) (string, error) {
+	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
 		return "the real answer", nil
 	}, map[string]any{"prompt": "hi", "background": true})
 	if err != nil {
@@ -132,7 +132,7 @@ func TestSubagentBackgroundIgnoresTimeoutField(t *testing.T) {
 	// background:true + a tiny timeout must NOT cut the executor off — timeout
 	// is only meaningful on the foreground path (same rule as ColleagueAsk).
 	release := make(chan struct{})
-	out, err := callSubagent(t, func(ctx context.Context, prompt string) (string, error) {
+	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
 		if _, ok := ctx.Deadline(); ok {
 			t.Error("background executor's ctx must not carry an artificial deadline")
 		}
@@ -164,7 +164,7 @@ func TestSubagentBackgroundSurvivesCallerContextCancellation(t *testing.T) {
 	turnCtx, cancelTurn := context.WithCancel(context.Background())
 	executorSawCancellation := make(chan bool, 1)
 
-	out, err := callSubagentWithContext(t, turnCtx, func(ctx context.Context, prompt string) (string, error) {
+	out, err := callSubagentWithContext(t, turnCtx, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
 		// Give the test time to cancel turnCtx before this returns, then
 		// report whether ITS ctx (which must NOT be turnCtx) got cancelled too.
 		select {
@@ -220,4 +220,132 @@ func extractFilePath(t *testing.T, msg string) string {
 		rest = rest[:nl]
 	}
 	return strings.TrimSpace(rest)
+}
+
+// ── max_iterations ──────────────────────────────────────────────────────
+
+// Omitting max_iterations (JSON zero-value, indistinguishable from "not
+// set") must pass 0 through to the executor unchanged — the Agent's own
+// wiring (buildSessionTools' Subagent executor) is what maps 0 to its
+// default (subagentMaxIterations); the tool itself must not invent a default
+// value of its own.
+func TestSubagentMaxIterationsOmittedPassesZeroThrough(t *testing.T) {
+	var got int
+	_, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+		got = maxIterations
+		return "ok", nil
+	}, map[string]any{"prompt": "hi"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 0 {
+		t.Errorf("executor received maxIterations = %d, want 0 (omitted)", got)
+	}
+}
+
+// A valid, explicit override must reach the executor exactly as requested.
+func TestSubagentMaxIterationsValidValueReachesExecutor(t *testing.T) {
+	var got int
+	_, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+		got = maxIterations
+		return "ok", nil
+	}, map[string]any{"prompt": "hi", "max_iterations": 150})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 150 {
+		t.Errorf("executor received maxIterations = %d, want 150", got)
+	}
+}
+
+// The boundary values of the allowed range (1 and 200) must both be
+// accepted, not rejected as off-by-one.
+func TestSubagentMaxIterationsBoundaryValuesAccepted(t *testing.T) {
+	for _, want := range []int{subagentMinIterations, subagentMaxIterationsCeiling} {
+		var got int
+		called := false
+		_, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+			called = true
+			got = maxIterations
+			return "ok", nil
+		}, map[string]any{"prompt": "hi", "max_iterations": want})
+		if err != nil {
+			t.Errorf("max_iterations=%d: unexpected error: %v", want, err)
+		}
+		if !called {
+			t.Errorf("max_iterations=%d: executor was not called", want)
+		}
+		if got != want {
+			t.Errorf("max_iterations=%d: executor received %d", want, got)
+		}
+	}
+}
+
+// Anything outside [1, 200] must be rejected explicitly — with an actionable
+// message — BEFORE the executor is ever invoked (not silently clamped).
+func TestSubagentMaxIterationsOutOfRangeRejected(t *testing.T) {
+	cases := []int{-1, 0 - 1, 201, 1000, subagentMaxIterationsCeiling + 1}
+	for _, bad := range cases {
+		if bad == 0 {
+			continue // 0 is the valid "omitted" sentinel, not a case here
+		}
+		called := false
+		out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+			called = true
+			return "should not run", nil
+		}, map[string]any{"prompt": "hi", "max_iterations": bad})
+		if called {
+			t.Errorf("max_iterations=%d: executor must not run for an out-of-range value", bad)
+		}
+		if err == nil {
+			t.Errorf("max_iterations=%d: expected an error", bad)
+		}
+		if !strings.Contains(out, "max_iterations") {
+			t.Errorf("max_iterations=%d: error message should mention max_iterations, got %q", bad, out)
+		}
+	}
+}
+
+// The out-of-range validation must apply to the background path too, not
+// just foreground — runSubagentBackground must never be reached with a bad
+// value.
+func TestSubagentMaxIterationsOutOfRangeRejectedInBackgroundMode(t *testing.T) {
+	called := false
+	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+		called = true
+		return "should not run", nil
+	}, map[string]any{"prompt": "hi", "background": true, "max_iterations": 999})
+	if called {
+		t.Error("executor must not run (not even in a background goroutine) for an out-of-range max_iterations")
+	}
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(out, "max_iterations") {
+		t.Errorf("error message should mention max_iterations, got %q", out)
+	}
+}
+
+// A valid max_iterations override must also reach the executor in
+// background mode (not just foreground).
+func TestSubagentMaxIterationsReachesExecutorInBackgroundMode(t *testing.T) {
+	gotCh := make(chan int, 1)
+	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+		gotCh <- maxIterations // synchronizes-before the receive below — no data race
+		return "done", nil
+	}, map[string]any{"prompt": "hi", "background": true, "max_iterations": 42})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "background") {
+		t.Errorf("out = %q, want a background-delegation message", out)
+	}
+	select {
+	case got := <-gotCh:
+		if got != 42 {
+			t.Errorf("executor received maxIterations = %d, want 42", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("background executor never ran")
+	}
 }

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -246,4 +247,88 @@ func TestFetchSummarizerDelegatedCostReachesParentSession(t *testing.T) {
 	}
 	t.Logf("parent session totals after a Fetch+prompt-using turn: input=%d output=%d cost=$%v (includes delegated summarizer spend)",
 		after.InputTokens, after.OutputTokens, after.CostUSD)
+}
+
+// TestSubagentMaxIterationsOverrideReachesEphemeralSubAgent is an end-to-end
+// integration check that the Subagent tool's 'max_iterations' override
+// (agent/tools/subagent.go) actually reaches the ephemeral sub-agent
+// buildSessionTools' executor constructs (agent.go) — not just that the tool
+// validates and forwards the value (already covered by
+// agent/tools/subagent_test.go's unit tests against a mock executor).
+//
+// The ephemeral sub-agent is discarded on Close(), and its own internal
+// events (EventMaxIterationsReached included) never propagate to the parent
+// session's Subscribe callback — the parent's executor only listens for
+// EventStreamTextDelta/EventTurnEnd/EventError on the sub-agent's session to
+// assemble the final answer string (see buildSessionTools' Subagent
+// executor). So this can't observe the sub-agent's events directly; instead
+// it forces an observable BEHAVIOR difference visible in that final answer:
+// request max_iterations=1 (the minimum — `for i := range 1-1` is ZERO real
+// ReAct loop passes, going straight to the max-iterations summary path
+// before ever calling a tool) for a task that explicitly requires running a
+// tool first. If the override reached the sub-agent, its result must be a
+// "reached my limit" style summary that admits the task ISN'T done — never
+// the completion phrase, since with zero real passes it's structurally
+// impossible for it to have actually run the tool. If the override did NOT
+// reach the sub-agent (silently fell back to the default budget, e.g. 50),
+// it has more than enough room to run the tool and complete normally.
+func TestSubagentMaxIterationsOverrideReachesEphemeralSubAgent(t *testing.T) {
+	a := New(AgentOptions{Store: store.NewInMemoryStore()})
+	defer a.Close()
+
+	models := a.Models()
+	if len(models) < 1 {
+		t.Skip("need at least 1 active model in this environment to run a real Subagent call")
+	}
+
+	sess, err := a.NewSession(t.TempDir(), models[0].Model)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer sess.Close()
+
+	var subagentResult string
+	sawResult := false
+	done := make(chan struct{})
+	sess.Subscribe(func(e types.Event) {
+		if e.Type == types.EventToolResult && e.ToolName == "Subagent" {
+			sawResult = true
+			subagentResult = e.Output
+		}
+		if e.Type == types.EventTurnEnd {
+			close(done)
+		}
+	})
+	sess.Prompt(context.Background(),
+		"Use the Subagent tool exactly once, with max_iterations set to 1, delegating this task to it: "+
+			"'Run the Bash tool with command `echo COMPLETION_MARKER_XYZ`, then in your NEXT response after seeing its output, say exactly: TASK COMPLETE.' "+
+			"Do not do this yourself — delegate it, then report back whatever the sub-agent returned.")
+
+	select {
+	case <-done:
+	case <-time.After(90 * time.Second):
+		t.Fatal("turn did not finish within 90s")
+	}
+
+	if !sawResult {
+		t.Skip("model did not invoke Subagent with max_iterations=1 this run (nondeterministic tool use/compliance) — rerun to exercise this path")
+	}
+	// Structural check, not a fragile substring search: a model that
+	// genuinely completed the task was instructed to respond with EXACTLY
+	// "TASK COMPLETE" — a short, near-empty-around-it response. A model that
+	// hit max_iterations=1 (0 real ReAct passes) is instead answering
+	// maxIterationsPrompt's own instruction to summarize (1) done, (2)
+	// pending, (3) ask the user — structurally a multi-paragraph report, and
+	// ALWAYS produced one in practice (observed on repeated runs). A plain
+	// `strings.Contains(result, "TASK COMPLETE")` is NOT a reliable signal by
+	// itself: a model reporting what's still pending legitimately quotes the
+	// target completion phrase inside that same report (observed in
+	// practice) — so this checks response SHAPE (short vs. a structured
+	// report) instead of merely whether the phrase appears anywhere in it.
+	trimmed := strings.TrimSpace(subagentResult)
+	looksLikeGenuineCompletion := len(trimmed) < 80 && strings.Contains(strings.ToUpper(trimmed), "TASK COMPLETE")
+	if looksLikeGenuineCompletion {
+		t.Errorf("sub-agent result looks like a genuine short completion (not a multi-paragraph max-iterations report), meaning it had room to run the tool and finish — the max_iterations=1 override did not reach the ephemeral sub-agent. Result: %q", subagentResult)
+	}
+	t.Logf("sub-agent result under max_iterations=1 (len=%d): %q", len(trimmed), subagentResult)
 }

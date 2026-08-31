@@ -11,9 +11,14 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
-// SubagentExecutor is the closure the Agent builds and passes to the Subagent tool.
-// It encapsulates all sub-agent creation logic — the tool itself is stateless.
-type SubagentExecutor func(ctx context.Context, prompt string) (string, error)
+// SubagentExecutor is the closure the Agent builds and passes to the Subagent
+// tool. It encapsulates all sub-agent creation logic — the tool itself is
+// stateless. maxIterations is the caller's requested ReAct iteration budget
+// for the sub-agent; 0 means "use the Agent's own default"
+// (subagentMaxIterations, see agent.go) — the Subagent tool itself has
+// already validated a non-zero value is within [subagentMinIterations,
+// subagentMaxIterationsCeiling] before this is ever called.
+type SubagentExecutor func(ctx context.Context, prompt string, maxIterations int) (string, error)
 
 // subagentInput is the JSON input schema for the Subagent tool.
 //
@@ -23,14 +28,28 @@ type SubagentExecutor func(ctx context.Context, prompt string) (string, error)
 // requireFields' doc comment on why the tag alone isn't the stronger
 // guarantee this field already had before that helper existed).
 type subagentInput struct {
-	Prompt     string `json:"prompt" validate:"required"`
-	Timeout    int    `json:"timeout,omitempty"`
-	Background bool   `json:"background,omitempty"`
+	Prompt        string `json:"prompt" validate:"required"`
+	Timeout       int    `json:"timeout,omitempty"`
+	Background    bool   `json:"background,omitempty"`
+	MaxIterations int    `json:"max_iterations,omitempty"`
 }
 
 // subagentTimeout is the default wait when Timeout isn't specified — same
 // value the tool used unconditionally before it became configurable.
 const subagentTimeout = 120 * time.Second
+
+// subagentMinIterations/subagentMaxIterationsCeiling bound the optional
+// 'max_iterations' override a caller can request. 0 (the JSON zero-value,
+// indistinguishable from "omitted") means "use the default" and is exempt
+// from this range — anything else must fall inside [1, 200]. The ceiling
+// exists so a model can't accidentally (or a malicious prompt-inject
+// couldn't deliberately) request an unbounded iteration budget that burns
+// through a runaway amount of tokens/cost before the usual progress-summary
+// fallback ever kicks in.
+const (
+	subagentMinIterations        = 1
+	subagentMaxIterationsCeiling = 200
+)
 
 // Subagent returns a Tool that delegates a task to a sub-agent, blocking for
 // the response (or, with background: true, returning immediately with a
@@ -58,13 +77,14 @@ func Subagent(executor SubagentExecutor) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolSubagent,
-			Description: `Spawn an autonomous sub-agent for a self-contained task. PREFER over doing it yourself when: exploring/reading large codebases (keeps your context clean), fetching multiple URLs, analyzing multiple files, or refactoring isolated modules. Invoke MULTIPLE simultaneously — they run in parallel. Each has full tool access. DO NOT use when tasks depend on each other's output. Blocks until the sub-agent finishes and returns its final text — set 'background: true' to get a result-file path immediately instead of waiting, if the task might take a while (background has no timeout: use it for genuinely slow tasks instead of passing a large 'timeout').`,
+			Description: `Spawn an autonomous sub-agent for a self-contained task. PREFER over doing it yourself when: exploring/reading large codebases (keeps your context clean), fetching multiple URLs, analyzing multiple files, or refactoring isolated modules. Invoke MULTIPLE simultaneously — they run in parallel. Each has full tool access. DO NOT use when tasks depend on each other's output. Blocks until the sub-agent finishes and returns its final text — set 'background: true' to get a result-file path immediately instead of waiting, if the task might take a while (background has no timeout: use it for genuinely slow tasks instead of passing a large 'timeout'). If the task is genuinely large or multi-step, also raise 'max_iterations' — the default budget is tuned for typical delegated tasks and WILL cut a large one short.`,
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"prompt": {"type": "string", "description": "The complete task or question for the sub-agent."},
 					"timeout": {"type": "integer", "description": "Seconds to wait for a response (default: 120). Ignored when background is true — background waits as long as needed."},
-					"background": {"type": "boolean", "description": "If true, return immediately with a path to a result file instead of blocking, and wait as long as needed (no timeout). Default false."}
+					"background": {"type": "boolean", "description": "If true, return immediately with a path to a result file instead of blocking, and wait as long as needed (no timeout). Default false."},
+					"max_iterations": {"type": "integer", "description": "Override the sub-agent's ReAct iteration budget (default: 50, range 1-200 if set). ONLY set this when the delegated task is genuinely large or multi-step — extensive codebase exploration, many files/URLs to process, a long multi-phase investigation — that the default 50 would likely cut short. Leave unset for a typical, focused delegated task; requesting a larger budget than the task needs wastes nothing but isn't necessary. Pairs well with 'background: true' for large tasks you don't want to block your own turn on."}
 				},
 				"required": ["prompt"]
 			}`),
@@ -81,6 +101,16 @@ func Subagent(executor SubagentExecutor) Tool {
 				err := fmt.Errorf("subagent: prompt is required")
 				return err.Error(), err
 			}
+			// 0 means "omitted, use the default" — exempt from the range
+			// check. Any other value must fall inside [1, 200]; reject
+			// anything outside it explicitly (rather than silently
+			// clamping) so the model gets an actionable signal instead of a
+			// budget quietly different from what it asked for.
+			if req.MaxIterations != 0 && (req.MaxIterations < subagentMinIterations || req.MaxIterations > subagentMaxIterationsCeiling) {
+				err := fmt.Errorf("subagent: max_iterations must be between %d and %d (got %d) — omit it to use the default",
+					subagentMinIterations, subagentMaxIterationsCeiling, req.MaxIterations)
+				return err.Error(), err
+			}
 
 			// Timeout only applies to the blocking (foreground) path — it
 			// exists to protect the CALLER from waiting indefinitely. In
@@ -90,7 +120,7 @@ func Subagent(executor SubagentExecutor) Tool {
 			// the slow task background was meant to tolerate (see the same
 			// reasoning in ColleagueAsk).
 			if req.Background {
-				return runSubagentBackground(executor, req.Prompt)
+				return runSubagentBackground(executor, req.Prompt, req.MaxIterations)
 			}
 
 			timeout := subagentTimeout
@@ -100,7 +130,7 @@ func Subagent(executor SubagentExecutor) Tool {
 			// Combine caller ctx (Stop cancellation) + timeout.
 			ctx2, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
-			out, err := executor(ctx2, req.Prompt)
+			out, err := executor(ctx2, req.Prompt, req.MaxIterations)
 			// On timeout, discard any partial output: a sub-agent cut off
 			// mid-inference may have produced misleading, half-formed reasoning
 			// that would contaminate the parent's context if surfaced. Return a
@@ -138,7 +168,7 @@ func Subagent(executor SubagentExecutor) Tool {
 // lifecycle, so it can't be cancelled out from under the sub-agent by one
 // finishing — which is exactly the "let it run, check back later" model
 // this mode exists for.
-func runSubagentBackground(executor SubagentExecutor, prompt string) (string, error) {
+func runSubagentBackground(executor SubagentExecutor, prompt string, maxIterations int) (string, error) {
 	f, err := os.CreateTemp("", "harness-subagent-*.txt")
 	if err != nil {
 		return fmt.Sprintf("Error creating result file: %v", err), err
@@ -147,7 +177,7 @@ func runSubagentBackground(executor SubagentExecutor, prompt string) (string, er
 	f.Close()
 
 	go func() {
-		text, err := executor(context.Background(), prompt)
+		text, err := executor(context.Background(), prompt, maxIterations)
 		result := text
 		if err != nil {
 			result = fmt.Sprintf("Error: %v\n\n%s", err, text)

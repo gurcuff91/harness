@@ -48,7 +48,7 @@ func allBuiltinTools() []Tool {
 		ScheduleDelete(auditScheduleStore{}, "owner"),
 		ColleagueList(),
 		ColleagueAsk(),
-		Subagent(func(ctx context.Context, prompt string) (string, error) { return "", nil }),
+		Subagent(func(ctx context.Context, prompt string, maxIterations int) (string, error) { return "", nil }),
 	}
 }
 

@@ -106,7 +106,7 @@ func TestWriteContentEmptyIsStillLegitimate(t *testing.T) {
 // requireFields' tag alone would miss (IsZero() is false for "   ").
 func TestSubagentAndColleagueAskStillCatchWhitespaceOnly(t *testing.T) {
 	t.Run("Subagent whitespace-only prompt", func(t *testing.T) {
-		tool := Subagent(func(ctx context.Context, prompt string) (string, error) { return "unreachable", nil })
+		tool := Subagent(func(ctx context.Context, prompt string, maxIterations int) (string, error) { return "unreachable", nil })
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{"prompt":"   "}`))
 		if err == nil {
 			t.Fatalf("expected whitespace-only prompt to be rejected, got out=%q", out)
