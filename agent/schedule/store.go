@@ -75,7 +75,7 @@ type Store struct {
 	mu       sync.Mutex
 	path     string
 	data     map[string]map[string]Schedule // owner → (slug → schedule)
-	loadedAt time.Time                       // mtime of the file as of the last load() — see reloadIfStale
+	loadedAt time.Time                      // mtime of the file as of the last load() — see reloadIfStale
 }
 
 // Open loads the schedule store from path (default ~/.harness/schedules.json

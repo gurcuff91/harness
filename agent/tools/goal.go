@@ -68,7 +68,7 @@ Builder's report:
 
 Respond in exactly this format:
 
-## Test Report
+## Test Veredict
 - Criterion "<criterion text>": PASS/FAIL — <evidence>
 - Criterion "<criterion text>": PASS/FAIL — <evidence>
 ...
@@ -150,7 +150,7 @@ func GoalRoundResult(builderReport, testerReport string) string {
 func Goal(executor GoalExecutor) Tool {
 	return Tool{
 		Def: types.ToolDef{
-			Name: ToolGoal,
+			Name:        ToolGoal,
 			Description: `Run one round of an adversarial build/test loop: a Builder sub-agent implements 'builder_prompt', then a Tester sub-agent independently verifies the result against the acceptance criteria in 'tester_prompt' — without seeing the builder's reasoning, only its final report. The tool ALREADY establishes each sub-agent's role and behavior internally — 'builder_prompt'/'tester_prompt' must contain ONLY operational content (what to do / what to check); never role-setting text like "You are the Builder..." or "You are the Tester...", which the tool already provides and would otherwise be duplicated. Returns BOTH the Builder's full response and the Tester's verdict; read the verdict to decide whether to call Goal again with a refined builder_prompt (if criteria failed) or the task is done (if all passed) — and use the Builder's response as the real content when reporting back to the user, never reconstruct it from the Tester's summary. Never invoke this tool on your own initiative — only when the user has explicitly requested this adversarial build/test workflow in their current message.`,
 			InputSchema: json.RawMessage(`{
 				"type": "object",

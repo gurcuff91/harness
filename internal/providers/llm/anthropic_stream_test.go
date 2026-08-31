@@ -80,7 +80,7 @@ func TestParseAnthropicStreamDroppedConnectionMidToolCallIsAnError(t *testing.T)
 		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_abc","name":"Bash"}}` + "\n\n" +
 		"event: content_block_delta\n" +
 		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\": \"ec"}}` + "\n\n"
-		// Connection drops HERE — no content_block_stop, no message_stop.
+	// Connection drops HERE — no content_block_stop, no message_stop.
 
 	sentinel := io.ErrUnexpectedEOF
 	r := &erroringReader{data: []byte(raw), err: sentinel}
@@ -107,7 +107,7 @@ func TestParseAnthropicStreamCleanEOFBeforeMessageStopIsAnError(t *testing.T) {
 		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}` + "\n\n" +
 		"event: content_block_delta\n" +
 		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial answ"}}` + "\n\n"
-		// Reader hits a clean io.EOF here — no content_block_stop, no message_stop.
+	// Reader hits a clean io.EOF here — no content_block_stop, no message_stop.
 
 	resp, err := ParseAnthropicStream(context.Background(), &staticReader{data: []byte(raw)}, nil, func(s string) string { return s })
 	if err == nil {

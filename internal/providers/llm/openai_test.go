@@ -297,7 +297,7 @@ func TestParseOpenAIStreamContextCancelUnblocks(t *testing.T) {
 func TestParseOpenAIStreamDroppedConnectionMidToolCallIsAnError(t *testing.T) {
 	raw := `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","function":{"name":"Bash","arguments":""}}]},"index":0}]}` + "\n\n" +
 		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"command\": \"ec"}}]},"index":0}]}` + "\n\n"
-		// Connection drops HERE — no further tool_calls delta, no [DONE].
+	// Connection drops HERE — no further tool_calls delta, no [DONE].
 
 	sentinel := io.ErrUnexpectedEOF
 	r := &erroringReader{data: []byte(raw), err: sentinel}
