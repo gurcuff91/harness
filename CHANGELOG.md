@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.59] - 2026-09-04
+
+### Change — `skill:<name>` echo format tightened to `Skill:<name>`, no space
+- **Requested by Gus**: the previous fix's echo format was `"Skill: goal <text>"` (space after the colon) — changed to `"Skill:goal <text>"` (no space), mirroring the literal `skill:<name>` command syntax instead of reading as a separate word.
+- **Change** (`server/server.go`): `display := "Skill:" + skillName` (was `"Skill: " + skillName`).
+- Verified live via SSE: `received_prompt` now carries exactly `"Skill:goal add a hello.txt file with the text hello"`. Full suite + `-race` + `go vet ./...` green.
+
 ## [0.76.58] - 2026-09-04
 
 ### Fix — invoking ANY skill via `skill:<name>` echoed the skill's entire body to the user

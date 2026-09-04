@@ -1312,10 +1312,11 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 			// PromptWithDisplayText keeps the skill's full body (can be
 			// large — SKILL.md content, not just a short instruction) OUT
 			// of what a transport echoes back to the user: it shows
-			// "Skill: <name> <their own text>" instead of the entire
-			// injected prompt scrolling past. The model itself still
-			// receives the full prompt unchanged.
-			display := "Skill: " + skillName
+			// "Skill:<name> <their own text>" (mirroring the literal
+			// "skill:<name>" command syntax, no space before the name)
+			// instead of the entire injected prompt scrolling past. The
+			// model itself still receives the full prompt unchanged.
+			display := "Skill:" + skillName
 			if userPrompt != "" {
 				display += " " + userPrompt
 			}
