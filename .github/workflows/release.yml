@@ -98,7 +98,7 @@ jobs:
           LDFLAGS="-s -w -X github.com/gurcuff91/harness/internal/version.Version=$TAG"
           mkdir -p dist
           build() {
-            GOOS=$1 GOARCH=$2 go build -ldflags "$LDFLAGS" -o "dist/harness$3" ./cmd/harness
+            GOOS=$1 GOARCH=$2 go build -ldflags "$LDFLAGS" -o "dist/harness-$1-$2$3" ./cmd/harness
           }
           build darwin amd64 ""
           build darwin arm64 ""
