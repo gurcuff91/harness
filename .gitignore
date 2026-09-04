@@ -1,6 +1,7 @@
 # Binaries
 harness
 agent-harness
+dist/
 
 # IDE
 .idea/

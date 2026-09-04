@@ -1,0 +1,137 @@
+name: Release
+
+# Two triggers into the same job:
+#   1. push of a "v*" tag — the automatic path: `make release-push` (see
+#      Makefile) pushes the annotated tag it just created, which fires this.
+#   2. workflow_dispatch — manual rebuild from the Actions tab. Leave the
+#      `tag` input empty to rebuild the latest existing tag (e.g. to publish
+#      assets for a release that was tagged before this workflow existed, or
+#      to re-run after a transient failure); or specify an exact tag to
+#      rebuild that one instead.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (defaults to the latest tag if left empty)'
+        required: false
+
+permissions:
+  contents: write # gh release create needs this to publish/attach assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history — needed to resolve "latest tag" and read CHANGELOG.md at that tag
+
+      - name: Resolve target tag
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          PUSHED_REF: ${{ github.ref }}
+        # Untrusted/dynamic values (the manual dispatch's free-text tag input)
+        # are passed in via `env:` above, never interpolated directly into
+        # this script — the documented GitHub Actions hardening against
+        # script injection via ${{ }} expressions landing in shell code.
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$(git describe --tags --abbrev=0)"
+          else
+            TAG="${PUSHED_REF#refs/tags/}"
+          fi
+          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "❌ Tag $TAG does not exist."
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Resolved target tag: $TAG"
+
+      - name: Checkout target tag
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: git checkout "$TAG"
+
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          VER="${TAG#v}"
+          awk "/^## \[$VER\]/{f=1;print;next} /^## \[/{f=0} f" CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "❌ No CHANGELOG.md entry found for [$VER] — document the release before publishing."
+            exit 1
+          fi
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build all platforms
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          LDFLAGS="-s -w -X github.com/gurcuff91/harness/internal/version.Version=$TAG"
+          mkdir -p dist
+          build() {
+            GOOS=$1 GOARCH=$2 go build -ldflags "$LDFLAGS" -o "dist/harness$3" ./cmd/harness
+          }
+          build darwin amd64 ""
+          build darwin arm64 ""
+          build linux amd64 ""
+          build linux arm64 ""
+          build windows amd64 ".exe"
+
+      - name: Package archives
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          cd dist
+          # Rename each raw binary into its own dir so the archive's internal
+          # entry is just "harness" (or "harness.exe"), not "harness-linux-arm64".
+          package_unix() {
+            local os=$1 arch=$2
+            mkdir -p "$os-$arch" && mv "harness-$os-$arch" "$os-$arch/harness"
+            chmod +x "$os-$arch/harness"
+            tar -czf "harness-${TAG}-${os}-${arch}.tar.gz" -C "$os-$arch" harness
+            rm -rf "$os-$arch"
+          }
+          package_windows() {
+            local os=$1 arch=$2
+            mkdir -p "$os-$arch" && mv "harness-$os-$arch.exe" "$os-$arch/harness.exe"
+            (cd "$os-$arch" && zip -q "../harness-${TAG}-${os}-${arch}.zip" harness.exe)
+            rm -rf "$os-$arch"
+          }
+          package_unix darwin amd64
+          package_unix darwin arm64
+          package_unix linux amd64
+          package_unix linux arm64
+          package_windows windows amd64
+          ls -lh .
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum harness-*.tar.gz harness-*.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          gh release create "$TAG" \
+            dist/harness-*.tar.gz dist/harness-*.zip dist/SHA256SUMS.txt \
+            --title "$TAG" \
+            --notes-file release-notes.md \
+            --clobber

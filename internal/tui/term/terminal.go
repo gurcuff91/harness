@@ -9,8 +9,6 @@ package term
 import (
 	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"golang.org/x/term"
 
@@ -109,9 +107,12 @@ func (t *ProcessTerminal) Start(onInput func(string), onResize func()) error {
 
 	t.stopCh = make(chan struct{})
 
-	// Resize handling via SIGWINCH (Unix).
-	t.resizeCh = make(chan os.Signal, 1)
-	signal.Notify(t.resizeCh, syscall.SIGWINCH)
+	// Resize handling — SIGWINCH on Unix; a no-op on Windows (which has no
+	// such signal). See resize_unix.go/resize_windows.go: notifyResize
+	// leaves t.resizeCh nil on Windows, and resizeLoop below already treats
+	// a nil channel as "never fires" (a nil channel blocks forever in a
+	// select, which is exactly the desired no-op behavior).
+	t.resizeCh = notifyResize()
 	go t.resizeLoop()
 
 	// Read loop.
@@ -162,9 +163,7 @@ func (t *ProcessTerminal) Stop() {
 	if t.stopCh != nil {
 		close(t.stopCh)
 	}
-	if t.resizeCh != nil {
-		signal.Stop(t.resizeCh)
-	}
+	stopResize(t.resizeCh)
 	if t.buffer != nil {
 		t.buffer.destroy()
 	}

@@ -10,7 +10,7 @@ INSTALL_DIR=$(HOME)/go/bin
 GO=go
 
 # Build flags
-VERSION=v0.76.59
+VERSION=v0.76.60
 LDFLAGS=-ldflags "-s -w -X github.com/gurcuff91/harness/internal/version.Version=$(VERSION)"
 
 # Default target
@@ -45,13 +45,15 @@ build-race:
 	$(GO) build -race $(LDFLAGS) -o $(BINARY_DIR)/$(BINARY_NAME) ./cmd/harness
 	@echo "✅ Built with -race: ./$(BINARY_NAME)"
 
-# Build for multiple platforms
+# Build for multiple platforms — kept in sync with .github/workflows/release.yml,
+# which builds the exact same 5 targets for GitHub Release assets.
 build-all:
 	@echo "Building for all platforms..."
 	@mkdir -p dist
 	GOOS=darwin GOARCH=amd64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-darwin-amd64 ./cmd/harness
 	GOOS=darwin GOARCH=arm64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-darwin-arm64 ./cmd/harness
 	GOOS=linux GOARCH=amd64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-amd64 ./cmd/harness
+	GOOS=linux GOARCH=arm64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-arm64 ./cmd/harness
 	GOOS=windows GOARCH=amd64 $(GO) build $(LDFLAGS) -o dist/$(BINARY_NAME)-windows-amd64.exe ./cmd/harness
 	@echo "✅ Binaries in ./dist/"
 	@ls -lh dist/
