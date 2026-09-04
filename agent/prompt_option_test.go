@@ -51,3 +51,25 @@ func TestPromptWithOriginUserAndScheduled(t *testing.T) {
 	}
 }
 
+// TestBuildPromptConfigDefaultsToEmptyDisplayText verifies the zero-value
+// default (no PromptWithDisplayText) leaves displayText empty — the signal
+// promptSync's echo path uses to fall back to the real prompt text.
+func TestBuildPromptConfigDefaultsToEmptyDisplayText(t *testing.T) {
+	c := buildPromptConfig(nil)
+	if c.displayText != "" {
+		t.Errorf("displayText = %q, want empty (no override)", c.displayText)
+	}
+}
+
+// TestPromptWithDisplayTextSetsOverride verifies PromptWithDisplayText sets
+// displayText without touching any other config field.
+func TestPromptWithDisplayTextSetsOverride(t *testing.T) {
+	c := buildPromptConfig([]PromptOption{PromptWithDisplayText("Skill: goal build a widget")})
+	if c.displayText != "Skill: goal build a widget" {
+		t.Errorf("displayText = %q, want %q", c.displayText, "Skill: goal build a widget")
+	}
+	if c.origin != OriginUser {
+		t.Errorf("origin = %q, want default %q unaffected by PromptWithDisplayText", c.origin, OriginUser)
+	}
+}
+

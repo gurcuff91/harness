@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.58] - 2026-09-04
+
+### Fix — invoking ANY skill via `skill:<name>` echoed the skill's entire body to the user
+- **Reported by Gus**: running `/skill:goal <objective>` (or any `skill:<name>` command) showed the full injected prompt in the TUI — the skill's location note plus its ENTIRE `SKILL.md` body (in `goal`'s case, ~160 lines) — with the user's own text tacked on at the end, instead of a short confirmation. Root cause: when `PromptWithDisplayText` was removed as part of the `Goal`-tool-to-Skill migration (assumed dead with no remaining caller — see the previous entry), the generic `skill:<name>` handler in `server.go` was overlooked as ALSO composing a large prompt (skill content + user text) that needed the same echo treatment `Goal`'s removed command used to get. This wasn't unique to `goal` — every skill invoked via this command path was affected.
+- **Fix**: `PromptWithDisplayText` (`agent/session.go`) is restored — same mechanism as before, now generalized to its real owner. `server.go`'s `skill:<name>` handler calls `proxy.session.Prompt(ctx, prompt, agent.PromptWithDisplayText("Skill: "+skillName+" "+userPrompt))` — the model still receives the full skill content unchanged, but transports now echo just `Skill: goal <the user's own text>` regardless of which skill was invoked or how large its body is.
+- Tests: `agent/prompt_option_test.go` regained `TestBuildPromptConfigDefaultsToEmptyDisplayText` and `TestPromptWithDisplayTextSetsOverride`. Verified live end-to-end: the SSE `received_prompt` event for a real `skill:goal` invocation now carries exactly `"Skill: goal add a hello.txt file with the text hello"`, not the skill body. Full suite + `-race` + `go vet ./...` green.
+
 ## [0.76.57] - 2026-09-04
 
 ### Change — removed the `Goal` tool entirely; the adversarial build/test loop now lives as a Skill, orchestrated via plain `Subagent` calls

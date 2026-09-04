@@ -1304,11 +1304,22 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 			}
 			// Build prompt: skill location note + content + optional user prompt. The
 			// location lets the model resolve relative paths the skill references.
+			userPrompt, _ := req.Params["prompt"].(string)
 			prompt := fmt.Sprintf("This skill is located at %s\nAny relative paths it references are relative to this directory.\n\n%s", dir, content)
-			if userPrompt, _ := req.Params["prompt"].(string); userPrompt != "" {
+			if userPrompt != "" {
 				prompt += "\n\n---\n\n" + userPrompt
 			}
-			ps := proxy.session.Prompt(context.Background(), prompt)
+			// PromptWithDisplayText keeps the skill's full body (can be
+			// large — SKILL.md content, not just a short instruction) OUT
+			// of what a transport echoes back to the user: it shows
+			// "Skill: <name> <their own text>" instead of the entire
+			// injected prompt scrolling past. The model itself still
+			// receives the full prompt unchanged.
+			display := "Skill: " + skillName
+			if userPrompt != "" {
+				display += " " + userPrompt
+			}
+			ps := proxy.session.Prompt(context.Background(), prompt, agent.PromptWithDisplayText(display))
 			status := "started"
 			if ps == types.PromptQueued {
 				status = "queued"
