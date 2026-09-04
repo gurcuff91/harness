@@ -77,34 +77,50 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install X11 dev headers (for linux/amd64's real clipboard backend)
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libx11-dev
+
       - name: Build all platforms
         env:
           TAG: ${{ steps.resolve.outputs.tag }}
-        # CGO_ENABLED=0 for every target: golang.design/x/clipboard (used for
-        # clipboard image paste in the TUI) needs cgo + X11 dev headers to
-        # build its Linux backend, which this runner doesn't have installed —
-        # and shouldn't need to, for a cross-compiling release job. With cgo
-        # off, it falls back to clipboard_nocgo.go (a pure-Go stub that
-        # panics only if clipboard paste is actually invoked at runtime),
-        # which is an acceptable trade-off here: initClipboard() in
-        # internal/tui/clipboard.go already treats Init() failure as
-        # "clipboard unavailable" and degrades gracefully rather than
-        # crashing, so losing this one optional feature in cross-compiled
-        # release binaries is fine — the alternative is installing X11 dev
-        # packages on the runner for a feature most release binaries (piped
-        # over SSH, run in containers, etc.) can't use anyway.
+        # Per-platform CGO_ENABLED, NOT a single blanket setting — clipboard
+        # image paste (golang.design/x/clipboard, internal/tui/clipboard.go)
+        # is cgo-only on non-Windows, and each target's real feasibility
+        # differs:
+        #   - linux/amd64: NATIVE build on this runner — cgo works with just
+        #     the X11 headers installed above (libX11 itself is dlopen'd at
+        #     RUNTIME, per clipboard_linux.c, so build-time headers are
+        #     enough; no .so needed here). Real clipboard support.
+        #   - linux/arm64: would need a full multiarch cross-toolchain
+        #     (dpkg --add-architecture arm64 + ports.ubuntu.com sources +
+        #     gcc-aarch64-linux-gnu) for marginal benefit — this target
+        #     exists for Raspberry Pi/ARM SERVERS, almost always run
+        #     headless over SSH, where an X11 clipboard wouldn't work
+        #     anyway even with cgo. Not worth the fragility; CGO_ENABLED=0.
+        #   - darwin/amd64, darwin/arm64: cgo needs the Cocoa/Foundation
+        #     frameworks (clipboard_darwin.m), which only exist on a real
+        #     macOS toolchain — not cross-compilable from this Linux runner
+        #     at all. CGO_ENABLED=0 is the only option here.
+        #   - windows/amd64: clipboard_windows.go uses syscall/DLLs directly,
+        #     no cgo involved regardless — CGO_ENABLED=0 costs nothing.
+        # Whichever target ends up cgo-less compiles the library's
+        # clipboard_nocgo.go stub instead, whose functions panic if actually
+        # invoked at runtime — internal/tui/clipboard.go's initClipboard/
+        # PasteImageFromClipboard explicitly recover() from that and report
+        # "clipboard not available", exactly like any other init failure
+        # (e.g. a headless machine with no X11 session at all).
         run: |
-          export CGO_ENABLED=0
           LDFLAGS="-s -w -X github.com/gurcuff91/harness/internal/version.Version=$TAG"
           mkdir -p dist
           build() {
-            GOOS=$1 GOARCH=$2 go build -ldflags "$LDFLAGS" -o "dist/harness-$1-$2$3" ./cmd/harness
+            local goos=$1 goarch=$2 suffix=$3 cgo=$4
+            CGO_ENABLED=$cgo GOOS=$goos GOARCH=$goarch go build -ldflags "$LDFLAGS" -o "dist/harness-$goos-$goarch$suffix" ./cmd/harness
           }
-          build darwin amd64 ""
-          build darwin arm64 ""
-          build linux amd64 ""
-          build linux arm64 ""
-          build windows amd64 ".exe"
+          build darwin  amd64 ""     0
+          build darwin  arm64 ""     0
+          build linux   amd64 ""     1
+          build linux   arm64 ""     0
+          build windows amd64 ".exe" 0
 
       - name: Package archives
         env:
