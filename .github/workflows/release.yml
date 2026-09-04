@@ -80,7 +80,21 @@ jobs:
       - name: Build all platforms
         env:
           TAG: ${{ steps.resolve.outputs.tag }}
+        # CGO_ENABLED=0 for every target: golang.design/x/clipboard (used for
+        # clipboard image paste in the TUI) needs cgo + X11 dev headers to
+        # build its Linux backend, which this runner doesn't have installed —
+        # and shouldn't need to, for a cross-compiling release job. With cgo
+        # off, it falls back to clipboard_nocgo.go (a pure-Go stub that
+        # panics only if clipboard paste is actually invoked at runtime),
+        # which is an acceptable trade-off here: initClipboard() in
+        # internal/tui/clipboard.go already treats Init() failure as
+        # "clipboard unavailable" and degrades gracefully rather than
+        # crashing, so losing this one optional feature in cross-compiled
+        # release binaries is fine — the alternative is installing X11 dev
+        # packages on the runner for a feature most release binaries (piped
+        # over SSH, run in containers, etc.) can't use anyway.
         run: |
+          export CGO_ENABLED=0
           LDFLAGS="-s -w -X github.com/gurcuff91/harness/internal/version.Version=$TAG"
           mkdir -p dist
           build() {
