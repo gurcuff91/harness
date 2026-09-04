@@ -1,9 +1,26 @@
 # `Goal` tool — adversarial builder/tester loop engineering — Design
 
 **Date:** 2026-08-31
-**Status:** Approved, ready for implementation planning
+**Status:** SUPERSEDED (2026-09-04) — see note below. Kept for historical context only.
 **Area:** `agent/tools/goal.go` (new), `agent/agent.go` (wiring), `agent/prompts.go`
 (`/goal` command prompt), `internal/tui/commands.go` (`/goal <prompt>` command)
+
+> **Superseded note (2026-09-04):** the dedicated `Goal` tool designed below was
+> removed entirely. Real-world use surfaced that Builder/Tester sub-agents
+> aren't the blank slates the tool's fixed role prompts assumed — they share
+> the parent's cwd, tools, skills, and read-only memory, and can investigate
+> the project themselves. Once the protocol grew (frozen acceptance contracts,
+> goal-hacking detection, round ledgers, staleness criteria) it became too
+> large and too editable-without-a-recompile to justify living as a hardcoded
+> Go string. The whole protocol now lives as a **Skill**
+> (`~/.harness/agent/skills/goal/SKILL.md`), orchestrated via two plain
+> `Subagent` tool calls per round (Builder, then a fresh Tester) instead of a
+> purpose-built tool — invoked via the existing generic `skill:goal` command
+> path (`server.go`'s `skill:<name>` handler), no new server-side command at
+> all. The `Goal` tool, its executor wiring in `agent.go`, `GoalCommandPrompt`,
+> and `PromptWithDisplayText` (added specifically to keep the tool's fixed
+> protocol prompt from leaking into the TUI echo) were all deleted as part of
+> this migration — see the CHANGELOG entry for the removal commit.
 
 ## Problem
 

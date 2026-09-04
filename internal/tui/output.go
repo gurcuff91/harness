@@ -205,8 +205,6 @@ func toolStyle(name string) (colorFn func(string) string, icon string) {
 		return ansi.Accent, "✦" // star: skill
 	case "Subagent":
 		return ansi.Accent, "⊕" // circled plus: spawn a sub-agent
-	case "Goal":
-		return ansi.Accent, "✪" // star-in-circle: goal/objective achieved, not the internal adversarial mechanism
 	case "MemoWrite", "MemoSearch", "MemoDelete":
 		return ansi.Accent, "✳" // asterisk: memory note
 	case "Schedule", "ScheduleList", "ScheduleDelete":

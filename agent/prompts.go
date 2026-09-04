@@ -63,38 +63,3 @@ func buildCompactionCheckpoint(summary string, hasMemory bool) string {
 const maxIterationsPrompt = "You've reached the maximum number of tool calls allowed for this turn. " +
 	"Please summarize: (1) what you have completed so far, (2) what still needs to be done, " +
 	"and (3) ask the user if they want you to continue or if they'd like to change direction."
-
-// GoalCommandPrompt builds the message injected into the session when the
-// user runs the /goal command — it does NOT implement the loop itself (that
-// stays the model's own ReAct loop, driven by repeated Goal tool calls); it
-// only explains the protocol at a high level and hands off the user's own
-// goal text. Exported (unlike the const prompts above) because it needs to
-// interpolate the user's goal — server.go's handleExecCommand composes it
-// for the "goal" command the same way it already composes the skill: prompt.
-//
-// Step 0 (surface conversation-only context FIRST, before round 1, WHEN
-// THERE IS ANY) is deliberately narrow, not a general "gather everything"
-// prelude: the Builder and Tester are ephemeral sub-agents, but they are NOT
-// blank slates about the PROJECT — they run with the same cwd, the same
-// tools (Bash/Read/Fetch/etc.), the same skills, and the same read-only
-// memory search the parent has, so buildSystemPrompt's SYSTEM.md/AGENTS.md/
-// memory sections are already available to them, and they can investigate
-// the codebase themselves exactly as the parent could. What they genuinely
-// cannot get on their own is anything that only exists in THIS
-// conversation's history — a decision already made, a constraint the user
-// stated, something already tried and ruled out. Step 0 is scoped to
-// exactly that, so the parent doesn't waste its own turn re-discovering or
-// restating project context a sub-agent can find by itself.
-func GoalCommandPrompt(userGoal string) string {
-	return "Use the Goal tool to drive an adversarial build/test loop toward this objective:\n\n" +
-		userGoal +
-		"\n\n" +
-		"Protocol:\n" +
-		"0. Before composing round 1's prompts, check whether THIS CONVERSATION holds anything the Builder/Tester have no other way to know — a decision already made, a constraint the user stated, something already tried and ruled out. They run in the SAME project (same cwd, same tools, same skills, same read-only memory) so they can explore the codebase, read files, and search memory themselves — don't re-discover or restate any of that for them. Only surface what's specific to this conversation; if there's nothing like that, skip straight to step 1.\n" +
-		"1. Compose this round's 'builder_prompt' — operational content only, what to do — including any conversation-only context from step 0, if there was any.\n" +
-		"2. Compose 'tester_prompt' as a concrete, checkable list of acceptance criteria derived from the objective — not a vague instruction.\n" +
-		"3. Call the Goal tool. Read the Tester's report it returns.\n" +
-		"4. If 'Overall: PASS' — the goal is achieved. Stop and report success to the user.\n" +
-		"5. If 'Overall: FAIL' — refine 'builder_prompt' for the next round using the SPECIFIC per-criterion failures the Tester reported (not a generic \"try again\").\n" +
-		"6. If progress stalls (the same criteria keep failing across rounds with no improvement) or the objective turns out ambiguous or infeasible, STOP and ask the user rather than looping indefinitely."
-}

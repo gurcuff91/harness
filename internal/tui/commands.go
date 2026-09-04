@@ -496,7 +496,7 @@ func (t *TUI) applyCommandResult(cmd string, args []string, status *client.Statu
 	}
 	// Commands that trigger agent streaming show the spinner instead of a
 	// static confirmation (the stream itself is the feedback).
-	if cmd == "compact" || cmd == "goal" || strings.HasPrefix(cmd, "skill:") {
+	if cmd == "compact" || strings.HasPrefix(cmd, "skill:") {
 		t.setSpinning(true)
 		t.updateInfo()
 		return

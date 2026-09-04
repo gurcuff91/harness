@@ -123,17 +123,5 @@ func TestSubagentAndColleagueAskStillCatchWhitespaceOnly(t *testing.T) {
 			t.Fatalf("expected whitespace-only prompt to be rejected, got out=%q", out)
 		}
 	})
-	t.Run("Goal whitespace-only builder_prompt and tester_prompt", func(t *testing.T) {
-		tool := Goal(func(ctx context.Context, builderPrompt, testerPrompt string, maxIterations int) (string, error) {
-			return "unreachable", nil
-		})
-		out, err := tool.Execute(context.Background(), json.RawMessage(`{"builder_prompt":"   ","tester_prompt":"x"}`))
-		if err == nil {
-			t.Fatalf("expected whitespace-only builder_prompt to be rejected, got out=%q", out)
-		}
-		out, err = tool.Execute(context.Background(), json.RawMessage(`{"builder_prompt":"x","tester_prompt":"   "}`))
-		if err == nil {
-			t.Fatalf("expected whitespace-only tester_prompt to be rejected, got out=%q", out)
-		}
-	})
+
 }
