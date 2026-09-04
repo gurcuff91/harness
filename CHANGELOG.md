@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.61] - 2026-09-04
+
+### Fix — three real bugs found live-testing the new release workflow (0.76.60) in CI, plus a repo-config prerequisite it needed to run at all
+- **Repo config prerequisite**: the repo's GitHub default branch was still `master` (a single, long-abandoned "Initial commit"), while all 350+ real commits lived on `main` — GitHub Actions only ever discovers/runs workflows that exist on the default branch, so pushing `release.yml` to `main` alone did nothing; the tag push for 0.76.60 never triggered it. Changed the repo's default branch to `main` (`gh repo edit --default-branch main`) — a pure GitHub-side setting, no history rewritten.
+- **Bug 1 — every build silently overwrote the same file**: the build loop's `-o` path never actually included `$GOOS`/`$GOARCH` (`dist/harness$3` for every platform), so all 5 `go build` calls wrote to the same `dist/harness`/`dist/harness.exe`, each overwriting the last — the packaging step then failed looking for `harness-darwin-amd64` etc., which never existed under that name. Fixed to `dist/harness-$1-$2$3`.
+- **Bug 2 — Linux cross-compile failed without cgo/X11**: `golang.design/x/clipboard` (used for TUI clipboard image paste) needs cgo + X11 dev headers to build its Linux backend, which the GitHub-hosted runner doesn't have installed. Fixed with `CGO_ENABLED=0` for the entire build step (all 5 targets) — the library falls back to its own pure-Go no-op stub (`clipboard_nocgo.go`, panics only if clipboard paste is actually invoked at runtime), which `internal/tui/clipboard.go`'s `initClipboard` already treats as "unavailable" and degrades gracefully from, exactly as it does today when `Init()` fails for any other reason.
+- **Bug 3 — `gh release create` has no `--clobber` flag**: that flag belongs to `gh release upload` (uploading assets to an ALREADY-created release), not `gh release create` — the manual `workflow_dispatch` rebuild path failed outright with "unknown flag" the moment a Release already existed for the target tag. Fixed by checking `gh release view` first and running `gh release delete "$TAG" --yes` (the GitHub Release entity only — never the underlying git tag `make release` created) before re-creating.
+- **Verified in production**: after all three fixes, `gh workflow run release.yml -f tag=v0.76.60` completed successfully end-to-end — published `v0.76.60`'s GitHub Release with all 5 packaged binaries + `SHA256SUMS.txt`, downloaded via `gh release download`, checksum verified, and the extracted `darwin/arm64` binary confirmed to run correctly.
+- Full suite + `-race` + `go vet ./...` green (no application code touched in this entry — workflow-only fixes).
+
 ## [0.76.60] - 2026-09-04
 
 ### Feature — automated GitHub Releases with cross-platform binaries, triggered by the existing `make release-push` tag push
