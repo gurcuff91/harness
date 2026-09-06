@@ -27,7 +27,7 @@ func callSubagentWithContext(t *testing.T, ctx context.Context, executor Subagen
 }
 
 func TestSubagentMissingPromptErrors(t *testing.T) {
-	_, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+	_, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
 		return "should not be called", nil
 	}, map[string]any{})
 	if err == nil {
@@ -36,7 +36,7 @@ func TestSubagentMissingPromptErrors(t *testing.T) {
 }
 
 func TestSubagentForegroundReturnsExecutorResult(t *testing.T) {
-	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
 		return "the answer for: " + prompt, nil
 	}, map[string]any{"prompt": "what is 2+2"})
 	if err != nil {
@@ -50,7 +50,7 @@ func TestSubagentForegroundReturnsExecutorResult(t *testing.T) {
 func TestSubagentForegroundDefaultTimeoutDoesNotCutAFastCall(t *testing.T) {
 	// No "timeout" in input — must fall back to subagentTimeout (5 min), not
 	// something so short a normal test call would spuriously fail.
-	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
 		if _, ok := ctx.Deadline(); !ok {
 			t.Error("expected the foreground path to set a deadline on ctx")
 		}
@@ -62,7 +62,7 @@ func TestSubagentForegroundDefaultTimeoutDoesNotCutAFastCall(t *testing.T) {
 }
 
 func TestSubagentForegroundCustomTimeoutIsApplied(t *testing.T) {
-	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
 		deadline, ok := ctx.Deadline()
 		if !ok {
 			t.Fatal("expected a deadline")
@@ -78,7 +78,7 @@ func TestSubagentForegroundCustomTimeoutIsApplied(t *testing.T) {
 }
 
 func TestSubagentForegroundTimeoutExpires(t *testing.T) {
-	_, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+	_, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
 		<-ctx.Done()
 		return "", ctx.Err()
 	}, map[string]any{"prompt": "hi", "timeout": 1})
@@ -89,7 +89,7 @@ func TestSubagentForegroundTimeoutExpires(t *testing.T) {
 
 func TestSubagentBackgroundReturnsImmediatelyWithFilePath(t *testing.T) {
 	release := make(chan struct{})
-	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
 		<-release // would hang forever if this ever ran synchronously
 		return "background result", nil
 	}, map[string]any{"prompt": "hi", "background": true})
@@ -103,7 +103,7 @@ func TestSubagentBackgroundReturnsImmediatelyWithFilePath(t *testing.T) {
 }
 
 func TestSubagentBackgroundWritesResultToFile(t *testing.T) {
-	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
 		return "the real answer", nil
 	}, map[string]any{"prompt": "hi", "background": true})
 	if err != nil {
@@ -132,7 +132,7 @@ func TestSubagentBackgroundIgnoresTimeoutField(t *testing.T) {
 	// background:true + a tiny timeout must NOT cut the executor off — timeout
 	// is only meaningful on the foreground path (same rule as ColleagueAsk).
 	release := make(chan struct{})
-	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
 		if _, ok := ctx.Deadline(); ok {
 			t.Error("background executor's ctx must not carry an artificial deadline")
 		}
@@ -164,7 +164,7 @@ func TestSubagentBackgroundSurvivesCallerContextCancellation(t *testing.T) {
 	turnCtx, cancelTurn := context.WithCancel(context.Background())
 	executorSawCancellation := make(chan bool, 1)
 
-	out, err := callSubagentWithContext(t, turnCtx, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+	out, err := callSubagentWithContext(t, turnCtx, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
 		// Give the test time to cancel turnCtx before this returns, then
 		// report whether ITS ctx (which must NOT be turnCtx) got cancelled too.
 		select {
@@ -231,7 +231,7 @@ func extractFilePath(t *testing.T, msg string) string {
 // value of its own.
 func TestSubagentMaxIterationsOmittedPassesZeroThrough(t *testing.T) {
 	var got int
-	_, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+	_, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
 		got = maxIterations
 		return "ok", nil
 	}, map[string]any{"prompt": "hi"})
@@ -246,7 +246,7 @@ func TestSubagentMaxIterationsOmittedPassesZeroThrough(t *testing.T) {
 // A valid, explicit override must reach the executor exactly as requested.
 func TestSubagentMaxIterationsValidValueReachesExecutor(t *testing.T) {
 	var got int
-	_, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+	_, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
 		got = maxIterations
 		return "ok", nil
 	}, map[string]any{"prompt": "hi", "max_iterations": 150})
@@ -264,7 +264,7 @@ func TestSubagentMaxIterationsBoundaryValuesAccepted(t *testing.T) {
 	for _, want := range []int{subagentMinIterations, subagentMaxIterationsCeiling} {
 		var got int
 		called := false
-		_, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+		_, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
 			called = true
 			got = maxIterations
 			return "ok", nil
@@ -290,7 +290,7 @@ func TestSubagentMaxIterationsOutOfRangeRejected(t *testing.T) {
 			continue // 0 is the valid "omitted" sentinel, not a case here
 		}
 		called := false
-		out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+		out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
 			called = true
 			return "should not run", nil
 		}, map[string]any{"prompt": "hi", "max_iterations": bad})
@@ -311,7 +311,7 @@ func TestSubagentMaxIterationsOutOfRangeRejected(t *testing.T) {
 // value.
 func TestSubagentMaxIterationsOutOfRangeRejectedInBackgroundMode(t *testing.T) {
 	called := false
-	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
 		called = true
 		return "should not run", nil
 	}, map[string]any{"prompt": "hi", "background": true, "max_iterations": 999})
@@ -330,7 +330,7 @@ func TestSubagentMaxIterationsOutOfRangeRejectedInBackgroundMode(t *testing.T) {
 // background mode (not just foreground).
 func TestSubagentMaxIterationsReachesExecutorInBackgroundMode(t *testing.T) {
 	gotCh := make(chan int, 1)
-	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int) (string, error) {
+	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
 		gotCh <- maxIterations // synchronizes-before the receive below — no data race
 		return "done", nil
 	}, map[string]any{"prompt": "hi", "background": true, "max_iterations": 42})
@@ -344,6 +344,65 @@ func TestSubagentMaxIterationsReachesExecutorInBackgroundMode(t *testing.T) {
 	case got := <-gotCh:
 		if got != 42 {
 			t.Errorf("executor received maxIterations = %d, want 42", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("background executor never ran")
+	}
+}
+
+// ── readonly ────────────────────────────────────────────────────────────
+
+// Omitting readonly (JSON zero-value, indistinguishable from "not set")
+// must pass false through to the executor unchanged — full tool access
+// remains the default, matching the tool's own Description.
+func TestSubagentReadonlyOmittedPassesFalseThrough(t *testing.T) {
+	var got bool
+	_, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
+		got = readonly
+		return "ok", nil
+	}, map[string]any{"prompt": "hi"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != false {
+		t.Errorf("executor received readonly = %v, want false (omitted)", got)
+	}
+}
+
+// readonly:true must reach the executor in the foreground path.
+func TestSubagentReadonlyTrueReachesExecutor(t *testing.T) {
+	var got bool
+	_, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
+		got = readonly
+		return "ok", nil
+	}, map[string]any{"prompt": "hi", "readonly": true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != true {
+		t.Errorf("executor received readonly = %v, want true", got)
+	}
+}
+
+// readonly:true must also reach the executor in background mode, exactly
+// like max_iterations does — the background path forwards every field, not
+// just some.
+func TestSubagentReadonlyTrueReachesExecutorInBackgroundMode(t *testing.T) {
+	gotCh := make(chan bool, 1)
+	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
+		gotCh <- readonly
+		return "done", nil
+	}, map[string]any{"prompt": "hi", "background": true, "readonly": true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "background") {
+		t.Errorf("out = %q, want a background-delegation message", out)
+	}
+	select {
+	case got := <-gotCh:
+		if got != true {
+			t.Errorf("executor received readonly = %v, want true", got)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("background executor never ran")

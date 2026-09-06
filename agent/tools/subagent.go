@@ -17,8 +17,11 @@ import (
 // for the sub-agent; 0 means "use the Agent's own default"
 // (subagentMaxIterations, see agent.go) — the Subagent tool itself has
 // already validated a non-zero value is within [subagentMinIterations,
-// subagentMaxIterationsCeiling] before this is ever called.
-type SubagentExecutor func(ctx context.Context, prompt string, maxIterations int) (string, error)
+// subagentMaxIterationsCeiling] before this is ever called. readonly, when
+// true, means the sub-agent must be built WITHOUT Write/Edit — see
+// subagentInput.Readonly's doc comment for exactly what this guarantees
+// (and doesn't).
+type SubagentExecutor func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error)
 
 // subagentInput is the JSON input schema for the Subagent tool.
 //
@@ -32,6 +35,15 @@ type subagentInput struct {
 	Timeout       int    `json:"timeout,omitempty"`
 	Background    bool   `json:"background,omitempty"`
 	MaxIterations int    `json:"max_iterations,omitempty"`
+	// Readonly, when true, builds the sub-agent WITHOUT the Write/Edit
+	// tools — an extra, structural safety layer on top of whatever the
+	// caller's own prompt already tells the sub-agent not to do (e.g. "just
+	// investigate, don't change anything"). It is NOT a full sandbox: Bash
+	// remains available and can trivially modify files (`echo > file`,
+	// `rm`, `git commit`, …) — this only removes the two STRUCTURED
+	// file-editing tools, making a disobedient sub-agent's job harder, not
+	// impossible. Default false (today's behavior: full tool access).
+	Readonly bool `json:"readonly,omitempty"`
 }
 
 // subagentTimeout is the default wait when Timeout isn't specified — same
@@ -77,14 +89,15 @@ func Subagent(executor SubagentExecutor) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolSubagent,
-			Description: `Spawn an autonomous sub-agent for a self-contained task. PREFER over doing it yourself when: exploring/reading large codebases (keeps your context clean), fetching multiple URLs, analyzing multiple files, or refactoring isolated modules. Invoke MULTIPLE simultaneously — they run in parallel. Each has full tool access. DO NOT use when tasks depend on each other's output. Blocks until the sub-agent finishes and returns its final text — set 'background: true' to get a result-file path immediately instead of waiting, if the task might take a while (background has no timeout: use it for genuinely slow tasks instead of passing a large 'timeout'). If the task is genuinely large or multi-step, also raise 'max_iterations' — the default budget is tuned for typical delegated tasks and WILL cut a large one short.`,
+			Description: `Spawn an autonomous sub-agent for a self-contained task. PREFER over doing it yourself when: exploring/reading large codebases (keeps your context clean), fetching multiple URLs, analyzing multiple files, or refactoring isolated modules. Invoke MULTIPLE simultaneously — they run in parallel. Each has full tool access by default. DO NOT use when tasks depend on each other's output. Blocks until the sub-agent finishes and returns its final text — set 'background: true' to get a result-file path immediately instead of waiting, if the task might take a while (background has no timeout: use it for genuinely slow tasks instead of passing a large 'timeout'). If the task is genuinely large or multi-step, also raise 'max_iterations' — the default budget is tuned for typical delegated tasks and WILL cut a large one short.`,
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"prompt": {"type": "string", "description": "The complete task or question for the sub-agent."},
 					"timeout": {"type": "integer", "description": "Seconds to wait for a response (default: 120). Ignored when background is true — background waits as long as needed."},
 					"background": {"type": "boolean", "description": "If true, return immediately with a path to a result file instead of blocking, and wait as long as needed (no timeout). Default false."},
-					"max_iterations": {"type": "integer", "description": "Override the sub-agent's ReAct iteration budget (default: 50, range 1-200 if set). ONLY set this when the delegated task is genuinely large or multi-step — extensive codebase exploration, many files/URLs to process, a long multi-phase investigation — that the default 50 would likely cut short. Leave unset for a typical, focused delegated task; requesting a larger budget than the task needs wastes nothing but isn't necessary. Pairs well with 'background: true' for large tasks you don't want to block your own turn on."}
+					"max_iterations": {"type": "integer", "description": "Override the sub-agent's ReAct iteration budget (default: 50, range 1-200 if set). ONLY set this when the delegated task is genuinely large or multi-step — extensive codebase exploration, many files/URLs to process, a long multi-phase investigation — that the default 50 would likely cut short. Leave unset for a typical, focused delegated task; requesting a larger budget than the task needs wastes nothing but isn't necessary. Pairs well with 'background: true' for large tasks you don't want to block your own turn on."},
+					"readonly": {"type": "boolean", "description": "If true, the sub-agent cannot use Write or Edit — only read/explore/investigate. Use for research, code review, or analysis tasks that should never modify files. This is an extra safety layer on top of your own prompt instructions, not a full sandbox: the sub-agent still has Bash, which can modify files too. Default false."}
 				},
 				"required": ["prompt"]
 			}`),
@@ -120,7 +133,7 @@ func Subagent(executor SubagentExecutor) Tool {
 			// the slow task background was meant to tolerate (see the same
 			// reasoning in ColleagueAsk).
 			if req.Background {
-				return runSubagentBackground(executor, req.Prompt, req.MaxIterations)
+				return runSubagentBackground(executor, req.Prompt, req.MaxIterations, req.Readonly)
 			}
 
 			timeout := subagentTimeout
@@ -130,7 +143,7 @@ func Subagent(executor SubagentExecutor) Tool {
 			// Combine caller ctx (Stop cancellation) + timeout.
 			ctx2, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
-			out, err := executor(ctx2, req.Prompt, req.MaxIterations)
+			out, err := executor(ctx2, req.Prompt, req.MaxIterations, req.Readonly)
 			// On timeout, discard any partial output: a sub-agent cut off
 			// mid-inference may have produced misleading, half-formed reasoning
 			// that would contaminate the parent's context if surfaced. Return a
@@ -168,7 +181,7 @@ func Subagent(executor SubagentExecutor) Tool {
 // lifecycle, so it can't be cancelled out from under the sub-agent by one
 // finishing — which is exactly the "let it run, check back later" model
 // this mode exists for.
-func runSubagentBackground(executor SubagentExecutor, prompt string, maxIterations int) (string, error) {
+func runSubagentBackground(executor SubagentExecutor, prompt string, maxIterations int, readonly bool) (string, error) {
 	f, err := os.CreateTemp("", "harness-subagent-*.txt")
 	if err != nil {
 		return fmt.Sprintf("Error creating result file: %v", err), err
@@ -177,7 +190,7 @@ func runSubagentBackground(executor SubagentExecutor, prompt string, maxIteratio
 	f.Close()
 
 	go func() {
-		text, err := executor(context.Background(), prompt, maxIterations)
+		text, err := executor(context.Background(), prompt, maxIterations, readonly)
 		result := text
 		if err != nil {
 			result = fmt.Sprintf("Error: %v\n\n%s", err, text)

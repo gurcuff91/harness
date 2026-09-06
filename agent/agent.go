@@ -887,7 +887,7 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 	if a.isToolAllowed(tools.ToolSubagent) {
 		// Capture current settings in a closure — Agent has zero knowledge of sub-agent mechanics
 		parentA := a
-		executor := func(ctx context.Context, prompt string, requestedMaxIterations int) (string, error) {
+		executor := func(ctx context.Context, prompt string, requestedMaxIterations int, readonly bool) (string, error) {
 			// requestedMaxIterations is the caller's optional override (the
 			// Subagent tool's own 'max_iterations' param) — 0 means "not
 			// requested, use the default". Already validated by the tool to
@@ -906,6 +906,21 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 			maxIter := subagentMaxIterations
 			if requestedMaxIterations > 0 {
 				maxIter = requestedMaxIterations
+			}
+			// Base recursion/memory/schedule restrictions every sub-agent
+			// gets, regardless of readonly. When readonly is requested, Write
+			// and Edit are appended on top — an extra STRUCTURAL layer beyond
+			// whatever the caller's own prompt already tells the sub-agent
+			// not to do (see subagentInput.Readonly's doc comment in
+			// tools/subagent.go for the exact guarantee: this blocks the two
+			// structured file-editing tools, not Bash, which can still modify
+			// files if the sub-agent disobeys its instructions anyway).
+			disallowed := []string{
+				tools.ToolSubagent, tools.ToolMemoWrite, tools.ToolMemoDelete,
+				tools.ToolSchedule, tools.ToolScheduleList, tools.ToolScheduleDelete,
+			}
+			if readonly {
+				disallowed = append(disallowed, tools.ToolWrite, tools.ToolEdit)
 			}
 			// Create ephemeral sub-agent inheriting parent settings. It reuses the
 			// parent's MCP tools (via Tools) WITHOUT spawning its own MCP processes
@@ -940,12 +955,9 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 				// runs only in the parent), the scheduler engine and its tools belong
 				// to the root agent. Subagents get neither the engine (EnableScheduler
 				// stays false) nor the Schedule* tools (disallowed).
-				DisallowedTools: []string{
-					tools.ToolSubagent, tools.ToolMemoWrite, tools.ToolMemoDelete,
-					tools.ToolSchedule, tools.ToolScheduleList, tools.ToolScheduleDelete,
-				},
-				Tools:        parentA.MCPTools(),
-				sharedMemory: parentA.memStore, // share the parent's store (read-only for subagents; not closed by the subagent)
+				DisallowedTools: disallowed,
+				Tools:           parentA.MCPTools(),
+				sharedMemory:    parentA.memStore, // share the parent's store (read-only for subagents; not closed by the subagent)
 			})
 			// Read the CURRENT model at execution time, not the one captured
 			// when this closure was built — see buildSessionTools' sessRef

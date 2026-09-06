@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.63] - 2026-09-04
+
+### Feature — `Subagent` gains an optional `readonly` flag: an extra safety layer against a sub-agent editing files it shouldn't
+- **Requested by Gus**: for research/investigation/code-review sub-agent tasks that should never modify anything, an explicit, structural way to prevent it — not just relying on the caller's own prompt telling the sub-agent "don't write anything".
+- **Change** (`agent/tools/subagent.go`, `agent/agent.go`): `Subagent` gains `readonly` (bool, default `false` — today's full-access behavior unchanged). When `true`, the ephemeral sub-agent is constructed with `Write`/`Edit` appended to its `DisallowedTools` — genuinely absent from its tool registry, not merely instructed against. Explicitly documented as an EXTRA safety layer, not a full sandbox: `Bash` remains available and can still modify files (`echo > file`, `rm`, `git commit`, …) if a sub-agent disobeys its own prompt instructions — `readonly` only removes the two structured file-editing tools, making that harder, not impossible. Applies identically to the foreground and `background: true` paths, mirroring `max_iterations`'s own plumbing.
+- Tests: `agent/tools/subagent_test.go` gained `TestSubagentReadonlyOmittedPassesFalseThrough`, `TestSubagentReadonlyTrueReachesExecutor`, `TestSubagentReadonlyTrueReachesExecutorInBackgroundMode` (mock executor, all green). Live end-to-end integration test (`agent/subagent_readonly_test.go`, `TestSubagentReadonlyOverrideReachesEphemeralSubAgent`) against a real connected provider: asks the sub-agent to write a file and report if it lacks a writing tool — confirmed the ephemeral sub-agent's own response explicitly named having only `Read`/`Bash`/`WebFetch`/`Skill` available, no `Write`/`Edit`, structurally proving the restriction reached it (not just "chose not to write"). Full suite + `-race` + `go vet ./...` green.
+
+### Fix — a real, unrelated bug found while validating the above: `claude-oauth` requests were being rejected with a stale hardcoded Claude Code version
+- **Found while testing `readonly` live**: the integration test above (and, on closer inspection, the pre-existing `max_iterations` one too) was failing near-instantly with what looked like "the model didn't invoke the tool this run" — actually masking a real `anthropic API error 400` on every single attempt: `claude_code_version_too_old — Claude Code 2.1.90 does not support this model; version 2.1.251 or newer is required`.
+- **Root cause**: `internal/providers/claude_oauth.go` makes harness's OAuth requests indistinguishable from real Claude Code (so a Claude subscription can be used instead of paying API rates) by sending a `user-agent: claude-cli/<version> (external, cli)` header — `ccVersion`'s hardcoded default (`envOrDefault("ANTHROPIC_CLI_VERSION", "2.1.90")`) had fallen behind Anthropic's own minimum-supported-version enforcement for the currently active model.
+- **Fix**: bumped the hardcoded default to `2.1.251` — verified live (a standalone test forcing `ANTHROPIC_CLI_VERSION=2.1.251` via the existing env override completed a real turn with zero errors, vs. the hardcoded `2.1.90` default failing every single call) before hardcoding it as the new baseline. The `ANTHROPIC_CLI_VERSION` env var override still exists for whenever Anthropic raises the bar again — no code change needed for that case going forward, just the env var, until the next hardcoded bump.
+- No test changes (this constant has no test coverage of its literal value) — verified via the same live integration tests above, both now passing consistently instead of silently short-circuiting on a 400.
+
 ## [0.76.62] - 2026-09-04
 
 ### Fix — a real crash risk in the `CGO_ENABLED=0` release binaries, and real clipboard support restored for `linux/amd64`

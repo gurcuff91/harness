@@ -52,7 +52,7 @@ const oauthTokenURL = "https://platform.claude.com/v1/oauth/token"
 // what this code used before).
 var oauthRefreshClient = &http.Client{Timeout: 30 * time.Second}
 
-var ccVersion = envOrDefault("ANTHROPIC_CLI_VERSION", "2.1.90")
+var ccVersion = envOrDefault("ANTHROPIC_CLI_VERSION", "2.1.251")
 
 // ── ClaudeOAuth ──────────────────────────────────────────────────────────
 
