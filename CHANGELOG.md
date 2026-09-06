@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.64] - 2026-09-06
+
+### Change — renamed the `ANTHROPIC_CLI_VERSION` env override to `CLAUDE_CLI_VERSION`
+- **Requested by Gus**: `ANTHROPIC_CLI_VERSION` names the wrong thing — the value it overrides is the CLAUDE CODE client version harness impersonates in its `user-agent` header (see 0.76.63's fix), not an Anthropic API version. `CLAUDE_CLI_VERSION` names what it actually controls.
+- **Change** (`internal/providers/claude_oauth.go`): `envOrDefault("ANTHROPIC_CLI_VERSION", "2.1.251")` → `envOrDefault("CLAUDE_CLI_VERSION", "2.1.251")`. Default value unchanged. No other code references the old name.
+- Verified live: a real turn with `CLAUDE_CLI_VERSION=2.1.251` set completes with zero errors, same as the hardcoded default. Full suite + `-race` + `go vet ./...` green.
+
 ## [0.76.63] - 2026-09-04
 
 ### Feature — `Subagent` gains an optional `readonly` flag: an extra safety layer against a sub-agent editing files it shouldn't
