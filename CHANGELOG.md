@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.68] - 2026-09-10
+
+### Feature — built-in `WebSearch` tool with MiniMax + Ollama Cloud fallback
+- Added a new built-in tool, `WebSearch`, gated behind `AgentOptions.EnableWebSearch` (enabled by default for all interactive transports: TUI, Telegram, Slack, ACP, `harness serve`).
+- The tool performs a live web search via the `minimax` provider's coding-plan search endpoint first, falling back transparently to `ollama-cloud`'s Web Search API on transport errors or empty results — the caller never needs to know which backend answered.
+- Output is a single normalized JSON shape (`{"title", "url", "snippet"}`) regardless of which backend responded; `limit` defaults to 5 (max 10), `timeout` defaults to 30s per backend.
+- If neither provider is connected, the tool returns `"WebSearch needs at least one provider connected: `minimax` or `ollama-cloud`"`. Backend names are otherwise never leaked into aggregated dispatch errors — those are categorized generically (e.g. "request timed out", "provider rejected the request (status 500)") and deduplicated when both backends fail the same way.
+- Description follows the existing built-in tool style (Bash/Fetch): purely operational — what the tool does and when to use it — with all parameter documentation living in the JSON Schema, not the description string.
+
+### Fix — WebSearch provider credentials were captured once at session creation, not re-checked per call
+- **Reported by Gus**: disconnecting both `minimax` and `ollama-cloud` mid-session did not stop `WebSearch` from working — it kept using credentials resolved when the session was first built.
+- **Root cause**: `Agent.webSearchLookup()` called `webSearchBackends()` once and wrapped the result in a struct that permanently cached the snapshot; the tool's `ProviderLookup` interface was never re-consulted afterward, despite a code comment incorrectly claiming it would be.
+- **Fix**: `webSearchLookup()` now returns a live closure (`searchBackendsLookupFunc`) that re-walks the provider registry and re-resolves credentials on every `ActiveSearchBackends()` call — connecting or disconnecting either provider takes effect on the tool's very next invocation, no session or process restart required.
+- Added `TestLookupIsConsultedOnEveryCallNotCachedAtConstruction`, a regression test that would have failed against the old snapshot-based implementation.
+
 ## [0.76.67] - 2026-09-10
 
 ### Fix — Codex model context metadata now uses the provider endpoint
