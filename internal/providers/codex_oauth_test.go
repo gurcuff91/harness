@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gurcuff91/harness/internal/oauthflow"
+	"github.com/gurcuff91/harness/internal/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -19,6 +20,19 @@ func makeIDToken(claims map[string]any) string {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
 	payload, _ := json.Marshal(claims)
 	return header + "." + base64.RawURLEncoding.EncodeToString(payload) + ".fakesig"
+}
+
+func TestCodexModelMetadataKeepsProviderContextAuthoritative(t *testing.T) {
+	// The Codex endpoint reports 272k for Luna. EnrichMeta must not replace
+	// that authoritative value with OpenRouter's 1.05M deployment metadata.
+	meta := llm.EnrichMeta(types.ModelMeta{
+		ID:            "gpt-5.6-luna",
+		DisplayName:   "GPT-5.6-Luna",
+		ContextWindow: 272000,
+	})
+	if meta.ContextWindow != 272000 {
+		t.Fatalf("context window = %d, want provider-authoritative 272000", meta.ContextWindow)
+	}
 }
 
 // ── Request translation ───────────────────────────────────────────────────

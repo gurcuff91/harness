@@ -765,8 +765,13 @@ func fetchCodexModels(creds types.Credentials) ([]types.ModelMeta, error) {
 	}
 	var result struct {
 		Models []struct {
-			Slug                     string `json:"slug"`
-			DisplayName              string `json:"display_name"`
+			Slug        string `json:"slug"`
+			DisplayName string `json:"display_name"`
+			// The Codex endpoint is authoritative for context capacity. Keep
+			// this ahead of EnrichMeta: OpenRouter is only a fallback for
+			// fields Codex does not provide, and may describe a different
+			// deployment/configuration of the same model.
+			ContextWindow            int    `json:"context_window"`
 			Visibility               string `json:"visibility"`
 			Priority                 int    `json:"priority"`
 			DefaultReasoningLevel    string `json:"default_reasoning_level"`
@@ -784,19 +789,21 @@ func fetchCodexModels(creds types.Credentials) ([]types.ModelMeta, error) {
 	// but not shown, "none" is internal-only. Sort by priority descending
 	// (higher first), matching the Codex CLI's own picker ordering.
 	var visible []struct {
-		Slug        string `json:"slug"`
-		DisplayName string `json:"display_name"`
-		Visibility  string `json:"visibility"`
-		Priority    int    `json:"priority"`
+		Slug          string
+		DisplayName   string
+		Visibility    string
+		Priority      int
+		ContextWindow int
 	}
 	for _, m := range result.Models {
 		if m.Visibility == "list" {
 			visible = append(visible, struct {
-				Slug        string `json:"slug"`
-				DisplayName string `json:"display_name"`
-				Visibility  string `json:"visibility"`
-				Priority    int    `json:"priority"`
-			}{m.Slug, m.DisplayName, m.Visibility, m.Priority})
+				Slug          string
+				DisplayName   string
+				Visibility    string
+				Priority      int
+				ContextWindow int
+			}{m.Slug, m.DisplayName, m.Visibility, m.Priority, m.ContextWindow})
 		}
 	}
 	// priority desc — simple insertion sort over a tiny list (≤ ~15 models),
@@ -809,7 +816,14 @@ func fetchCodexModels(creds types.Credentials) ([]types.ModelMeta, error) {
 
 	var metas []types.ModelMeta
 	for _, m := range visible {
-		meta := llm.EnrichMeta(types.ModelMeta{ID: m.Slug})
+		meta := llm.EnrichMeta(types.ModelMeta{
+			ID:            m.Slug,
+			DisplayName:   m.DisplayName,
+			ContextWindow: m.ContextWindow,
+			// Codex exposes context capacity here, not a generic output-token
+			// limit; leave MaxTokens empty so EnrichMeta supplies its fallback.
+			MaxTokens: 0,
+		})
 		metas = append(metas, meta)
 	}
 	return metas, nil

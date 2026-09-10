@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.67] - 2026-09-10
+
+### Fix — Codex model context metadata now uses the provider endpoint
+- `codex-oauth` now preserves the authoritative `context_window` returned by `GET /backend-api/codex/models` before applying fallback enrichment.
+- For `gpt-5.6-luna`, the Codex endpoint currently reports `272000` tokens; OpenRouter's unrelated `1050000` deployment metadata no longer overrides it.
+- OpenRouter remains available for fields Codex does not provide, such as missing pricing or capability metadata.
+- Added regression coverage preventing provider-reported context windows from being replaced by fallback catalog data.
+
 ## [0.76.66] - 2026-09-10
 
 ### Fix — MiniMax SSE streams without an OpenAI `[DONE]` sentinel

@@ -836,7 +836,7 @@ func (s *Session) SwitchModel(ctx context.Context, fullModel string) error {
 	// compact is mandatory — switch fails if compact fails.
 	if meta := provider.ModelMeta(modelID); meta != nil && meta.ContextWindow > 0 {
 		if s.lastInputTokens > meta.ContextWindow {
-			if compactErr := s.compact(ctx); compactErr != nil {
+			if compactErr := s.compactWithTarget(ctx, provider, modelID); compactErr != nil {
 				// Compact already emitted EventError — just return
 				return fmt.Errorf("cannot switch to %s: history (%d tokens) exceeds context window (%d): %w",
 					fullModel, s.lastInputTokens, meta.ContextWindow, compactErr)
@@ -885,10 +885,18 @@ func (s *Session) SwitchThinking(level string) error {
 // turn), where it's safe; external callers go through the public Compact, which
 // guards against running mid-turn.
 func (s *Session) compact(ctx context.Context) error {
+	return s.compactWithTarget(ctx, s.provider, s.modelID)
+}
+
+// compactWithTarget compacts using an explicit provider/model pair. This is
+// important for SwitchModel: the destination model must perform the summary
+// call before the session's active model is mutated, otherwise an exhausted
+// source provider can make the destination switch impossible.
+func (s *Session) compactWithTarget(ctx context.Context, provider providers.Provider, modelID string) error {
 	s.emit(types.Event{Type: types.EventCompactStart})
 
 	// Generate compaction summary — store is untouched until this succeeds
-	summary, err := s.generateCompactionSummary(ctx)
+	summary, err := s.generateCompactionSummary(ctx, provider, modelID)
 	if err != nil {
 		s.emit(types.Event{Type: types.EventError, Message: fmt.Sprintf("compact failed: %v", err)})
 		return fmt.Errorf("compact: %w", err)
@@ -943,7 +951,7 @@ func (s *Session) compact(ctx context.Context) error {
 // The result is stored internally — NOT streamed to the transport.
 // Retries up to 3 times with exponential backoff to handle transient token
 // refresh failures or network errors during compact.
-func (s *Session) generateCompactionSummary(ctx context.Context) (string, error) {
+func (s *Session) generateCompactionSummary(ctx context.Context, provider providers.Provider, modelID string) (string, error) {
 	// Strip inline images from the history before sending to the compaction
 	// model: the LLM only needs text to produce a summary, and providers like
 	// Anthropic reject requests with many large images (>2000px) when they appear
@@ -979,7 +987,7 @@ func (s *Session) generateCompactionSummary(ctx context.Context) (string, error)
 	messages := append(history, types.NewUserTextMessage(compactRequestPrompt))
 	req := &types.Request{
 		SystemPrompt: compactSystemPrompt,
-		Model:        s.modelID,
+		Model:        modelID,
 		Messages:     messages,
 		Tools:        nil, // no tools — pure text
 		MaxTokens:    4096,
@@ -999,7 +1007,7 @@ func (s *Session) generateCompactionSummary(ctx context.Context) (string, error)
 		}
 
 		var summaryText string
-		_, err := s.provider.CompleteStream(ctx, req, func(se types.StreamEvent) {
+		_, err := provider.CompleteStream(ctx, req, func(se types.StreamEvent) {
 			if se.Type == types.StreamTextDelta {
 				summaryText += se.Delta
 			}
