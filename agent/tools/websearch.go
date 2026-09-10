@@ -1,208 +1,393 @@
-// Package tools — WebSearch built-in tool.
-//
-// Calls the MiniMax coding-plan search endpoint with the active provider's
-// API key. The tool is fully self-contained: it owns its HTTP client, URL,
-// and response parser, instead of relying on a Search() helper on the
-// provider. Decoupling from the provider registry is via a small
-// ProviderLookup interface injected by the agent.
 package tools
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gurcuff91/harness/types"
 )
 
-// MiniMax search endpoint (per the official MiniMax-Coding-Plan-MCP integration).
-var webSearchEndpoint = "https://api.minimax.io/v1/coding_plan/search"
-
-// Default tunables — overridable through the tool's JSON params.
+// Defaults — overridable through the tool's JSON params. Defaults follow
+// the lighter end of each backend's documented range (MiniMax accepts up
+// to ~20 organic entries in practice; Ollama caps at 10), so a single
+// default serves both without surprises.
 const (
-	webSearchDefaultLimit   = 10
 	webSearchDefaultTimeout = 30 * time.Second
+	webSearchDefaultLimit   = 5
 	webSearchMinLimit       = 1
-	webSearchMaxLimit       = 50
+	webSearchMaxLimit       = 10
 )
 
-// webSearchAPIKeyHeader identifies the upstream customer of the API key
-// (mirrors MiniMax-Coding-Plan-MCP's MM-API-Source: Minimax-MCP value).
-const webSearchAPIKeyHeader = "MM-API-Source"
+// snippetMaxChars caps the Ollama content field — its API can return
+// full-page excerpts (~10k chars). MiniMax snippets are short by design
+// and pass through untouched.
+const snippetMaxChars = 500
 
-// webSearchHint is the MM-API-Source we send. Distinct from the upstream
-// MCP so telemetry can attribute traffic to harness's built-in tool.
-const webSearchHint = "harness-websearch"
+// minimaxAPIKeyHeader/minimaxHint identify the upstream customer of the
+// API key (mirrors MiniMax-Coding-Plan-MCP's MM-API-Source header),
+// distinct from that MCP so traffic can be attributed to harness's own
+// built-in tool.
+const (
+	minimaxAPIKeyHeader = "MM-API-Source"
+	minimaxHint         = "harness-websearch"
+)
 
-// ProviderLookup is the minimal contract WebSearch needs from the provider
-// registry. The agent satisfies it by wrapping the minimax provider
-// instance once per session.
-type ProviderLookup interface {
-	IsActive() bool
-	ResolveCredentials() (types.Credentials, error)
-}
-
-// searchInput is the tool's JSON schema payload. `limit` and `timeout` are
-// optional; their zero values mean "use the documented default" (see
-// normalizeSearchInput below).
+// searchInput is the JSON input schema for the WebSearch tool.
 type searchInput struct {
-	Query   string `json:"query"`
+	Query   string `json:"query" validate:"required"`
 	Limit   int    `json:"limit,omitempty"`
 	Timeout int    `json:"timeout,omitempty"`
 }
 
-// searchResult is the per-result shape returned by the MiniMax API.
+// searchResult is the per-result normalized shape, identical regardless of
+// which backend answered.
 type searchResult struct {
 	Title   string `json:"title"`
-	Link    string `json:"link"`
+	URL     string `json:"url"`
 	Snippet string `json:"snippet"`
-	Date    string `json:"date"`
 }
 
-// searchResponse mirrors the upstream JSON envelope. Only the fields we
-// consume today are decoded; the rest are ignored.
-type searchResponse struct {
-	Organic []searchResult `json:"organic"`
-	// RelatedSearches intentionally omitted — not part of the tool contract yet.
+// SearchBackend is one ready-to-use HTTP backend for the search dispatcher.
+// Name is for internal dispatch/diagnostics ONLY — the tool never embeds
+// it in the user-facing error string or output (best-effort, no
+// infrastructure leaks to the model or to the TUI).
+type SearchBackend struct {
+	Name string
+	URL  string
+	Key  string
+}
+
+// ProviderLookup is the minimal contract the WebSearch tool needs from the
+// agent. The agent passes a list of currently-active backends; the tool
+// dispatches against them in order without ever importing the providers
+// package directly (keeps the backend/frontend separation described in
+// AGENTS.md intact: agent/tools must never depend on internal/providers).
+type ProviderLookup interface {
+	ActiveSearchBackends() []SearchBackend
+}
+
+// WebSearch returns the WebSearch tool. lookup is consulted at each call
+// for active backends (so a freshly-connected provider starts being used
+// immediately). client may be nil; per-backend timeouts come from the
+// tool's `timeout` param and bound the context, not the shared client.
+func WebSearch(lookup ProviderLookup, client *http.Client) Tool {
+	if client == nil {
+		client = &http.Client{Timeout: 0}
+	}
+	return Tool{
+		Def: types.ToolDef{
+			Name:        "WebSearch",
+			Description: "Search the public web for up-to-date information that is not in your training data or the local session. Use this whenever you need current facts, news, prices, or anything else that may have changed since your training cutoff.",
+			InputSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"query": {"type": "string", "description": "3-5 keyword search query. Include a date for time-sensitive topics (e.g. \"latest iPhone 2025\")."},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 10, "description": "Maximum number of results to return (default: 5)."},
+					"timeout": {"type": "integer", "minimum": 1, "description": "Per-backend HTTP timeout in seconds (default: 30)."}
+				},
+				"required": ["query"]
+			}`),
+		},
+		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
+			var args searchInput
+			if err := json.Unmarshal(input, &args); err != nil {
+				return fmt.Sprintf("Error parsing input: %v", err), err
+			}
+			if err := requireFields(&args); err != nil {
+				return err.Error(), err
+			}
+			if strings.TrimSpace(args.Query) == "" {
+				return "", fmt.Errorf("query is required")
+			}
+			return runWebSearch(ctx, lookup, client, args)
+		},
+	}
+}
+
+// runWebSearch is the dispatcher: it fans out to each active backend in
+// order, stopping at the first one that returns non-empty results.
+func runWebSearch(ctx context.Context, lookup ProviderLookup, httpClient *http.Client, args searchInput) (string, error) {
+	limit, timeout := normalizeSearchInput(args)
+
+	var backends []SearchBackend
+	if lookup != nil {
+		backends = lookup.ActiveSearchBackends()
+	}
+	if len(backends) == 0 {
+		return "", fmt.Errorf("WebSearch needs at least one provider connected: `minimax` or `ollama-cloud`")
+	}
+
+	// Per-backend dispatch loop. Each backend gets its own context.WithTimeout
+	// so a stuck backend can't consume the whole user budget. Failures fall
+	// through to the next backend unless they produced a non-empty result.
+	var reasons []string
+	for _, b := range backends {
+		reqCtx, cancel := context.WithTimeout(ctx, timeout)
+		results, reason, err := runOneBackend(reqCtx, b, httpClient, args.Query, limit)
+		cancel()
+
+		if err == nil && len(results) > 0 {
+			return renderResults(results)
+		}
+		// Two distinct outcomes recorded separately:
+		//   - backend returned a structured, empty result (success-with-zero-
+		//     data): no error, no reason — continue to give the next backend
+		//     a chance.
+		//   - backend errored (err != nil): record the categorized reason for
+		//     the aggregated final error in case no backend produces data.
+		if err != nil {
+			reasons = append(reasons, reason)
+		}
+	}
+
+	// No backend produced results. Distinguish "all backends returned
+	// cleanly but empty" (legitimate no-result answer: `[]`) from "at least
+	// one backend failed" (error to surface to the user).
+	if len(reasons) == 0 {
+		return "[]", nil
+	}
+	deduped := dedupeReasons(reasons)
+	return "", fmt.Errorf("web search failed: no results from any backend\n\n- %s", strings.Join(deduped, "\n- "))
+}
+
+// runOneBackend fires a single backend, normalizes the response, and
+// returns either the slice of normalized results or a short, infra-leak-
+// free failure category plus the underlying error.
+func runOneBackend(ctx context.Context, b SearchBackend, httpClient *http.Client, query string, limit int) ([]searchResult, string, error) {
+	body, err := buildBackendRequest(b, query)
+	if err != nil {
+		return nil, "request build failed", err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, b.URL, bytes.NewReader(body))
+	if err != nil {
+		return nil, "request build failed", err
+	}
+	if b.Key != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+b.Key)
+	}
+	addBackendHeaders(httpReq, b)
+
+	httpResp, err := httpClient.Do(httpReq)
+	if err != nil {
+		return nil, classifyTransportError(err), err
+	}
+	defer httpResp.Body.Close()
+	respBody, _ := io.ReadAll(httpResp.Body)
+	if httpResp.StatusCode != http.StatusOK {
+		return nil, fmt.Sprintf("provider rejected the request (status %d)", httpResp.StatusCode),
+			types.NewProviderAPIError(b.Name, httpResp.StatusCode, respBody)
+	}
+
+	results, err := parseBackendResponse(b, respBody, limit)
+	if err != nil {
+		// base_resp.status_code != 0 lands here (MiniMax only — Ollama has
+		// no equivalent layer). Not a real HTTP failure, but the backend
+		// said "no" — same coarse category as a 4xx.
+		return nil, "provider rejected the request (status 0)", err
+	}
+	return results, "", nil
+}
+
+// ── Per-backend request/response translation ──────────────────────────────
+//
+// MiniMax:  POST https://api.minimax.io/v1/coding_plan/search
+//           body {"q": "<query>"}, header MM-API-Source: harness-websearch
+//           response {organic:[{title,link,snippet,date}], base_resp:{status_code,status_msg}}
+// Ollama:   POST https://ollama.com/api/web_search
+//           body {"query": "<query>", "max_results": N}
+//           response {results:[{title,url,content}]}
+//
+// Both are normalized to searchResult{title, url, snippet} — MiniMax's
+// "link" becomes "url" and its "date" is dropped; Ollama's "content"
+// becomes "snippet", truncated to snippetMaxChars.
+
+func buildBackendRequest(b SearchBackend, query string) ([]byte, error) {
+	switch b.Name {
+	case "ollama-cloud":
+		return json.Marshal(map[string]any{
+			"query":       query,
+			"max_results": webSearchMaxLimit,
+		})
+	case "minimax":
+		return json.Marshal(map[string]string{"q": query})
+	default:
+		return nil, fmt.Errorf("unsupported backend: %s", b.Name)
+	}
+}
+
+func addBackendHeaders(req *http.Request, b SearchBackend) {
+	req.Header.Set("Content-Type", "application/json")
+	if b.Name == "minimax" {
+		req.Header.Set(minimaxAPIKeyHeader, minimaxHint)
+	}
+}
+
+func parseBackendResponse(b SearchBackend, body []byte, limit int) ([]searchResult, error) {
+	switch b.Name {
+	case "ollama-cloud":
+		return parseOllamaResponse(body, limit)
+	case "minimax":
+		return parseMinimaxResponse(body, limit)
+	default:
+		return nil, fmt.Errorf("unsupported backend: %s", b.Name)
+	}
+}
+
+type minimaxResponse struct {
+	Organic  []minimaxItem `json:"organic"`
 	BaseResp struct {
 		StatusCode int    `json:"status_code"`
 		StatusMsg  string `json:"status_msg"`
 	} `json:"base_resp"`
 }
 
-// WebSearch returns the built-in WebSearch tool.
-//
-// `lookup` is consulted on every invocation so freshly-rotated credentials
-// take effect immediately, without requiring a process restart. `client`
-// may be nil; a default 30s timeout client is used in that case.
-func WebSearch(lookup ProviderLookup, client *http.Client) Tool {
-	if client == nil {
-		// Per-call timeouts come from the tool's `timeout` param via
-		// context.WithTimeout — this default only bounds the underlying
-		// transport. Leaving it at the documented default keeps behavior
-		// consistent across sessions.
-		client = &http.Client{Timeout: 0}
-	}
-	return Tool{
-		Def: types.ToolDef{
-			Name:        "WebSearch",
-			Description: webSearchDescription,
-			InputSchema: mustSchema(searchInput{}),
-		},
-		Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {
-			return runWebSearch(ctx, lookup, client, raw)
-		},
-	}
+type minimaxItem struct {
+	Title   string `json:"title"`
+	Link    string `json:"link"`
+	Snippet string `json:"snippet"`
+	// Date is parsed but intentionally discarded — the normalized output
+	// shape doesn't carry a date field (Ollama has no equivalent).
+	Date string `json:"date,omitempty"`
 }
 
-// webSearchDescription guides the model toward 3-5 keyword queries and
-// encourages including a date for time-sensitive topics (mirrors
-// MiniMax-Coding-Plan-MCP's recommended query strategy).
-const webSearchDescription = `
-You MUST use this tool whenever you need real-time or external information from the public web that is not in your training data or the local session.
-
-Performs a live web search backed by the MiniMax coding-plan API.
-
-Args:
-    query (string, required): The search query. Aim for 3-5 keywords for the best results. For time-sensitive topics, include the current date (e.g. "latest iPhone 2025").
-    limit (int, optional, default 10, max 50): Maximum number of organic results to return.
-    timeout (int, optional, default 30, seconds): HTTP timeout for the upstream request.
-
-Strategy:
-    - Rephrase with different keywords if the first query returns no useful organic matches.
-    - Prefer narrow, factual queries over open-ended ones.
-
-Requirements:
-    - The active provider named "minimax" must be connected. If it is not, the tool returns a clear error message explaining how to connect it (run "harness connect minimax" or set MINIMAX_API_KEY). Do NOT attempt to bypass this; the call always fails fast when the provider is missing.
-`
-
-// errProviderInactive is the dedicated message returned when the model
-// calls WebSearch without the minimax provider connected. Surfaced
-// verbatim in Execute's error string so the model can relay it.
-var errProviderInactive = "WebSearch requires the \"minimax\" provider to be connected (run \"harness connect minimax\" or set MINIMAX_API_KEY)"
-
-// runWebSearch validates input, performs the HTTP call, and returns the
-// truncated organic slice as JSON. All non-network errors are returned as
-// descriptive strings; network/HTTP errors are wrapped so the registry's
-// existing telemetry paths pick them up.
-func runWebSearch(ctx context.Context, lookup ProviderLookup, client *http.Client, raw json.RawMessage) (string, error) {
-	var in searchInput
-	if err := json.Unmarshal(raw, &in); err != nil {
-		return "", fmt.Errorf("invalid JSON arguments: %w", err)
+func parseMinimaxResponse(body []byte, limit int) ([]searchResult, error) {
+	if len(body) == 0 {
+		return nil, nil
 	}
-	if in.Query == "" {
-		return "", fmt.Errorf("query is required")
-	}
-	limit, timeout := normalizeSearchInput(in)
-
-	if lookup == nil || !lookup.IsActive() {
-		return "", fmt.Errorf("%s", errProviderInactive)
-	}
-	creds, err := lookup.ResolveCredentials()
-	if err != nil || creds.APIKey == "" {
-		return "", fmt.Errorf("%s", errProviderInactive)
-	}
-
-	requestCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	body, err := json.Marshal(map[string]string{"q": in.Query})
-	if err != nil {
-		return "", fmt.Errorf("marshal request: %w", err)
-	}
-	url := currentSearchURL()
-	httpReq, err := http.NewRequestWithContext(requestCtx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+creds.APIKey)
-	httpReq.Header.Set(webSearchAPIKeyHeader, webSearchHint)
-
-	httpResp, err := client.Do(httpReq)
-	if err != nil {
-		return "", fmt.Errorf("web search: %w", err)
-	}
-	defer httpResp.Body.Close()
-
-	respBody, _ := io.ReadAll(httpResp.Body)
-	if httpResp.StatusCode != http.StatusOK {
-		return "", types.NewProviderAPIError("minimax", httpResp.StatusCode, respBody)
-	}
-
-	var resp searchResponse
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
+	var resp minimaxResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	if resp.BaseResp.StatusCode != 0 {
-		// MiniMax uses nested base_resp.status_code (0 == ok) for
-		// application-level rejections distinct from the HTTP status.
-		return "", fmt.Errorf("minimax rejected search: status_code=%d status_msg=%q",
-			resp.BaseResp.StatusCode, resp.BaseResp.StatusMsg)
+		return nil, fmt.Errorf("provider rejected the request (status %d): %s",
+			resp.BaseResp.StatusCode, strings.TrimSpace(resp.BaseResp.StatusMsg))
 	}
-
-	results := resp.Organic
-	if len(results) > limit {
-		results = results[:limit]
+	out := make([]searchResult, 0, len(resp.Organic))
+	for _, item := range resp.Organic {
+		out = append(out, searchResult{Title: item.Title, URL: item.Link, Snippet: item.Snippet})
 	}
-	if results == nil {
-		// Guarantee a stable JSON `[]` on empty upstream responses
-		// instead of `null` — the downstream model consumes this shape.
-		results = []searchResult{}
+	if len(out) > limit {
+		out = out[:limit]
 	}
-	out, err := json.MarshalIndent(results, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("marshal results: %w", err)
-	}
-	return string(out), nil
+	return out, nil
 }
 
-// normalizeSearchInput clamps the limit and timeout to the documented
-// bounds, returning the effective values to use for the HTTP call.
+type ollamaResponse struct {
+	Results []ollamaItem `json:"results"`
+}
+
+type ollamaItem struct {
+	Title   string `json:"title"`
+	URL     string `json:"url"`
+	Content string `json:"content"`
+}
+
+func parseOllamaResponse(body []byte, limit int) ([]searchResult, error) {
+	if len(body) == 0 {
+		return nil, nil
+	}
+	var resp ollamaResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	out := make([]searchResult, 0, len(resp.Results))
+	for _, item := range resp.Results {
+		out = append(out, searchResult{Title: item.Title, URL: item.URL, Snippet: truncateSnippet(item.Content)})
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// truncateSnippet caps a long snippet at snippetMaxChars, suffixing "…".
+// A short summary is plenty for citation; full content is one Fetch call away.
+func truncateSnippet(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= snippetMaxChars {
+		return s
+	}
+	return s[:snippetMaxChars] + "…"
+}
+
+// ── Error classification & shared helpers ──────────────────────────────────
+
+// classifyTransportError translates low-level errors into short, infra-
+// leak-free categories used in the aggregated user-facing error.
+func classifyTransportError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if cat := ctxErrCategory(err); cat != "" {
+		return cat
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "connection refused"):
+		return "connection refused"
+	case strings.Contains(msg, "no such host"):
+		return "network unreachable"
+	default:
+		return "transport error"
+	}
+}
+
+// ctxErrCategory maps a context/timeout error to a short category. Uses
+// errors.Is/As for canonical recognition (context.DeadlineExceeded,
+// context.Canceled, any net.Error with Timeout()==true), falling back to
+// string-matching for errors the stdlib doesn't wrap cleanly.
+func ctxErrCategory(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "request timed out"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "request cancelled"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "request timed out"
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "context deadline exceeded") {
+		return "request timed out"
+	}
+	if strings.Contains(msg, "context canceled") {
+		return "request cancelled"
+	}
+	return ""
+}
+
+// dedupeReasons collapses repeated reason strings, preserving first-seen
+// order. Keeps the aggregated error readable when two backends fail the
+// same way (e.g. both time out).
+func dedupeReasons(reasons []string) []string {
+	seen := make(map[string]struct{}, len(reasons))
+	out := make([]string, 0, len(reasons))
+	for _, r := range reasons {
+		if r == "" {
+			continue
+		}
+		if _, ok := seen[r]; ok {
+			continue
+		}
+		seen[r] = struct{}{}
+		out = append(out, r)
+	}
+	return out
+}
+
+// normalizeSearchInput clamps limit and timeout to the documented bounds.
 func normalizeSearchInput(in searchInput) (limit int, timeout time.Duration) {
 	limit = in.Limit
 	switch {
@@ -222,38 +407,15 @@ func normalizeSearchInput(in searchInput) (limit int, timeout time.Duration) {
 	return limit, t
 }
 
-func currentSearchURL() string { return webSearchEndpoint }
-
-// mustSchema builds the JSON Schema for a tool's input struct using the
-// shared llm.SchemaFor helper (kept side-by-side with the other built-in
-// tool definitions to surface uniform errors at startup).
-func mustSchema(v any) json.RawMessage {
-	// WebSearch's schema is small enough to spell out by hand so the
-	// description on each field can carry the query guidance rather than
-	// relying on a generic "object" entry the model has to interpret.
-	const schema = `{
-  "type": "object",
-  "required": ["query"],
-  "properties": {
-    "query": {
-      "type": "string",
-      "description": "3-5 keyword search query. Include a date for time-sensitive topics."
-    },
-    "limit": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 50,
-      "default": 10,
-      "description": "Maximum number of organic results to return."
-    },
-    "timeout": {
-      "type": "integer",
-      "minimum": 1,
-      "default": 30,
-      "description": "HTTP timeout in seconds for the upstream search request."
-    }
-  }
-}`
-	_ = v // reserved for a future llm.SchemaFor replacement
-	return json.RawMessage(schema)
+// renderResults guarantees a JSON `[]` (never `null`) for empty slices —
+// the model consumes the shape uniformly across both backends.
+func renderResults(results []searchResult) (string, error) {
+	if results == nil {
+		results = []searchResult{}
+	}
+	out, err := json.MarshalIndent(results, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal results: %w", err)
+	}
+	return string(out), nil
 }

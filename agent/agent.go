@@ -311,37 +311,75 @@ func (a *Agent) Options() AgentOptions {
 	return a.opts
 }
 
-// webSearchLookup returns a ProviderLookup facade for the WebSearch tool.
-// The lookup consults the global provider registry at call time so a fresh
-// API key (Connect/disconnect from the running transport) takes effect
-// without rebuilding the agent.
-func (a *Agent) webSearchLookup() tools.ProviderLookup {
+// webSearchBackends returns the list of currently-active search backends
+// in the dispatch order the WebSearch tool expects (minimax first,
+// ollama-cloud second). A provider is included only when it's both IsActive
+// AND ResolveCredentials returns a non-empty API key — same gate the
+// provider registry already uses to decide model availability.
+//
+// Backends are built fresh on each call so a freshly-connected provider
+// (or a freshly-rotated key, via the credentials chain) starts being
+// used immediately, without restarting the agent.
+func (a *Agent) webSearchBackends() []tools.SearchBackend {
 	providers.EnsureRegistry()
-	for _, p := range providers.All {
-		if p.Name() == "minimax" {
-			return &minimaxLookup{provider: p}
+	want := []struct {
+		name string
+		url  string
+	}{
+		{"minimax", "https://api.minimax.io/v1/coding_plan/search"},
+		{"ollama-cloud", "https://ollama.com/api/web_search"},
+	}
+	out := make([]tools.SearchBackend, 0, len(want))
+	for _, w := range want {
+		var p providers.Provider
+		for _, candidate := range providers.All {
+			if candidate.Name() == w.name {
+				p = candidate
+				break
+			}
 		}
+		if p == nil {
+			continue
+		}
+		if !p.IsActive() {
+			continue
+		}
+		creds, err := p.ResolveCredentials()
+		if err != nil || creds.APIKey == "" {
+			continue
+		}
+		out = append(out, tools.SearchBackend{
+			Name: w.name,
+			URL:  w.url,
+			Key:  creds.APIKey,
+		})
 	}
-	return &minimaxLookup{} // zero-value lookup.IsActive() == false
+	return out
 }
 
-// minimaxLookup adapts a Provider to the small ProviderLookup interface
-// the WebSearch tool requires. Keeping it private so the only thing
-// that imports it is the WebSearch wiring above.
-type minimaxLookup struct{ provider providers.Provider }
-
-func (m *minimaxLookup) IsActive() bool {
-	if m.provider == nil {
-		return false
-	}
-	return m.provider.IsActive()
+// webSearchLookup adapts webSearchBackends() to the ProviderLookup
+// interface the tool consumes.
+//
+// IMPORTANT: this must NOT snapshot the backend list — buildSessionTools
+// (and therefore this function) runs once, at session-creation time, and
+// the resulting Tool is registered for the session's whole lifetime. A
+// captured snapshot would keep answering with the backends that were
+// active at session start, even after the user disconnects both
+// minimax/ollama-cloud mid-session (or connects a fresh one). Returning a
+// live closure instead means every Execute call re-walks the provider
+// registry and re-resolves credentials at THAT moment — connect/disconnect
+// takes effect on the very next WebSearch call, no session restart needed.
+func (a *Agent) webSearchLookup() tools.ProviderLookup {
+	return searchBackendsLookupFunc(a.webSearchBackends)
 }
 
-func (m *minimaxLookup) ResolveCredentials() (types.Credentials, error) {
-	if m.provider == nil {
-		return types.Credentials{}, fmt.Errorf("provider %q not found", "minimax")
-	}
-	return m.provider.ResolveCredentials()
+// searchBackendsLookupFunc adapts a plain function to ProviderLookup so
+// webSearchLookup can hand the tool a live callback instead of a frozen
+// struct — see webSearchLookup's doc comment for why this matters.
+type searchBackendsLookupFunc func() []tools.SearchBackend
+
+func (f searchBackendsLookupFunc) ActiveSearchBackends() []tools.SearchBackend {
+	return f()
 }
 
 // RegisterTool adds a tool to the agent's registry so all future sessions
