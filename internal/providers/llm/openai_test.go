@@ -18,7 +18,7 @@ import (
 func feedParseStream(t *testing.T, rawSSE string) (*types.Response, []types.StreamEvent) {
 	t.Helper()
 	var events []types.StreamEvent
-	resp, err := parseOpenAIStream(context.Background(), strings.NewReader(rawSSE), func(e types.StreamEvent) {
+	resp, err := parseOpenAIStream(context.Background(), strings.NewReader(rawSSE), false, func(e types.StreamEvent) {
 		events = append(events, e)
 	})
 	if err != nil {
@@ -272,7 +272,7 @@ func TestParseOpenAIStreamContextCancelUnblocks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := parseOpenAIStream(ctx, r, nil)
+		_, err := parseOpenAIStream(ctx, r, false, nil)
 		done <- err
 	}()
 
@@ -302,7 +302,7 @@ func TestParseOpenAIStreamDroppedConnectionMidToolCallIsAnError(t *testing.T) {
 	sentinel := io.ErrUnexpectedEOF
 	r := &erroringReader{data: []byte(raw), err: sentinel}
 
-	resp, err := parseOpenAIStream(context.Background(), r, nil)
+	resp, err := parseOpenAIStream(context.Background(), r, false, nil)
 	if err == nil {
 		t.Fatalf("expected an error for a connection dropped mid-tool-call, got a successful response: %+v", resp)
 	}
@@ -319,8 +319,27 @@ func TestParseOpenAIStreamCleanEOFBeforeDoneIsAnError(t *testing.T) {
 	raw := mkChunk("", "partial answ")
 	// staticReader hits a clean io.EOF right after — no [DONE] marker.
 
-	resp, err := parseOpenAIStream(context.Background(), &staticReader{data: []byte(raw)}, nil)
+	resp, err := parseOpenAIStream(context.Background(), &staticReader{data: []byte(raw)}, false, nil)
 	if err == nil {
 		t.Fatalf("expected an error for a stream that EOF'd before [DONE], got a successful response: %+v", resp)
+	}
+}
+
+func TestParseOpenAIStreamAllowsMiniMaxCleanEOFAfterTerminalChunk(t *testing.T) {
+	raw := `data: {"choices":[{"delta":{"content":"pong"},"finish_reason":"stop","index":0}]}` + "\n\n"
+	resp, err := parseOpenAIStream(context.Background(), strings.NewReader(raw), true, nil)
+	if err != nil {
+		t.Fatalf("expected terminal clean EOF to succeed for MiniMax: %v", err)
+	}
+	if resp.Text != "pong" {
+		t.Fatalf("text = %q, want pong", resp.Text)
+	}
+}
+
+func TestParseOpenAIStreamRejectsCleanEOFAfterNonTerminalChunk(t *testing.T) {
+	raw := mkChunk("", "partial")
+	_, err := parseOpenAIStream(context.Background(), strings.NewReader(raw), true, nil)
+	if err == nil {
+		t.Fatal("expected clean EOF without terminal chunk to remain an error")
 	}
 }

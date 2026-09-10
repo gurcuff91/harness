@@ -132,7 +132,7 @@ func (o *MiniMax) CompleteStream(ctx context.Context, req *types.Request, cb typ
 	// ReasoningSplit moves thinking into reasoning_content (parsed by the
 	// shared OpenAI stream handler) rather than inline <think> tags.
 	return llm.DoOpenAIStream(ctx, o.client, minimaxURL+"/chat/completions", o.apiKey,
-		&llm.OpenAIRequest{Request: req, ReasoningSplit: true}, nil, cb)
+		&llm.OpenAIRequest{Request: req, ReasoningSplit: true, AllowCleanEOF: true}, nil, cb)
 }
 
 // fetchMiniMaxModels lists models from MiniMax's /v1/models (OpenAI format) and

@@ -19,6 +19,10 @@ type OpenAIRequest struct {
 	// MiniMax uses this to emit thinking via the separate reasoning_content
 	// field (which we already parse) instead of inline <think> tags.
 	ReasoningSplit bool
+	// AllowCleanEOF permits providers whose SSE implementation omits the
+	// OpenAI-compatible [DONE] sentinel to complete after a terminal chunk.
+	// It is intentionally opt-in: unexpected EOF remains an error by default.
+	AllowCleanEOF bool
 }
 
 // openAIWireRequest is the internal wire format sent to the API.
@@ -85,7 +89,7 @@ func DoOpenAIStream(ctx context.Context, client *http.Client, apiURL, apiKey str
 		b, _ := io.ReadAll(httpResp.Body)
 		return nil, types.NewProviderAPIError("openai", httpResp.StatusCode, b)
 	}
-	return parseOpenAIStream(ctx, httpResp.Body, cb)
+	return parseOpenAIStream(ctx, httpResp.Body, req.AllowCleanEOF, cb)
 }
 
 // translateMessageToOpenAI converts a types.Message to OpenAI wire format.
@@ -265,7 +269,7 @@ func stripThinkingTags(s string) (cleaned string, stripped bool) {
 	return cleaned, stripped
 }
 
-func parseOpenAIStream(ctx context.Context, body io.Reader, cb types.StreamCallback) (*types.Response, error) {
+func parseOpenAIStream(ctx context.Context, body io.Reader, allowCleanEOF bool, cb types.StreamCallback) (*types.Response, error) {
 	emit := func(e types.StreamEvent) {
 		if cb != nil {
 			cb(e)
@@ -282,6 +286,7 @@ func parseOpenAIStream(ctx context.Context, body io.Reader, cb types.StreamCallb
 	var textBuf, reasoningBuf string
 
 	var sawDone bool
+	var sawTerminalChunk bool
 	sseCh, sseErr := ParseSSE(ctx, body)
 	for sse := range sseCh {
 		if sse.Data == "[DONE]" {
@@ -297,6 +302,17 @@ func parseOpenAIStream(ctx context.Context, body io.Reader, cb types.StreamCallb
 			resp.Usage.OutputTokens = int(jsonFloat(u, "completion_tokens"))
 		}
 		choices, _ := event["choices"].([]any)
+		// MiniMax emits a final finish_reason chunk, then a separate usage
+		// chunk, and closes the SSE response without [DONE]. Treat that
+		// protocol-specific clean EOF as complete only when explicitly enabled.
+		if len(choices) > 0 {
+			if choice, ok := choices[0].(map[string]any); ok {
+				if reason, _ := choice["finish_reason"].(string); reason != "" {
+					sawTerminalChunk = true
+				}
+			}
+		}
+
 		if len(choices) == 0 {
 			continue
 		}
@@ -407,7 +423,7 @@ func parseOpenAIStream(ctx context.Context, body io.Reader, cb types.StreamCallb
 	if err := sseErr(); err != nil {
 		return nil, fmt.Errorf("stream connection lost: %w", err)
 	}
-	if !sawDone {
+	if !sawDone && !(allowCleanEOF && sawTerminalChunk) {
 		return nil, fmt.Errorf("stream ended unexpectedly before completion (no [DONE] marker received) — the connection likely dropped mid-response")
 	}
 

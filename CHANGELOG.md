@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.66] - 2026-09-10
+
+### Fix — MiniMax SSE streams without an OpenAI `[DONE]` sentinel
+- MiniMax's current OpenAI-compatible endpoint emits a terminal chunk with `finish_reason: "stop"`, followed by a separate usage chunk, then closes the response without sending `data: [DONE]`.
+- Added an opt-in `AllowCleanEOF` parser mode and enabled it only for MiniMax. A clean EOF is accepted only after a terminal `finish_reason` chunk; premature EOFs and dropped connections remain errors.
+- Added regression coverage for valid MiniMax completion and rejected incomplete streams. Other OpenAI-compatible providers retain strict `[DONE]` validation.
+
 ## [0.76.65] - 2026-09-10
 
 ### Feature — `codex-oauth` provider for ChatGPT subscriptions
