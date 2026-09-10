@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.65] - 2026-09-10
+
+### Feature — `codex-oauth` provider for ChatGPT subscriptions
+- Added a complete Codex CLI-compatible OAuth PKCE flow and streaming Responses API provider for `codex-oauth/gpt-5.6-luna` and compatible Codex models.
+- Added reasoning replay, tool-call streaming, parallel tool execution compatibility, account identity propagation, model discovery, token refresh persistence, and session-safe OAuth callback handling.
+- Added unit and live integration coverage for OAuth, request translation, SSE parsing, reasoning replay, tool calls, credentials, and model responses.
+
+### Fix — Codex prompt-cache session routing and usage accounting
+- Corrected the Codex session header from `session_id` to the official `session-id` spelling used by Codex CLI. This restores prompt-cache routing; live validation confirmed cache reads on subsequent requests (`cached_tokens` reported by the backend).
+- Added parsing for the backend's `usage.input_tokens_details.cache_write_tokens` field. The field is preserved as reported by OpenAI; it may legitimately remain zero when the backend does not report a cache write.
+- Added `account_id` propagation through the client/server provider-connect path and preserved Codex reasoning item IDs required for encrypted replay.
+
 ## [0.76.64] - 2026-09-06
 
 ### Change — renamed the `ANTHROPIC_CLI_VERSION` env override to `CLAUDE_CLI_VERSION`

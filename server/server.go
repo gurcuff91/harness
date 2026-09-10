@@ -544,10 +544,12 @@ type modelInfo struct {
 
 // connect/disconnect request types
 type connectRequest struct {
-	APIKey       string `json:"api_key,omitempty"`
-	AccessToken  string `json:"access_token,omitempty"`
-	RefreshToken string `json:"refresh_token,omitempty"`
-	ExpiresAt    int64  `json:"expires_at,omitempty"`
+	APIKey           string `json:"api_key,omitempty"`
+	AccessToken      string `json:"access_token,omitempty"`
+	RefreshToken     string `json:"refresh_token,omitempty"`
+	ExpiresAt        int64  `json:"expires_at,omitempty"`
+	SubscriptionType string `json:"subscription_type,omitempty"`
+	AccountID        string `json:"account_id,omitempty"` // codex-oauth — per-request header account id
 }
 
 func (s *Server) handleConnectProvider(w http.ResponseWriter, r *http.Request) {
@@ -573,11 +575,13 @@ func (s *Server) handleConnectProvider(w http.ResponseWriter, r *http.Request) {
 	}
 
 	creds := types.Credentials{
-		Type:         target.CredentialType(),
-		APIKey:       req.APIKey,
-		AccessToken:  req.AccessToken,
-		RefreshToken: req.RefreshToken,
-		ExpiresAt:    req.ExpiresAt,
+		Type:             target.CredentialType(),
+		APIKey:           req.APIKey,
+		AccessToken:      req.AccessToken,
+		RefreshToken:     req.RefreshToken,
+		ExpiresAt:        req.ExpiresAt,
+		SubscriptionType: req.SubscriptionType,
+		AccountID:        req.AccountID,
 	}
 
 	if err := target.Connect(creds); err != nil {

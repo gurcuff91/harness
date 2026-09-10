@@ -43,6 +43,8 @@ func For(provider string) (OauthFlow, error) {
 	switch provider {
 	case "claude-oauth":
 		return NewClaudeOauthFlow(), nil
+	case "codex-oauth":
+		return NewCodexOauthFlow(), nil
 	default:
 		return nil, fmt.Errorf("no OAuth flow for provider: %s", provider)
 	}

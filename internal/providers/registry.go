@@ -16,6 +16,9 @@ func initRegistry() {
 	if oauth, err := NewClaudeOAuth(); err == nil {
 		All = append(All, oauth)
 	}
+	if codex, err := NewCodexOAuth(); err == nil {
+		All = append(All, codex)
+	}
 	All = append(All,
 		NewAnthropic(),
 		NewOpenAI(),

@@ -41,6 +41,13 @@ type ContentPart struct {
 type ThinkingPart struct {
 	Content   string `json:"content"`
 	Signature string `json:"signature,omitempty"` // Anthropic cache signature
+	// OpenAIItemID rides the provider-side reasoning item id for providers
+	// whose backend verifies replayed reasoning by item id + opaque payload
+	// (codex-oauth: encrypted_content is cryptographically bound to the
+	// item's id — replaying it under a different id is rejected). Both
+	// fields are provider-opaque round-trip tokens; only the issuing
+	// provider should ever consume them.
+	OpenAIItemID string `json:"openai_item_id,omitempty"`
 }
 
 // ── Constructors ──────────────────────────────────────────────────────────
@@ -72,9 +79,22 @@ func NewAssistantTextMessage(text string) Message {
 }
 
 func NewAssistantToolCallMessage(text string, thinking string, thinkingSig string, calls []ToolCall) Message {
+	return NewAssistantToolCallMessageWithOpenAIReplay(text, thinking, "", thinkingSig, calls)
+}
+
+// NewAssistantToolCallMessageWithOpenAIReplay is NewAssistantToolCallMessage
+// plus the codex-oauth reasoning-replay pair (item id + encrypted content) —
+// both provider-opaque round-trip tokens the backend verifies together on the
+// next turn. thinkingItemID empty means "no replay token" (claude-oauth, or a
+// turn that produced no reasoning item).
+func NewAssistantToolCallMessageWithOpenAIReplay(text string, thinking string, thinkingItemID string, thinkingSig string, calls []ToolCall) Message {
 	var parts []ContentPart
 	if thinking != "" {
-		parts = append(parts, ContentPart{Thinking: &ThinkingPart{Content: thinking, Signature: thinkingSig}})
+		parts = append(parts, ContentPart{Thinking: &ThinkingPart{
+			Content:      thinking,
+			Signature:    thinkingSig,
+			OpenAIItemID: thinkingItemID,
+		}})
 	}
 	if text != "" {
 		parts = append(parts, ContentPart{Text: text})

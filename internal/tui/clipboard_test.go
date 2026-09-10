@@ -28,10 +28,23 @@ func TestPasteImageFromClipboardNeverPanics(t *testing.T) {
 		}
 	}()
 	path, err := PasteImageFromClipboard()
-	// Whichever path (nocgo panic, recovered; or a normal cgo Init()
-	// failure on a headless runner) — an unavailable clipboard must surface
-	// as a clean error, never a zero-value success.
-	if err == nil && path != "" {
-		t.Errorf("got a path (%q) with no error on a system where clipboard access should not be possible in this test environment", path)
+	// Any of the three possible outcomes is acceptable here — the assertion
+	// this test exists for is "NO PANIC EVER ESCAPES", which the defer above
+	// enforces:
+	//   1. CGO_ENABLED=0 build (release binaries): the nocgo stub panics and
+	//      the recover() inside the function turns it into a clean error.
+	//   2. cgo build, headless/no display (CI runners): Init() fails with a
+	//      normal error.
+	//   3. cgo build, real display (a dev machine): the clipboard works, and
+	//      the result legitimately depends on what's IN it right now — an
+	//      image yields (path, nil); an empty/text-only clipboard yields
+	//      ("", nil). A machine's clipboard state at test time is outside
+	//      the test's control (a screenshot taken a minute ago makes path
+	//      non-empty), so neither specific outcome may be asserted here —
+	//      only that err==nil && path=="" together is IMPOSSIBLE (an
+	//      available clipboard with no image returns "" and nil; anything
+	//      else carries an error).
+	if err == nil && path == "" {
+		t.Log("clipboard available, no image in it — valid outcome")
 	}
 }

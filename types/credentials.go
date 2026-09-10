@@ -24,6 +24,11 @@ type Credentials struct {
 	RefreshToken     string `json:"refresh_token,omitempty"`
 	ExpiresAt        int64  `json:"expires_at,omitempty"` // Unix ms
 	SubscriptionType string `json:"subscription_type,omitempty"`
+	// AccountID is the ChatGPT account id some OAuth providers require as a
+	// per-request header (codex-oauth: `ChatGPT-Account-ID`, extracted from
+	// the login flow's id_token JWT). Empty for providers that don't need one
+	// (claude-oauth).
+	AccountID string `json:"account_id,omitempty"`
 }
 
 // ── SDK read models ────────────────────────────────────────────────────────
@@ -55,11 +60,21 @@ func APIKeyCredentials(key string) Credentials {
 }
 
 func OAuthCredentials(access, refresh string, expiresAt int64, subType string) Credentials {
+	return OAuthCredentialsWithAccount(access, refresh, expiresAt, subType, "")
+}
+
+// OAuthCredentialsWithAccount is OAuthCredentials plus the optional per-
+// request account id (codex-oauth's ChatGPT-Account-ID). The short
+// OAuthCredentials form stays for providers without an account id
+// (claude-oauth) — call sites read a little cleaner when the empty value
+// isn't being threaded through.
+func OAuthCredentialsWithAccount(access, refresh string, expiresAt int64, subType, accountID string) Credentials {
 	return Credentials{
 		Type:             CredTypeOAuth,
 		AccessToken:      access,
 		RefreshToken:     refresh,
 		ExpiresAt:        expiresAt,
 		SubscriptionType: subType,
+		AccountID:        accountID,
 	}
 }

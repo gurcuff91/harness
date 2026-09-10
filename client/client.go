@@ -171,12 +171,18 @@ func (c *Client) ConnectProvider(name, apiKey string) (*Status, error) {
 }
 
 // ConnectProviderWithCreds sends full OAuth credentials to connect a
-// subscription provider.
+// subscription provider. Every OAuth-relevant field travels — including the
+// optional account_id (codex-oauth's per-request header id) and
+// subscription_type: dropping any one of them server-side would make the
+// provider's own Connect() validation fail with a misleading "missing field"
+// even though the login flow extracted it successfully.
 func (c *Client) ConnectProviderWithCreds(name string, creds *types.Credentials) (*Status, error) {
 	return c.decodeStatus("POST", "/api/providers/"+name+"/connect", map[string]any{
-		"access_token":  creds.AccessToken,
-		"refresh_token": creds.RefreshToken,
-		"expires_at":    creds.ExpiresAt,
+		"access_token":      creds.AccessToken,
+		"refresh_token":     creds.RefreshToken,
+		"expires_at":        creds.ExpiresAt,
+		"subscription_type": creds.SubscriptionType,
+		"account_id":        creds.AccountID,
 	})
 }
 

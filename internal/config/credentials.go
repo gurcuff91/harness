@@ -39,6 +39,7 @@ type ProviderCredential struct {
 	RefreshToken     string `json:"refresh_token,omitempty"`
 	ExpiresAt        int64  `json:"expires_at,omitempty"`
 	SubscriptionType string `json:"subscription_type,omitempty"` // optional (oauth)
+	AccountID        string `json:"account_id,omitempty"`        // optional (codex-oauth) — per-request header account id
 }
 
 func newCredentialsManager() *CredentialsManager {
