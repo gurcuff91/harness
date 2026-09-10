@@ -19,4 +19,5 @@ const (
 	ToolScheduleDelete = "ScheduleDelete"
 	ToolColleagueList  = "ColleagueList"
 	ToolColleagueAsk   = "ColleagueAsk"
+	ToolWebSearch      = "WebSearch"
 )

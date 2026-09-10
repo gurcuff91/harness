@@ -71,12 +71,19 @@ func newOneShotAgent() *agent.Agent {
 // One-shot commands (newOneShotAgent) and config-only commands
 // (newConfigAgent) never enable it — a process that exits in milliseconds has
 // nothing to offer a colleague and no time to wait for one.
+//
+// EnableWebSearch is always on here too: interactive transports are where
+// the model field real-time / external questions, and the WebSearch tool
+// gates itself on the minimax provider being connected (returning a clear
+// "connect the minimax provider" error otherwise), so it's safe to enable
+// without a pre-flight provider check.
 func newInteractiveAgent(scheduler bool, directives ...string) *agent.Agent {
 	return agent.New(agent.AgentOptions{
 		EnableMCPs:       true,
 		EnableMemory:     true,
 		EnableScheduler:  scheduler,
 		EnableColleagues: true,
+		EnableWebSearch:  true,
 		MaxIterations:    interactiveMaxIterations,
 		Directives:       directives,
 	})

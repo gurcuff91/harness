@@ -104,6 +104,13 @@ type AgentOptions struct {
 	// and project context, not the caller's. Off by default; disabled for
 	// subagents and one-shot CLI commands regardless of this flag.
 	EnableColleagues bool
+
+	// EnableWebSearch registers the built-in WebSearch tool. The tool owns its
+	// own HTTP client and uses the active minimax provider's API key — if the
+	// provider isn't connected, the tool returns a single actionable error at
+	// call time, so it's safe to enable unconditionally without a pre-flight
+	// provider check. Mirrors EnableMCPs' opt-in style for "extra" tools.
+	EnableWebSearch bool
 }
 
 // defaultMaxIterations is the fallback used when AgentOptions.MaxIterations
@@ -302,6 +309,39 @@ func (a *Agent) Schedules() *schedule.Store { return a.schedStore }
 // Options returns the original configuration — used by the Subagent tool to clone.
 func (a *Agent) Options() AgentOptions {
 	return a.opts
+}
+
+// webSearchLookup returns a ProviderLookup facade for the WebSearch tool.
+// The lookup consults the global provider registry at call time so a fresh
+// API key (Connect/disconnect from the running transport) takes effect
+// without rebuilding the agent.
+func (a *Agent) webSearchLookup() tools.ProviderLookup {
+	providers.EnsureRegistry()
+	for _, p := range providers.All {
+		if p.Name() == "minimax" {
+			return &minimaxLookup{provider: p}
+		}
+	}
+	return &minimaxLookup{} // zero-value lookup.IsActive() == false
+}
+
+// minimaxLookup adapts a Provider to the small ProviderLookup interface
+// the WebSearch tool requires. Keeping it private so the only thing
+// that imports it is the WebSearch wiring above.
+type minimaxLookup struct{ provider providers.Provider }
+
+func (m *minimaxLookup) IsActive() bool {
+	if m.provider == nil {
+		return false
+	}
+	return m.provider.IsActive()
+}
+
+func (m *minimaxLookup) ResolveCredentials() (types.Credentials, error) {
+	if m.provider == nil {
+		return types.Credentials{}, fmt.Errorf("provider %q not found", "minimax")
+	}
+	return m.provider.ResolveCredentials()
 }
 
 // RegisterTool adds a tool to the agent's registry so all future sessions
@@ -881,6 +921,18 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 		if a.isToolAllowed(tools.ToolColleagueAsk) {
 			reg.Register(tools.ColleagueAsk())
 		}
+	}
+
+	// WebSearch — built-in MiniMax-backed search tool. The tool owns its HTTP
+	// client and reaches for the active minimax provider's API key at call
+	// time. We pass a thin ProviderLookup facade instead of letting the tool
+	// import internal/providers; the agent is the single place that knows
+	// both sides. Off unless EnableWebSearch; gated by the same allow-list
+	// as every other built-in.
+	if a.opts.EnableWebSearch && a.isToolAllowed(tools.ToolWebSearch) {
+		// nil client → tool uses its own 30s default; per-call timeouts
+		// come from the tool's `timeout` param, not from the shared client.
+		reg.Register(tools.WebSearch(a.webSearchLookup(), nil))
 	}
 
 	// Subagent tool — only if allowed (excluded for sub-agents themselves)

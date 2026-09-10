@@ -211,6 +211,8 @@ func toolStyle(name string) (colorFn func(string) string, icon string) {
 		return ansi.Accent, "◷" // clock: cron-scheduled prompt management
 	case "ColleagueList", "ColleagueAsk":
 		return ansi.Accent, "⇄" // back-and-forth: request/response with another agent
+	case "WebSearch":
+		return ansi.Accent, "◌" // diana/objetivo (U+25CC): live web search
 	default:
 		return ansi.Accent, "◈" // diamond: generic MCP/external tool
 	}

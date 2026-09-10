@@ -25,6 +25,7 @@ var primaryParam = map[string]string{
 	"Schedule":       "slug",
 	"ScheduleDelete": "slug",
 	"ColleagueAsk":   "colleague",
+	"WebSearch":      "query",
 }
 
 // secondaryPrimaryParam is a SECOND param shown bare (no "key="), right after
