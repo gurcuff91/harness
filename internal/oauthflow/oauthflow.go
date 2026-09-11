@@ -1,20 +1,25 @@
-// Package oauthflow implements provider OAuth PKCE login flows — harness
-// obtains OAuth tokens ITSELF (browser + code exchange), without depending on
-// a provider's own CLI being installed.
+// Package oauthflow implements provider OAuth PKCE login flows. It is a
+// SERVER-SIDE implementation detail — the only caller is server/oauth.go's
+// HTTP handler behind POST /api/oauth/{provider}. Neither the CLI nor the
+// TUI import this package directly; they drive OAuth through
+// client.Client's StartOAuth/ExchangeOAuth, which talk to that endpoint.
 //
-// The package is organized around one interface, OauthFlow, split into the two
-// phases every transport drives separately:
+// The package is organized around one interface, OauthFlow, split into the
+// two phases the endpoint drives statelessly across two separate HTTP
+// requests:
 //
-//	Start()          → generate PKCE, open the browser, return the auth URL
-//	Exchange(code)   → swap the pasted authorization code for credentials
+//	Start()                        → generate PKCE, return the auth URL AND the verifier
+//	Exchange(code, verifierCode)   → swap the pasted code for credentials, given that verifier back
 //
-// The CLI blocks on stdin between the two phases; the TUI drops into its
-// value-capture and completes on the next submit — neither spawns a subprocess
-// or leaves raw mode. This file holds the interface plus the pieces every
-// provider's flow reuses (PKCE, browser, the generic token POST); each
-// provider's specifics live in its own file (claude.go, and a future codex.go
-// etc.), so adding a provider is one new file implementing OauthFlow — no
-// switch to touch, no shared code to fork.
+// Start does NOT open a browser (that's the CLI/TUI's job, via
+// internal/browseropen, once they have the URL) and does NOT retain the
+// verifier as mutable struct state — the caller (the HTTP handler) hands it
+// back explicitly in Exchange, so the server never needs to remember
+// anything about an in-flight login between the two requests. This file
+// holds the interface plus the pieces every provider's flow reuses (PKCE,
+// the generic token POST); each provider's specifics live in its own file
+// (claude.go, codex.go), so adding a provider is one new file implementing
+// OauthFlow — no switch to touch, no shared code to fork.
 package oauthflow
 
 import (
@@ -26,8 +31,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os/exec"
-	"runtime"
 	"time"
 
 	"github.com/gurcuff91/harness/types"
@@ -52,20 +55,23 @@ func For(provider string) (OauthFlow, error) {
 
 // OauthFlow is one provider's OAuth PKCE login flow. A single instance is
 // single-use: call Start once, then Exchange once with the code the user
-// pastes back. Obtain one via For(provider) (the runtime-dispatch entry point)
-// or a concrete constructor (e.g. NewClaudeOauthFlow) when the provider is
-// known at compile time.
+// pastes back AND the verifierCode Start returned. Obtain one via
+// For(provider) (the runtime-dispatch entry point) or a concrete constructor
+// (e.g. NewClaudeOauthFlow) when the provider is known at compile time.
 type OauthFlow interface {
-	// Start generates the PKCE verifier/challenge, opens the user's browser at
-	// the provider's authorization URL, and returns that URL (so the caller
-	// can also print it for a manual open). Non-blocking; touches no terminal
-	// state, so it is safe to call from the TUI's raw mode.
-	Start() (authURL string, err error)
+	// Start generates the PKCE verifier/challenge and returns the provider's
+	// authorization URL plus the verifier the caller MUST hold onto and pass
+	// back to Exchange — this flow does NOT retain it internally, so the
+	// HTTP handler wrapping this interface can be stateless across the two
+	// separate requests Start/Exchange arrive as. Does not open a browser;
+	// that's the caller's job once it has authURL.
+	Start() (authURL, verifierCode string, err error)
 
-	// Exchange swaps the authorization code the user pasted (after logging in)
-	// for OAuth credentials ready to persist. Must be called after Start on
-	// the same instance.
-	Exchange(code string) (*types.Credentials, error)
+	// Exchange swaps the authorization code the user pasted (after logging
+	// in) for OAuth credentials ready to persist, using verifierCode from
+	// this SAME flow's Start call (passed in explicitly rather than read
+	// from stored state).
+	Exchange(code, verifierCode string) (*types.Credentials, error)
 }
 
 // ── Shared PKCE (RFC 7636) ──────────────────────────────────────────────────
@@ -95,29 +101,6 @@ func randomURLSafe(n int) string {
 		return s[:n]
 	}
 	return s
-}
-
-// ── Shared browser open ─────────────────────────────────────────────────────
-
-// openBrowser opens u in the user's default browser (best-effort; errors are
-// ignored — callers always print the URL so a headless/failed open still lets
-// the user copy it manually).
-//
-// It's a package var, not a plain func, purely so tests can stub it: exercising
-// a flow's URL/PKCE construction must NOT actually launch a browser on every
-// `go test` run.
-var openBrowser = func(u string) {
-	var cmd string
-	var args []string
-	switch runtime.GOOS {
-	case "darwin":
-		cmd, args = "open", []string{u}
-	case "windows":
-		cmd, args = "rundll32", []string{"url.dll,FileProtocolHandler", u}
-	default:
-		cmd, args = "xdg-open", []string{u}
-	}
-	_ = exec.Command(cmd, args...).Start()
 }
 
 // ── Shared token POST ───────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/gurcuff91/harness/client"
-	"github.com/gurcuff91/harness/internal/oauthflow"
+	"github.com/gurcuff91/harness/internal/browseropen"
 	"github.com/gurcuff91/harness/internal/tui/ansi"
 	"github.com/gurcuff91/harness/internal/tui/components"
 )
@@ -169,13 +169,13 @@ func (t *TUI) captureValue(value string) {
 		return
 	}
 
-	// OAuth code capture (phase two of the native flow started in cmdConnect):
+// OAuth code capture (phase two of the native flow started in cmdConnect):
 	// the value is an authorization code, not a command argument. Exchange it
 	// for tokens and connect. Done off the event goroutine — Exchange makes an
 	// HTTP call — so the UI stays responsive.
-	if p.oauthFlow != nil {
+	if p.oauthVerifier != "" {
 		provider := p.args[0]
-		go t.completeOAuthConnect(provider, p.oauthFlow, value)
+		go t.completeOAuthConnect(provider, p.oauthVerifier, value)
 		return
 	}
 
@@ -183,9 +183,11 @@ func (t *TUI) captureValue(value string) {
 }
 
 // completeOAuthConnect finishes the native OAuth flow: exchange the pasted
-// code for credentials, then connect the provider. Runs on its own goroutine.
-func (t *TUI) completeOAuthConnect(provider string, flow oauthflow.OauthFlow, code string) {
-	creds, err := flow.Exchange(code)
+// code (via the server's stateless /api/oauth/{provider} endpoint, passing
+// back the verifier cmdConnect captured from StartOAuth) for credentials,
+// then connect the provider. Runs on its own goroutine.
+func (t *TUI) completeOAuthConnect(provider, verifierCode, code string) {
+	creds, err := t.client.ExchangeOAuth(provider, code, verifierCode)
 	if err != nil {
 		t.showWarn(fmt.Sprintf("connect %s: %s", provider, err.Error()))
 		return
@@ -339,29 +341,28 @@ func (t *TUI) cmdConnect(args []string) {
 		apiKey = strings.Join(args[1:], " ")
 	}
 
-	// Subscription/OAuth providers (e.g. claude-oauth) authenticate via the
-	// native OAuth PKCE flow: open the browser now, then drop into value
-	// capture so the user pastes back the authorization code. Phase two
-	// (Exchange) runs in captureValue — same two-phase split the CLI uses,
-	// both resolving the provider's flow via oauthflow.For (the one place that
-	// maps provider→flow) and driving oauthflow.OauthFlow's Start/Exchange.
-	// Nothing here spawns a subprocess or leaves raw mode; opening a browser
-	// and capturing a pasted value is exactly what the API-key path already
-	// does. Provider-agnostic — a new OAuth provider needs no change here.
+// Subscription/OAuth providers (e.g. claude-oauth) authenticate via the
+	// native OAuth PKCE flow, driven entirely through the server's stateless
+	// POST /api/oauth/{provider} endpoint: StartOAuth returns the URL to open
+	// AND the verifier this TUI must hold onto — the server itself keeps no
+	// state between this call and the Exchange that follows in captureValue.
+	// Open the browser now, then drop into value capture so the user pastes
+	// back the authorization code. Same two-phase split the CLI uses via the
+	// same client.Client methods — neither client imports internal/oauthflow
+	// directly anymore. Nothing here spawns a subprocess or leaves raw mode;
+	// opening a browser and capturing a pasted value is exactly what the
+	// API-key path already does. Provider-agnostic — a new OAuth provider
+	// needs no change here.
 	if t.providerIsSubscription(provider) {
-		flow, err := oauthflow.For(provider)
+		authURL, verifierCode, err := t.client.StartOAuth(provider)
 		if err != nil {
 			t.showWarn(fmt.Sprintf("connect %s: %s", provider, err.Error()))
 			return
 		}
-		authURL, err := flow.Start()
-		if err != nil {
-			t.showWarn(fmt.Sprintf("connect %s: %s", provider, err.Error()))
-			return
-		}
+		browseropen.Open(authURL)
 		t.addRaw(ansi.Dimmed("Opening your browser to authenticate…\n" +
 			"If it doesn't open, paste this URL manually:\n" + authURL))
-		t.pending = &pendingValue{cmd: "connect", args: []string{provider}, oauthFlow: flow}
+		t.pending = &pendingValue{cmd: "connect", args: []string{provider}, oauthVerifier: verifierCode}
 		t.editor.Clear()
 		t.editor.SetPlaceholder("Paste the authorization code from your browser and press Enter (Esc to cancel)")
 		t.tui.RequestRender(false)

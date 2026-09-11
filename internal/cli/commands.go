@@ -81,12 +81,14 @@ func RunConnect(ctx context.Context, a *agent.Agent, name, apiKey, output string
 	// Branch on the credential type the provider actually needs.
 	switch credType {
 	case "oauth":
-		// Native OAuth PKCE flow: open the browser, let the user log in, and
-		// exchange the pasted code for tokens — no Claude Code install or
-		// keychain read required (see internal/oauthflow). RunOAuth resolves
-		// the provider's specific flow by name (oauthflow.For), so this branch
-		// stays provider-agnostic — a new OAuth provider needs no change here.
-		creds, err := RunOAuth(name)
+		// Native OAuth PKCE flow, driven entirely through the server's
+		// stateless POST /api/oauth/{provider} endpoint: open the browser,
+		// let the user log in, and exchange the pasted code for tokens — no
+		// Claude Code install or keychain read required, and no direct
+		// dependency on internal/oauthflow from this CLI package anymore.
+		// RunOAuth stays provider-agnostic — a new OAuth provider needs no
+		// change here.
+		creds, err := RunOAuth(c, name)
 		if err != nil {
 			return fmt.Errorf("OAuth: %w", err)
 		}

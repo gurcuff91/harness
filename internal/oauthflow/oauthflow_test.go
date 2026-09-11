@@ -7,20 +7,6 @@ import (
 	"testing"
 )
 
-// stubBrowser replaces the package-level openBrowser with a no-op that records
-// the URL it was handed, restoring the real one when the test ends. This keeps
-// `go test` from actually launching a browser every run, and lets a test
-// assert the exact URL a flow tried to open. Returns a pointer to the captured
-// URL. Shared by every flow's tests.
-func stubBrowser(t *testing.T) *string {
-	t.Helper()
-	var opened string
-	orig := openBrowser
-	openBrowser = func(u string) { opened = u }
-	t.Cleanup(func() { openBrowser = orig })
-	return &opened
-}
-
 // TestGeneratePKCEProducesValidS256Pair verifies the PKCE pair satisfies
 // RFC 7636: challenge == base64url(sha256(verifier)), verifier within
 // [43,128], url-safe alphabet only, and unique per call.

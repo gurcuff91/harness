@@ -112,6 +112,7 @@ func (s *Server) handler() http.Handler {
 	r.Get("/api/providers", s.handleProviders)
 	r.Post("/api/providers/{name}/connect", s.handleConnectProvider)
 	r.Post("/api/providers/{name}/disconnect", s.handleDisconnectProvider)
+	r.Post("/api/oauth/{provider}", s.handleOAuth)
 	r.Get("/api/models", s.handleModels)
 	r.Get("/api/sessions", s.handleListSessions)
 	r.Post("/api/sessions", s.handleCreateSession)

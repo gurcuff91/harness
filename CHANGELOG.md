@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.69] - 2026-09-11
+
+### Feature — OAuth login moved behind a stateless server API endpoint
+- Added `POST /api/oauth/{provider}`, a single REST endpoint driving both phases of a provider's native OAuth PKCE flow: an empty/no `exchange_code` body starts the flow (returns `auth_url` + `verifier_code`); a body carrying `exchange_code` + `verifier_code` completes it (returns raw credentials). The caller still makes a separate call to `POST /api/providers/{name}/connect` to persist them — this endpoint never calls `Connect` itself.
+- The server holds no OAuth session state between the two calls. The PKCE verifier travels through the caller: `oauthflow.OauthFlow`'s interface changed from `Start() (authURL string, err error)` / `Exchange(code string)` to `Start() (authURL, verifierCode string, err error)` / `Exchange(code, verifierCode string)` — every flow instance is now stateless, safe to construct fresh per HTTP request.
+- `client.Client` gained `StartOAuth`/`ExchangeOAuth`. The CLI (`harness connect`) and the TUI (`/connect`) no longer import `internal/oauthflow` directly — both now drive OAuth logins entirely through the client SDK, consistent with how every other client/server interaction in harness already works. Browser-opening moved out of `oauthflow` into a new tiny package, `internal/browseropen`, used only by CLI/TUI (never the server).
+- `codex-oauth`'s local callback listener (`localhost:1455`) now fails loudly (`409 Conflict`) if the port is already bound, instead of silently degrading to "no callback page" — a stateless caller has nowhere else to learn the code was never displayed. The listener also gains a 5-minute auto-shutdown timer for abandoned logins, so a forgotten browser tab doesn't hold the port for the parent process's whole lifetime.
+- **Investigated live**: confirmed Anthropic's OAuth authorize endpoint rejects `localhost:1455` as a `redirect_uri` for the public Claude Code client id (`"Redirect URI ... is not supported by client."`) — Claude keeps its Anthropic-hosted callback page; only Codex uses a local listener. Also confirmed live that Anthropic's token endpoint does not require the `state` parameter to be echoed back on exchange, matching this codebase's existing (unvalidated) `state` handling — `claude.go` no longer couples `state` to the PKCE verifier.
+- Codex's callback page was also re-styled to closely match Anthropic's own hosted callback page (colors, typography, and layout captured from the live page's computed styles), so both providers' login UX reads as the same product.
+
 ## [0.76.68] - 2026-09-10
 
 ### Feature — built-in `WebSearch` tool with MiniMax + Ollama Cloud fallback

@@ -21,7 +21,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -51,21 +50,30 @@ const (
 )
 
 // codexOauthFlow implements OauthFlow for Codex. Unexported — callers get it
-// as an OauthFlow via NewCodexOauthFlow.
+// as an OauthFlow via NewCodexOauthFlow. Unlike claudeOauthFlow, it DOES
+// carry per-instance state: not PKCE state (that's stateless too — Start
+// returns the verifier instead of storing it), but the local callback
+// listener's shutdown hook, which must live somewhere for as long as the
+// listener itself is bound.
 type codexOauthFlow struct {
-	verifier string
-	state    string
-
-	// stopListener is this flow's OWN kill switch for the callback listener
-	// Start() bound — per-flow state, not a package global, because two
-	// flows (or a flow plus a test) binding the same port would otherwise
-	// overwrite each other's shutdown hook, leaving stale listeners holding
-	// the port with nobody able to close them. Guarded by stopMu: the
-	// assignment happens on Start's goroutine, the one-shot handler calls
-	// it from the HTTP server's, and tests' t.Cleanup may race both.
+	// stopMu/stopListener guard the callback listener Start() binds — kept
+	// per-flow (not a package global) because two flows (or a flow plus a
+	// test) binding the same port would otherwise stomp each other's
+	// shutdown hook, leaking a listener nobody can close. Three things can
+	// call stopListener: the one-shot callback handler (success path), the
+	// codexListenerTimeout timer (abandoned-login path), and a test's
+	// cleanup — shutdownOnce inside serveCodexCallbackPage makes the actual
+	// listener.Close() idempotent regardless of which fires first.
 	stopMu       sync.Mutex
 	stopListener func()
 }
+
+// codexListenerTimeout bounds how long the local callback listener stays
+// bound if the browser never redirects back (abandoned login, closed tab,
+// network hiccup). Without this, a forgotten login would hold port 1455
+// open for the lifetime of the parent server process. A package var (not a
+// const) so tests can shrink it instead of waiting 5 real minutes.
+var codexListenerTimeout = 5 * time.Minute
 
 // NewCodexOauthFlow returns Codex's OAuth PKCE flow. No provider argument —
 // the caller already knows it wants Codex. Returns the OauthFlow interface,
@@ -74,12 +82,20 @@ func NewCodexOauthFlow() OauthFlow {
 	return &codexOauthFlow{}
 }
 
-// Start generates PKCE, builds Codex's authorization URL, opens the browser,
-// and returns the URL. See OauthFlow.Start.
-func (f *codexOauthFlow) Start() (string, error) {
+// Start generates PKCE, builds Codex's authorization URL, and binds the
+// local callback listener. Does not open a browser — see OauthFlow.Start's
+// doc comment. Returns the URL and the verifier the caller must pass back
+// to Exchange.
+//
+// Unlike the pre-HTTP-API version of this flow, a port-1455 bind failure is
+// now a HARD error (not a silent degrade-to-"copy from the address bar"):
+// stateless callers only get the auth_url back, with nowhere else to
+// display the code if the listener never starts, so failing loudly here —
+// "a login is already in progress" — is more honest than returning a URL
+// whose promised callback page silently never renders.
+func (f *codexOauthFlow) Start() (authURL, verifierCode string, err error) {
 	verifier, challenge := generatePKCE()
-	f.verifier = verifier
-	f.state = randomURLSafe(32)
+	state := randomURLSafe(32)
 
 	q := url.Values{}
 	q.Set("client_id", codexClientID)
@@ -88,80 +104,84 @@ func (f *codexOauthFlow) Start() (string, error) {
 	q.Set("scope", codexOAuthScope)
 	q.Set("code_challenge", challenge)
 	q.Set("code_challenge_method", "S256")
-	q.Set("state", f.state)
+	q.Set("state", state)
 	q.Set("codex_cli_simplified_flow", "true")
 	q.Set("originator", "codex_cli_rs")
-	authURL := codexAuthURL + "?" + q.Encode()
+	authURL = codexAuthURL + "?" + q.Encode()
 
-	// Bind the callback listener SYNCHRONOUSLY BEFORE opening the browser —
-	// ordering matters and a goroutine loses the race: returning from a
-	// ChatGPT login with an ACTIVE session redirects to localhost:1455 in
-	// milliseconds, faster than a freshly spawned goroutine's net.Listen can
-	// win it, and the browser then shows an unfriendly "connection refused"
-	// (observed live). net.Listen is instant; only Serve() blocks, so the
-	// bind happens here and Serve moves to a goroutine.
+	// Bind the callback listener SYNCHRONOUSLY — ordering matters and a
+	// goroutine loses the race: returning from a ChatGPT login with an
+	// ACTIVE session redirects to localhost:1455 in milliseconds, faster
+	// than a freshly spawned goroutine's net.Listen can win it, and the
+	// browser then shows an unfriendly "connection refused" (observed
+	// live). net.Listen is instant; only Serve() blocks, so the bind
+	// happens here and Serve moves to a goroutine.
 	l, err := net.Listen("tcp", "localhost:1455")
 	if err != nil {
-		// Port already in use (another harness instance's listener, or a
-		// stale one) — NOT fatal: Exchange accepts the raw code pasted from
-		// the browser's address bar, and claude-style copy/paste is the
-		// flow's single funnel anyway.
-		callNoteCallbackUnavailable(err)
-		f.stopListener = func() {} // nothing of OURS to stop
-	} else {
-		f.stopMu.Lock()
-		f.stopListener = func() { l.Close() }
-		stop := f.stopListener
-		f.stopMu.Unlock()
-		// serveCodexCallbackPage launches its own Serve goroutine and handles
-		// its own post-shutdown error filtering (post-success noise is
-		// silent); nothing to wait on — Start returns immediately with the
-		// port already listening.
-		go serveCodexCallbackPage(l, stop)
+		return "", "", fmt.Errorf("port 1455 already in use — a login is already in progress: %w", err)
 	}
 
-	openBrowser(authURL) // best-effort; caller also prints the URL
+	f.stopMu.Lock()
+	f.stopListener = func() { l.Close() }
+	stop := f.stopListener
+	f.stopMu.Unlock()
 
-	return authURL, nil
+	// Auto-shutdown safety net: if the callback never arrives (abandoned
+	// login), don't hold the port forever. serveCodexCallbackPage's
+	// shutdownOnce makes this safe to race against the real callback
+	// firing first — whichever happens first wins, the other is a no-op.
+	timer := time.AfterFunc(codexListenerTimeout, stop)
+
+	// serveCodexCallbackPage launches its own Serve goroutine and handles
+	// its own post-shutdown error filtering (post-success noise is
+	// silent); nothing to wait on — Start returns immediately with the
+	// port already listening. It also stops the timer once the real
+	// callback arrives, so the timer doesn't fire pointlessly later.
+	go serveCodexCallbackPage(l, stop, timer)
+
+	return authURL, verifier, nil
 }
 
 // serveCodexCallbackPage serves the one-shot callback page on an ALREADY-
-// BOUND listener (Start binds it synchronously before opening the browser —
-// see the comment there for why the bind can't live inside this goroutine).
-// It renders a small page displaying the authorization code the browser
-// arrived with — the same "here is your code, copy it" experience Anthropic's
-// hosted callback page gives claude-oauth users. One-shot: the first request
-// served shuts the server down, so the process never keeps a listener open
-// beyond the moment the browser lands. Blocks its own goroutine until that
-// first request arrives (or forever, if the user abandons the login —
-// harmless: the process exits whenever the harness session does).
-func serveCodexCallbackPage(l net.Listener, stopListener func()) error {
+// BOUND listener (Start binds it synchronously — see the comment there for
+// why the bind can't live inside this goroutine). It renders a small page
+// displaying the authorization code the browser arrived with — the same
+// "here is your code, copy it" experience Anthropic's hosted callback page
+// gives claude-oauth users. One-shot: the first request served shuts the
+// server down (and cancels the abandoned-login timer), so the process
+// never keeps a listener open beyond the moment the browser lands or the
+// timeout elapses. Blocks its own goroutine until the callback arrives (or
+// the timer fires) — harmless either way: the process exits whenever the
+// harness session does regardless.
+func serveCodexCallbackPage(l net.Listener, stopListener func(), timeoutTimer *time.Timer) error {
 	mux := http.NewServeMux()
 	var shutdownOnce sync.Once
 	mux.HandleFunc("/auth/callback", func(w http.ResponseWriter, r *http.Request) {
 		code := r.URL.Query().Get("code")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprintf(w, codexCallbackPageHTML, html.EscapeString(code))
-		// One-shot: the FIRST request stops the server. Closing the listener
-		// immediately after writing the response is safe — the bytes are
-		// buffered to the kernel and the response is complete; there's
-		// nothing to flush asynchronously. shutdownOnce guards against a
-		// second racing request double-closing (a double Close would just
-		// error, but the once makes intent explicit).
+		// One-shot: the FIRST request stops the server and cancels the
+		// abandoned-login timer (the real callback arrived, so the timer's
+		// job is moot). Closing the listener immediately after writing the
+		// response is safe — the bytes are buffered to the kernel and the
+		// response is complete; there's nothing to flush asynchronously.
+		// shutdownOnce guards against a second racing request
+		// double-closing (a double Close would just error, but the once
+		// makes intent explicit).
 		shutdownOnce.Do(func() {
+			timeoutTimer.Stop()
 			go stopListener()
 		})
 	})
 
 	srv := &http.Server{Handler: mux}
 	// Serve() errors are SILENT here, unconditionally: the BIND already
-	// succeeded synchronously in Start (and any bind failure got its note
-	// there), so Serve's only possible failures are post-bind noise — an
-	// in-flight Accept racing this listener's Close (from the one-shot
-	// handler OR from a test's cleanup, both legitimate) surfaces as wrapped
-	// "use of closed network connection", never worth a scary note for a
-	// listener that either did its job or was deliberately stopped. The
-	// copy-from-URL fallback always exists regardless.
+	// succeeded synchronously in Start, so Serve's only possible failures
+	// are post-bind noise — an in-flight Accept racing this listener's
+	// Close (from the one-shot handler, the timeout timer, OR a test's
+	// cleanup, all legitimate) surfaces as wrapped "use of closed network
+	// connection", never worth a scary note for a listener that either did
+	// its job or was deliberately stopped.
 	go func() {
 		_ = srv.Serve(l)
 	}()
@@ -169,22 +189,26 @@ func serveCodexCallbackPage(l net.Listener, stopListener func()) error {
 }
 
 // codexCallbackPageHTML is the single small page the one-shot listener
-// serves. Minimal, dark-mode-agnostic styling: shows the code in a
-// selectable block plus a Copy button, mirroring Anthropic's own callback
-// page's "copy this code" shape so the two providers' login UX feels the
-// same. The %s placeholder receives the (HTML-escaped) code.
+// serves. Deliberately cloned from Anthropic's own hosted callback page —
+// pulled by inspecting its live computed styles (light background
+// rgb(252,252,251), text rgb(11,11,11), 22px/500-weight heading, 14px
+// secondary text in rgb(82,81,78), a bordered/rounded code box, and a
+// borderless "Copy code" button with a clipboard glyph) so the two
+// providers' login UX reads as the same product rather than two
+// implementations bolted together. The %s placeholder receives the
+// (HTML-escaped) code.
 const codexCallbackPageHTML = `<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>harness — Codex login</title></head>
-<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#1a1a2e;color:#e0e0e0;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0">
-  <div style="text-align:center;max-width:560px;padding:32px">
-    <h2 style="font-weight:600;margin:0 0 8px">Login successful</h2>
-    <p style="color:#9a9a9a;margin:0 0 24px">Copy this authorization code and paste it back into harness:</p>
-    <div style="display:flex;gap:8px;justify-content:center;align-items:center;background:#24243a;border-radius:10px;padding:16px 20px">
-      <code id="authcode" style="font-size:1.05em;word-break:break-all;user-select:all">%s</code>
-      <button onclick="navigator.clipboard.writeText(document.getElementById('authcode').textContent).then(()=>{this.textContent='Copied';setTimeout(()=>{this.textContent='Copy'},1500)})" style="background:#4a4a6a;color:#fff;border:0;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:0.9em">Copy</button>
-    </div>
-    <p style="color:#6a6a7a;font-size:0.85em;margin-top:24px">You can close this tab after copying.</p>
+<head><meta charset="utf-8"><title>Authentication code — harness</title></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:rgb(252,252,251);color:rgb(11,11,11);display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;text-align:center">
+  <div style="max-width:896px;padding:0 16px">
+    <h1 style="font-weight:500;font-size:22px;margin:0 0 16px">Authentication code</h1>
+    <p style="color:rgb(82,81,78);font-size:14px;margin:0 0 16px">Paste this into harness:</p>
+    <pre id="authcode" style="background:rgb(252,252,251);border:1px solid rgba(11,11,11,0.1);border-radius:12px;padding:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;font-size:14px;color:rgb(82,81,78);word-break:break-all;white-space:pre-wrap;user-select:all;margin:0 0 16px;cursor:pointer">%s</pre>
+    <button onclick="navigator.clipboard.writeText(document.getElementById('authcode').textContent).then(()=>{document.getElementById('copylabel').textContent='Copied'; setTimeout(()=>{document.getElementById('copylabel').textContent='Copy code'},1500)})" style="background:none;border:0;border-radius:8px;color:rgb(11,11,11);cursor:pointer;font-size:14px;display:inline-flex;align-items:center;gap:6px;padding:0 12px;height:32px">
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg>
+      <span id="copylabel">Copy code</span>
+    </button>
   </div>
 </body>
 </html>`
@@ -203,13 +227,13 @@ const codexCallbackPageHTML = `<!DOCTYPE html>
 // from auth.openai.com over TLS, the same trust every OAuth client places in
 // the token endpoint (the id_token's signature is for downstream RPs that
 // received it from an untrusted channel, which is not this path).
-func (f *codexOauthFlow) Exchange(code string) (*types.Credentials, error) {
+func (f *codexOauthFlow) Exchange(code, verifierCode string) (*types.Credentials, error) {
 	code = normalizePastedCode(code)
 	if code == "" {
 		return nil, fmt.Errorf("empty authorization code")
 	}
-	if f.verifier == "" {
-		return nil, fmt.Errorf("Exchange called before Start")
+	if verifierCode == "" {
+		return nil, fmt.Errorf("verifierCode is required (pass the value Start returned)")
 	}
 
 	form := url.Values{}
@@ -217,7 +241,7 @@ func (f *codexOauthFlow) Exchange(code string) (*types.Credentials, error) {
 	form.Set("client_id", codexClientID)
 	form.Set("code", code)
 	form.Set("redirect_uri", codexRedirect)
-	form.Set("code_verifier", f.verifier)
+	form.Set("code_verifier", verifierCode)
 
 	req, err := http.NewRequest("POST", codexTokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -345,22 +369,4 @@ func normalizePastedCode(input string) string {
 	return strings.TrimSpace(s)
 }
 
-// noteCallbackUnavailable prints the "callback page not served" note. A
-// package var + mu purely so tests can silence it: Start() launches the
-// listener from several tests' goroutines — which may outlive the test that
-// spawned them (an abandoned login's listener binds fine and sits waiting) —
-// so the stub's restore and the goroutine's call can race without a lock.
-// Same stubbing pattern as openBrowser, with locking for the goroutine
-// lifetime case.
-var (
-	noteMu                  sync.Mutex
-	noteCallbackUnavailable = func(err error) {
-		fmt.Fprintf(os.Stderr, "harness: note: could not serve local callback page (%v) — copy the code from the browser URL instead\n", err)
-	}
-)
 
-func callNoteCallbackUnavailable(err error) {
-	noteMu.Lock()
-	defer noteMu.Unlock()
-	noteCallbackUnavailable(err)
-}

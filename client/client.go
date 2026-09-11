@@ -191,6 +191,49 @@ func (c *Client) DisconnectProvider(name string) (*Status, error) {
 	return c.decodeStatus("POST", "/api/providers/"+name+"/disconnect", nil)
 }
 
+// ── Native OAuth (PKCE) login ────────────────────────────────────────────
+
+// StartOAuth begins a provider's native OAuth PKCE flow: returns the URL the
+// caller must open in a browser (this client never opens one itself — see
+// internal/browseropen for CLI/TUI's shared helper) and the PKCE verifier
+// the caller MUST hold onto and pass back to ExchangeOAuth. The server is
+// stateless between the two calls: losing verifierCode means the login has
+// to restart from StartOAuth.
+func (c *Client) StartOAuth(provider string) (authURL, verifierCode string, err error) {
+	data, err := c.do("POST", "/api/oauth/"+provider, map[string]any{})
+	if err != nil {
+		return "", "", err
+	}
+	var out struct {
+		AuthURL      string `json:"auth_url"`
+		VerifierCode string `json:"verifier_code"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return "", "", fmt.Errorf("decode StartOAuth response: %w", err)
+	}
+	return out.AuthURL, out.VerifierCode, nil
+}
+
+// ExchangeOAuth swaps the user-pasted authorization code for credentials,
+// using the verifierCode StartOAuth returned. Returns raw credentials only
+// — the caller is still responsible for a SEPARATE call to
+// ConnectProviderWithCreds to persist them (this mirrors RunConnect's
+// existing two-step shape: OAuth login, then Connect).
+func (c *Client) ExchangeOAuth(provider, exchangeCode, verifierCode string) (*types.Credentials, error) {
+	data, err := c.do("POST", "/api/oauth/"+provider, map[string]any{
+		"exchange_code": exchangeCode,
+		"verifier_code": verifierCode,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var creds types.Credentials
+	if err := json.Unmarshal(data, &creds); err != nil {
+		return nil, fmt.Errorf("decode ExchangeOAuth response: %w", err)
+	}
+	return &creds, nil
+}
+
 // ── Models ───────────────────────────────────────────────────────────────
 
 // ListModels returns every model of every active provider, with metadata.

@@ -13,24 +13,39 @@ import (
 	"time"
 )
 
-// ── Start: URL + PKCE construction ─────────────────────────────────────────
-
-func TestCodexFlowStartBuildsAuthorizeURL(t *testing.T) {
-	openedURL := stubBrowser(t)
-	silenceCallbackNote(t)
-	f := NewCodexOauthFlow()
-
-	if _, err := f.Start(); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+// stopFlow closes the flow's listener (if any) so subsequent tests can
+// rebind port 1455. Safe to call even if Start failed (stopListener will be
+// nil in that case — guarded).
+func stopFlow(t *testing.T, f OauthFlow) {
+	t.Helper()
+	concrete, ok := f.(*codexOauthFlow)
+	if !ok {
+		return
 	}
 	t.Cleanup(func() {
-		concrete := f.(*codexOauthFlow)
 		concrete.stopMu.Lock()
 		stop := concrete.stopListener
 		concrete.stopMu.Unlock()
-		stop()
+		if stop != nil {
+			stop()
+		}
 	})
-	authURL := *openedURL
+}
+
+// ── Start: URL + PKCE construction ─────────────────────────────────────────
+
+func TestCodexFlowStartBuildsAuthorizeURL(t *testing.T) {
+	f := NewCodexOauthFlow()
+	authURL, verifierCode, err := f.Start()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	stopFlow(t, f)
+
+	if verifierCode == "" {
+		t.Fatal("Start returned an empty verifierCode")
+	}
+
 	u, err := url.Parse(authURL)
 	if err != nil {
 		t.Fatalf("auth URL not parseable: %v", err)
@@ -64,93 +79,107 @@ func TestCodexFlowStartBuildsAuthorizeURL(t *testing.T) {
 	if !strings.Contains(q.Get("scope"), "api.connectors.read") || !strings.Contains(q.Get("scope"), "api.connectors.invoke") {
 		t.Errorf("scope = %q, want it to include api.connectors.read/invoke", q.Get("scope"))
 	}
+
+	// The challenge in the URL must be S256 of the RETURNED verifierCode.
+	h := sha256.Sum256([]byte(verifierCode))
+	want := base64.RawURLEncoding.EncodeToString(h[:])
+	if q.Get("code_challenge") != want {
+		t.Errorf("challenge does not match sha256(verifierCode): %q vs %q", q.Get("code_challenge"), want)
+	}
 }
 
-func TestCodexPKCEVerifierProducesMatchingChallenge(t *testing.T) {
-	openedURL := stubBrowser(t)
-	silenceCallbackNote(t)
-	f := NewCodexOauthFlow().(*codexOauthFlow)
-	if _, err := f.Start(); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+// TestCodexStartFailsLoudlyWhenPortBusy is the regression test for the
+// hard-error behavior a stateless HTTP handler needs: a second Start while
+// a listener is already bound must fail immediately, not silently degrade
+// to "no callback page" (which was fine when Start/Exchange lived in one
+// process's memory, but leaves a caller with nowhere to learn the code was
+// never displayed once Start only returns auth_url/verifier_code).
+func TestCodexStartFailsLoudlyWhenPortBusy(t *testing.T) {
+	first := NewCodexOauthFlow()
+	if _, _, err := first.Start(); err != nil {
+		t.Fatalf("first Start: %v", err)
 	}
-	f.stopMu.Lock()
-	stop := f.stopListener
-	f.stopMu.Unlock()
-	t.Cleanup(stop)
-	authURL := *openedURL
-	q, _ := url.Parse(authURL)
-	challenge := q.Query().Get("code_challenge")
+	stopFlow(t, first)
 
-	// Reproduce the S256 chain: sha256(verifier) base64url must equal the
-	// challenge the URL carries — proving Exchange's code_verifier is the
-	// one the authorize request committed to.
-	h := sha256.Sum256([]byte(f.verifier))
-	want := base64.RawURLEncoding.EncodeToString(h[:])
-	if challenge != want {
-		t.Errorf("challenge does not match sha256(verifier): %q vs %q", challenge, want)
+	second := NewCodexOauthFlow()
+	_, _, err := second.Start()
+	if err == nil {
+		t.Fatal("expected the second Start to fail while the first flow's listener is still bound")
+	}
+	if !strings.Contains(err.Error(), "already in progress") {
+		t.Errorf("error should explain a login is already in progress, got: %v", err)
+	}
+}
+
+// TestCodexListenerAutoShutsDownAfterTimeout verifies the abandoned-login
+// safety net: if the callback never arrives, the listener releases the
+// port on its own after codexListenerTimeout, rather than holding it for
+// the lifetime of the parent process.
+func TestCodexListenerAutoShutsDownAfterTimeout(t *testing.T) {
+	orig := codexListenerTimeout
+	codexListenerTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { codexListenerTimeout = orig })
+
+	f := NewCodexOauthFlow()
+	if _, _, err := f.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Give the timer time to fire and release the port; then a fresh Start
+	// must succeed (no "already in progress").
+	deadline := time.Now().Add(2 * time.Second)
+	var released bool
+	for time.Now().Before(deadline) {
+		second := NewCodexOauthFlow()
+		_, _, err := second.Start()
+		if err == nil {
+			stopFlow(t, second)
+			released = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !released {
+		t.Error("port 1455 was never released after codexListenerTimeout elapsed")
 	}
 }
 
 // ── Exchange validation ─────────────────────────────────────────────────────
 
-func TestCodexExchangeBeforeStartErrors(t *testing.T) {
+func TestCodexExchangeEmptyVerifierErrors(t *testing.T) {
 	f := NewCodexOauthFlow()
-	_, err := f.Exchange("somecode")
+	_, err := f.Exchange("somecode", "")
 	if err == nil {
-		t.Fatal("expected an error for Exchange called before Start")
+		t.Fatal("expected an error when verifierCode is empty")
 	}
-	if !strings.Contains(err.Error(), "before Start") {
-		t.Errorf("error should identify the ordering problem, got: %v", err)
+	if !strings.Contains(err.Error(), "verifierCode") {
+		t.Errorf("error should name the missing verifierCode, got: %v", err)
 	}
 }
 
 func TestCodexExchangeEmptyCodeErrors(t *testing.T) {
-	stubBrowser(t)
-	silenceCallbackNote(t)
 	f := NewCodexOauthFlow()
-	if _, err := f.Start(); err != nil {
+	if _, _, err := f.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		concrete := f.(*codexOauthFlow)
-		concrete.stopMu.Lock()
-		stop := concrete.stopListener
-		concrete.stopMu.Unlock()
-		stop()
-	})
-	if _, err := f.Exchange("  "); err == nil {
+	stopFlow(t, f)
+	if _, err := f.Exchange("  ", "v"); err == nil {
 		t.Fatal("expected an error for an empty pasted code")
 	}
 }
 
 func TestCodexExchangeStripsStateFragment(t *testing.T) {
-	silenceCallbackNote(t)
-	// The paste may arrive as "CODE#STATE" (claude's callback page format) —
-	// Exchange strips the fragment before validating. Verify via the form the
-	// token POST would send: stub the HTTP client? postToken is package-
-	// internal; instead assert the stripping logic through the exported path
-	// with an httptest server pointed at codexTokenURL — skipped here because
-	// codexTokenURL is a const. The fragment-stripping behavior is shared
-	// with claude.go's identical logic and covered there; here we only pin
-	// that Exchange normalizes the same way by calling it against a fake
-	// server via URL override — which the design (single const endpoint)
-	// deliberately doesn't allow, so this asserts the pre-flight validation
-	// only.
 	f := NewCodexOauthFlow()
-	stubBrowser(t)
-	silenceCallbackNote(t)
-	if _, err := f.Start(); err != nil {
+	if _, _, err := f.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		concrete := f.(*codexOauthFlow)
-		concrete.stopMu.Lock()
-		stop := concrete.stopListener
-		concrete.stopMu.Unlock()
-		stop()
-	})
-	if _, err := f.Exchange("CODE#STATE"); err == nil {
-		t.Fatal("expected an error from Exchange without a reachable token endpoint")
+	stopFlow(t, f)
+	// "CODE#STATE" strips to "CODE", which then genuinely fails against the
+	// real token endpoint (no network stub available for a fixed const
+	// URL) — this only pins that fragment-stripping happens before the
+	// network call, not the network outcome itself.
+	if _, err := f.Exchange("CODE#STATE", "v"); err == nil {
+		t.Fatal("expected an error from Exchange without a reachable/valid token endpoint")
 	}
 }
 
@@ -208,10 +237,6 @@ func TestServeCodexCallbackPageOneShot(t *testing.T) {
 	// next request fails). The listener is bound synchronously FIRST —
 	// mirroring Start()'s ordering — so the first request can't race the
 	// bind the way a real browser would.
-	// Bind with retries: other tests' Start() listeners release the port
-	// asynchronously (their t.Cleanup fires between tests, but the kernel
-	// can hold the socket in TIME_WAIT briefly), so a single immediate bind
-	// can spuriously fail when the whole package runs together.
 	var l net.Listener
 	var bindErr error
 	for i := 0; i < 50; i++ {
@@ -224,11 +249,9 @@ func TestServeCodexCallbackPageOneShot(t *testing.T) {
 	if bindErr != nil {
 		t.Fatalf("bind (after retries): %v", bindErr)
 	}
-	// serveCodexCallbackPage no longer returns anything — it owns its Serve
-	// goroutine and its post-shutdown error filtering internally. The test
-	// only needs the listener reachable (bound synchronously above) and the
-	// one-shot behavior observable over HTTP.
-	go serveCodexCallbackPage(l, func() { l.Close() })
+	timer := time.AfterFunc(time.Minute, func() {}) // long enough to never fire in this test
+	t.Cleanup(func() { timer.Stop() })
+	go serveCodexCallbackPage(l, func() { l.Close() }, timer)
 
 	resp, err := http.Get("http://localhost:1455/auth/callback?code=ac_TEST<code>&state=xyz")
 	if err != nil {
@@ -237,8 +260,7 @@ func TestServeCodexCallbackPageOneShot(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 
-	// The page must render the code — HTML-escaped (the < > in the code).
-	if !strings.Contains(string(body), "ac_G_5WeiXYZ") && !strings.Contains(string(body), "ac_TEST") {
+	if !strings.Contains(string(body), "ac_TEST") {
 		t.Errorf("callback page did not render the code, got:\n%s", body)
 	}
 	if !strings.Contains(string(body), "&lt;code&gt;") {
@@ -246,8 +268,7 @@ func TestServeCodexCallbackPageOneShot(t *testing.T) {
 	}
 
 	// One-shot: the server should shut down after serving — a second request
-	// must fail. Allow a short settle window (the handler defers shutdown by
-	// 200ms to flush the response first).
+	// must fail. Allow a short settle window.
 	dead := false
 	for i := 0; i < 50; i++ {
 		time.Sleep(30 * time.Millisecond)
@@ -261,21 +282,4 @@ func TestServeCodexCallbackPageOneShot(t *testing.T) {
 	if !dead {
 		t.Error("callback server is still serving after the first request — the one-shot shutdown did not fire")
 	}
-}
-
-// silenceCallbackNote replaces noteCallbackUnavailable with a no-op for the
-// test's lifetime — tests that call Start() spin the callback-page listener
-// in a goroutine, and parallel binds to the same port would otherwise spam
-// stderr with the bind-failure note on every run.
-func silenceCallbackNote(t *testing.T) {
-	t.Helper()
-	noteMu.Lock()
-	orig := noteCallbackUnavailable
-	noteCallbackUnavailable = func(error) {}
-	noteMu.Unlock()
-	t.Cleanup(func() {
-		noteMu.Lock()
-		noteCallbackUnavailable = orig
-		noteMu.Unlock()
-	})
 }
