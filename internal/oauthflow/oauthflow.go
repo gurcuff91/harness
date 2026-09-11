@@ -70,7 +70,9 @@ type OauthFlow interface {
 	// Exchange swaps the authorization code the user pasted (after logging
 	// in) for OAuth credentials ready to persist, using verifierCode from
 	// this SAME flow's Start call (passed in explicitly rather than read
-	// from stored state).
+	// from stored state). code is Claude's callback shape, which may arrive
+	// as "CODE#STATE" — implementations that need the state half (Claude
+	// does; Codex doesn't) extract it from that suffix themselves.
 	Exchange(code, verifierCode string) (*types.Credentials, error)
 }
 

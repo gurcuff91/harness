@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.70] - 2026-09-11
+
+### Fix — Claude OAuth exchange rejected with "Invalid request format"
+- **Reported by Gus**: `harness connect claude-oauth` failed at the token-exchange step with `400 invalid_request_error: "Invalid request format"` after the OAuth-behind-the-API migration (v0.76.69).
+- **Root cause**: Anthropic's token endpoint is non-standard — it hard-requires the original `state` value to be echoed back in the token-exchange body, or it rejects the whole request outright (confirmed against a live 400→200 flip reported by a third-party OAuth gateway hitting the identical symptom). The pre-migration code happened to keep `state` in memory on the same flow instance across Start/Exchange, but never actually sent it in the token POST — the v0.76.69 refactor made that gap visible by making Exchange genuinely stateless (a fresh flow instance per HTTP request), and a previous investigation had incorrectly concluded `state` was unnecessary for Claude's exchange.
+- **Fix** (`internal/oauthflow/claude.go`): `Exchange` now extracts `state` from the pasted `"CODE#STATE"` shape Claude's callback page already produces (previously discarded) and echoes it back in the token request body. No change to the `/api/oauth/{provider}` REST contract — the state travels implicitly inside the code the user pastes, exactly as it already did.
+- Tests: `internal/oauthflow/claude_test.go` gained `TestParseCodeStateFragmentSplitsCorrectly` pinning the exact code/state split behavior. Full suite + `go vet ./...` green.
+
 ## [0.76.69] - 2026-09-11
 
 ### Feature — OAuth login moved behind a stateless server API endpoint

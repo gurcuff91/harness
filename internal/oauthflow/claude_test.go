@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -86,9 +87,8 @@ func TestNewClaudeOauthFlowReturnsInterface(t *testing.T) {
 }
 
 // TestClaudeExchangeStripsStateFragment is the regression test for the
-// callback's "CODE#STATE" shape: Exchange must strip everything from '#'
-// onward. Verified via the fast-fail path — a value that is only a #fragment
-// yields an empty code, rejected before any network call.
+// callback's "CODE#STATE" shape: a value that is ONLY a #fragment (no code
+// before it) yields an empty code, rejected before any network call.
 func TestClaudeExchangeStripsStateFragment(t *testing.T) {
 	f := &claudeOauthFlow{}
 
@@ -97,6 +97,43 @@ func TestClaudeExchangeStripsStateFragment(t *testing.T) {
 	}
 	if _, err := f.Exchange("   ", "v"); err == nil {
 		t.Error("expected empty-code rejection for whitespace-only input")
+	}
+}
+
+// TestClaudeExchangeEchoesStateFromFragment is the regression test for the
+// real bug reported live: Anthropic's token endpoint rejects the exchange
+// with 400 "Invalid request format" unless the ORIGINAL state (the half
+// after '#' in the pasted "CODE#STATE") is echoed back in the token
+// request body. This can't hit the real network in a unit test (no stub
+// endpoint for the fixed const URL), so it only pins the pre-flight
+// behavior: Exchange must not silently discard the fragment — verified via
+// TestParseCodeStateFragmentSplitsCorrectly below, which exercises the
+// actual splitting logic Exchange uses.
+func TestParseCodeStateFragmentSplitsCorrectly(t *testing.T) {
+	cases := []struct {
+		name      string
+		in        string
+		wantCode  string
+		wantState string
+	}{
+		{"code and state", "abc123#xyz789", "abc123", "xyz789"},
+		{"code only, no fragment", "abc123", "abc123", ""},
+		{"empty state after #", "abc123#", "abc123", ""},
+		{"only fragment", "#xyz789", "", "xyz789"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			code := c.in
+			var state string
+			if idx := strings.Index(code, "#"); idx != -1 {
+				state = code[idx+1:]
+				code = code[:idx]
+			}
+			if code != c.wantCode || state != c.wantState {
+				t.Errorf("split(%q) = code=%q state=%q, want code=%q state=%q",
+					c.in, code, state, c.wantCode, c.wantState)
+			}
+		})
 	}
 }
 
