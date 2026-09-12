@@ -270,6 +270,10 @@ func (t *TUI) runCommand(cmd string, args []string) {
 		go t.cmdFork()
 		return
 
+	case "new":
+		go t.newSessionInPlace()
+		return
+
 	case "info":
 		go t.showInfo()
 		return

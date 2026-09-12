@@ -168,6 +168,48 @@ func (t *TUI) resumeInPlace(sessID string) {
 	t.startSSE(t.baseCtx)
 }
 
+// newSessionInPlace closes the currently active session (if any, flushing
+// it to disk) and starts a brand new, empty one with the same model/cwd —
+// distinct from /reset, which reuses the SAME session ID and only wipes its
+// history. Mirrors resumeInPlace's shape (stop SSE, close old session,
+// clear scrollback, wire up the new one, reconnect SSE), but creates rather
+// than resumes. No warning when there was no active session to close — a
+// missing t.sessionID (e.g. startup couldn't create one) is not an error
+// here, it's just nothing to close before creating the new one.
+func (t *TUI) newSessionInPlace() {
+	if t.sseCancel != nil {
+		t.sseCancel()
+		t.sseCancel = nil
+	}
+	if t.sessionID != "" {
+		t.client.CloseSession(t.sessionID) //nolint:errcheck
+	}
+
+	cwd, _ := os.Getwd()
+	sess, err := t.client.CreateSession(t.model, cwd, "")
+	if err != nil {
+		t.showWarn(fmt.Sprintf("Failed to create session: %s", err.Error()))
+		return
+	}
+
+	// Reset state + scrollback for the incoming session.
+	t.resetForNewSession()
+
+	t.sessionID = sess.ID
+	t.sessionName = sess.Name
+	if sess.Thinking != "" {
+		t.thinking = sess.Thinking
+	}
+	t.maxIterations = sess.MaxIterations
+	t.refreshSubscriptionFlag()
+	t.loadStatsFromSession(sess)
+	t.loadSessionCommands()
+
+	t.addRaw(ansi.Dimmed(fmt.Sprintf("── new session: %s ──", t.sessionName)))
+	t.updateInfo()
+	t.startSSE(t.baseCtx)
+}
+
 // startSSE opens a persistent SSE stream for the active session.
 func (t *TUI) startSSE(ctx context.Context) {
 	if t.sessionID == "" {
@@ -351,6 +393,7 @@ func (t *TUI) rootCommandItems() []components.SelectItem {
 		{Value: "info", Label: "info", Description: "Show session info snapshot"},
 		{Value: "context", Label: "context", Description: "Show context window breakdown"},
 		{Value: "fork", Label: "fork", Description: "Fork this session — exact copy with a new ID"},
+		{Value: "new", Label: "new", Description: "Close the active session (if any) and start a brand new, empty one"},
 	}
 	for _, cmd := range t.sessionCmds {
 		items = append(items, components.SelectItem{

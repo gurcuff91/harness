@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.71] - 2026-09-12
+
+### Feature — TUI gains `/new`: close the active session and start a brand new one
+- Added a `/new` command, distinct from the existing `/reset`: `/reset` reuses the SAME session (same ID), only wiping its history, while `/new` closes/persists the currently active session (if any — no warning when there wasn't one) and creates a genuinely new session with a fresh ID, same model/cwd.
+- Implemented as `newSessionInPlace()` (`internal/tui/session.go`), mirroring `resumeInPlace`'s shape: stop the SSE stream, close the old session (flush to disk), create the new one, clear scrollback/stats, reconnect SSE. Registered in the command palette and `runCommand`'s switch.
+
+### Fix — session store crashed on Windows with "The directory name is invalid."
+- **Reported by Gus**: `harness` failed to create a session on Windows with `mkdir C:\Users\gustavo\.harness\agent\sessions\C:-Users-gustavo-Downloads: The directory name is invalid.`
+- **Root cause** (`agent/store/file.go`): `cwdSlug` replaced the OS path separator with `-` but left the Windows drive-letter colon (`C:`) untouched, folding it directly into the directory NAME instead of its normal drive-separator position — `C:\Users\gustavo\Downloads` slugged to `C:-Users-gustavo-Downloads`, a component NTFS rejects outright.
+- **Fix**: `cwdSlug` now strips every NTFS-illegal path character (`:<>"|?*`), unconditionally on any OS — not just when `GOOS=="windows"`, since a slug should be safe to recreate on any platform a session store might later be read from. `C:\Users\gustavo\Downloads` now slugs to `C-Users-gustavo-Downloads`.
+- Tests: `agent/store/cwdslug_test.go` (new) reproduces the exact reported path, confirms Unix paths are unaffected, and asserts no NTFS-illegal character ever survives the slug for any input. Full suite + `go vet ./...` green.
+
 ## [0.76.70] - 2026-09-11
 
 ### Fix — Claude OAuth exchange rejected with "Invalid request format"

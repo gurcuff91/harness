@@ -207,9 +207,29 @@ func (m *FileStore) sessionDir(cwd string) string {
 	return filepath.Join(m.baseDir, cwdSlug(cwd))
 }
 
+// windowsIllegalDirChars are the characters NTFS forbids in a path
+// component, MINUS the backslash and forward slash (already handled as
+// path separators below) — notably the drive-letter colon ("C:"), which a
+// Windows cwd always carries and which sessionDir would otherwise fold
+// straight into the directory NAME (not just its natural drive-separator
+// position), producing an invalid component like "C:-Users-..." that
+// mkdir rejects outright (reported live on Windows: "The directory name
+// is invalid."). Stripped unconditionally, not just on GOOS=="windows" —
+// a slug must be safe to recreate on ANY platform a session store might
+// later be copied to or read from, and none of these characters are
+// legal (or even common) in a real Unix path component either.
+const windowsIllegalDirChars = `:<>"|?*`
+
 // cwdSlug converts a cwd path to a filesystem-safe directory name.
 func cwdSlug(cwd string) string {
-	slug := strings.ReplaceAll(cwd, string(os.PathSeparator), "-")
+	slug := strings.ReplaceAll(cwd, "/", "-")
+	slug = strings.ReplaceAll(slug, `\`, "-")
+	slug = strings.Map(func(r rune) rune {
+		if strings.ContainsRune(windowsIllegalDirChars, r) {
+			return -1
+		}
+		return r
+	}, slug)
 	slug = strings.ReplaceAll(slug, " ", "_")
 	slug = strings.Trim(slug, "-")
 	if slug == "" {
