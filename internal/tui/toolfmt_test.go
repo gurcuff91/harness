@@ -35,6 +35,9 @@ func TestFormatToolArgsBuiltins(t *testing.T) {
 			"ColleagueAsk", `{"colleague":"jax-major","prompt":"look at this","images":["a.png","b.png"],"timeout":30}`,
 			"jax-major look at this timeout=30 (2 images)",
 		},
+		"session search primary + limit": {
+			"SessionSearch", `{"query":"PKCE verifier","limit":5}`, "PKCE verifier limit=5",
+		},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

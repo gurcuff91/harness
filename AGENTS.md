@@ -9,7 +9,7 @@
 - **Module:** `github.com/gurcuff91/harness`
 - **Binary:** Single binary, ~9MB — entry point in `cmd/harness/main.go` (module root free for an SDK facade)
 - **Version:** single source of truth in package `version` (`version.Version`), injected via ldflags from the `Makefile` (`VERSION=`); falls back to `"dev"` for a plain `go build`.
-- **Dependencies (direct):** `golang.org/x/term` (raw mode), `github.com/rivo/uniseg` (grapheme/width), `github.com/go-chi/chi/v5` (HTTP router), `modernc.org/sqlite` (pure-Go SQLite for the memory store), `golang.design/x/clipboard` (clipboard image paste in the TUI), `github.com/google/uuid` (IDs), `github.com/robfig/cron/v3` (schedule parsing), `github.com/alecthomas/kong` (CLI grammar/parsing — `internal/cli/kong.go`). Keep the set minimal — no new deps without approval.
+- **Dependencies (direct):** `golang.org/x/term` (raw mode), `github.com/rivo/uniseg` (grapheme/width), `github.com/go-chi/chi/v5` (HTTP router), `modernc.org/sqlite` (pure-Go SQLite — the memory store AND each session's own `SessionSearch` FTS5 index), `golang.design/x/clipboard` (clipboard image paste in the TUI), `github.com/google/uuid` (IDs), `github.com/robfig/cron/v3` (schedule parsing), `github.com/alecthomas/kong` (CLI grammar/parsing — `internal/cli/kong.go`), `github.com/gorilla/websocket` (Slack transport's RTM connection). Keep the set minimal — no new deps without approval.
 
 ## Golden Rules
 
@@ -43,7 +43,7 @@ cmd/harness/main.go             ← executable entry point (package main) — ju
 │   ├── memory/                 ← persistent memory (SQLite + FTS5, cwd + global)
 │   └── tools/                  ← built-in tools — custom tools here (package tools)
 │       ├── registry.go / bash.go / file.go / edit.go / fetch.go
-│       ├── skill.go / memory.go / truncate.go / names.go
+│       ├── skill.go / memory.go / session.go / websearch.go / truncate.go / names.go
 ├── mcp/                        ← Model Context Protocol client (stdlib) — MCPStatuses() exposes it
 │   ├── jsonrpc.go / stdio.go / http.go / client.go / manager.go
 ├── client/                     ← the ONE typed HTTP/SSE SDK over server's API — every transport uses *client.Client directly (no per-transport wrappers)
@@ -60,10 +60,11 @@ cmd/harness/main.go             ← executable entry point (package main) — ju
 🔒 INTERNAL (compiler-enforced, not importable by third parties)
 └── internal/
     ├── providers/              ← LLM provider layer (Resolve, streaming)
-    │   ├── provider.go / anthropic.go / claude_oauth.go / openai.go
+    │   ├── provider.go / anthropic.go / claude_oauth.go / codex_oauth.go / openai.go
     │   ├── ollama*.go / opencode_go.go / minimax.go / registry.go / status.go
     │   └── llm/                ← core LLM types, metadata cascade, model registry
-    ├── oauthflow/              ← native OAuth PKCE login flows. OauthFlow interface (Start→browser, Exchange→creds) + shared PKCE/browser/token-POST + For(provider) dispatch in oauthflow.go; one file per provider (claude.go), each implementing OauthFlow. Add a provider = one new file + one For() case, no call-site changes.
+    ├── oauthflow/              ← native OAuth PKCE login flows — a SERVER-SIDE implementation detail: the only caller is server/oauth.go's handler behind POST /api/oauth/{provider}. OauthFlow interface (Start returns authURL+verifierCode, stateless; Exchange takes code+verifierCode back) + shared PKCE/token-POST + For(provider) dispatch in oauthflow.go; one file per provider (claude.go, codex.go), each implementing OauthFlow. Add a provider = one new file + one For() case, no call-site changes. Neither the CLI nor the TUI import this package — both drive OAuth through client.Client's StartOAuth/ExchangeOAuth instead (see server/oauth.go and internal/browseropen below).
+    ├── browseropen/            ← the one function (Open) that opens a URL in the user's default browser — used by the CLI and TUI after StartOAuth returns an auth_url. The server NEVER opens a browser itself; that's exclusively a client-side concern.
     ├── config/                 ← typed settings + credentials managers
     │   ├── settings.go / credentials.go / manager.go
     ├── version/                ← build version (ldflags target)
@@ -176,7 +177,7 @@ session.Prompt(ctx, text, opts…)   → queues into followUps (returns PromptSt
 │       emit(EventToolCall) → run → emit(EventToolResult) │
 │       ↓ wait for all before next iteration              │
 │   append tool results to history                        │
-│   if ContextUsage >= 0.98 → auto-compact mid-turn        │
+│   if ContextUsage >= 0.95 → auto-compact mid-turn        │
 │   emit(EventLoopEnd)                                    │
 │   continue loop                                         │
 └────────────────────────────────────────────────────────┘
@@ -204,18 +205,18 @@ make install              # build + install to ~/go/bin
 
 1. Create `providers/<name>.go`
 2. Implement the `providers.Provider` interface
-3. Add constructor to `internal/providers/registry.go` in the `Resolve()` switch
+3. Add the constructor to `internal/providers/registry.go`'s `initRegistry()`, appending to the `All` slice
 4. Register the provider key + status in `internal/providers/status.go`
 5. Add credential handling (`config/credentials.go` is the store; api-key providers use `resolveAPIKey`)
-6. Add a connect handler in `internal/cli/cli.go` and, if OAuth, add an `OauthFlow` implementation in `internal/oauthflow/<provider>.go` (one file implementing the `OauthFlow` interface — see `claude.go`)
+6. For an API-key provider, `RunConnect` (`internal/cli/commands.go`) already handles it generically via the credential type — no new code needed there. For OAuth, add an `OauthFlow` implementation in `internal/oauthflow/<provider>.go` (one file implementing `Start() (authURL, verifierCode string, err error)` / `Exchange(code, verifierCode string) (*types.Credentials, error)` — see `claude.go`/`codex.go`) plus a `case` in `oauthflow.For`. This flow is driven ENTIRELY by `server/oauth.go`'s `POST /api/oauth/{provider}` handler — the CLI and TUI never call `oauthflow` directly, they call `client.Client`'s `StartOAuth`/`ExchangeOAuth`, which hit that endpoint. The server holds no state between the two calls; the PKCE verifier travels through the caller.
 
 ### Adding a New Tool
 
 1. Create `agent/tools/<name>.go`
 2. Define the `Tool` struct with JSON schema and Execute function
 3. Add the name constant in `agent/tools/names.go`
-4. Register it in `agent/agent.go` `buildSessionTools()`
-5. Add tool icon + primary param in `transport/tui/toolfmt.go`
+4. Register it in `agent/agent.go` `buildSessionTools()` — always-on built-ins (Bash/Read/Write/Edit/Fetch) just check `isToolAllowed`; an *optional* built-in that needs its own on/off switch (e.g. `WebSearch`, `SessionInfo`/`SessionSearch`) adds a new `AgentOptions.EnableX bool` field instead, gating registration with `if a.opts.EnableX && a.isToolAllowed(...)`. A tool needing a live view of session state (current model, thinking level, full history) must read it through a LOCK-FREE getter on `*Session` (`CurrentModel()`, `CurrentThinking()`, `AllMessages()`, …) — never `Session.Meta()` or anything that takes `s.mu`: the tool executor runs inside a turn while `promptSync` already holds that lock for the whole turn, so taking it again deadlocks instantly with no timeout (see `agent/session_info_test.go`'s `TestSessionInfoGettersDoNotDeadlockUnderPromptSyncLock` and the `CurrentModel()` precedent it mirrors).
+5. Add tool icon + primary param in `internal/tui/toolfmt.go` (`primaryParam`) and `internal/tui/output.go` (`toolStyle`).
 
 ### Adding a New Command
 
@@ -260,13 +261,14 @@ Universal levels mapped per-provider:
 4-tier fallback for models without capability APIs:
 
 ```
-1. Provider API        (Anthropic, Ollama /api/show)  — authoritative
-2. llm-registry        (GitHub JSON, fetched once/session)
-3. Hardcoded registry  (model_registry.go, ~15 models)
+1. Provider API        (Anthropic, Ollama /api/show)  — authoritative, never overwritten
+2. OpenRouter catalog  (remote, fetched once/session)
+3. Hardcoded registry  (internal/providers/llm/models.go, a handful of aggregator-ID models OpenRouter doesn't carry under a matching key)
 4. Name inference       ("vision" in name → vision=true, etc.)
+5. Generic defaults     (128k context, 32k max tokens)
 ```
 
-`enrichMeta()` in `model_registry.go` runs tiers 2-4. Only used for OpenAI and OpenCode Go providers.
+`EnrichMeta()` in `internal/providers/llm/models.go` runs tiers 2-5, additively (a later tier only fills fields an earlier one left empty). Used by `minimax`, `openai`, `opencode-go`, `ollama`, and `codex-oauth` — providers with fully authoritative capability APIs (Anthropic, Ollama's local `/api/show`) call `ApplyRegistryPricing` instead, to fill only missing prices without touching already-authoritative fields.
 
 ## Rendering Rules
 
@@ -276,7 +278,7 @@ Universal levels mapped per-provider:
 - Spinner restarts when content stops and model is still working
 - Text streaming: word-wrap to terminal width, left border (`│`)
 - Thinking: gray border. Response: cyan border.
-- Footer: `╰ duration ↑input ↓output R:cache_read W:cache_write $cost ctx%/ctx_max model`
+- Footer (`internal/tui/output.go` `updateInfo()`): `↑input ↓output Rcache_read Wcache_write $cost(sub) ctx%/ctx_max model(thinking)` — the `R`/`W` cache segment and the `(thinking)`/`(sub)` suffixes only appear when non-zero/non-default.
 - Tool calls: icon + name + args. Results: ✓/✗ + one-line summary + duration.
 
 ## Patterns to Follow
@@ -304,12 +306,13 @@ Keep files focused. Current largest files for reference:
 
 | File | Lines | Role |
 |------|-------|------|
-| `server/server.go` | ~1420 | HTTP/SSE routes + handlers |
-| `agent/session.go` | ~1170 | Session lifecycle, ReAct loop, history, tool pairing |
-| `internal/tui/components/markdown.go` | ~1130 | Faithful streaming markdown renderer (complex by nature) |
-| `agent/agent.go` | ~920 | Agent factory, MCP/memory/scheduler wiring, prompt assembly |
-| `internal/providers/claude_oauth.go` | ~610 | OAuth token management + streaming |
-| `internal/providers/llm/anthropic.go` | ~505 | Anthropic request/response types |
-| `internal/cli/app.go` | ~85 | CLI router + dispatch |
+| `agent/session.go` | ~1780 | Session lifecycle, ReAct loop, history, tool pairing |
+| `server/server.go` | ~1410 | HTTP/SSE routes + handlers |
+| `agent/agent.go` | ~1290 | Agent factory, MCP/memory/scheduler/SessionInfo+SessionSearch wiring, prompt assembly |
+| `internal/tui/components/markdown.go` | ~1280 | Faithful streaming markdown renderer (complex by nature) |
+| `internal/providers/codex_oauth.go` | ~990 | Codex OAuth + Responses-dialect streaming |
+| `internal/providers/claude_oauth.go` | ~790 | OAuth token management + streaming |
+| `internal/providers/llm/anthropic.go` | ~540 | Anthropic request/response types |
+| `internal/cli/app.go` | ~105 | CLI router + dispatch |
 
 If a file grows past ~500 lines, consider splitting — but only along real boundaries.

@@ -20,10 +20,11 @@ func TestBuildCompactionCheckpoint(t *testing.T) {
 		got := buildCompactionCheckpoint(summary, true, false)
 		assertStartsWithSummary(t, got, summary)
 		reminder := got[len(summary):]
-		for _, tool := range []string{"MemoSearch", "MemoWrite", "MemoDelete"} {
-			if !contains(reminder, tool) {
-				t.Errorf("memory-only reminder should mention %s, got: %q", tool, reminder)
-			}
+		// The reminder is about RECOVERING lost context (a read), so only
+		// MemoSearch is relevant here — MemoWrite/MemoDelete (write-side
+		// tools) aren't part of that operation and don't need to be named.
+		if !contains(reminder, "MemoSearch") {
+			t.Errorf("memory-only reminder should mention MemoSearch, got: %q", reminder)
 		}
 		if contains(reminder, "SessionSearch") {
 			t.Errorf("memory-only reminder must not mention SessionSearch (not enabled), got: %q", reminder)

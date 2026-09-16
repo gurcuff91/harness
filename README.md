@@ -17,6 +17,7 @@ harness
 On first run, connect a provider:
 ```
 harness connect claude-oauth    # Browser OAuth (Claude subscription)
+harness connect codex-oauth     # Browser OAuth (ChatGPT/Codex subscription)
 harness connect anthropic       # API key
 harness connect openai          # API key
 harness connect opencode-go     # API key
@@ -29,9 +30,11 @@ Providers can also be connected from inside the TUI command palette.
 ## Features
 
 - **Streaming-first** — all providers stream token-by-token; there is no non-streaming path
-- **Multi-provider** — Claude OAuth, Anthropic, OpenAI, OpenCode Go, Ollama Cloud, Ollama local, MiniMax
+- **Multi-provider** — Claude OAuth, Codex OAuth (ChatGPT), Anthropic, OpenAI, OpenCode Go, Ollama Cloud, Ollama local, MiniMax
 - **Thinking support** — extended thinking with configurable levels (off/low/medium/high/xhigh), mapped per-provider
 - **Tool execution** — Bash, Read, Write, Edit, Fetch, Skill, Subagent — plus tool calls run in parallel within a turn
+- **Web search** — live web search (MiniMax primary, Ollama Cloud fallback) via the `WebSearch` tool
+- **Session recall** — `SessionInfo`/`SessionSearch` give the model its own identity plus full-text search over this session's ENTIRE conversation history, even turns already folded into a compaction checkpoint
 - **MCP** — external tools via Model Context Protocol (local stdio + remote HTTP servers)
 - **Persistent memory** — project-scoped + global memories (SQLite + FTS5), recalled across sessions
 - **Scheduled prompts** — cron-scheduled prompts that fire back into the session that created them
@@ -69,7 +72,7 @@ harness/
 │   ├── memory/               # Persistent memory (SQLite + FTS5, cwd + global)
 │   └── tools/                # Built-in tools — custom tools here
 │       ├── bash.go / file.go / edit.go / fetch.go / skill.go
-│       └── memory.go / truncate.go / names.go
+│       └── memory.go / session.go / websearch.go / truncate.go / names.go
 ├── mcp/                       # 🔓 Model Context Protocol client (stdlib)
 │   └── jsonrpc.go / stdio.go / http.go / client.go / manager.go
 ├── client/                   # 🔓 Typed HTTP/SSE client over the server API
@@ -85,10 +88,12 @@ harness/
 │
 └── internal/                 # 🔒 Implementation detail (not importable by third parties)
     ├── providers/            # LLM provider layer (Resolve, streaming)
-    │   ├── anthropic.go / claude_oauth.go / openai.go / ollama*.go
+    │   ├── anthropic.go / claude_oauth.go / codex_oauth.go / openai.go / ollama*.go
     │   ├── opencode_go.go / minimax.go / registry.go / status.go
     │   └── llm/              # Core LLM types + metadata cascade + model registry
-    ├── oauthflow/            # Native OAuth PKCE login flows (one file per provider)
+    ├── oauthflow/            # Native OAuth PKCE login flows — server-side only,
+    │                         #   driven entirely by server/oauth.go's POST /api/oauth/{provider}
+    ├── browseropen/          # Opens a URL in the user's default browser (CLI/TUI only)
     ├── config/               # Typed settings + credentials managers
     ├── logx/                 # NewHarnessLogger() — the concrete line-format logger
     ├── version/              # Build version (ldflags target)
@@ -178,11 +183,12 @@ time it's passed in.
 
 | Provider | Auth | Models Source | Capabilities Source |
 |----------|------|---------------|---------------------|
-| `claude-oauth` | Browser OAuth (PKCE) | Anthropic `/v1/models` API | API (context, vision, thinking) |
+| `claude-oauth` | Browser OAuth (PKCE, Claude subscription) | Anthropic `/v1/models` API | API (context, vision, thinking) |
+| `codex-oauth` | Browser OAuth (PKCE, ChatGPT/Codex subscription) | Codex backend `/models` API | API (context window authoritative) |
 | `anthropic` | `ANTHROPIC_API_KEY` | Anthropic `/v1/models` API | API |
-| `openai` | `OPENAI_API_KEY` | Static list | llm-registry (GitHub) |
-| `opencode-go` | `OPENCODE_GO_API_KEY` | `/v1/models` API | llm-registry + hardcoded |
-| `minimax` | `MINIMAX_API_KEY` | Static list | llm-registry + hardcoded |
+| `openai` | `OPENAI_API_KEY` | Static list | OpenRouter catalog |
+| `opencode-go` | `OPENCODE_GO_API_KEY` | `/v1/models` API | OpenRouter + hardcoded |
+| `minimax` | `MINIMAX_API_KEY` | Static list | OpenRouter + hardcoded |
 | `ollama-cloud` | `OLLAMA_CLOUD_API_KEY` | `/v1/models` + `/api/show` | `/api/show` (context, vision, thinking) |
 | `ollama` | None (auto-detect) | `/api/tags` + `/api/show` | `/api/show` |
 
@@ -265,6 +271,8 @@ All data stored in `~/.harness/`:
 ├── slack.json              — Slack credentials + admin list
 └── agent/
     ├── sessions/<cwd>/     — Session history (JSONL, partitioned by project)
+    │   └── <session-id>.search.db — Lazy FTS5 index for SessionSearch (built
+    │                                 only when the tool is enabled and used)
     ├── skills/             — Discovered skills
     ├── memory.db           — Persistent memory (SQLite + FTS5, WAL mode)
     └── SYSTEM.md           — Optional user-level system prompt addendum — a
@@ -283,15 +291,21 @@ All data stored in `~/.harness/`:
 | `Fetch` | HTTP requests (text + binary downloads) |
 | `Skill` | Load a discovered skill |
 | `Subagent` | Spawn a scoped autonomous sub-agent (parallelizable) |
+| `WebSearch` | Web search (MiniMax primary, Ollama Cloud fallback) |
+| `SessionInfo` | Snapshot of the current session (id/cwd/name/model/thinking/created_at) |
+| `SessionSearch` | Full-text search over this session's complete history, including pre-compaction content |
 | `MemoWrite` / `MemoSearch` / `MemoDelete` | Persistent project + global memory |
 | `Schedule` / `ScheduleList` / `ScheduleDelete` | Cron-scheduled prompts |
 | `ColleagueList` / `ColleagueAsk` | Discover and delegate to other running instances |
 
 The memory tools require `AgentWithMemory` (or the CLI's memory-enabled path);
-`Schedule*` management tools are always available, while the engine that *fires*
-schedules requires `--scheduler` / `AgentWithScheduler`; `Colleague*` requires
-`AgentWithColleagues`. External tools can be added via **MCP** servers
-(`harness mcp add`), namespaced as `mcp__<server>__<tool>`.
+`WebSearch` requires `EnableWebSearch` and a connected search backend
+(minimax or ollama-cloud); `SessionInfo`/`SessionSearch` are both gated by the
+single `EnableSessionInfo` flag (on by default for the CLI's interactive
+transports); `Schedule*` management tools are always available, while the
+engine that *fires* schedules requires `--scheduler` / `AgentWithScheduler`;
+`Colleague*` requires `AgentWithColleagues`. External tools can be added via
+**MCP** servers (`harness mcp add`), namespaced as `mcp__<server>__<tool>`.
 
 ## License
 
