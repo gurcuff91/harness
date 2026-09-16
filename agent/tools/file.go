@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,7 +13,15 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
-// imageExtToMime maps supported image extensions to MIME types.
+// imageExtToMime maps supported image extensions to MIME types. Used ONLY
+// to decide whether a path LOOKS like an image worth attempting to read as
+// one (isImagePath) — never to decide the mime_type actually sent to the
+// provider or persisted to the session's .jsonl. See sniffImageMime's doc
+// comment for why: a mismatched extension (e.g. a JPEG saved as
+// "screenshot.png") silently corrupted a session permanently until this was
+// fixed — the provider rejects the byte/label mismatch on every future turn
+// that replays the history, and there's no way to un-persist it short of
+// hand-editing the .jsonl.
 var imageExtToMime = map[string]string{
 	".png":  "image/png",
 	".jpg":  "image/jpeg",
@@ -25,6 +34,44 @@ func isImagePath(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	_, ok := imageExtToMime[ext]
 	return ok
+}
+
+// supportedImageMimes is the set sniffImageMime will ever return — the same
+// four formats imageExtToMime lists, just keyed by MIME type instead of
+// extension, so a real screenshot util's/pdf-preview's/random other image
+// container http.DetectContentType might recognize (bmp, tiff, ico, …)
+// still gets rejected with a clear error instead of silently reaching the
+// provider as an unsupported type.
+var supportedImageMimes = map[string]bool{
+	"image/png":  true,
+	"image/jpeg": true,
+	"image/gif":  true,
+	"image/webp": true,
+}
+
+// sniffImageMime determines an image's REAL mime type from its bytes (via
+// http.DetectContentType — stdlib, no new dependency), never from the
+// file's extension or a caller-supplied label. Returns ok=false if the
+// content isn't one of the four types this tool (and the providers it
+// feeds) actually supports, regardless of what the file's name claims.
+//
+// This exists because of a real, reproduced-in-the-field bug: a file named
+// "campaign_setup_current.png" whose actual bytes were JPEG got tagged
+// mime_type: "image/png" (inferred from the ".png" extension alone) and
+// permanently corrupted a session — Anthropic rejects the byte/label
+// mismatch, and since the full history replays on every turn, the SAME
+// session kept failing forever until the .jsonl was hand-edited to fix the
+// one bad entry. Sniffing the real bytes at read time makes that class of
+// corruption impossible to persist in the first place.
+func sniffImageMime(data []byte) (mime string, ok bool) {
+	detected := http.DetectContentType(data)
+	// DetectContentType can return a mime with a "; charset=..." suffix for
+	// text-ish types (never for the binary image formats we care about, but
+	// guard against it anyway rather than assume).
+	if i := strings.IndexByte(detected, ';'); i >= 0 {
+		detected = detected[:i]
+	}
+	return detected, supportedImageMimes[detected]
 }
 
 // maxImageFileBytes caps the RAW file size Read will base64-encode as an
@@ -78,9 +125,6 @@ func ReadFile(cwd string) Tool {
 
 			// Image file — return as ImageData
 			if isImagePath(path) {
-				ext := strings.ToLower(filepath.Ext(path))
-				mime := imageExtToMime[ext]
-
 				// Check size via Stat BEFORE reading/encoding — see
 				// maxImageFileBytes' comment for why this must happen before
 				// the file is ever loaded into memory or base64-encoded.
@@ -93,6 +137,17 @@ func ReadFile(cwd string) Tool {
 				if err != nil {
 					return fmt.Sprintf("Error reading image: %v", err), nil, err
 				}
+
+				// mime_type sent to the provider (and persisted to the
+				// session's .jsonl) MUST reflect the REAL bytes, never the
+				// file's extension — see sniffImageMime's doc comment for
+				// the exact corruption this prevents.
+				mime, ok := sniffImageMime(data)
+				if !ok {
+					err := fmt.Errorf("%q has an image extension but its content is not a supported image format (detected: %s) — supported: png, jpeg, gif, webp", path, mime)
+					return err.Error(), nil, err
+				}
+
 				img := types.ImageData{
 					MimeType: mime,
 					Base64:   base64.StdEncoding.EncodeToString(data),

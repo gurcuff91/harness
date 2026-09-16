@@ -20,6 +20,29 @@ func writeFileOfSize(t *testing.T, path string, n int) {
 	}
 }
 
+// pngMagic is a real PNG file signature — needed (unlike writeFileOfSize's
+// all-zero content) for any test that exercises the success path THROUGH
+// sniffImageMime, which now rejects content that doesn't actually match a
+// supported image format regardless of the file's extension.
+var pngMagic = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+
+// writeFakePNGOfSize creates a file of exactly n bytes that PASSES
+// sniffImageMime (real PNG magic bytes up front, zero-padded after) — for
+// tests that need the size guard's success path to actually reach
+// base64-encoding, now that content is sniffed rather than trusted from the
+// extension.
+func writeFakePNGOfSize(t *testing.T, path string, n int) {
+	t.Helper()
+	if n < len(pngMagic) {
+		t.Fatalf("size %d too small to hold the PNG magic header", n)
+	}
+	data := make([]byte, n)
+	copy(data, pngMagic)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestReadFile_ImageOverSizeLimitRejectedBeforeReading is the regression test
 // for a real incident: an 8.5MB PNG (image/png raw bytes) was read, base64
 // encoded to ~11.35MB, exceeded Anthropic's 10MB tool_result image cap, and
@@ -59,7 +82,7 @@ func TestReadFile_ImageOverSizeLimitRejectedBeforeReading(t *testing.T) {
 func TestReadFile_ImageAtOrUnderSizeLimitStillWorks(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ok.png")
-	writeFileOfSize(t, path, maxImageFileBytes) // exactly at the limit — must pass
+	writeFakePNGOfSize(t, path, maxImageFileBytes) // exactly at the limit — must pass
 
 	r := ReadFile(dir)
 	out, images, err := r.ExecuteRich(context.Background(), json.RawMessage(`{"path":"ok.png"}`))

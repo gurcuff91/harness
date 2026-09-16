@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.78] - 2026-09-16
+
+### Fix — a mislabeled image could permanently corrupt a session
+- Field-reported and diagnosed live: `Read`'s image handling inferred `mime_type` purely from the file's EXTENSION (`imageExtToMime[ext]`), never from its actual bytes. A file named `campaign_setup_current.png` whose real content was JPEG got tagged `mime_type: "image/png"` — Anthropic rejects that byte/label mismatch with a 400, and since the full session history replays on every turn, the SAME persisted `tool_result` kept failing forever, with no way to recover short of hand-editing the session's `.jsonl`. Confirmed forensically: the corrupted session's `.meta.json` `compact_offset`/`.jsonl` line was traced exactly, decoded, and the base64 prefix (`/9j/4AAQSkZJRg`) confirmed a JPEG signature under a `.png` name.
+- Fixed by adding `sniffImageMime` (`agent/tools/file.go`) — uses `net/http.DetectContentType` (stdlib, no new dependency) to determine the REAL format from the file's magic bytes, restricted to the four supported formats (png/jpeg/gif/webp). `Read` and `loadColleagueImages` (the `Subagent`/`ColleagueAsk` image-attachment path in `agent/tools/colleague.go`) now both tag images with the sniffed mime type, not the extension's claim — a mislabeled-but-genuinely-supported file (like the field report) is now read CORRECTLY instead of corrupting the session; content that isn't any supported image format at all is rejected outright with a clear error instead of ever reaching the provider or the session's persisted history.
+- Telegram/Slack/ACP transports were already unaffected (Telegram declares `image/jpeg` unconditionally, matching how Telegram always delivers photos; Slack and ACP both use the mime type reported by their own protocol/API, never a local file extension) — this was specifically a local-file-path bug in `Read` and `Subagent`/`ColleagueAsk`'s image-attachment loading.
+- Added `agent/tools/image_mime_sniff_test.go`: `sniffImageMime` unit coverage for all four formats plus non-image content, and end-to-end `Read`/`loadColleagueImages` regression tests reproducing the exact field scenario (a mismatched `.png`/JPEG file is now read successfully as `image/jpeg`, while genuinely non-image content under an image extension is rejected).
+- The already-corrupted session from the field report was repaired directly (its one bad `.jsonl` line's `mime_type` corrected from `image/png` to `image/jpeg`, verified byte-identical everywhere else) — this release prevents the same corruption from happening to any session going forward.
+
 ## [0.76.77] - 2026-09-16
 
 ### Fix — SDK facade was missing `AgentWithWebSearch`/`AgentWithSessionInfo`

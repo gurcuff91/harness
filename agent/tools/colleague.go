@@ -324,10 +324,15 @@ func askColleagueBackground(url, colleagueName, prompt string, images []types.Im
 }
 
 // loadColleagueImages validates and base64-encodes local image paths, using
-// the same extension check as the Read tool (isImagePath/imageExtToMime).
-// Returns an error immediately if any path is missing or not a supported
-// image type — a partial delegation with silently-dropped images would be
-// worse than failing clearly upfront.
+// the same extension check as the Read tool (isImagePath) to decide which
+// paths are worth attempting — but the actual mime_type sent to the
+// provider/persisted to the session's .jsonl comes from sniffImageMime
+// (the real bytes), never the extension. See sniffImageMime's doc comment
+// for the exact session-corrupting bug this prevents. Returns an error
+// immediately if any path is missing, not a supported image type, or its
+// content doesn't match a supported format — a partial delegation with
+// silently-dropped or mislabeled images would be worse than failing
+// clearly upfront.
 func loadColleagueImages(paths []string) ([]types.ImageData, error) {
 	if len(paths) == 0 {
 		return nil, nil
@@ -341,9 +346,12 @@ func loadColleagueImages(paths []string) ([]types.ImageData, error) {
 		if err != nil {
 			return nil, fmt.Errorf("colleague: reading image %q: %w", p, err)
 		}
-		ext := strings.ToLower(filepath.Ext(p))
+		mime, ok := sniffImageMime(data)
+		if !ok {
+			return nil, fmt.Errorf("colleague: %q has an image extension but its content is not a supported image format (detected: %s)", p, mime)
+		}
 		images = append(images, types.ImageData{
-			MimeType: imageExtToMime[ext],
+			MimeType: mime,
 			Base64:   base64.StdEncoding.EncodeToString(data),
 		})
 	}
