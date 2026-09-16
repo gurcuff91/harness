@@ -117,6 +117,7 @@ func TestSessionInfoGettersDoNotDeadlockUnderPromptSyncLock(t *testing.T) {
 		_ = sess.CurrentModel()
 		_ = sess.CurrentThinking()
 		_ = sess.CreatedAt()
+		_ = sess.CurrentStats()
 	}()
 
 	select {
@@ -167,5 +168,55 @@ func TestSessionSearchMessagesDoesNotDeadlockUnderPromptSyncLock(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("SearchMessages deadlocked — it must never take s.mu (mirrors AllMessages()'s locking shape), but something in this path blocked waiting for s.mu while s.mu was held by the simulated turn (promptSync).")
+	}
+}
+
+// TestResetClearsInMemoryStats is the regression test for a real bug found
+// live while extending SessionInfo with usage stats: Reset() called
+// s.store.Reset() (which correctly clears Stats on the PERSISTED meta) but
+// never cleared the in-memory s.stats/lastInputTokens this Session handle
+// actually reads from — Stats(), CurrentStats(), ContextBreakdown(), and the
+// auto-compact threshold check all kept seeing the pre-reset totals. Worse,
+// the next updateStats/persistStatsLocked call (or draining pending
+// delegated cost) would silently resurrect the stale totals right back onto
+// the just-cleared store. Confirmed failing before the fix (CostUSD
+// survived Reset() unchanged), passing after.
+func TestResetClearsInMemoryStats(t *testing.T) {
+	a := New(AgentOptions{Store: store.NewInMemoryStore()})
+	defer a.Close()
+
+	models := a.Models()
+	if len(models) < 1 {
+		t.Skip("need at least 1 active model in this environment")
+	}
+
+	sess, err := a.NewSession(t.TempDir(), models[0].Model)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer sess.Close()
+
+	sess.mu.Lock()
+	sess.stats.CostUSD = 5.0
+	sess.stats.InputTokens = 1000
+	sess.stats.ContextUsage = 0.5
+	sess.snapshotStatsLocked()
+	sess.mu.Unlock()
+
+	if err := sess.Reset(); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	sess.mu.Lock()
+	stats := sess.stats
+	sess.mu.Unlock()
+	if stats.CostUSD != 0 || stats.InputTokens != 0 || stats.ContextUsage != 0 {
+		t.Errorf("in-memory s.stats not cleared by Reset(): %+v", stats)
+	}
+
+	// CurrentStats() (the lock-free snapshot SessionInfo reads) must also
+	// reflect the reset, not just the s.mu-guarded field.
+	if got := sess.CurrentStats(); got.CostUSD != 0 || got.InputTokens != 0 {
+		t.Errorf("CurrentStats() not cleared by Reset(): %+v", got)
 	}
 }

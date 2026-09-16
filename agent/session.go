@@ -122,6 +122,20 @@ type Session struct {
 	// SwitchThinking (the same lock that guards thinkingLvl itself).
 	thinkingStr atomic.Value // string
 
+	// statsSnapshot mirrors modelStr/thinkingStr's exact reasoning, for
+	// s.stats (accumulated tokens/cost/context usage): SessionInfo's tool
+	// executor needs to read the CURRENT stats from inside a tool call
+	// (promptSync holds s.mu for the whole turn), so a lock-free snapshot is
+	// required — s.stats itself is only ever safe to read under s.mu.
+	// Refreshed via snapshotStatsLocked (caller must hold s.mu) at every
+	// point s.stats mutates: newSession (initial), updateStats (every
+	// turn), drainPendingDelegatedCost's callers, compactWithTarget (after
+	// resetting ContextUsage), and Reset. May lag by up to one turn behind
+	// pending delegated cost (Subagent/Fetch) not yet drained — the same
+	// staleness window Stats()/Meta() already have for any concurrent
+	// reader, not a new one introduced by this snapshot.
+	statsSnapshot atomic.Value // types.SessionStats
+
 	// Follow-up prompts — separate mutex to avoid deadlock with mu
 	followMu      sync.Mutex
 	followCond    *sync.Cond // signals when the queue drains (busy → false); lazily created
@@ -261,6 +275,7 @@ func newSession(storeInst *store.Session,
 	s.loadModelMeta(modelID)
 	s.modelStr.Store(provider.Name() + "/" + modelID)
 	s.thinkingStr.Store(thinkingLvl)
+	s.snapshotStatsLocked() // no lock needed yet — s isn't reachable by any other goroutine until newSession returns
 
 	// Restore lastInputTokens from persisted stats so ContextBreakdown() shows
 	// meaningful "actual" + "free space" values immediately on resume, without
@@ -411,7 +426,25 @@ func (s *Session) Reset() error {
 	if s.IsBusy() {
 		return ErrBusy
 	}
-	return s.store.Reset()
+	if err := s.store.Reset(); err != nil {
+		return err
+	}
+	// BUG FIX: s.store.Reset() clears Stats on the PERSISTED meta, but the
+	// in-memory s.stats/lastInputTokens this Session handle actually reads
+	// from (Stats(), CurrentStats(), ContextBreakdown(), the auto-compact
+	// threshold check, …) were never cleared here — found live while wiring
+	// SessionInfo's extended stats. A stale s.stats survived Reset() and
+	// would resurface on the very next updateStats/persistStatsLocked call
+	// (or via delegated cost draining), silently reviving cost/token totals
+	// the user just asked to wipe. Reset() runs OUTSIDE a turn (IsBusy()
+	// above already guarantees promptSync isn't holding s.mu), so taking the
+	// lock here is safe — no deadlock risk.
+	s.mu.Lock()
+	s.stats = types.SessionStats{}
+	s.lastInputTokens = 0
+	s.snapshotStatsLocked()
+	s.mu.Unlock()
+	return nil
 }
 
 // Wait blocks until the session's queue is fully drained (no turn in flight and
@@ -571,6 +604,28 @@ func (s *Session) persistStatsLocked() {
 	meta.Stats = s.stats
 	meta.LastActiveAt = time.Now()
 	s.store.UpdateMeta(meta)
+}
+
+// snapshotStatsLocked refreshes statsSnapshot from the current s.stats.
+// Caller must already hold s.mu (same "Locked" convention as
+// persistStatsLocked). Must be called at every point s.stats itself
+// mutates, so CurrentStats() never observes a value stale by more than the
+// current critical section.
+func (s *Session) snapshotStatsLocked() {
+	s.statsSnapshot.Store(s.stats)
+}
+
+// CurrentStats returns a lock-free snapshot of accumulated token/cost/
+// context stats — safe to call from inside a tool executor while
+// promptSync holds s.mu for the whole turn (mirrors CurrentModel()/
+// CurrentThinking()'s exact pattern; see modelStr's doc comment for why
+// taking s.mu here would deadlock instead). May lag by up to one turn
+// behind delegated cost (Subagent/Fetch) not yet drained — the same
+// staleness window Stats()/Meta() already carry for any concurrent reader,
+// not something new introduced by this snapshot.
+func (s *Session) CurrentStats() types.SessionStats {
+	v, _ := s.statsSnapshot.Load().(types.SessionStats)
+	return v
 }
 
 func (s *Session) drainFollowUps() {
@@ -950,6 +1005,7 @@ func (s *Session) compactWithTarget(ctx context.Context, provider providers.Prov
 	// already happened and drive cost/stats, so they must be preserved.
 	s.lastInputTokens = 0
 	s.stats.ContextUsage = 0
+	s.snapshotStatsLocked()
 	meta := s.store.Meta()
 	meta.Stats = s.stats
 	s.store.UpdateMeta(meta)
@@ -1248,6 +1304,7 @@ func (s *Session) Stats() types.SessionStats {
 	// state doesn't lag behind what this call just reported.
 	if s.drainPendingDelegatedCost() {
 		s.persistStatsLocked()
+		s.snapshotStatsLocked()
 	}
 	return s.stats
 }
@@ -1362,6 +1419,7 @@ func (s *Session) Meta() store.SessionMeta {
 	s.mu.Lock()
 	if s.drainPendingDelegatedCost() {
 		s.persistStatsLocked()
+		s.snapshotStatsLocked()
 	}
 	s.mu.Unlock()
 
@@ -1558,6 +1616,7 @@ func (s *Session) updateStats(se types.StreamEvent) {
 
 	// Persist stats to store
 	s.persistStatsLocked()
+	s.snapshotStatsLocked()
 
 	// Emit enriched EventTokens to handler
 	s.emit(types.Event{

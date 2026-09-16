@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.76] - 2026-09-16
+
+### Feature — `SessionInfo` now exposes environment + accumulated usage, matching the TUI's `/info` panel
+- Extended `SessionInfoSnapshot` with `version` (harness build version), `mcp_connected`/`schedule_count` (environment counts, owned-by-this-session for schedules), and `input_tokens`/`output_tokens`/`cache_read`/`cache_write`/`cost_usd`/`context_usage`/`context_window` (accumulated usage) — everything the TUI's `/info` panel shows except `max_iterations` (an internal ReAct-loop implementation detail, deliberately excluded per Gus's explicit call).
+- This is a deliberate reversal of the tool's earlier, stricter convention ("never surface spend to the model") — Gus's call: this is genuinely useful self-awareness for the model, the same data the TUI footer already shows the human.
+- New `Session.CurrentStats()` — a lock-free `atomic.Value` snapshot of accumulated stats, mirroring `CurrentModel()`/`CurrentThinking()`'s exact pattern (safe to call from inside a tool executor while `promptSync` holds `s.mu` for the whole turn; `Stats()`/`Meta()` both take `s.mu` and would deadlock there). Refreshed at every point `s.stats` mutates: session construction, every turn's `updateStats`, delegated-cost draining, post-compaction reset, and `Reset()`.
+- `mcp_connected`/`schedule_count` read through `Agent.MCPStatuses()`/`Agent.Schedules().List()` — both guarded by their OWN locks (`mcp.Manager.mu`/`schedule.Store.mu`), never `s.mu`, so no deadlock risk calling them from the same closure (same data `server.go`'s `handleSessionInfo` already computes for the HTTP API).
+
+### Fix — a real bug found live while wiring `CurrentStats()`: `Session.Reset()` never cleared in-memory stats
+- `Reset()` called `s.store.Reset()`, which correctly clears `Stats` on the PERSISTED meta — but never cleared this `Session` handle's own in-memory `s.stats`/`lastInputTokens`, the fields `Stats()`, `ContextBreakdown()`, and the auto-compact threshold check actually read from. Confirmed live: `CostUSD` set to `5.0`, `Reset()` called, `CostUSD` still `5.0` afterward. Worse than cosmetic — the very next `updateStats`/`persistStatsLocked` call (or draining pending delegated cost from a Subagent/Fetch call finishing in the background) would silently resurrect the stale totals right back onto the store `Reset()` had just cleared.
+- Fixed: `Reset()` now also clears `s.stats`/`lastInputTokens` and refreshes `CurrentStats()`'s snapshot, under `s.mu` (safe — `Reset()` only runs outside a turn, `IsBusy()` already guarantees `promptSync` isn't holding the lock).
+- Added `TestResetClearsInMemoryStats`, confirmed failing before the fix and passing after.
+
 ## [0.76.75] - 2026-09-16
 
 ### Refactor — SessionSearch's FTS5 logic moves from the tool into the SessionStore port

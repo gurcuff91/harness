@@ -292,7 +292,7 @@ All data stored in `~/.harness/`:
 | `Skill` | Load a discovered skill |
 | `Subagent` | Spawn a scoped autonomous sub-agent (parallelizable) |
 | `WebSearch` | Web search (MiniMax primary, Ollama Cloud fallback) |
-| `SessionInfo` | Snapshot of the current session (id/cwd/name/model/thinking/created_at) |
+| `SessionInfo` | Snapshot of the current session — identity (id/cwd/name/model/thinking/created_at), environment (harness version, connected MCPs, owned schedules), and accumulated usage (tokens/cache/cost/context) |
 | `SessionSearch` | Full-text search over this session's complete history, including pre-compaction content |
 | `MemoWrite` / `MemoSearch` / `MemoDelete` | Persistent project + global memory |
 | `Schedule` / `ScheduleList` / `ScheduleDelete` | Cron-scheduled prompts |

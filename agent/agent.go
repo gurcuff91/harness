@@ -18,6 +18,7 @@ import (
 	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/internal/config"
 	"github.com/gurcuff91/harness/internal/providers"
+	"github.com/gurcuff91/harness/internal/version"
 	"github.com/gurcuff91/harness/mcp"
 	"github.com/gurcuff91/harness/types"
 )
@@ -992,16 +993,40 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 	// whatever was true when buildSessionTools ran.
 	if a.opts.EnableSessionInfo {
 		if a.isToolAllowed(tools.ToolSessionInfo) {
-			// Deliberately built from lock-free getters (ID/CWD/Name/
-			// CurrentModel/CurrentThinking/CreatedAt), NEVER (*sessRef).Meta()
-			// — Meta() takes s.mu, and this closure runs INSIDE a tool
-			// executor while promptSync holds s.mu for the whole turn.
-			// Calling Meta() here deadlocks instantly with no timeout, no
-			// error — exactly the class of bug CurrentModel() was
-			// introduced to fix (see its own doc comment and the
-			// subagent-timeout-background project memory this mirrors).
+			// Deliberately built from lock-free getters/methods (ID/CWD/
+			// Name/CurrentModel/CurrentThinking/CreatedAt/CurrentStats),
+			// NEVER (*sessRef).Meta() or Stats() — both take s.mu, and this
+			// closure runs INSIDE a tool executor while promptSync holds
+			// s.mu for the whole turn. Calling either here deadlocks
+			// instantly with no timeout, no error — exactly the class of
+			// bug CurrentModel() was introduced to fix (see its own doc
+			// comment and the subagent-timeout-background project memory
+			// this mirrors).
+			//
+			// MCPStatuses()/Schedules() below take THEIR OWN locks
+			// (mcp.Manager.mu / schedule.Store.mu respectively) — never
+			// s.mu — so calling them from inside this closure carries no
+			// deadlock risk at all, same reasoning server.go's
+			// handleSessionInfo already relies on for the identical data.
 			reg.Register(tools.SessionInfo(func() tools.SessionInfoSnapshot {
 				sess := *sessRef
+				stats := sess.CurrentStats()
+
+				mcpConnected := 0
+				for _, st := range a.MCPStatuses() {
+					if st.Connected {
+						mcpConnected++
+					}
+				}
+				scheduleCount := 0
+				if sc := a.Schedules(); sc != nil {
+					for _, s := range sc.List() {
+						if s.Owner == sessionID {
+							scheduleCount++
+						}
+					}
+				}
+
 				return tools.SessionInfoSnapshot{
 					ID:        sess.ID(),
 					CWD:       sess.CWD(),
@@ -1009,6 +1034,18 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 					Model:     sess.CurrentModel(),
 					Thinking:  sess.CurrentThinking(),
 					CreatedAt: sess.CreatedAt().Format(time.RFC3339),
+
+					Version:       version.Version,
+					MCPConnected:  mcpConnected,
+					ScheduleCount: scheduleCount,
+
+					InputTokens:   stats.InputTokens,
+					OutputTokens:  stats.OutputTokens,
+					CacheRead:     stats.CacheRead,
+					CacheWrite:    stats.CacheWrite,
+					CostUSD:       stats.CostUSD,
+					ContextUsage:  stats.ContextUsage,
+					ContextWindow: stats.ContextWindow,
 				}
 			}))
 		}
