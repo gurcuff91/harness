@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.72] - 2026-09-16
+
+### Feature — `SessionInfo` and `SessionSearch` built-in tools
+- Added two new built-in tools, gated behind a single new flag, `AgentOptions.EnableSessionInfo` (on by default for every transport built via `newInteractiveAgent`: TUI, `harness serve`, Telegram, Slack, ACP).
+- `SessionInfo` returns a small snapshot of the session's own identity/config (id, cwd, name, model, thinking level) — no cost/token/compaction internals exposed to the model.
+- `SessionSearch` full-text searches the ENTIRE conversation history of the current session — every user/assistant message ever exchanged, including turns already folded into a compaction checkpoint. This closes a real gap `MemoSearch` doesn't cover: memory is only what the model deliberately chose to write, while `SessionSearch` recovers the literal, unabridged transcript, addressing cases where a compaction summary dropped a detail the user later asks about.
+- Implementation: a per-session SQLite FTS5 index (`<session-id>.search.db`, living right next to that session's own `.jsonl`/`.meta.json`), synced lazily and incrementally — entirely inside the tool, with zero changes to `agent/store` or `AddMessage`. Only plain text from user/assistant messages is indexed (no tool_call/tool_result/thinking). See `docs/plans/2026-09-16-session-info-search-tools-design.md` for the full design.
+- `agent/store`: `cwdSlug` exported as `CwdSlug`, plus a new `DefaultSessionsDir()` — let `agent/tools` compute the same on-disk session directory `FileStore` uses, without importing `agent/store` directly (same boundary-crossing pattern `FetchSummarizer` already established).
+
+### Fix — a real deadlock found live while wiring SessionInfo
+- SessionInfo's closure originally called `Session.Meta()`, which takes `s.mu` — but the closure runs inside a tool executor goroutine while `promptSync` already holds `s.mu` for the entire turn (including parallel tool execution). Every foreground `SessionInfo` call hung indefinitely, past any timeout, with no error — the exact same deadlock class previously found and fixed for `CurrentModel()` (see the `subagent-timeout-background` project memory).
+- Fixed by adding lock-free getters to `Session` — `CWD()`, `CreatedAt()`, `CurrentThinking()` (mirroring the existing `CurrentModel()`/`ID()`/`Name()`) — backed by a new immutable `createdAt` field and a new `thinkingStr atomic.Value` (mirroring `modelStr`). SessionInfo's closure now reads exclusively through these, never through `Meta()`.
+- Added `TestSessionInfoGettersDoNotDeadlockUnderPromptSyncLock`, mirroring the existing `TestCurrentModelDoesNotDeadlockUnderPromptSyncLock` regression test — confirmed it fails against `Meta()` (deadlocks) and passes against the fix. Live integration test against a real connected provider: full turn calling both tools completed in ~12s (previously hung indefinitely).
+
+### Polish — tool descriptions and the post-compaction reminder no longer cross-reference tools that may not exist
+- `MemoSearch`/`SessionSearch` each describe themselves in isolation — no more mentioning the other by name, since a session may have only one of the two enabled, and a reference to a tool that isn't in the model's own tool list is confusing, not helpful.
+- The post-compaction reminder (`memoryCompactionReminder`) now has independent branches for "memory only", "session search only", "both", and "neither" — each names only the tool(s) actually available to that session.
+- A new, deliberately brief `## Session Tools` system-prompt section (mirroring `## Memory`'s existence, not its detail) points at SessionInfo/SessionSearch as a capability, without duplicating what each tool's own `Description` already says.
+
 ## [0.76.71] - 2026-09-12
 
 ### Feature — TUI gains `/new`: close the active session and start a brand new one
