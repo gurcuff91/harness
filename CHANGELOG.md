@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.73] - 2026-09-16
+
+### Fix — `SessionSearch` returned near-useless snippets and could hit "database is locked (SQLITE_BUSY)" under parallel tool calls
+- **Poor snippets**: FTS5's native `snippet()` function is capped by SQLite itself at 64 tokens (its 5th argument "must be greater than zero and equal to or less than 64" per the FTS5 docs — verified live, not assumed) — far too short to recover real context from a long message. Switched to `highlight()` (full column text, matches bracketed) plus a new `windowSnippet()` that trims to a 512-character window centered on the first match, snapped to word boundaries (never splits a UTF-8 rune or chops a word in half), with leading/trailing `...` marking whichever side was actually trimmed. Confirmed against a synthetic long message: the previous 64-token cap yielded ~394 chars; the new window comfortably clears 500+.
+- **`SQLITE_BUSY` under concurrency**: the ReAct loop runs tool calls in parallel, and every `SessionSearch` invocation opens a brand-new `*sql.DB` against the same on-disk index file (unlike `agent/memory`'s single long-lived `*Store`). Two fixes, both required — reproduced the exact reported error live before and after each:
+  1. `busy_timeout(5000)` + `journal_mode(WAL)` added to the DSN (same pragma pattern as `agent/memory.Open`) — makes ordinary reads/writes on an already-created index wait for the lock instead of erroring instantly.
+  2. A new in-process, per-path `sync.Mutex` (`sessionSearchLocks`) around each `Execute` call — needed because `busy_timeout` alone does NOT reliably protect the very first `CREATE TABLE`/`CREATE VIRTUAL TABLE` migration when several goroutines open a brand-new index file at once, which is exactly what happens the first time a session fires `SessionSearch` more than once concurrently. The real contention here is always same-process (one session, one index file), so an in-process lock is the correct fix — not a bigger busy_timeout.
+- Added regression tests: `TestSessionSearchLongMessageSnippetIsRoomierThanFTS5Snippet`, `TestWindowSnippet*`, and `TestSessionSearchConcurrentCallsDoNotDeadlockOrError` (12 goroutines hitting one index concurrently, passes under `-race`). Confirmed both fixes actually matter by reverting each independently and watching the concurrency test fail with the literal reported error message.
+
 ## [0.76.72] - 2026-09-16
 
 ### Feature — `SessionInfo` and `SessionSearch` built-in tools

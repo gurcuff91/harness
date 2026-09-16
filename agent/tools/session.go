@@ -19,11 +19,46 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no cgo) — same as agent/memory
 
 	"github.com/gurcuff91/harness/types"
 )
+
+// sessionSearchLocks serializes SessionSearch's Execute against the SAME
+// on-disk index path within this process. busy_timeout+WAL (see
+// openSessionSearchDB) is enough to make ORDINARY reads/writes on an
+// already-created database wait for each other instead of erroring — but it
+// does NOT reliably protect the very first migrate (CREATE TABLE/CREATE
+// VIRTUAL TABLE) when several goroutines open a brand-new file at once,
+// which is exactly what the ReAct loop's parallel tool execution produces
+// the first time a session calls SessionSearch more than once concurrently.
+// A single in-process mutex per path removes that race outright, since the
+// real contention here is always same-process (one session, one index
+// file) — unlike agent/memory's store, which is a genuinely shared,
+// long-lived, cross-process file. Never locked for the ":memory:" fallback:
+// each call there gets its own fully isolated in-process database, so
+// there's nothing to serialize.
+var (
+	sessionSearchLocksMu sync.Mutex
+	sessionSearchLocks   = map[string]*sync.Mutex{}
+)
+
+func lockSessionSearchIndex(path string) func() {
+	if path == "" {
+		return func() {}
+	}
+	sessionSearchLocksMu.Lock()
+	l, ok := sessionSearchLocks[path]
+	if !ok {
+		l = &sync.Mutex{}
+		sessionSearchLocks[path] = l
+	}
+	sessionSearchLocksMu.Unlock()
+	l.Lock()
+	return l.Unlock
+}
 
 // SessionInfoSnapshot is the JSON shape SessionInfo returns. Deliberately
 // excludes CompactCount (the model has no existing concept of compaction
@@ -139,6 +174,9 @@ func SessionSearch(messages SessionMessageProvider, indexPath SessionSearchIndex
 			if indexPath != nil {
 				path = indexPath()
 			}
+			unlock := lockSessionSearchIndex(path)
+			defer unlock()
+
 			db, err := openSessionSearchDB(path)
 			if err != nil {
 				return "", fmt.Errorf("open session search index: %w", err)
@@ -180,7 +218,18 @@ func openSessionSearchDB(path string) (*sql.DB, error) {
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 			return nil, fmt.Errorf("create index dir: %w", err)
 		}
-		dsn = path
+		// busy_timeout(5000) + journal_mode(WAL): the ReAct loop runs tool
+		// calls in PARALLEL, and Execute opens a FRESH *sql.DB handle on
+		// every single invocation (unlike agent/memory's long-lived Store),
+		// so two SessionSearch calls racing on the SAME session can easily
+		// collide on this file. Without busy_timeout the second writer got
+		// an instant "database is locked (5) (SQLITE_BUSY)" instead of
+		// waiting — identical fix, identical reasoning, as agent/memory's
+		// Open() (see that file's comment for the full explanation of why
+		// order matters: busy_timeout before the WAL switch). Skipped for
+		// ":memory:" — pragmas apply per-connection there and each parallel
+		// call already gets its own throwaway in-memory database anyway.
+		dsn = path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -258,16 +307,29 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value`, fmt.Sprintf("%d", len(al
 	return tx.Commit()
 }
 
-// querySessionSearchIndex runs the FTS5 MATCH query and returns snippets
-// (native FTS5 snippet() — a fragment with the match highlighted, not the
-// full message), ranked by bm25() relevance, capped to limit.
+// sessionSearchSnippetMaxChars caps the returned snippet. FTS5's own
+// snippet() function is capped by SQLite itself at 64 TOKENS (roughly one
+// short sentence) — its 5th argument "must be greater than zero and equal
+// to or less than 64" per the FTS5 docs, no way to raise it — which made
+// every result nearly useless for recovering real context. Using
+// highlight() instead (full column text, match(es) wrapped in brackets)
+// and windowing it ourselves in Go trades that hard 64-token ceiling for a
+// much roomier, still-bounded character budget.
+const sessionSearchSnippetMaxChars = 512
+
+// querySessionSearchIndex runs the FTS5 MATCH query, ranked by bm25()
+// relevance and capped to limit. Uses highlight() (full text, matches
+// bracketed) rather than snippet() (see sessionSearchSnippetMaxChars) and
+// windows the result down to sessionSearchSnippetMaxChars centered on the
+// first match — so a match buried deep in a long message is still surfaced
+// instead of silently truncated away.
 func querySessionSearchIndex(db *sql.DB, query string, limit int) ([]sessionSearchResult, error) {
 	ftsQuery := toSessionSearchFTSQuery(query)
 	if ftsQuery == "" {
 		return nil, nil
 	}
 	rows, err := db.Query(`
-SELECT role, snippet(messages_fts, 1, '[', ']', '...', 12)
+SELECT role, highlight(messages_fts, 1, '[', ']')
 FROM messages_fts
 WHERE messages_fts MATCH ?
 ORDER BY bm25(messages_fts)
@@ -283,9 +345,68 @@ LIMIT ?`, ftsQuery, limit)
 		if err := rows.Scan(&r.Role, &r.Snippet); err != nil {
 			return nil, err
 		}
+		r.Snippet = windowSnippet(r.Snippet, sessionSearchSnippetMaxChars)
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// windowSnippet trims a highlighted (bracket-marked) full message down to
+// at most maxChars, centered on the FIRST match so a match buried deep in a
+// long message still ends up in the returned window instead of getting cut
+// off by a naive head-truncation. Operates on runes (not bytes) so UTF-8
+// text is never split mid-character, and nudges each cut to the nearest
+// space within a small margin so words aren't chopped in half either.
+// Ellipses mark whichever side(s) were actually trimmed.
+func windowSnippet(full string, maxChars int) string {
+	runes := []rune(full)
+	if len(runes) <= maxChars {
+		return full
+	}
+
+	matchIdx := 0
+	for i, r := range runes {
+		if r == '[' {
+			matchIdx = i
+			break
+		}
+	}
+
+	half := maxChars / 2
+	start := matchIdx - half
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxChars
+	if end > len(runes) {
+		end = len(runes)
+		start = end - maxChars
+		if start < 0 {
+			start = 0
+		}
+	}
+
+	const wordMargin = 40
+	prefix, suffix := "", ""
+	if start > 0 {
+		for j := start; j < start+wordMargin && j < end; j++ {
+			if runes[j] == ' ' {
+				start = j + 1
+				break
+			}
+		}
+		prefix = "..."
+	}
+	if end < len(runes) {
+		for j := end; j > end-wordMargin && j > start; j-- {
+			if runes[j-1] == ' ' {
+				end = j - 1
+				break
+			}
+		}
+		suffix = "..."
+	}
+	return prefix + string(runes[start:end]) + suffix
 }
 
 // toSessionSearchFTSQuery mirrors agent/memory's toFTSQuery: splits on
