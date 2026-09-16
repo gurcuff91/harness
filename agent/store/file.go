@@ -27,15 +27,30 @@ type FileStore struct {
 	mu      sync.Mutex
 }
 
+// DefaultSessionsDir returns the default base directory FileStore uses when
+// constructed with an empty baseDir (~/.harness/agent/sessions). Exported so
+// callers that need to locate a session's on-disk directory independently
+// of a live FileStore instance — e.g. agent/tools' SessionSearch resolver,
+// which must work out the SAME path FileStore would have used even when it
+// only has a sessionID/cwd, not a *FileStore handle — can agree on the same
+// default without duplicating it.
+func DefaultSessionsDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("home dir: %w", err)
+	}
+	return filepath.Join(home, ".harness", "agent", "sessions"), nil
+}
+
 // NewFileStore creates a filesystem-backed store. baseDir defaults to
 // ~/.harness/agent/sessions if empty.
 func NewFileStore(baseDir string) (*FileStore, error) {
 	if baseDir == "" {
-		home, err := os.UserHomeDir()
+		dir, err := DefaultSessionsDir()
 		if err != nil {
-			return nil, fmt.Errorf("home dir: %w", err)
+			return nil, err
 		}
-		baseDir = filepath.Join(home, ".harness", "agent", "sessions")
+		baseDir = dir
 	}
 	if err := os.MkdirAll(baseDir, 0700); err != nil {
 		return nil, fmt.Errorf("create sessions dir: %w", err)
@@ -204,7 +219,7 @@ func (m *FileStore) findJSONLPath(sessionID string) (string, bool) {
 
 // sessionDir returns the directory for a given cwd (a sanitized slug).
 func (m *FileStore) sessionDir(cwd string) string {
-	return filepath.Join(m.baseDir, cwdSlug(cwd))
+	return filepath.Join(m.baseDir, CwdSlug(cwd))
 }
 
 // windowsIllegalDirChars are the characters NTFS forbids in a path
@@ -220,8 +235,17 @@ func (m *FileStore) sessionDir(cwd string) string {
 // legal (or even common) in a real Unix path component either.
 const windowsIllegalDirChars = `:<>"|?*`
 
-// cwdSlug converts a cwd path to a filesystem-safe directory name.
-func cwdSlug(cwd string) string {
+// CwdSlug converts a cwd path to a filesystem-safe directory name — the
+// exact same slug FileStore uses to lay out
+// <baseDir>/<cwd-slug>/<session-id>.{meta.json,jsonl}. Exported so callers
+// outside this package that need to locate a session's ON-DISK directory
+// for a purpose FileStore itself doesn't cover (e.g. agent/tools'
+// SessionSearch placing its own per-session search index right next to the
+// session's .jsonl) can compute the identical path without agent/tools
+// importing agent/store directly — the agent constructs a small resolver
+// closure using this function and injects it into the tool, the same
+// pattern FetchSummarizer already uses to cross that same boundary.
+func CwdSlug(cwd string) string {
 	slug := strings.ReplaceAll(cwd, "/", "-")
 	slug = strings.ReplaceAll(slug, `\`, "-")
 	slug = strings.Map(func(r rune) rune {

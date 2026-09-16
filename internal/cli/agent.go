@@ -77,15 +77,20 @@ func newOneShotAgent() *agent.Agent {
 // gates itself on the minimax provider being connected (returning a clear
 // "connect the minimax provider" error otherwise), so it's safe to enable
 // without a pre-flight provider check.
+//
+// EnableSessionInfo (SessionInfo/SessionSearch) is unconditional here too,
+// same as the flags above — every transport built via this constructor
+// (TUI, serve, Telegram, Slack, ACP) gets both tools.
 func newInteractiveAgent(scheduler bool, directives ...string) *agent.Agent {
 	return agent.New(agent.AgentOptions{
-		EnableMCPs:       true,
-		EnableMemory:     true,
-		EnableScheduler:  scheduler,
-		EnableColleagues: true,
-		EnableWebSearch:  true,
-		MaxIterations:    interactiveMaxIterations,
-		Directives:       directives,
+		EnableMCPs:        true,
+		EnableMemory:      true,
+		EnableScheduler:   scheduler,
+		EnableColleagues:  true,
+		EnableWebSearch:   true,
+		EnableSessionInfo: true,
+		MaxIterations:     interactiveMaxIterations,
+		Directives:        directives,
 	})
 }
 

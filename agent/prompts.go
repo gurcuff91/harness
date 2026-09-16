@@ -37,22 +37,38 @@ Respond with ONLY the summary text.`
 const compactRequestPrompt = "Summarize the conversation so far following the instructions above."
 
 // memoryCompactionReminder is appended to the persisted compaction checkpoint
-// (NOT to the summary shown to the user) when the session has memory enabled
-// (mirrors the "## Memory" block in buildSystemPrompt — same condition,
-// a.memStore != nil). Right after compaction, the model's nearest context is
-// this dense summary, not the system prompt further up — exactly the kind of
-// "lack context about earlier work" moment the Memory section already tells
-// the model to use MemoSearch for. Worded as a nudge, not an instruction to
-// always search, so it doesn't induce needless MemoSearch calls.
-const memoryCompactionReminder = "\n\n---\nReminder: you have persistent, project-scoped memory (MemoSearch/MemoWrite/MemoDelete). If this summary is missing something you need, it may be worth searching memory before assuming the context is gone."
+// (NOT to the summary shown to the user) for whichever recovery tool(s) are
+// actually enabled for this session (EnableMemory / EnableSessionInfo —
+// independent flags; either, both, or neither may be on). Right after
+// compaction, the model's nearest context is this dense summary, not the
+// system prompt further up — exactly the kind of "lack context about
+// earlier work" moment where a reminder pays off.
+//
+// Each branch mentions ONLY the tool(s) actually available to this session
+// — never the other one, even when both happen to be true. A reference to
+// a tool the model doesn't have registered is worse than no reference at
+// all: confusing, and useless since it can't call something that isn't in
+// its own tool list.
+func memoryCompactionReminder(hasMemory, sessionSearchEnabled bool) string {
+	switch {
+	case hasMemory && sessionSearchEnabled:
+		return "\n\n---\nReminder: you have persistent, project-scoped memory (MemoSearch) and full-text search over this session's own conversation history (SessionSearch). If this summary is missing something you need, one of them may have it — searching before assuming the context is gone is often worth it."
+	case hasMemory:
+		return "\n\n---\nReminder: you have persistent, project-scoped memory (MemoSearch). If this summary is missing something you need, it may be worth searching memory before assuming the context is gone."
+	case sessionSearchEnabled:
+		return "\n\n---\nReminder: you have full-text search over this session's own conversation history (SessionSearch). If this summary is missing something you need, it may be worth searching before assuming the context is gone."
+	default:
+		return ""
+	}
+}
 
 // buildCompactionCheckpoint appends memoryCompactionReminder to summary when
-// hasMemory is true, leaving summary untouched otherwise. Split out from
-// Session.compact as a pure function so the memory-nudge behavior is directly
-// testable without standing up a Session (provider, store, tools, …).
-func buildCompactionCheckpoint(summary string, hasMemory bool) string {
-	if hasMemory {
-		return summary + memoryCompactionReminder
+// either recovery tool is enabled, leaving summary untouched otherwise. Split
+// out from Session.compact as a pure function so the reminder behavior is
+// directly testable without standing up a Session (provider, store, tools, …).
+func buildCompactionCheckpoint(summary string, hasMemory, sessionSearchEnabled bool) string {
+	if reminder := memoryCompactionReminder(hasMemory, sessionSearchEnabled); reminder != "" {
+		return summary + reminder
 	}
 	return summary
 }

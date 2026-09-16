@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -111,6 +112,16 @@ type AgentOptions struct {
 	// call time, so it's safe to enable unconditionally without a pre-flight
 	// provider check. Mirrors EnableMCPs' opt-in style for "extra" tools.
 	EnableWebSearch bool
+
+	// EnableSessionInfo registers BOTH the SessionInfo and SessionSearch
+	// built-in tools — two views of the same concept ("information about
+	// this session"), gated behind a single flag. SessionInfo returns a
+	// small snapshot of the session's own identity/config; SessionSearch
+	// full-text searches the ENTIRE conversation history (including
+	// anything already folded into a compaction checkpoint) via a per-
+	// session SQLite FTS5 index synced lazily inside the tool itself — see
+	// docs/plans/2026-09-16-session-info-search-tools-design.md.
+	EnableSessionInfo bool
 }
 
 // defaultMaxIterations is the fallback used when AgentOptions.MaxIterations
@@ -382,6 +393,36 @@ func (f searchBackendsLookupFunc) ActiveSearchBackends() []tools.SearchBackend {
 	return f()
 }
 
+// sessionSearchIndexPath returns the resolver SessionSearch uses to locate
+// its per-session FTS5 index — computed ONCE per buildSessionTools call
+// (cwd/sessionID are immutable for a session's lifetime, unlike the model,
+// which is why THIS resolver can be a closure over two already-known
+// strings rather than needing to read *sessRef at call time the way
+// SessionInfo/AllMessages do).
+//
+// The index deliberately lives right next to the session's own .jsonl/
+// .meta.json (same cwd-slug directory FileStore itself uses) — computed via
+// store.CwdSlug + store.DefaultSessionsDir so agent/tools never needs to
+// import agent/store to agree on that layout (same boundary-crossing
+// pattern buildFetchSummarizer already uses for FetchSummarizer).
+//
+// Returns "" (→ SessionSearch's in-memory fallback) when the default
+// sessions directory can't be resolved (e.g. no home dir) — this is best-
+// effort placement, not a hard requirement; a caller using a non-file
+// SessionStore (InMemoryStore, a custom SDK port) has no stable path to
+// place a companion index at ANYWAY, so "" is also the honest answer for
+// those, and SessionSearch still functions, just without cross-process
+// persistence.
+func (a *Agent) sessionSearchIndexPath(sessionID, cwd string) tools.SessionSearchIndexPathResolver {
+	return func() string {
+		base, err := store.DefaultSessionsDir()
+		if err != nil {
+			return ""
+		}
+		return filepath.Join(base, store.CwdSlug(cwd), sessionID+".search.db")
+	}
+}
+
 // RegisterTool adds a tool to the agent's registry so all future sessions
 // created by this agent include it. Must be called before NewSession/ResumeSession.
 // Idempotent: re-registering the same name replaces the previous entry.
@@ -579,7 +620,7 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 		sessionTools, tl, systemPrompt, pl,
 		a.maxIterations, maxTokens,
 		res.Skills, loader.ReadSkill,
-		a.memStore != nil)
+		a.memStore != nil, a.opts.EnableSessionInfo)
 	sess.agent = a
 	a.registerSession(sess)
 	return sess, nil
@@ -646,7 +687,7 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 		resumeTools, tl, resumePrompt, pl,
 		a.maxIterations, maxTokens,
 		skills, readSkill,
-		a.memStore != nil)
+		a.memStore != nil, a.opts.EnableSessionInfo)
 	sess.agent = a
 	a.registerSession(sess)
 	return sess, nil
@@ -719,7 +760,7 @@ func (a *Agent) ForkSession(sessionID string) (*Session, error) {
 		forkTools, tl, forkPrompt, pl,
 		a.maxIterations, maxTokens,
 		skills, readSkill,
-		a.memStore != nil)
+		a.memStore != nil, a.opts.EnableSessionInfo)
 	sess.agent = a
 	a.registerSession(sess)
 	return sess, nil
@@ -973,6 +1014,41 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 		reg.Register(tools.WebSearch(a.webSearchLookup(), nil))
 	}
 
+	// SessionInfo / SessionSearch — two views of "information about this
+	// session", gated behind one flag. Both closures read from *sessRef at
+	// EXECUTION time (same pattern buildFetchSummarizer/Subagent's executor
+	// already use for CurrentModel) so they always reflect live state, not
+	// whatever was true when buildSessionTools ran.
+	if a.opts.EnableSessionInfo {
+		if a.isToolAllowed(tools.ToolSessionInfo) {
+			// Deliberately built from lock-free getters (ID/CWD/Name/
+			// CurrentModel/CurrentThinking/CreatedAt), NEVER (*sessRef).Meta()
+			// — Meta() takes s.mu, and this closure runs INSIDE a tool
+			// executor while promptSync holds s.mu for the whole turn.
+			// Calling Meta() here deadlocks instantly with no timeout, no
+			// error — exactly the class of bug CurrentModel() was
+			// introduced to fix (see its own doc comment and the
+			// subagent-timeout-background project memory this mirrors).
+			reg.Register(tools.SessionInfo(func() tools.SessionInfoSnapshot {
+				sess := *sessRef
+				return tools.SessionInfoSnapshot{
+					ID:        sess.ID(),
+					CWD:       sess.CWD(),
+					Name:      sess.Name(),
+					Model:     sess.CurrentModel(),
+					Thinking:  sess.CurrentThinking(),
+					CreatedAt: sess.CreatedAt().Format(time.RFC3339),
+				}
+			}))
+		}
+		if a.isToolAllowed(tools.ToolSessionSearch) {
+			reg.Register(tools.SessionSearch(
+				func() []types.Message { return (*sessRef).AllMessages() },
+				a.sessionSearchIndexPath(sessionID, cwd),
+			))
+		}
+	}
+
 	// Subagent tool — only if allowed (excluded for sub-agents themselves)
 	if a.isToolAllowed(tools.ToolSubagent) {
 		// Capture current settings in a closure — Agent has zero knowledge of sub-agent mechanics
@@ -1162,6 +1238,15 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) (string,
 				}
 			}
 		}
+	}
+
+
+
+	// Deliberately brief — just a pointer that this capability exists.
+	// Each tool's own Description carries the actual detail (what it
+	// returns, when to use it); duplicating that here would be redundant.
+	if a.opts.EnableSessionInfo {
+		b.WriteString("\n\n## Session Tools\n\nYou have SessionInfo (this session's own identity/config) and SessionSearch (full-text search over this session's complete conversation history) available — use them when you need information about the current session itself.")
 	}
 
 	if a.schedStore != nil {

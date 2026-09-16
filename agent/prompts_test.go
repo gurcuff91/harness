@@ -2,41 +2,63 @@ package agent
 
 import "testing"
 
-// TestBuildCompactionCheckpoint verifies the memory nudge is appended only
-// when the session has memory enabled, and that the reminder text is
+// TestBuildCompactionCheckpoint verifies the reminder is appended only when
+// at least one recovery tool (memory or session search) is enabled, that it
+// names the right tool(s) for each combination, and that it's
 // self-contained (doesn't silently mutate the summary it's appended to).
 func TestBuildCompactionCheckpoint(t *testing.T) {
 	const summary = "Goal: refactor auth. Done: added middleware. Pending: tests."
 
-	t.Run("no memory — summary unchanged", func(t *testing.T) {
-		got := buildCompactionCheckpoint(summary, false)
+	t.Run("neither enabled — summary unchanged", func(t *testing.T) {
+		got := buildCompactionCheckpoint(summary, false, false)
 		if got != summary {
-			t.Errorf("hasMemory=false must not alter the summary.\ngot:  %q\nwant: %q", got, summary)
+			t.Errorf("hasMemory=false, hasSessionSearch=false must not alter the summary.\ngot:  %q\nwant: %q", got, summary)
 		}
 	})
 
-	t.Run("with memory — reminder appended", func(t *testing.T) {
-		got := buildCompactionCheckpoint(summary, true)
-		if got == summary {
-			t.Error("hasMemory=true must append the memory reminder, got the summary unchanged")
-		}
-		wantPrefix := summary
-		if len(got) <= len(wantPrefix) || got[:len(wantPrefix)] != wantPrefix {
-			t.Errorf("checkpoint must start with the original summary verbatim, got: %q", got)
-		}
-		gotSuffix := got[len(summary):]
-		if gotSuffix != memoryCompactionReminder {
-			t.Errorf("appended suffix = %q, want memoryCompactionReminder %q", gotSuffix, memoryCompactionReminder)
-		}
-	})
-
-	t.Run("reminder mentions the memory tools", func(t *testing.T) {
+	t.Run("memory only — reminder mentions MemoSearch, not SessionSearch", func(t *testing.T) {
+		got := buildCompactionCheckpoint(summary, true, false)
+		assertStartsWithSummary(t, got, summary)
+		reminder := got[len(summary):]
 		for _, tool := range []string{"MemoSearch", "MemoWrite", "MemoDelete"} {
-			if !contains(memoryCompactionReminder, tool) {
-				t.Errorf("memoryCompactionReminder should mention %s so the model knows which tool to use, got: %q", tool, memoryCompactionReminder)
+			if !contains(reminder, tool) {
+				t.Errorf("memory-only reminder should mention %s, got: %q", tool, reminder)
+			}
+		}
+		if contains(reminder, "SessionSearch") {
+			t.Errorf("memory-only reminder must not mention SessionSearch (not enabled), got: %q", reminder)
+		}
+	})
+
+	t.Run("session search only — reminder mentions SessionSearch, not MemoSearch", func(t *testing.T) {
+		got := buildCompactionCheckpoint(summary, false, true)
+		assertStartsWithSummary(t, got, summary)
+		reminder := got[len(summary):]
+		if !contains(reminder, "SessionSearch") {
+			t.Errorf("session-search-only reminder should mention SessionSearch, got: %q", reminder)
+		}
+		if contains(reminder, "MemoSearch") {
+			t.Errorf("session-search-only reminder must not mention MemoSearch (not enabled), got: %q", reminder)
+		}
+	})
+
+	t.Run("both enabled — reminder mentions both tools side by side, no prescribed order", func(t *testing.T) {
+		got := buildCompactionCheckpoint(summary, true, true)
+		assertStartsWithSummary(t, got, summary)
+		reminder := got[len(summary):]
+		for _, tool := range []string{"MemoSearch", "SessionSearch"} {
+			if !contains(reminder, tool) {
+				t.Errorf("both-enabled reminder should mention %s, got: %q", tool, reminder)
 			}
 		}
 	})
+}
+
+func assertStartsWithSummary(t *testing.T, got, summary string) {
+	t.Helper()
+	if len(got) <= len(summary) || got[:len(summary)] != summary {
+		t.Errorf("checkpoint must start with the original summary verbatim, got: %q", got)
+	}
 }
 
 func contains(s, substr string) bool {

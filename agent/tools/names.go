@@ -20,4 +20,6 @@ const (
 	ToolColleagueList  = "ColleagueList"
 	ToolColleagueAsk   = "ColleagueAsk"
 	ToolWebSearch      = "WebSearch"
+	ToolSessionInfo    = "SessionInfo"
+	ToolSessionSearch  = "SessionSearch"
 )

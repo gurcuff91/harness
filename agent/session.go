@@ -33,6 +33,13 @@ type Session struct {
 	id   string
 	cwd  string
 	name string
+	// createdAt is write-once at construction (never reassigned afterward,
+	// unlike name/thinkingLvl) — safe to read from ANYWHERE, including from
+	// inside a tool executor goroutine while promptSync holds s.mu for the
+	// whole turn (see SessionInfo's doc comment / the CurrentModel()
+	// lock-free precedent this mirrors: taking s.mu from inside a tool
+	// deadlocks instantly, no timeout, no error).
+	createdAt time.Time
 
 	// Dependencies
 	agent        *Agent // owning agent — used to unregister on Close (may be nil in tests)
@@ -43,14 +50,15 @@ type Session struct {
 	tools        *tools.Registry
 	systemPrompt string
 	// hasMemory mirrors Agent.memStore != nil — the same condition that gates
-	// the "## Memory" block in buildSystemPrompt. Used to add a brief,
-	// equally-conditional nudge to the compaction checkpoint (see
-	// generateCompactionSummary): right after compaction the model's nearest
-	// context is a dense summary, not the system prompt, so the memory
-	// reminder is easy to lose track of exactly when "lack context about
-	// earlier work" (the system prompt's own trigger for using MemoSearch) is
-	// most likely to be true.
-	hasMemory bool
+	// the "## Memory" block in buildSystemPrompt. hasSessionSearch mirrors
+	// AgentOptions.EnableSessionInfo. Both feed the compaction checkpoint's
+	// reminder (see buildCompactionCheckpoint/memoryCompactionReminder):
+	// right after compaction the model's nearest context is a dense summary,
+	// not the system prompt, so a reminder naming whichever recovery tool(s)
+	// are actually available is easy to lose track of exactly when "lack
+	// context about earlier work" is most likely to be true.
+	hasMemory        bool
+	hasSessionSearch bool
 
 	// Stats — accumulated over the session lifetime
 	stats           types.SessionStats
@@ -104,6 +112,15 @@ type Session struct {
 	// tool execution), so taking s.mu there would deadlock. atomic.Value gives
 	// us a safe, consistent snapshot without any lock contention.
 	modelStr atomic.Value // string
+
+	// thinkingStr mirrors modelStr's exact reasoning, for the exact same
+	// reason: SessionInfo's tool executor needs to read the CURRENT
+	// thinking level from inside a tool call (promptSync holds s.mu for the
+	// whole turn), so a lock-free snapshot is required — reading
+	// s.thinkingLvl directly would be a data race, and taking s.mu to read
+	// it safely would deadlock. Written under s.mu in newSession and
+	// SwitchThinking (the same lock that guards thinkingLvl itself).
+	thinkingStr atomic.Value // string
 
 	// Follow-up prompts — separate mutex to avoid deadlock with mu
 	followMu      sync.Mutex
@@ -215,13 +232,14 @@ func newSession(storeInst *store.Session,
 	toolReg *tools.Registry, tl toolLens, systemPrompt string, pl promptLens,
 	maxIterations, maxTokens int,
 	skills []resources.SkillInfo, readSkill func(string) (content string, dir string, err error),
-	hasMemory bool) *Session {
+	hasMemory, hasSessionSearch bool) *Session {
 
 	meta := storeInst.Meta()
 	s := &Session{
 		id:            meta.ID,
 		cwd:           meta.CWD,
 		name:          meta.Name,
+		createdAt:     meta.CreatedAt,
 		store:         storeInst,
 		provider:      provider,
 		modelID:       modelID,
@@ -233,7 +251,8 @@ func newSession(storeInst *store.Session,
 		stats:         meta.Stats, // restore accumulated stats
 		skills:        skills,
 		readSkill:     readSkill,
-		hasMemory:     hasMemory,
+		hasMemory:        hasMemory,
+		hasSessionSearch: hasSessionSearch,
 		// Context breakdown lens — write-once, from builder functions.
 		sysPromptLen: pl.total,
 		toolsLen:     tl.totalBytes,
@@ -241,6 +260,7 @@ func newSession(storeInst *store.Session,
 	s.followCond = sync.NewCond(&s.followMu)
 	s.loadModelMeta(modelID)
 	s.modelStr.Store(provider.Name() + "/" + modelID)
+	s.thinkingStr.Store(thinkingLvl)
 
 	// Restore lastInputTokens from persisted stats so ContextBreakdown() shows
 	// meaningful "actual" + "free space" values immediately on resume, without
@@ -866,11 +886,23 @@ func (s *Session) SwitchThinking(level string) error {
 	}
 	s.mu.Lock()
 	s.thinkingLvl = level
+	s.thinkingStr.Store(level) // lock-free snapshot for CurrentThinking()
 	meta := s.store.Meta()
 	meta.Thinking = level
 	s.store.UpdateMeta(meta)
 	s.mu.Unlock()
 	return nil
+}
+
+// CurrentThinking returns the session's active thinking level, reflecting
+// any SwitchThinking call made after the session (and its tools, including
+// SessionInfo's closure) were built. Lock-free — see thinkingStr's doc
+// comment for why (mirrors CurrentModel() exactly).
+func (s *Session) CurrentThinking() string {
+	if v := s.thinkingStr.Load(); v != nil {
+		return v.(string)
+	}
+	return ""
 }
 
 // Compact summarizes the conversation via LLM and stores a checkpoint.
@@ -906,7 +938,7 @@ func (s *Session) compactWithTarget(ctx context.Context, provider providers.Prov
 	// gets the memory nudge appended (when memory is enabled for this session);
 	// the event below keeps the LLM's summary as-is so the UI shows a clean
 	// summary, not the internal reminder.
-	checkpoint := buildCompactionCheckpoint(summary, s.hasMemory)
+	checkpoint := buildCompactionCheckpoint(summary, s.hasMemory, s.hasSessionSearch)
 	if err := s.store.AddCompactionSummary(checkpoint); err != nil {
 		s.emit(types.Event{Type: types.EventError, Message: fmt.Sprintf("compact checkpoint failed: %v", err)})
 		return fmt.Errorf("compact: checkpoint: %w", err)
@@ -1174,6 +1206,19 @@ func isContextOverflowError(err error) bool {
 
 // ID returns the session's unique identifier.
 func (s *Session) ID() string { return s.id }
+
+// CWD returns the session's working directory — immutable for the
+// session's lifetime, so safe to call lock-free from anywhere, including
+// from inside a tool executor (see createdAt's doc comment for why that
+// matters).
+func (s *Session) CWD() string { return s.cwd }
+
+// CreatedAt returns when the session was created — immutable for the
+// session's lifetime, so safe to call lock-free from anywhere, including
+// from inside a tool executor (see the field's own doc comment for why
+// that matters: promptSync holds s.mu for the whole turn, and a tool that
+// takes s.mu deadlocks instantly with no timeout).
+func (s *Session) CreatedAt() time.Time { return s.createdAt }
 
 // Name returns the session's display name.
 func (s *Session) Name() string { return s.name }

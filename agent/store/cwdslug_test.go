@@ -43,8 +43,8 @@ func TestCwdSlugStripsWindowsIllegalChars(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := cwdSlug(c.in); got != c.want {
-				t.Errorf("cwdSlug(%q) = %q, want %q", c.in, got, c.want)
+			if got := CwdSlug(c.in); got != c.want {
+				t.Errorf("CwdSlug(%q) = %q, want %q", c.in, got, c.want)
 			}
 		})
 	}
@@ -61,11 +61,11 @@ func TestCwdSlugNeverContainsIllegalChars(t *testing.T) {
 		`weird:mixed\path/chars<>"|?*`,
 	}
 	for _, in := range inputs {
-		slug := cwdSlug(in)
+		slug := CwdSlug(in)
 		for _, illegal := range windowsIllegalDirChars {
 			for _, r := range slug {
 				if r == illegal {
-					t.Errorf("cwdSlug(%q) = %q still contains illegal char %q", in, slug, string(illegal))
+					t.Errorf("CwdSlug(%q) = %q still contains illegal char %q", in, slug, string(illegal))
 				}
 			}
 		}
