@@ -13,8 +13,9 @@ import (
 // test for the new EnableSessionInfo flag: confirms both SessionInfo and
 // SessionSearch are genuinely registered and callable end-to-end against a
 // real provider — not just unit-testable in isolation (see
-// agent/tools/session_test.go for the focused unit coverage of the FTS5
-// sync/query logic itself).
+// agent/store/search_test.go for the focused unit coverage of the FTS5
+// sync/query logic itself, and agent/tools/session_test.go for the tool's
+// own input-parsing/delegation responsibilities).
 func TestSessionInfoAndSessionSearchToolsReachRealTurn(t *testing.T) {
 	a := New(AgentOptions{EnableSessionInfo: true, Store: store.NewInMemoryStore()})
 	defer a.Close()
@@ -122,5 +123,49 @@ func TestSessionInfoGettersDoNotDeadlockUnderPromptSyncLock(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("SessionInfo's getters deadlocked — one of them blocked waiting for s.mu while s.mu was held by the simulated turn (promptSync). This is the exact deadlock that hung every foreground SessionInfo call.")
+	}
+}
+
+// TestSessionSearchMessagesDoesNotDeadlockUnderPromptSyncLock guards
+// against the SAME deadlock class for SearchMessages after the
+// SessionSearch-into-SessionStore migration: Session.SearchMessages must
+// mirror AllMessages()'s locking shape (briefly take s.mu only to read the
+// immutable s.id, release before calling the port) — never hold s.mu for
+// the actual search. If a future change accidentally routed this through
+// something that takes s.mu (like Meta()), this test would hang and fail
+// exactly like TestSessionInfoGettersDoNotDeadlockUnderPromptSyncLock does
+// for that bug.
+func TestSessionSearchMessagesDoesNotDeadlockUnderPromptSyncLock(t *testing.T) {
+	a := New(AgentOptions{EnableSessionInfo: true, Store: store.NewInMemoryStore()})
+	defer a.Close()
+
+	models := a.Models()
+	if len(models) < 1 {
+		t.Skip("need at least 1 active model in this environment")
+	}
+
+	sess, err := a.NewSession(t.TempDir(), models[0].Model)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer sess.Close()
+
+	// Simulate promptSync holding s.mu for the duration of a turn.
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// InMemoryStore returns ErrSearchNotSupported immediately — what
+		// matters here is only that the call returns AT ALL rather than
+		// blocking forever on s.mu.
+		_, _ = sess.SearchMessages("anything", 10)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("SearchMessages deadlocked — it must never take s.mu (mirrors AllMessages()'s locking shape), but something in this path blocked waiting for s.mu while s.mu was held by the simulated turn (promptSync).")
 	}
 }

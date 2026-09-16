@@ -9,7 +9,7 @@
 - **Module:** `github.com/gurcuff91/harness`
 - **Binary:** Single binary, ~9MB — entry point in `cmd/harness/main.go` (module root free for an SDK facade)
 - **Version:** single source of truth in package `version` (`version.Version`), injected via ldflags from the `Makefile` (`VERSION=`); falls back to `"dev"` for a plain `go build`.
-- **Dependencies (direct):** `golang.org/x/term` (raw mode), `github.com/rivo/uniseg` (grapheme/width), `github.com/go-chi/chi/v5` (HTTP router), `modernc.org/sqlite` (pure-Go SQLite — the memory store AND each session's own `SessionSearch` FTS5 index), `golang.design/x/clipboard` (clipboard image paste in the TUI), `github.com/google/uuid` (IDs), `github.com/robfig/cron/v3` (schedule parsing), `github.com/alecthomas/kong` (CLI grammar/parsing — `internal/cli/kong.go`), `github.com/gorilla/websocket` (Slack transport's RTM connection). Keep the set minimal — no new deps without approval.
+- **Dependencies (direct):** `golang.org/x/term` (raw mode), `github.com/rivo/uniseg` (grapheme/width), `github.com/go-chi/chi/v5` (HTTP router), `modernc.org/sqlite` (pure-Go SQLite — `agent/memory`'s store AND `agent/store.FileStore`'s per-session `SearchMessages` FTS5 index), `golang.design/x/clipboard` (clipboard image paste in the TUI), `github.com/google/uuid` (IDs), `github.com/robfig/cron/v3` (schedule parsing), `github.com/alecthomas/kong` (CLI grammar/parsing — `internal/cli/kong.go`), `github.com/gorilla/websocket` (Slack transport's RTM connection). Keep the set minimal — no new deps without approval.
 
 ## Golden Rules
 
@@ -38,7 +38,7 @@ cmd/harness/main.go             ← executable entry point (package main) — ju
 │   ├── agent.go                ← Chat() loop, tool execution, MCP + memory wiring, Close()
 │   ├── session.go              ← session lifecycle, history, tool pairing
 │   ├── prompts.go              ← system prompt assembly
-│   ├── store/                  ← session persistence (JSONL per cwd) — custom stores here
+│   ├── store/                  ← session persistence (JSONL per cwd) — custom stores here. SessionStore also owns full-text SearchMessages(sessionID, query, limit) ([]SearchResult, error) — FileStore backs it with a per-session SQLite FTS5 index (file.go), InMemoryStore returns ErrSearchNotSupported; a custom port is free to implement it however it wants (or not at all)
 │   ├── resources/              ← skill/resource discovery — custom loaders here
 │   ├── memory/                 ← persistent memory (SQLite + FTS5, cwd + global)
 │   └── tools/                  ← built-in tools — custom tools here (package tools)
@@ -215,7 +215,7 @@ make install              # build + install to ~/go/bin
 1. Create `agent/tools/<name>.go`
 2. Define the `Tool` struct with JSON schema and Execute function
 3. Add the name constant in `agent/tools/names.go`
-4. Register it in `agent/agent.go` `buildSessionTools()` — always-on built-ins (Bash/Read/Write/Edit/Fetch) just check `isToolAllowed`; an *optional* built-in that needs its own on/off switch (e.g. `WebSearch`, `SessionInfo`/`SessionSearch`) adds a new `AgentOptions.EnableX bool` field instead, gating registration with `if a.opts.EnableX && a.isToolAllowed(...)`. A tool needing a live view of session state (current model, thinking level, full history) must read it through a LOCK-FREE getter on `*Session` (`CurrentModel()`, `CurrentThinking()`, `AllMessages()`, …) — never `Session.Meta()` or anything that takes `s.mu`: the tool executor runs inside a turn while `promptSync` already holds that lock for the whole turn, so taking it again deadlocks instantly with no timeout (see `agent/session_info_test.go`'s `TestSessionInfoGettersDoNotDeadlockUnderPromptSyncLock` and the `CurrentModel()` precedent it mirrors).
+4. Register it in `agent/agent.go` `buildSessionTools()` — always-on built-ins (Bash/Read/Write/Edit/Fetch) just check `isToolAllowed`; an *optional* built-in that needs its own on/off switch (e.g. `WebSearch`, `SessionInfo`/`SessionSearch`) adds a new `AgentOptions.EnableX bool` field instead, gating registration with `if a.opts.EnableX && a.isToolAllowed(...)`. A tool needing a live view of session state (current model, thinking level, full history) must read it through a LOCK-FREE getter/method on `*Session` (`CurrentModel()`, `CurrentThinking()`, `AllMessages()`, `SearchMessages()`, …) — never `Session.Meta()` or anything that takes `s.mu`: the tool executor runs inside a turn while `promptSync` already holds that lock for the whole turn, so taking it again deadlocks instantly with no timeout (see `agent/session_info_test.go`'s `TestSessionInfoGettersDoNotDeadlockUnderPromptSyncLock`/`TestSessionSearchMessagesDoesNotDeadlockUnderPromptSyncLock` and the `CurrentModel()` precedent they mirror). A tool that needs actual PERSISTENCE logic (not just a live read) belongs on the `SessionStore` interface itself (`agent/store/store.go`), not inside the tool — see `SearchMessages` for the pattern: the interface method, a thin `*Session`/`*store.Session` wrapper, and the tool reduced to an adapter that only parses/validates input and delegates to an injected func. `agent/tools` importing `agent/store` for shared result/error types (`store.SearchResult`, `store.ErrSearchNotSupported`) is fine — no import cycle (`agent/store` has zero dependency on `agent/tools`) — same as `client/types.go` already does for `store.SessionMeta`.
 5. Add tool icon + primary param in `internal/tui/toolfmt.go` (`primaryParam`) and `internal/tui/output.go` (`toolStyle`).
 
 ### Adding a New Command
@@ -306,11 +306,12 @@ Keep files focused. Current largest files for reference:
 
 | File | Lines | Role |
 |------|-------|------|
-| `agent/session.go` | ~1780 | Session lifecycle, ReAct loop, history, tool pairing |
+| `agent/session.go` | ~1790 | Session lifecycle, ReAct loop, history, tool pairing |
 | `server/server.go` | ~1410 | HTTP/SSE routes + handlers |
-| `agent/agent.go` | ~1290 | Agent factory, MCP/memory/scheduler/SessionInfo+SessionSearch wiring, prompt assembly |
+| `agent/agent.go` | ~1255 | Agent factory, MCP/memory/scheduler/SessionInfo+SessionSearch wiring, prompt assembly |
 | `internal/tui/components/markdown.go` | ~1280 | Faithful streaming markdown renderer (complex by nature) |
 | `internal/providers/codex_oauth.go` | ~990 | Codex OAuth + Responses-dialect streaming |
+| `agent/store/file.go` | ~680 | Filesystem SessionStore — meta/log I/O plus per-session FTS5 SearchMessages |
 | `internal/providers/claude_oauth.go` | ~790 | OAuth token management + streaming |
 | `internal/providers/llm/anthropic.go` | ~540 | Anthropic request/response types |
 | `internal/cli/app.go` | ~105 | CLI router + dispatch |

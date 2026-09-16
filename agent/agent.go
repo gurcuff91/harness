@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -393,35 +392,7 @@ func (f searchBackendsLookupFunc) ActiveSearchBackends() []tools.SearchBackend {
 	return f()
 }
 
-// sessionSearchIndexPath returns the resolver SessionSearch uses to locate
-// its per-session FTS5 index — computed ONCE per buildSessionTools call
-// (cwd/sessionID are immutable for a session's lifetime, unlike the model,
-// which is why THIS resolver can be a closure over two already-known
-// strings rather than needing to read *sessRef at call time the way
-// SessionInfo/AllMessages do).
-//
-// The index deliberately lives right next to the session's own .jsonl/
-// .meta.json (same cwd-slug directory FileStore itself uses) — computed via
-// store.CwdSlug + store.DefaultSessionsDir so agent/tools never needs to
-// import agent/store to agree on that layout (same boundary-crossing
-// pattern buildFetchSummarizer already uses for FetchSummarizer).
-//
-// Returns "" (→ SessionSearch's in-memory fallback) when the default
-// sessions directory can't be resolved (e.g. no home dir) — this is best-
-// effort placement, not a hard requirement; a caller using a non-file
-// SessionStore (InMemoryStore, a custom SDK port) has no stable path to
-// place a companion index at ANYWAY, so "" is also the honest answer for
-// those, and SessionSearch still functions, just without cross-process
-// persistence.
-func (a *Agent) sessionSearchIndexPath(sessionID, cwd string) tools.SessionSearchIndexPathResolver {
-	return func() string {
-		base, err := store.DefaultSessionsDir()
-		if err != nil {
-			return ""
-		}
-		return filepath.Join(base, store.CwdSlug(cwd), sessionID+".search.db")
-	}
-}
+
 
 // RegisterTool adds a tool to the agent's registry so all future sessions
 // created by this agent include it. Must be called before NewSession/ResumeSession.
@@ -1042,10 +1013,9 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 			}))
 		}
 		if a.isToolAllowed(tools.ToolSessionSearch) {
-			reg.Register(tools.SessionSearch(
-				func() []types.Message { return (*sessRef).AllMessages() },
-				a.sessionSearchIndexPath(sessionID, cwd),
-			))
+			reg.Register(tools.SessionSearch(func(query string, limit int) ([]store.SearchResult, error) {
+				return (*sessRef).SearchMessages(query, limit)
+			}))
 		}
 	}
 

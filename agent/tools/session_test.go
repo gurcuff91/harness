@@ -2,17 +2,11 @@ package tools
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"fmt"
-	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
-	_ "modernc.org/sqlite"
-
-	"github.com/gurcuff91/harness/types"
+	"github.com/gurcuff91/harness/agent/store"
 )
 
 // ── SessionInfo ──────────────────────────────────────────────────────────
@@ -52,181 +46,105 @@ func TestSessionInfoReturnsExactFieldSet(t *testing.T) {
 	}
 }
 
-// ── SessionSearch ──────────────────────────────────────────────────────────
+// ── SessionSearch ────────────────────────────────────────────────────────
+//
+// SessionSearch is now a thin adapter over an injected SessionSearchFunc —
+// the actual FTS5 search logic lives in agent/store (FileStore.SearchMessages),
+// tested there directly. These tests cover ONLY the tool's own
+// responsibilities: input parsing/validation, limit clamping, delegating to
+// the injected func, and translating store.ErrSearchNotSupported into the
+// expected user-facing error.
 
-func msgText(role types.MessageRole, text string) types.Message {
-	return types.Message{Role: role, Parts: []types.ContentPart{{Text: text}}}
-}
-
-func msgToolCall(id, name string, argsJSON string) types.Message {
-	return types.Message{Role: types.RoleAssistant, Parts: []types.ContentPart{
-		{ToolCall: &types.ToolCall{ID: id, Name: name, Input: json.RawMessage(argsJSON)}},
-	}}
-}
-
-func msgToolResult(id, output string) types.Message {
-	return types.Message{Role: types.RoleUser, Parts: []types.ContentPart{
-		{ToolResult: &types.ToolResult{ID: id, Output: output}},
-	}}
-}
-
-func tempIndexResolver(t *testing.T) SessionSearchIndexPathResolver {
-	t.Helper()
-	dir := t.TempDir()
-	return func() string { return filepath.Join(dir, "session.search.db") }
-}
-
-func TestSessionSearchFindsIndexedText(t *testing.T) {
-	all := []types.Message{
-		msgText(types.RoleUser, "how does PKCE verification work"),
-		msgText(types.RoleAssistant, "PKCE uses a code verifier and challenge to prevent interception"),
+func TestSessionSearchDelegatesQueryAndClampedLimit(t *testing.T) {
+	var gotQuery string
+	var gotLimit int
+	fn := func(query string, limit int) ([]store.SearchResult, error) {
+		gotQuery = query
+		gotLimit = limit
+		return []store.SearchResult{{Role: "user", Snippet: "a [match] here"}}, nil
 	}
-	tool := SessionSearch(func() []types.Message { return all }, tempIndexResolver(t))
+	tool := SessionSearch(fn)
 
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"PKCE"}`))
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"PKCE","limit":5}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var results []sessionSearchResult
+	if gotQuery != "PKCE" {
+		t.Errorf("query = %q, want %q", gotQuery, "PKCE")
+	}
+	if gotLimit != 5 {
+		t.Errorf("limit = %d, want 5", gotLimit)
+	}
+	var results []store.SearchResult
 	if err := json.Unmarshal([]byte(out), &results); err != nil {
 		t.Fatalf("not JSON: %v\n%s", err, out)
 	}
-	if len(results) != 2 {
-		t.Fatalf("got %d results, want 2 (both messages mention PKCE): %s", len(results), out)
+	if len(results) != 1 || results[0].Snippet != "a [match] here" {
+		t.Errorf("unexpected results: %s", out)
 	}
 }
 
-func TestSessionSearchExcludesToolCallAndResult(t *testing.T) {
-	all := []types.Message{
-		msgToolCall("t1", "Bash", `{"command":"echo uniquemarker123"}`),
-		msgToolResult("t1", "output containing uniquemarker123 too"),
-		msgText(types.RoleUser, "unrelated text"),
+func TestSessionSearchLimitDefaultsAndClamps(t *testing.T) {
+	cases := []struct {
+		name      string
+		input     string
+		wantLimit int
+	}{
+		{"zero uses default", `{"query":"x","limit":0}`, sessionSearchDefaultLimit},
+		{"missing uses default", `{"query":"x"}`, sessionSearchDefaultLimit},
+		{"negative uses default", `{"query":"x","limit":-5}`, sessionSearchDefaultLimit},
+		{"over max clamps", `{"query":"x","limit":1000}`, sessionSearchMaxLimit},
+		{"within range passes through", `{"query":"x","limit":3}`, 3},
 	}
-	tool := SessionSearch(func() []types.Message { return all }, tempIndexResolver(t))
-
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"uniquemarker123"}`))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	var results []sessionSearchResult
-	_ = json.Unmarshal([]byte(out), &results)
-	if len(results) != 0 {
-		t.Errorf("tool_call/tool_result content must never be indexed, got: %s", out)
-	}
-}
-
-func TestSessionSearchIncrementalSyncOnlyIndexesNewMessages(t *testing.T) {
-	resolver := tempIndexResolver(t)
-	all := []types.Message{
-		msgText(types.RoleUser, "first alpha message"),
-	}
-	tool := SessionSearch(func() []types.Message { return all }, resolver)
-
-	out1, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"alpha"}`))
-	if err != nil {
-		t.Fatalf("first search: %v", err)
-	}
-	var r1 []sessionSearchResult
-	_ = json.Unmarshal([]byte(out1), &r1)
-	if len(r1) != 1 {
-		t.Fatalf("first search: got %d results, want 1: %s", len(r1), out1)
-	}
-
-	// Append a new message — the SAME tool instance (same resolver → same
-	// on-disk index) should pick it up on the next call without losing the
-	// earlier one.
-	all = append(all, msgText(types.RoleAssistant, "second beta message"))
-	tool2 := SessionSearch(func() []types.Message { return all }, resolver)
-
-	outBeta, err := tool2.Execute(context.Background(), json.RawMessage(`{"query":"beta"}`))
-	if err != nil {
-		t.Fatalf("second search: %v", err)
-	}
-	var rBeta []sessionSearchResult
-	_ = json.Unmarshal([]byte(outBeta), &rBeta)
-	if len(rBeta) != 1 {
-		t.Fatalf("expected the newly-appended message to be indexed and found: %s", outBeta)
-	}
-
-	outAlpha, err := tool2.Execute(context.Background(), json.RawMessage(`{"query":"alpha"}`))
-	if err != nil {
-		t.Fatalf("third search: %v", err)
-	}
-	var rAlpha []sessionSearchResult
-	_ = json.Unmarshal([]byte(outAlpha), &rAlpha)
-	if len(rAlpha) != 1 {
-		t.Fatalf("original message must still be searchable after incremental sync: %s", outAlpha)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var gotLimit int
+			fn := func(query string, limit int) ([]store.SearchResult, error) {
+				gotLimit = limit
+				return nil, nil
+			}
+			tool := SessionSearch(fn)
+			if _, err := tool.Execute(context.Background(), json.RawMessage(c.input)); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if gotLimit != c.wantLimit {
+				t.Errorf("limit = %d, want %d", gotLimit, c.wantLimit)
+			}
+		})
 	}
 }
 
-func TestSessionSearchSurvivesPreCompactionHistory(t *testing.T) {
-	// AllMessages() is defined to include everything, pre- and
-	// post-compaction — SessionSearch must not special-case that; it just
-	// indexes whatever the provider hands it.
-	all := []types.Message{
-		msgText(types.RoleUser, "a decision made long before compaction: use SQLite FTS5"),
-		{Role: types.RoleAssistant, Parts: []types.ContentPart{{Text: "compacted summary follows"}}, Meta: &types.MessageMeta{IsCompaction: true}},
-		msgText(types.RoleUser, "a much later question"),
+func TestSessionSearchRejectsEmptyQuery(t *testing.T) {
+	fn := func(query string, limit int) ([]store.SearchResult, error) {
+		t.Fatal("search func must not be called for an empty query")
+		return nil, nil
 	}
-	tool := SessionSearch(func() []types.Message { return all }, tempIndexResolver(t))
-
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"SQLite"}`))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	var results []sessionSearchResult
-	_ = json.Unmarshal([]byte(out), &results)
-	if len(results) != 1 {
-		t.Fatalf("pre-compaction content must still be searchable: %s", out)
+	tool := SessionSearch(fn)
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"query":""}`))
+	if err == nil {
+		t.Fatal("expected an error for empty query")
 	}
 }
 
-// TestSessionSearchExcludesCompactionAndSystemGeneratedMessages is the
-// direct regression test for the field report: a compaction checkpoint
-// ("Previous conversation summary: ...") is stored as a Role-user message
-// (see store.CompactionMessage), so without this filter it would show up
-// in results indistinguishable from something the human actually typed —
-// pure agent-authored noise. Same deal for the max-iterations
-// IsSystemGenerated progress-check prompt.
-func TestSessionSearchExcludesCompactionAndSystemGeneratedMessages(t *testing.T) {
-	all := []types.Message{
-		{Role: types.RoleUser, Parts: []types.ContentPart{{Text: "Previous conversation summary: uniquemarkerXYZ was discussed"}}, Meta: &types.MessageMeta{IsCompaction: true}},
-		{Role: types.RoleUser, Parts: []types.ContentPart{{Text: "You've reached the maximum uniquemarkerXYZ number of tool calls"}}, Meta: &types.MessageMeta{IsSystemGenerated: true}},
-		msgText(types.RoleUser, "a genuine question mentioning uniquemarkerXYZ too"),
+func TestSessionSearchTranslatesErrSearchNotSupported(t *testing.T) {
+	fn := func(query string, limit int) ([]store.SearchResult, error) {
+		return nil, store.ErrSearchNotSupported
 	}
-	tool := SessionSearch(func() []types.Message { return all }, tempIndexResolver(t))
-
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"uniquemarkerXYZ"}`))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	tool := SessionSearch(fn)
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"anything"}`))
+	if err == nil {
+		t.Fatal("expected an error")
 	}
-	var results []sessionSearchResult
-	if err := json.Unmarshal([]byte(out), &results); err != nil {
-		t.Fatalf("not JSON: %v\n%s", err, out)
-	}
-	if len(results) != 1 {
-		t.Fatalf("got %d results, want exactly 1 (only the genuine user message): %s", len(results), out)
-	}
-	if !strings.Contains(results[0].Snippet, "genuine question") {
-		t.Errorf("the surviving result must be the genuine message, got: %s", out)
+	if !strings.Contains(err.Error(), "does not support search") {
+		t.Errorf("expected a plain 'does not support search' message, got: %v", err)
 	}
 }
 
-func TestSessionSearchNoMatchesReturnsEmptyArray(t *testing.T) {
-	all := []types.Message{msgText(types.RoleUser, "hello world")}
-	tool := SessionSearch(func() []types.Message { return all }, tempIndexResolver(t))
-
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"zzzznonexistent"}`))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestSessionSearchNilResultsBecomeEmptyArray(t *testing.T) {
+	fn := func(query string, limit int) ([]store.SearchResult, error) {
+		return nil, nil
 	}
-	if strings.TrimSpace(out) != "[]" {
-		t.Errorf("output = %q, want []", out)
-	}
-}
-
-func TestSessionSearchEmptySessionReturnsEmptyArray(t *testing.T) {
-	tool := SessionSearch(func() []types.Message { return nil }, tempIndexResolver(t))
+	tool := SessionSearch(fn)
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"anything"}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -236,220 +154,13 @@ func TestSessionSearchEmptySessionReturnsEmptyArray(t *testing.T) {
 	}
 }
 
-func TestSessionSearchRejectsEmptyQuery(t *testing.T) {
-	tool := SessionSearch(func() []types.Message { return nil }, tempIndexResolver(t))
-	_, err := tool.Execute(context.Background(), json.RawMessage(`{"query":""}`))
+func TestSessionSearchPropagatesOtherErrors(t *testing.T) {
+	fn := func(query string, limit int) ([]store.SearchResult, error) {
+		return nil, context.DeadlineExceeded
+	}
+	tool := SessionSearch(fn)
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"anything"}`))
 	if err == nil {
-		t.Fatal("expected an error for empty query")
-	}
-}
-
-func TestSessionSearchFallsBackToInMemoryWhenResolverReturnsEmpty(t *testing.T) {
-	all := []types.Message{msgText(types.RoleUser, "gamma content here")}
-	tool := SessionSearch(func() []types.Message { return all }, func() string { return "" })
-
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"gamma"}`))
-	if err != nil {
-		t.Fatalf("unexpected error with empty resolver (should fall back to :memory:): %v", err)
-	}
-	var results []sessionSearchResult
-	_ = json.Unmarshal([]byte(out), &results)
-	if len(results) != 1 {
-		t.Fatalf("expected in-memory fallback to still work: %s", out)
-	}
-}
-
-func TestSessionSearchLimitClamps(t *testing.T) {
-	var all []types.Message
-	for i := 0; i < 5; i++ {
-		all = append(all, msgText(types.RoleUser, "repeated marker word appears here"))
-	}
-	tool := SessionSearch(func() []types.Message { return all }, tempIndexResolver(t))
-
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"marker","limit":2}`))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	var results []sessionSearchResult
-	_ = json.Unmarshal([]byte(out), &results)
-	if len(results) != 2 {
-		t.Fatalf("got %d results, want exactly 2 (limit)", len(results))
-	}
-}
-
-// ── windowSnippet ────────────────────────────────────────────────────────
-
-func TestWindowSnippetShortTextUnchanged(t *testing.T) {
-	s := "a short [match] here"
-	if got := windowSnippet(s, 512); got != s {
-		t.Errorf("short text must pass through unchanged, got %q", got)
-	}
-}
-
-func TestWindowSnippetLongTextCentersOnMatchAndBoundsLength(t *testing.T) {
-	prefix := strings.Repeat("filler word ", 100) // ~1200 chars before the match
-	suffix := strings.Repeat("more filler ", 100)  // ~1200 chars after the match
-	full := prefix + "the [needle] is here" + suffix
-
-	got := windowSnippet(full, 100)
-	if !strings.Contains(got, "[needle]") {
-		t.Fatalf("windowed snippet must still contain the match: %q", got)
-	}
-	if len(got) > 100+2*3+2*10 { // budget + both ellipses + small word-boundary slack
-		t.Errorf("windowed snippet too long: len=%d: %q", len(got), got)
-	}
-	if !strings.HasPrefix(got, "...") {
-		t.Errorf("expected leading ellipsis when the start was trimmed, got %q", got)
-	}
-	if !strings.HasSuffix(got, "...") {
-		t.Errorf("expected trailing ellipsis when the end was trimmed, got %q", got)
-	}
-}
-
-func TestWindowSnippetNoTrimAtEdges(t *testing.T) {
-	// Match right at the very start — nothing to trim on the left.
-	full := "[start] " + strings.Repeat("filler ", 200)
-	got := windowSnippet(full, 100)
-	if strings.HasPrefix(got, "...") {
-		t.Errorf("must not prefix with ellipsis when nothing was trimmed off the start: %q", got)
-	}
-}
-
-// TestSessionSearchLongMessageSnippetIsRoomierThanFTS5Snippet is the direct
-// regression test for the "snippet muy pobre" report: FTS5's native
-// snippet() is hard-capped at 64 tokens by SQLite itself (undocumented
-// nowhere else — verified live against modernc.org/sqlite). Our own
-// highlight()+windowSnippet() replacement must return something
-// meaningfully larger for a long message with a match buried in the middle.
-func TestSessionSearchLongMessageSnippetIsRoomierThanFTS5Snippet(t *testing.T) {
-	var b strings.Builder
-	b.WriteString("This is a very long message about PKCE verification and OAuth flows. ")
-	for i := 0; i < 40; i++ {
-		fmt.Fprintf(&b, "Extra filler sentence number %d to pad out the message body considerably. ", i)
-	}
-	b.WriteString("The important detail buried near the end is that PKCE requires a verifier.")
-	longText := b.String()
-
-	all := []types.Message{msgText(types.RoleUser, longText)}
-	tool := SessionSearch(func() []types.Message { return all }, tempIndexResolver(t))
-
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"PKCE"}`))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	var results []sessionSearchResult
-	if err := json.Unmarshal([]byte(out), &results); err != nil {
-		t.Fatalf("not JSON: %v\n%s", err, out)
-	}
-	if len(results) != 1 {
-		t.Fatalf("got %d results, want 1: %s", len(results), out)
-	}
-	// FTS5's own snippet() at its max legal N=64 tokens produced ~394 chars
-	// for this exact fixture (measured live) — ours must clear that by a
-	// wide margin since we're windowing on CHARACTERS with a 512 budget.
-	if len(results[0].Snippet) < 400 {
-		t.Errorf("snippet too short (%d chars), expected a roomier window: %q", len(results[0].Snippet), results[0].Snippet)
-	}
-}
-
-// TestSessionSearchRebuildsIndexBuiltUnderOlderFilterVersion is the direct
-// regression test for the field report's second half: a .search.db built
-// BEFORE the compaction/system-generated exclusion fix already has those
-// messages indexed as ordinary content, and the message-count-offset
-// incremental sync would never revisit them on its own — so the poison
-// would persist forever without a one-time forced rebuild.
-func TestSessionSearchRebuildsIndexBuiltUnderOlderFilterVersion(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "session.search.db")
-
-	// Simulate a pre-fix index: schema present, a compaction message
-	// already indexed as if it were ordinary content, offset advanced past
-	// it, and no filter_version row at all (the pre-fix schema never wrote
-	// one) — the oldest possible on-disk shape this migration must handle.
-	seed, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatalf("seed open: %v", err)
-	}
-	if _, err := seed.Exec(`CREATE TABLE search_meta(key TEXT PRIMARY KEY, value TEXT)`); err != nil {
-		t.Fatalf("seed schema (meta): %v", err)
-	}
-	if _, err := seed.Exec(`CREATE VIRTUAL TABLE messages_fts USING fts5(role, text, tokenize='unicode61')`); err != nil {
-		t.Fatalf("seed schema (fts): %v", err)
-	}
-	if _, err := seed.Exec(`INSERT INTO messages_fts(role, text) VALUES ('user', 'Previous conversation summary: poisonmarker leaked in here')`); err != nil {
-		t.Fatalf("seed poisoned row: %v", err)
-	}
-	if _, err := seed.Exec(`INSERT INTO search_meta(key, value) VALUES ('last_indexed_count', '1')`); err != nil {
-		t.Fatalf("seed offset: %v", err)
-	}
-	seed.Close()
-
-	// Now run SessionSearch against that pre-existing on-disk index, with
-	// the SAME compaction message still present in AllMessages() (as it
-	// always is — compaction checkpoints are never deleted from history)
-	// plus a genuine later message.
-	all := []types.Message{
-		{Role: types.RoleUser, Parts: []types.ContentPart{{Text: "Previous conversation summary: poisonmarker leaked in here"}}, Meta: &types.MessageMeta{IsCompaction: true}},
-		msgText(types.RoleUser, "a genuine later question about something else entirely"),
-	}
-	tool := SessionSearch(func() []types.Message { return all }, func() string { return path })
-
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"poisonmarker"}`))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	var results []sessionSearchResult
-	if err := json.Unmarshal([]byte(out), &results); err != nil {
-		t.Fatalf("not JSON: %v\n%s", err, out)
-	}
-	if len(results) != 0 {
-		t.Fatalf("compaction message must be purged on rebuild, got %d results: %s", len(results), out)
-	}
-
-	// The genuine message must still be findable after the rebuild.
-	out2, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"genuine"}`))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	var results2 []sessionSearchResult
-	_ = json.Unmarshal([]byte(out2), &results2)
-	if len(results2) != 1 {
-		t.Fatalf("genuine message must survive the rebuild, got %d results: %s", len(results2), out2)
-	}
-}
-
-// ── Concurrency ──────────────────────────────────────────────────────────
-
-// TestSessionSearchConcurrentCallsDoNotDeadlockOrError is the direct
-// regression test for the reported "database is locked (5) (SQLITE_BUSY)"
-// error: the ReAct loop runs tool calls in PARALLEL, and every SessionSearch
-// invocation opens a FRESH *sql.DB against the SAME on-disk index file, so
-// concurrent calls on one session used to race SQLite's single-writer lock
-// with no busy_timeout to fall back on.
-func TestSessionSearchConcurrentCallsDoNotDeadlockOrError(t *testing.T) {
-	resolver := tempIndexResolver(t)
-	var all []types.Message
-	for i := 0; i < 20; i++ {
-		all = append(all, msgText(types.RoleUser, fmt.Sprintf("concurrent marker message number %d", i)))
-	}
-
-	const n = 12
-	errCh := make(chan error, n)
-	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			tool := SessionSearch(func() []types.Message { return all }, resolver)
-			_, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"marker"}`))
-			errCh <- err
-		}()
-	}
-	wg.Wait()
-	close(errCh)
-	for err := range errCh {
-		if err != nil {
-			t.Errorf("concurrent SessionSearch call failed: %v", err)
-		}
+		t.Fatal("expected an error")
 	}
 }

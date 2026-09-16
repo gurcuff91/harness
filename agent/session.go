@@ -1341,6 +1341,15 @@ func (s *Session) AllMessages() []types.Message {
 	return s.store.AllMessages()
 }
 
+// SearchMessages full-text searches this session's complete conversation
+// history via the underlying store.Session/SessionStore. Returns
+// store.ErrSearchNotSupported if the backend doesn't implement search — the
+// SessionSearch tool translates that into a plain, honest error for the
+// model rather than treating it as "no matches".
+func (s *Session) SearchMessages(query string, limit int) ([]store.SearchResult, error) {
+	return s.store.SearchMessages(query, limit)
+}
+
 // Meta returns a snapshot of session metadata.
 // Meta returns the full session metadata from the store.
 // Includes: id, cwd, name, model, thinking, stats, timestamps.

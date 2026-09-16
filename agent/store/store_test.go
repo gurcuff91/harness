@@ -108,6 +108,30 @@ func TestPortDeleteSession(t *testing.T) {
 	}
 }
 
+func TestPortSearchMessagesCapability(t *testing.T) {
+	for name, p := range ports(t) {
+		t.Run(name, func(t *testing.T) {
+			p.SaveMeta(newMeta("s", "/p"))
+			p.AppendMessage("s", types.NewUserTextMessage("hello marker world"))
+
+			results, err := p.SearchMessages("s", "marker", 10)
+			switch name {
+			case "memory":
+				if err != ErrSearchNotSupported {
+					t.Errorf("InMemoryStore.SearchMessages: got err=%v, want ErrSearchNotSupported", err)
+				}
+			case "file":
+				if err != nil {
+					t.Fatalf("FileStore.SearchMessages: unexpected error: %v", err)
+				}
+				if len(results) != 1 {
+					t.Errorf("FileStore.SearchMessages: got %d results, want 1", len(results))
+				}
+			}
+		})
+	}
+}
+
 // ── the *Session handle (domain logic over the port) ──────────────────────
 
 func TestSessionHandleBasics(t *testing.T) {
@@ -126,6 +150,33 @@ func TestSessionHandleBasics(t *testing.T) {
 			s2, _ := OpenSession(p, "s")
 			if got := s2.Messages(); len(got) != 2 {
 				t.Errorf("reopened working set: want 2, got %d", len(got))
+			}
+		})
+	}
+}
+
+func TestSessionHandleSearchMessages(t *testing.T) {
+	for name, p := range ports(t) {
+		t.Run(name, func(t *testing.T) {
+			s, err := CreateSession(p, newMeta("s", "/p"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.AddMessage(types.NewUserTextMessage("hello marker world"))
+
+			results, err := s.SearchMessages("marker", 10)
+			switch name {
+			case "memory":
+				if err != ErrSearchNotSupported {
+					t.Errorf("got err=%v, want ErrSearchNotSupported", err)
+				}
+			case "file":
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if len(results) != 1 {
+					t.Errorf("got %d results, want 1", len(results))
+				}
 			}
 		})
 	}

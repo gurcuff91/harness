@@ -2,12 +2,15 @@ package store
 
 import (
 	"bufio"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	_ "modernc.org/sqlite" // pure-Go SQLite driver (no cgo) — same as agent/memory
 
 	"github.com/gurcuff91/harness/types"
 )
@@ -25,6 +28,28 @@ import (
 type FileStore struct {
 	baseDir string
 	mu      sync.Mutex
+
+	// searchMu/searchLocks serialize SearchMessages against the SAME
+	// on-disk .search.db WITHIN this process — completely independent of
+	// mu above (which guards meta/log I/O for ALL sessions). Scoped
+	// per-sessionID, not global, so a slow search on one session's index
+	// never blocks any other session's search, append, or meta read.
+	//
+	// This is required, not optional: busy_timeout(5000)+journal_mode(WAL)
+	// on the DSN (see searchDB) is enough to make ORDINARY reads/writes on
+	// an ALREADY-CREATED database wait for each other instead of erroring
+	// — but it does NOT reliably protect the very first migrate (CREATE
+	// TABLE/CREATE VIRTUAL TABLE) when several goroutines race to
+	// bootstrap a brand-new index file at once, which is exactly what the
+	// ReAct loop's parallel tool execution produces the first time a
+	// session calls SessionSearch more than once concurrently. Confirmed
+	// live: even with the pragmas already set, N goroutines racing to
+	// create a brand-new SQLite file hit "database is locked (SQLITE_BUSY)"
+	// 3-8 times per 50 rounds at 2-4-way concurrency. The mutex removes
+	// that race outright, since the real contention here is always
+	// same-process (one session, one index file).
+	searchMu    sync.Mutex
+	searchLocks map[string]*sync.Mutex
 }
 
 // DefaultSessionsDir returns the default base directory FileStore uses when
@@ -55,7 +80,7 @@ func NewFileStore(baseDir string) (*FileStore, error) {
 	if err := os.MkdirAll(baseDir, 0700); err != nil {
 		return nil, fmt.Errorf("create sessions dir: %w", err)
 	}
-	return &FileStore{baseDir: baseDir}, nil
+	return &FileStore{baseDir: baseDir, searchLocks: map[string]*sync.Mutex{}}, nil
 }
 
 // SaveMeta writes the session's metadata. The cwd-slug directory that holds the
@@ -183,10 +208,295 @@ func (m *FileStore) TruncateMessages(sessionID string) error {
 	if !found {
 		return nil // no file = already empty
 	}
-	return os.Truncate(path, 0)
+	if err := os.Truncate(path, 0); err != nil {
+		return err
+	}
+	// The search index's message-count offset would otherwise point at
+	// content that no longer exists — deleting it and letting the next
+	// SearchMessages call rebuild from scratch is simpler and more
+	// obviously correct than reconciling a stale offset against a
+	// truncated log. Best-effort: a missing index (never searched) or a
+	// failed removal isn't fatal to the reset itself.
+	m.deleteSearchIndex(sessionID, filepath.Dir(path))
+	return nil
+}
+
+// deleteSearchIndex removes sessionID's .search.db and its WAL/SHM
+// sidecars (if any) from dir. Best-effort — errors are ignored, matching
+// the tolerance-to-missing-file behavior the rest of this store already
+// has for optional/derived on-disk artifacts.
+func (m *FileStore) deleteSearchIndex(sessionID, dir string) {
+	base := filepath.Join(dir, sessionID+".search.db")
+	os.Remove(base)
+	os.Remove(base + "-wal")
+	os.Remove(base + "-shm")
 }
 
 func (m *FileStore) Close() error { return nil }
+
+// ── SearchMessages: per-session FTS5 index ─────────────────────────────────
+//
+// Full-text search over a session's complete message history, backed by a
+// per-session SQLite FTS5 index living right next to that session's own
+// .jsonl/.meta.json: <cwd-slug>/<session-id>.search.db. Built and synced
+// LAZILY — nothing is written here until the first SearchMessages call for
+// a given session, and only the messages that arrived since the last call
+// are indexed on each subsequent one (an incremental sync by message COUNT
+// offset, stored in the index's own search_meta table — not a byte offset,
+// since the source is LoadMessages, not a raw file read).
+
+// searchIndexLock returns an unlock func for the per-sessionID mutex
+// guarding sessionID's .search.db (see FileStore.searchLocks' doc comment
+// on the struct for why this is a SEPARATE, per-session lock rather than
+// reusing m.mu).
+func (m *FileStore) searchIndexLock(sessionID string) func() {
+	m.searchMu.Lock()
+	l, ok := m.searchLocks[sessionID]
+	if !ok {
+		l = &sync.Mutex{}
+		m.searchLocks[sessionID] = l
+	}
+	m.searchMu.Unlock()
+	l.Lock()
+	return l.Unlock
+}
+
+func (m *FileStore) SearchMessages(sessionID string, query string, limit int) ([]SearchResult, error) {
+	unlock := m.searchIndexLock(sessionID)
+	defer unlock()
+
+	m.mu.Lock()
+	jsonlPath, found := m.findJSONLPath(sessionID)
+	m.mu.Unlock()
+	if !found {
+		return nil, fmt.Errorf("session %s not found", sessionID)
+	}
+	indexPath := filepath.Join(filepath.Dir(jsonlPath), sessionID+".search.db")
+
+	db, err := openSearchIndexDB(indexPath)
+	if err != nil {
+		return nil, fmt.Errorf("open session search index: %w", err)
+	}
+	defer db.Close()
+
+	all, err := m.LoadMessages(sessionID, 0)
+	if err != nil {
+		return nil, fmt.Errorf("load messages for search: %w", err)
+	}
+	if err := syncSearchIndex(db, all); err != nil {
+		return nil, fmt.Errorf("sync session search index: %w", err)
+	}
+
+	results, err := querySearchIndex(db, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("session search query: %w", err)
+	}
+	return results, nil
+}
+
+// openSearchIndexDB opens (creating if absent) the per-session FTS5 index
+// at path. busy_timeout(5000)+journal_mode(WAL) on the DSN handles ordinary
+// read/write contention on an already-created index (see FileStore's
+// searchLocks doc comment on the struct for why an ADDITIONAL in-process
+// mutex is still required around the very first migration).
+func openSearchIndexDB(path string) (*sql.DB, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return nil, fmt.Errorf("create index dir: %w", err)
+	}
+	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1) // modernc.org/sqlite: single-writer discipline, same as agent/memory
+	const schema = `
+CREATE TABLE IF NOT EXISTS search_meta(key TEXT PRIMARY KEY, value TEXT);
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(role, text, tokenize='unicode61');`
+	if _, err := db.Exec(schema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	if err := resetSearchIndexIfStaleFilter(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("reset stale index: %w", err)
+	}
+	return db, nil
+}
+
+// searchIndexFilterVersion identifies the message-FILTERING rules baked
+// into syncSearchIndex (which messages get indexed at all), not the SQL
+// schema shape. Bump it whenever those rules change so an index built
+// under the OLD rules gets wiped and fully rebuilt under the new ones —
+// otherwise the message-count-offset incremental sync would never revisit
+// already-indexed messages, and an index built before a filtering fix
+// would carry the excluded content forever. Currently 2 (unchanged from
+// when this lived in agent/tools): compaction-checkpoint and
+// system-generated messages (both stored as Role user) are excluded.
+const searchIndexFilterVersion = 2
+
+// resetSearchIndexIfStaleFilter wipes the index and resets the sync offset
+// back to 0 when the on-disk index was built under an OLDER
+// searchIndexFilterVersion than the one this binary now uses — forcing
+// syncSearchIndex to reindex everything under the current (correct)
+// filtering rules on the very next call. A missing filter_version row
+// means EITHER a genuinely brand-new index (nothing to wipe, the reset is
+// a costless no-op) OR an index built before this versioning scheme
+// existed at all — both are safely handled by treating "no row" as version
+// 0, always older than any real version, so the wipe always runs and the
+// version gets stamped fresh afterward.
+func resetSearchIndexIfStaleFilter(db *sql.DB) error {
+	var stored int
+	err := db.QueryRow(`SELECT value FROM search_meta WHERE key = 'filter_version'`).Scan(&stored)
+	switch {
+	case err == sql.ErrNoRows:
+		stored = 0
+	case err != nil:
+		return err
+	}
+	if stored == searchIndexFilterVersion {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.Exec(`DELETE FROM messages_fts`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM search_meta WHERE key = 'last_indexed_count'`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+INSERT INTO search_meta(key, value) VALUES ('filter_version', ?)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value`, fmt.Sprintf("%d", searchIndexFilterVersion)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// syncSearchIndex indexes only the messages that arrived since the last
+// sync — the offset is a plain message COUNT, stored in search_meta. Only
+// plain text from user/assistant messages is indexed; tool_call/
+// tool_result/thinking parts are skipped entirely. Also skips synthetic
+// messages the human never actually typed — Meta.IsCompaction (the
+// "Previous conversation summary:" checkpoint injected by compaction,
+// stored with Role user) and Meta.IsSystemGenerated (the max-iterations
+// progress-check prompt, same deal) — both would otherwise pollute results
+// with agent-authored noise instead of genuine user/assistant conversation.
+func syncSearchIndex(db *sql.DB, all []types.Message) error {
+	var offsetStr string
+	err := db.QueryRow(`SELECT value FROM search_meta WHERE key = 'last_indexed_count'`).Scan(&offsetStr)
+	offset := 0
+	if err == nil {
+		fmt.Sscanf(offsetStr, "%d", &offset)
+	} else if err != sql.ErrNoRows {
+		return err
+	}
+	if offset >= len(all) {
+		return nil // nothing new
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	stmt, err := tx.Prepare(`INSERT INTO messages_fts(role, text) VALUES (?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, msg := range all[offset:] {
+		if msg.Role != types.RoleUser && msg.Role != types.RoleAssistant {
+			continue
+		}
+		if msg.Meta != nil && (msg.Meta.IsCompaction || msg.Meta.IsSystemGenerated) {
+			continue
+		}
+		var b strings.Builder
+		for _, p := range msg.Parts {
+			if p.Text != "" {
+				if b.Len() > 0 {
+					b.WriteByte('\n')
+				}
+				b.WriteString(p.Text)
+			}
+		}
+		text := b.String()
+		if text == "" {
+			continue // e.g. a tool-call-only assistant message — nothing to index
+		}
+		if _, err := stmt.Exec(string(msg.Role), text); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.Exec(`
+INSERT INTO search_meta(key, value) VALUES ('last_indexed_count', ?)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value`, fmt.Sprintf("%d", len(all))); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// searchSnippetMaxTokens is FTS5's own hard ceiling for the native
+// snippet() function's token-count argument — its 5th argument "must be
+// greater than zero and equal to or less than 64" per the FTS5 docs
+// (confirmed live against modernc.org/sqlite). 64 is the maximum allowed,
+// used here deliberately for the roomiest snippet SQLite's native function
+// can produce.
+const searchSnippetMaxTokens = 64
+
+// querySearchIndex runs the FTS5 MATCH query, ranked by bm25() relevance
+// and capped to limit. Uses FTS5's native snippet() — SQLite's own
+// match-centered fragment extraction — rather than a hand-rolled
+// alternative: simpler and good enough despite the 64-token ceiling.
+func querySearchIndex(db *sql.DB, query string, limit int) ([]SearchResult, error) {
+	ftsQuery := toSearchFTSQuery(query)
+	if ftsQuery == "" {
+		return []SearchResult{}, nil
+	}
+	rows, err := db.Query(fmt.Sprintf(`
+SELECT role, snippet(messages_fts, 1, '[', ']', '...', %d)
+FROM messages_fts
+WHERE messages_fts MATCH ?
+ORDER BY bm25(messages_fts)
+LIMIT ?`, searchSnippetMaxTokens), ftsQuery, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []SearchResult{}
+	for rows.Next() {
+		var r SearchResult
+		if err := rows.Scan(&r.Role, &r.Snippet); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// toSearchFTSQuery mirrors agent/memory's toFTSQuery: splits on whitespace,
+// quotes+escapes each term, and appends a prefix wildcard so partial words
+// still match — kept as an independent copy (not imported from
+// agent/memory) since agent/store must not depend on that package either.
+func toSearchFTSQuery(raw string) string {
+	fields := strings.Fields(raw)
+	if len(fields) == 0 {
+		return ""
+	}
+	terms := make([]string, len(fields))
+	for i, f := range fields {
+		terms[i] = `"` + strings.ReplaceAll(f, `"`, `""`) + `"*`
+	}
+	return strings.Join(terms, " ")
+}
 
 // ── path helpers (must hold m.mu) ─────────────────────────────────────────
 

@@ -101,4 +101,12 @@ func (m *InMemoryStore) TruncateMessages(sessionID string) error {
 	return nil
 }
 
+// SearchMessages always returns ErrSearchNotSupported — InMemoryStore is
+// for tests and the SDK's no-persist mode; reimplementing full-text search
+// in RAM buys nothing real and would mean maintaining a second search
+// implementation alongside FileStore's.
+func (m *InMemoryStore) SearchMessages(sessionID string, query string, limit int) ([]SearchResult, error) {
+	return nil, ErrSearchNotSupported
+}
+
 func (m *InMemoryStore) Close() error { return nil }
