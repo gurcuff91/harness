@@ -2,12 +2,15 @@ package tools
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+
+	_ "modernc.org/sqlite"
 
 	"github.com/gurcuff91/harness/types"
 )
@@ -178,6 +181,37 @@ func TestSessionSearchSurvivesPreCompactionHistory(t *testing.T) {
 	}
 }
 
+// TestSessionSearchExcludesCompactionAndSystemGeneratedMessages is the
+// direct regression test for the field report: a compaction checkpoint
+// ("Previous conversation summary: ...") is stored as a Role-user message
+// (see store.CompactionMessage), so without this filter it would show up
+// in results indistinguishable from something the human actually typed —
+// pure agent-authored noise. Same deal for the max-iterations
+// IsSystemGenerated progress-check prompt.
+func TestSessionSearchExcludesCompactionAndSystemGeneratedMessages(t *testing.T) {
+	all := []types.Message{
+		{Role: types.RoleUser, Parts: []types.ContentPart{{Text: "Previous conversation summary: uniquemarkerXYZ was discussed"}}, Meta: &types.MessageMeta{IsCompaction: true}},
+		{Role: types.RoleUser, Parts: []types.ContentPart{{Text: "You've reached the maximum uniquemarkerXYZ number of tool calls"}}, Meta: &types.MessageMeta{IsSystemGenerated: true}},
+		msgText(types.RoleUser, "a genuine question mentioning uniquemarkerXYZ too"),
+	}
+	tool := SessionSearch(func() []types.Message { return all }, tempIndexResolver(t))
+
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"uniquemarkerXYZ"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var results []sessionSearchResult
+	if err := json.Unmarshal([]byte(out), &results); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, out)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want exactly 1 (only the genuine user message): %s", len(results), out)
+	}
+	if !strings.Contains(results[0].Snippet, "genuine question") {
+		t.Errorf("the surviving result must be the genuine message, got: %s", out)
+	}
+}
+
 func TestSessionSearchNoMatchesReturnsEmptyArray(t *testing.T) {
 	all := []types.Message{msgText(types.RoleUser, "hello world")}
 	tool := SessionSearch(func() []types.Message { return all }, tempIndexResolver(t))
@@ -315,6 +349,72 @@ func TestSessionSearchLongMessageSnippetIsRoomierThanFTS5Snippet(t *testing.T) {
 	// wide margin since we're windowing on CHARACTERS with a 512 budget.
 	if len(results[0].Snippet) < 400 {
 		t.Errorf("snippet too short (%d chars), expected a roomier window: %q", len(results[0].Snippet), results[0].Snippet)
+	}
+}
+
+// TestSessionSearchRebuildsIndexBuiltUnderOlderFilterVersion is the direct
+// regression test for the field report's second half: a .search.db built
+// BEFORE the compaction/system-generated exclusion fix already has those
+// messages indexed as ordinary content, and the message-count-offset
+// incremental sync would never revisit them on its own — so the poison
+// would persist forever without a one-time forced rebuild.
+func TestSessionSearchRebuildsIndexBuiltUnderOlderFilterVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.search.db")
+
+	// Simulate a pre-fix index: schema present, a compaction message
+	// already indexed as if it were ordinary content, offset advanced past
+	// it, and no filter_version row at all (the pre-fix schema never wrote
+	// one) — the oldest possible on-disk shape this migration must handle.
+	seed, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("seed open: %v", err)
+	}
+	if _, err := seed.Exec(`CREATE TABLE search_meta(key TEXT PRIMARY KEY, value TEXT)`); err != nil {
+		t.Fatalf("seed schema (meta): %v", err)
+	}
+	if _, err := seed.Exec(`CREATE VIRTUAL TABLE messages_fts USING fts5(role, text, tokenize='unicode61')`); err != nil {
+		t.Fatalf("seed schema (fts): %v", err)
+	}
+	if _, err := seed.Exec(`INSERT INTO messages_fts(role, text) VALUES ('user', 'Previous conversation summary: poisonmarker leaked in here')`); err != nil {
+		t.Fatalf("seed poisoned row: %v", err)
+	}
+	if _, err := seed.Exec(`INSERT INTO search_meta(key, value) VALUES ('last_indexed_count', '1')`); err != nil {
+		t.Fatalf("seed offset: %v", err)
+	}
+	seed.Close()
+
+	// Now run SessionSearch against that pre-existing on-disk index, with
+	// the SAME compaction message still present in AllMessages() (as it
+	// always is — compaction checkpoints are never deleted from history)
+	// plus a genuine later message.
+	all := []types.Message{
+		{Role: types.RoleUser, Parts: []types.ContentPart{{Text: "Previous conversation summary: poisonmarker leaked in here"}}, Meta: &types.MessageMeta{IsCompaction: true}},
+		msgText(types.RoleUser, "a genuine later question about something else entirely"),
+	}
+	tool := SessionSearch(func() []types.Message { return all }, func() string { return path })
+
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"poisonmarker"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var results []sessionSearchResult
+	if err := json.Unmarshal([]byte(out), &results); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, out)
+	}
+	if len(results) != 0 {
+		t.Fatalf("compaction message must be purged on rebuild, got %d results: %s", len(results), out)
+	}
+
+	// The genuine message must still be findable after the rebuild.
+	out2, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"genuine"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var results2 []sessionSearchResult
+	_ = json.Unmarshal([]byte(out2), &results2)
+	if len(results2) != 1 {
+		t.Fatalf("genuine message must survive the rebuild, got %d results: %s", len(results2), out2)
 	}
 }
 

@@ -243,7 +243,66 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(role, text, tokenize=
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err := resetIndexIfStaleFilter(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("reset stale index: %w", err)
+	}
 	return db, nil
+}
+
+// sessionSearchFilterVersion identifies the message-FILTERING rules baked
+// into syncSessionSearchIndex (which messages get indexed at all), not the
+// SQL schema shape. Bump it whenever those rules change so an index built
+// under the OLD rules gets wiped and fully rebuilt under the new ones —
+// otherwise the message-count-offset incremental sync (see
+// syncSessionSearchIndex) would never revisit already-indexed messages, and
+// an index built before a filtering fix would carry the excluded content
+// forever. Bumped from 1 → 2 when compaction-checkpoint and
+// system-generated messages (both stored as Role user) started being
+// excluded — those had already been indexed as ordinary user messages by
+// any pre-existing .search.db and needed a one-time rebuild to purge.
+const sessionSearchFilterVersion = 2
+
+// resetIndexIfStaleFilter wipes the index and resets the sync offset back
+// to 0 when the on-disk index was built under an OLDER sessionSearchFilterVersion
+// than the one this binary now uses — forcing syncSessionSearchIndex to
+// reindex everything under the current (correct) filtering rules on the
+// very next call. A missing filter_version row means EITHER a genuinely
+// brand-new index (nothing to wipe, the reset is a costless no-op) OR an
+// index built before this versioning scheme existed at all (the exact
+// pre-fix on-disk shape from the field report) — both are safely handled by
+// treating "no row" as version 0, always older than any real version, so
+// the wipe always runs and the version gets stamped fresh afterward.
+func resetIndexIfStaleFilter(db *sql.DB) error {
+	var stored int
+	err := db.QueryRow(`SELECT value FROM search_meta WHERE key = 'filter_version'`).Scan(&stored)
+	switch {
+	case err == sql.ErrNoRows:
+		stored = 0
+	case err != nil:
+		return err
+	}
+	if stored == sessionSearchFilterVersion {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.Exec(`DELETE FROM messages_fts`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM search_meta WHERE key = 'last_indexed_count'`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+INSERT INTO search_meta(key, value) VALUES ('filter_version', ?)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value`, fmt.Sprintf("%d", sessionSearchFilterVersion)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // syncSessionSearchIndex indexes only the messages that arrived since the
@@ -251,7 +310,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(role, text, tokenize=
 // since the source is Session.AllMessages(), not a raw file — see the
 // design doc's "ajuste" note), stored in search_meta. Only plain text from
 // user/assistant messages is indexed; tool_call/tool_result/thinking parts
-// are skipped entirely.
+// are skipped entirely. Also skips synthetic messages the human never
+// actually typed — Meta.IsCompaction (the "Previous conversation summary:"
+// checkpoint injected by compaction, stored with Role user) and
+// Meta.IsSystemGenerated (the max-iterations progress-check prompt, same
+// deal) — both would otherwise pollute results with agent-authored noise
+// instead of genuine user/assistant conversation.
 func syncSessionSearchIndex(db *sql.DB, all []types.Message) error {
 	var offsetStr string
 	err := db.QueryRow(`SELECT value FROM search_meta WHERE key = 'last_indexed_count'`).Scan(&offsetStr)
@@ -279,6 +343,9 @@ func syncSessionSearchIndex(db *sql.DB, all []types.Message) error {
 
 	for _, msg := range all[offset:] {
 		if msg.Role != types.RoleUser && msg.Role != types.RoleAssistant {
+			continue
+		}
+		if msg.Meta != nil && (msg.Meta.IsCompaction || msg.Meta.IsSystemGenerated) {
 			continue
 		}
 		var b strings.Builder

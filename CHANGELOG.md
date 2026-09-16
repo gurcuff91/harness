@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.74] - 2026-09-16
+
+### Fix — `SessionSearch` was surfacing compaction summaries and system-generated prompts as if the human had typed them
+- Both a compaction checkpoint ("Previous conversation summary: ...", see `store.CompactionMessage`) and the max-iterations progress-check prompt (`requestProgressUpdate`) are stored as ordinary `Role: user` messages with a `Meta.IsCompaction`/`Meta.IsSystemGenerated` flag — `syncSessionSearchIndex` was indexing both indiscriminately, so a search could return the agent's own summary of the conversation instead of (or alongside) what the human actually said.
+- Fixed by skipping any message with `Meta.IsCompaction` or `Meta.IsSystemGenerated` set during indexing — `SessionSearch` now only ever returns genuine user/assistant conversation.
+- **Migration for already-built indexes**: since the sync offset is a message COUNT, a `.search.db` built before this fix would never revisit already-indexed messages on its own — the poisoned entries would persist forever. Added a `filter_version` stamp in `search_meta`; `openSessionSearchDB` now wipes and fully rebuilds any index whose stamped version is older than the current filtering rules (including the oldest case: an index with no stamp at all, from before this versioning scheme existed).
+- Added `TestSessionSearchExcludesCompactionAndSystemGeneratedMessages` and `TestSessionSearchRebuildsIndexBuiltUnderOlderFilterVersion` (the latter seeds a raw pre-fix on-disk index by hand and confirms the poisoned row is gone and the genuine one survives after the first post-fix call).
+
 ## [0.76.73] - 2026-09-16
 
 ### Fix — `SessionSearch` returned near-useless snippets and could hit "database is locked (SQLITE_BUSY)" under parallel tool calls
