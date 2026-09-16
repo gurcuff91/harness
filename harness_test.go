@@ -47,6 +47,39 @@ func TestAgentWithOptionsAppliesConfig(t *testing.T) {
 	}
 }
 
+// TestAgentWithBoolOptionsSetTheirFlag verifies each boolean AgentWith*
+// option flips its corresponding agent.AgentOptions.EnableX field — the
+// direct regression test for a real SDK-user report: AgentWithWebSearch and
+// AgentWithSessionInfo didn't exist at all (EnableWebSearch/EnableSessionInfo
+// were reachable only via AgentWithOptions or harness's own internal
+// newInteractiveAgent, never as a standalone facade option like every other
+// EnableX flag already had). Exercises AgentWithOptions + AgentOption
+// application directly (not agent.New(), which would require a live
+// provider) — this only needs to confirm the OPTION mutates the struct.
+func TestAgentWithBoolOptionsSetTheirFlag(t *testing.T) {
+	cases := []struct {
+		name string
+		opt  AgentOption
+		get  func(agent.AgentOptions) bool
+	}{
+		{"AgentWithMCPs", AgentWithMCPs(), func(o agent.AgentOptions) bool { return o.EnableMCPs }},
+		{"AgentWithMemory", AgentWithMemory(), func(o agent.AgentOptions) bool { return o.EnableMemory }},
+		{"AgentWithScheduler", AgentWithScheduler(), func(o agent.AgentOptions) bool { return o.EnableScheduler }},
+		{"AgentWithColleagues", AgentWithColleagues(), func(o agent.AgentOptions) bool { return o.EnableColleagues }},
+		{"AgentWithWebSearch", AgentWithWebSearch(), func(o agent.AgentOptions) bool { return o.EnableWebSearch }},
+		{"AgentWithSessionInfo", AgentWithSessionInfo(), func(o agent.AgentOptions) bool { return o.EnableSessionInfo }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var o agent.AgentOptions
+			c.opt(&o)
+			if !c.get(o) {
+				t.Errorf("%s did not set its EnableX flag", c.name)
+			}
+		})
+	}
+}
+
 // TestAgentWithOptionsAppliesPrebuiltStruct verifies AgentWithOptions applies
 // a whole pre-built AgentOptions, and that a AgentWith* option listed AFTER
 // it still wins (last-write-wins, per NewAgent's doc comment).

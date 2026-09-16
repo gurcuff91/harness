@@ -116,11 +116,11 @@ type AgentOptions struct {
 	// EnableSessionInfo registers BOTH the SessionInfo and SessionSearch
 	// built-in tools — two views of the same concept ("information about
 	// this session"), gated behind a single flag. SessionInfo returns a
-	// small snapshot of the session's own identity/config; SessionSearch
-	// full-text searches the ENTIRE conversation history (including
-	// anything already folded into a compaction checkpoint) via a per-
-	// session SQLite FTS5 index synced lazily inside the tool itself — see
-	// docs/plans/2026-09-16-session-info-search-tools-design.md.
+	// snapshot of the session's own identity/config/environment/usage;
+	// SessionSearch full-text searches the ENTIRE conversation history
+	// (including anything already folded into a compaction checkpoint) via
+	// the session's own SessionStore.SearchMessages — see
+	// docs/plans/2026-09-16-sessionsearch-into-store-design.md.
 	EnableSessionInfo bool
 }
 

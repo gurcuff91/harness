@@ -151,10 +151,11 @@ secrets) out of embedded code.
 
 The agent is configured with functional options: `AgentWithThinking`,
 `AgentWithMCPs`, `AgentWithMemory`, `AgentWithScheduler`, `AgentWithColleagues`,
-`AgentWithMaxIterations`, `AgentWithMaxTokens`, `AgentWithSystemPrompt`,
-`AgentWithDirectives`, `AgentWithTools`, `AgentWithDisallowedTools`,
-`AgentWithStore`, `AgentWithResourceLoader` (and `AgentWithOptions` to apply a
-pre-built config). `NewAgent()` with no options returns a sensible default agent.
+`AgentWithWebSearch`, `AgentWithSessionInfo`, `AgentWithMaxIterations`,
+`AgentWithMaxTokens`, `AgentWithSystemPrompt`, `AgentWithDirectives`,
+`AgentWithTools`, `AgentWithDisallowedTools`, `AgentWithStore`,
+`AgentWithResourceLoader` (and `AgentWithOptions` to apply a pre-built
+config). `NewAgent()` with no options returns a sensible default agent.
 
 ### Running a transport on an embedded agent
 
@@ -299,9 +300,9 @@ All data stored in `~/.harness/`:
 | `ColleagueList` / `ColleagueAsk` | Discover and delegate to other running instances |
 
 The memory tools require `AgentWithMemory` (or the CLI's memory-enabled path);
-`WebSearch` requires `EnableWebSearch` and a connected search backend
+`WebSearch` requires `AgentWithWebSearch` and a connected search backend
 (minimax or ollama-cloud); `SessionInfo`/`SessionSearch` are both gated by the
-single `EnableSessionInfo` flag (on by default for the CLI's interactive
+single `AgentWithSessionInfo` option (on by default for the CLI's interactive
 transports); `Schedule*` management tools are always available, while the
 engine that *fires* schedules requires `--scheduler` / `AgentWithScheduler`;
 `Colleague*` requires `AgentWithColleagues`. External tools can be added via

@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.77] - 2026-09-16
+
+### Fix — SDK facade was missing `AgentWithWebSearch`/`AgentWithSessionInfo`
+- Reported by an SDK user: `agent.AgentOptions.EnableWebSearch`/`EnableSessionInfo` existed and worked correctly, but had no corresponding `harness.AgentWithX()` option in the public facade (`harness.go`) — every other `EnableX` flag (`EnableMCPs`, `EnableMemory`, `EnableScheduler`, `EnableColleagues`) already had one. An external embedder using only the public `harness` package (not `agent` directly, nor `AgentWithOptions` with a hand-built `agent.AgentOptions`) had no way to turn either tool on — only the CLI's own internal `newInteractiveAgent` (which sets the struct fields directly) could reach them.
+- Added `harness.AgentWithWebSearch()` and `harness.AgentWithSessionInfo()`, matching every existing `AgentWithX` boolean option's exact shape and doc-comment style.
+- Also refreshed `AgentOptions.EnableSessionInfo`'s doc comment, which still described the pre-refactor "FTS5 index synced lazily inside the tool itself" design (see v0.76.75's `SessionSearch`-into-`SessionStore` move) instead of the current one.
+- Added `TestAgentWithBoolOptionsSetTheirFlag` (root `harness_test.go`) covering all 6 boolean `AgentWithX` options against their `AgentOptions` field — the direct regression test, and a guard against this class of omission recurring for a future `EnableX` flag.
+
 ## [0.76.76] - 2026-09-16
 
 ### Feature — `SessionInfo` now exposes environment + accumulated usage, matching the TUI's `/info` panel

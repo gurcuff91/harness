@@ -203,6 +203,26 @@ func AgentWithColleagues() AgentOption {
 	return func(o *agent.AgentOptions) { o.EnableColleagues = true }
 }
 
+// AgentWithWebSearch enables the built-in WebSearch tool. The tool owns its
+// own HTTP client and uses the active minimax provider's API key at call
+// time — if the provider isn't connected, the tool returns a single
+// actionable error instead of failing to register, so it's safe to enable
+// unconditionally without a pre-flight provider check. Off by default.
+func AgentWithWebSearch() AgentOption {
+	return func(o *agent.AgentOptions) { o.EnableWebSearch = true }
+}
+
+// AgentWithSessionInfo enables the built-in SessionInfo and SessionSearch
+// tools — two views of the same concept ("information about this
+// session"), gated behind this single option. SessionInfo returns a
+// snapshot of the session's own identity/config/environment/accumulated
+// usage; SessionSearch full-text searches the session's ENTIRE
+// conversation history, including anything already folded into a
+// compaction checkpoint. Off by default.
+func AgentWithSessionInfo() AgentOption {
+	return func(o *agent.AgentOptions) { o.EnableSessionInfo = true }
+}
+
 // ── Runners ──────────────────────────────────────────────────────────────
 //
 // Each RunX is a direct alias for its package's own Run(ctx, *agent.Agent,
