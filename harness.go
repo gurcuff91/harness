@@ -179,13 +179,14 @@ func AgentWithMemory() AgentOption {
 	return func(o *agent.AgentOptions) { o.EnableMemory = true }
 }
 
-// AgentWithScheduler enables cron-scheduled prompts: the agent runs the
-// engine that fires due schedules (in addition to the Schedule* management
-// tools, which are always available). Each schedule records the id of the
-// session that created it; when due, the engine routes the prompt back to
-// that session if it's active (otherwise the prompt is dropped). Only one
-// agent per process should enable this, so prompts don't fire twice. Off by
-// default.
+// AgentWithScheduler enables cron-scheduled prompts: the agent registers
+// the Schedule*/ScheduleList/ScheduleDelete management tools AND runs the
+// engine that fires due schedules — both travel together. Each schedule
+// records the id of the session that created it; when due, the engine
+// routes the prompt back to that session ONLY IF it's already active in
+// THIS instance (otherwise the prompt is dropped, not resurrected from
+// disk — see agent.fireScheduledPrompt). Only one agent per process should
+// enable this, so prompts don't fire twice. Off by default.
 func AgentWithScheduler() AgentOption {
 	return func(o *agent.AgentOptions) { o.EnableScheduler = true }
 }

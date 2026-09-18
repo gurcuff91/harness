@@ -303,8 +303,9 @@ The memory tools require `AgentWithMemory` (or the CLI's memory-enabled path);
 `WebSearch` requires `AgentWithWebSearch` and a connected search backend
 (minimax or ollama-cloud); `SessionInfo`/`SessionSearch` are both gated by the
 single `AgentWithSessionInfo` option (on by default for the CLI's interactive
-transports); `Schedule*` management tools are always available, while the
-engine that *fires* schedules requires `--scheduler` / `AgentWithScheduler`;
+transports); `Schedule*` management tools AND the engine that fires them both
+require `--scheduler` / `AgentWithScheduler` — they travel together, so an
+instance without it neither manages nor executes schedules;
 `Colleague*` requires `AgentWithColleagues`. External tools can be added via
 **MCP** servers (`harness mcp add`), namespaced as `mcp__<server>__<tool>`.
 

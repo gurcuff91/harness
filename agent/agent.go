@@ -46,8 +46,10 @@ type Agent struct {
 	memStore   *memory.Store
 	ownsMemory bool
 
-	// Scheduling (non-nil only when EnableScheduler). The agent owns the store
-	// (for the Schedule* tools) and the engine (which fires due prompts).
+	// Scheduling. schedStore opens unconditionally (needed for the
+	// read-only `harness schedules` listing / HTTP endpoint regardless of
+	// EnableScheduler) — the Schedule* TOOLS and schedEngine (which fires
+	// due prompts) are both gated on EnableScheduler; see scheduleAdapter().
 	schedStore  *schedule.Store
 	schedEngine *schedule.Engine
 
@@ -229,12 +231,15 @@ func New(opts AgentOptions) *Agent {
 		activeSessions:  make(map[string]*Session),
 	}
 
-	// Scheduling: the agent always opens the store so the Schedule* management
-	// tools work in any session. EnableScheduler only decides whether this agent
-	// also RUNS the engine that fires due prompts — so a plain session can manage
-	// schedules while exactly one agent (the one with --scheduler) executes them.
-	// Subagents get neither: they pass EnableScheduler=false and disallow the
-	// Schedule* tools.
+	// Scheduling: the agent always opens the store — Schedules() serves the
+	// read-only `harness schedules` listing / HTTP endpoint regardless of
+	// EnableScheduler, and schedules.json may be shared across several
+	// harness processes on this machine. The Schedule* MANAGEMENT TOOLS and
+	// the engine that fires due prompts both require EnableScheduler (see
+	// scheduleAdapter()) — an instance without it neither manages nor
+	// executes schedules, avoiding schedules created from an instance that
+	// would never run them. Subagents pass EnableScheduler=false and also
+	// disallow the Schedule* tools explicitly (belt and suspenders).
 	if st, err := schedule.Open(""); err == nil {
 		a.schedStore = st
 		if opts.EnableScheduler {
@@ -259,20 +264,21 @@ func New(opts AgentOptions) *Agent {
 }
 
 // fireScheduledPrompt is the engine callback: it routes the due prompt to the
-// session named by the schedule's owner, tagged as scheduled. If that session is
-// not currently active, it is auto-resumed from disk so scheduled prompts are
-// never lost across process restarts. The engine still records the run.
+// session named by the schedule's owner — ONLY if that session is already
+// active in THIS instance. If it isn't, the prompt is dropped silently (the
+// engine still records the run via RecordRun, so no catch-up pileup). This
+// is deliberate, not a gap: exactly one instance should run --scheduler, and
+// it should fire only into sessions IT itself has live — never resurrect an
+// arbitrary session from disk on the engine's own initiative. A transport
+// that wants its sessions to keep receiving scheduled prompts across
+// restarts (Telegram/Slack) is responsible for keeping them active itself
+// (see prewarmPumps in transports/telegram, transports/slack), not this
+// engine reaching into the store behind the transport's back.
 //
 // owner == "" is the single-session fallback (e.g. the TUI): if exactly one
 // session is active, it receives the prompt.
 func (a *Agent) fireScheduledPrompt(slug, prompt, owner string) {
-	sess := a.resolveScheduledSession(owner)
-	if sess == nil && owner != "" {
-		// Session not active — auto-resume from disk so the prompt runs.
-		// If the session no longer exists on disk, drop silently.
-		sess, _ = a.ResumeSession(owner)
-	}
-	if sess != nil {
+	if sess := a.resolveScheduledSession(owner); sess != nil {
 		sess.Prompt(context.Background(), prompt, PromptWithOriginScheduled())
 	}
 }
@@ -305,9 +311,18 @@ func (a *Agent) unregisterSession(id string) {
 }
 
 // scheduleAdapter exposes the agent's schedule store to the Schedule* tools.
-// Returns nil when scheduling is disabled.
+// Returns nil (no tools registered) unless EnableScheduler is set — the
+// store itself is always opened (Schedules() still serves the read-only
+// `harness schedules` listing / HTTP endpoint regardless), but the
+// Schedule/ScheduleList/ScheduleDelete TOOLS are only handed to the model
+// when THIS instance is the one actually running the engine that fires
+// them. Previously the tools were always registered whenever the store
+// opened, letting a model create/manage schedules from an instance that
+// would never execute them unless some OTHER --scheduler instance happened
+// to be running — confusing and easy to end up with schedules that never
+// fire. One agent, one engine, one set of tools: they now travel together.
 func (a *Agent) scheduleAdapter() tools.ScheduleStore {
-	if a.schedStore == nil {
+	if a.schedStore == nil || !a.opts.EnableScheduler {
 		return nil
 	}
 	return schedule.NewToolAdapter(a.schedStore)
@@ -926,7 +941,7 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 			reg.Register(a.toolReg.Get(def.Name))
 		}
 	}
-	if len(res.Skills) > 0 && a.isToolAllowed(tools.ToolSkill) {
+	if len(res.Skills) > 0 {
 		reg.Register(tools.Skill(loader.ReadSkill))
 	}
 	// Memory tools — project-scoped persistent memory, registered when a store is
@@ -1256,7 +1271,12 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) (string,
 		b.WriteString("\n\n## Session Tools\n\nYou have SessionInfo (this session's own identity/config) and SessionSearch (full-text search over this session's complete conversation history) available — use them when you need information about the current session itself.")
 	}
 
-	if a.schedStore != nil {
+	// Gated on EnableScheduler, matching scheduleAdapter()'s exact
+	// condition — not a.schedStore != nil (the store always opens
+	// regardless, but the tools this section describes are only actually
+	// registered when this instance runs the engine; mentioning them
+	// otherwise would describe tools the model doesn't have).
+	if a.opts.EnableScheduler {
 		b.WriteString("\n\n## Scheduling\n\nYou can schedule prompts to run automatically on a recurring cron schedule. Use Schedule to create or update one, ScheduleList to review what's scheduled and how often it has run, and ScheduleDelete to remove one. Schedule work the user wants done repeatedly on a cadence; the prompt runs later exactly as if the user sent it.")
 	}
 

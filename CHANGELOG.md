@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.79] - 2026-09-16
+
+### Fix — scheduling behavior reverted to "one instance manages AND executes, others do neither"
+- **`Schedule`/`ScheduleList`/`ScheduleDelete` tools are now gated on `EnableScheduler`** — previously they were always registered whenever the schedule store opened (which happens unconditionally), so an instance running WITHOUT `--scheduler`/`AgentWithScheduler` could still let the model create/list/delete schedules it would never itself execute — confusing, and easy to end up with schedules that silently never fire unless some OTHER `--scheduler` instance happened to be running. The store (`Agent.schedStore`) still always opens (the read-only `harness schedules` listing / HTTP endpoint depends on it regardless), but the TOOLS and the system prompt's `## Scheduling` section now travel together with the engine, both keyed off the exact same `opts.EnableScheduler` check.
+- **`fireScheduledPrompt` no longer auto-resumes an inactive session from disk** — reverted to the original (pre-`9afc4cb`) behavior: a fired schedule whose owner session isn't already active in THIS instance's `activeSessions` map is dropped silently (the engine still calls `RecordRun`, so no catch-up pileup on the next tick). This is deliberate: the instance running `--scheduler` should only ever fire into sessions it itself has live, never resurrect an arbitrary one from disk on the engine's own initiative — that responsibility belongs to whichever transport wants its sessions to keep receiving prompts across restarts (Telegram/Slack's `prewarmPumps`, unaffected by this change and confirmed to still do the right thing: it pre-warms every stored chat/channel mapping at startup, independent of `--scheduler`).
+- Net effect: `EnableScheduler=false` now means an instance neither manages nor executes schedules at all — a real, observable behavior change for anyone who was relying on a scheduler-less instance to create/list/delete schedules that some other instance executed.
+- New `agent/schedule_gating_test.go`: `TestFireScheduledPromptDropsInactiveOwnerWithoutResuming` (confirmed failing against the old auto-resume code, passing after the revert — verified live by temporarily restoring the old behavior and watching the test catch it), `TestScheduleToolsNotRegisteredWithoutEnableScheduler`/`TestScheduleToolsRegisteredWithEnableScheduler`, `TestScheduleAdapterNilWithoutEnableScheduler`/`TestScheduleAdapterNonNilWithEnableScheduler`.
+- Comments across `agent/agent.go` and `harness.go`'s `AgentWithScheduler` doc updated to describe the current (not historical) design; `README.md`'s Tools section corrected to match.
+
 ## [0.76.78] - 2026-09-16
 
 ### Fix — a mislabeled image could permanently corrupt a session
