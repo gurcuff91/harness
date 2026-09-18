@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -479,6 +480,13 @@ func (t *TUI) applyCommandResult(cmd string, args []string, status *client.Statu
 		if argVal != "" {
 			t.sessionName = argVal
 			confirm = "renamed → " + argVal
+		}
+	case "max-iter":
+		if argVal != "" {
+			if n, err := strconv.Atoi(argVal); err == nil {
+				t.maxIterations = n
+				confirm = "max iterations → " + argVal
+			}
 		}
 	}
 	// Reset: wipe the TUI's visual history and accumulated stats so the screen

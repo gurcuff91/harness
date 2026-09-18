@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.82] - 2026-09-18
+
+### Feature — per-session `max_iterations` override, settable at runtime and persisted across resume
+- New `Session.SetMaxIterations(n int) error` (`agent/session.go`), mirroring `SwitchThinking`'s exact shape: validates `n` is within `[1, 1000]`, mutates `s.maxIterations` under `s.mu` (race-free against `promptSync`'s own read of it — no separate lock-free snapshot needed, since nothing reads `max_iterations` from inside a tool executor mid-turn), and persists to the session's store. Once set, it wins over the owning `Agent`'s own default on every subsequent resume (`ResumeSession`) or `ForkSession` — mirroring how a `Thinking` override already survives both.
+- `agent/store.SessionMeta` gains `MaxIterations int` (`omitempty`) for persistence; `store.Session.Fork` now copies it onto the fork's own meta, same as `Thinking`.
+- The `[1, 1000]` bound is shared with `AgentOptions.MaxIterations` itself — `agent.New` (documented "never fails") now silently clamps an explicit value above 1000 instead of leaving it unbounded. The floor of 1 (not higher) is deliberate: it keeps the internal `fetchSummarizeMaxIterations` (5, `Fetch`'s single-turn condensing sub-agent budget) valid without a special case.
+- New session command `max-iter` (`server/server.go`'s dynamic command set + `handleExecCommand`, alongside `model`/`thinking`/`rename`) — accepts either a JSON string or number for `value`, returns `422` on an out-of-range value without touching session state. Works from the TUI (`/max-iter <n>`, footer `(turn/max)` updates immediately) or any client via `POST /api/sessions/{id}/commands`. `GET /api/sessions/{id}/info` already reported `max_iterations` (unchanged shape) — it now reflects the live override once set.
+- Tests: `agent/max_iterations_test.go` (range validation, `agent.New`'s silent clamp, `fetchSummarizeMaxIterations` staying valid, reject-out-of-range leaves state untouched, real persistence across a `FileStore`-backed resume, resume-without-override falls back to the agent default, fork carries the override over) and `harness_test.go`'s `TestMaxIterCommandEndToEnd` (real `RunServer` + real session + real HTTP `ExecCommand` + `GetSessionInfo` round trip, including the rejected-value case).
+
+### Fix — `CopyMessages` failed on a session forked before it ever received a message
+- Found live while testing the feature above: `FileStore.CopyMessages`'s own doc comment already promised "if srcID has no log yet (never written), dst gets an empty file" — but the implementation never actually checked whether the source `.jsonl` existed on disk (only lazily created on the FIRST `AppendMessage`), so forking (or otherwise copying) a session that was created but never sent a single message failed with `"no such file or directory"` instead of the promised empty-file fallback. Reproduced directly: creating a session and immediately calling `ForkSession` on it, with zero messages in between, failed every time before this fix.
+- Fixed with an `os.Stat` guard before trusting `findJSONLPath`'s "found" result — the source is now correctly treated as empty (not present) whenever the file doesn't actually exist yet, regardless of whether its `.meta.json` does.
+- New `agent/store/store_test.go`'s `TestPortCopyMessagesFromNeverWrittenSourceYieldsEmptyDst`, run against both `FileStore` and `InMemoryStore` — confirmed failing (`FileStore` only) before the fix, passing after.
+
 ## [0.76.81] - 2026-09-18
 
 ### Feature — `GET /api/sessions/{id}/tools`: list a session's available tools

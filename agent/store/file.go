@@ -182,7 +182,20 @@ func (m *FileStore) CopyMessages(srcID, dstID string) error {
 		return fmt.Errorf("CopyMessages: destination session %s not found", dstID)
 	}
 
+	// findJSONLPath only confirms srcID's .meta.json exists — it never
+	// checks whether the .jsonl itself was actually created on disk, which
+	// only happens lazily on the FIRST AppendMessage (see that method).
+	// Without the os.Stat guard below, a session forked/copied before ever
+	// receiving a message (a real, previously-unhandled case: create a
+	// session, then immediately Fork it before writing anything) hit
+	// os.ReadFile failing with "no such file or directory" instead of the
+	// empty-file fallback this function's own doc comment already promises.
 	srcPath, srcFound := m.findJSONLPath(srcID)
+	if srcFound {
+		if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+			srcFound = false
+		}
+	}
 	if !srcFound {
 		// Source has no JSONL yet — create an empty file for dst and return.
 		f, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)

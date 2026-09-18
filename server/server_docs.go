@@ -675,7 +675,7 @@ const openAPISpecTemplate = `{
         "type": "object",
         "required": ["command"],
         "properties": {
-          "command": { "type": "string", "example": "compact", "enum": ["compact","reset","rename","model","thinking","skill:<name>"] },
+          "command": { "type": "string", "example": "compact", "enum": ["compact","reset","rename","model","thinking","max-iter","skill:<name>"] },
           "params":  { "type": "object", "additionalProperties": true }
         }
       },

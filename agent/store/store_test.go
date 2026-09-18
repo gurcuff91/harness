@@ -93,6 +93,34 @@ func TestPortAppendAndLoadMessages(t *testing.T) {
 	}
 }
 
+// TestPortCopyMessagesFromNeverWrittenSourceYieldsEmptyDst is the direct
+// regression test for a real bug: FileStore.CopyMessages used to fail with
+// "no such file or directory" when srcID's .jsonl was never actually
+// created on disk (only its .meta.json exists — the .jsonl is created
+// lazily on the FIRST AppendMessage) — e.g. forking a session immediately
+// after creating it, before it ever received a message. The doc comment on
+// CopyMessages already promised "dst gets an empty file" for this case;
+// the implementation just didn't honor it.
+func TestPortCopyMessagesFromNeverWrittenSourceYieldsEmptyDst(t *testing.T) {
+	for name, p := range ports(t) {
+		t.Run(name, func(t *testing.T) {
+			p.SaveMeta(newMeta("src", "/p")) // meta exists, but NO AppendMessage ever called
+			p.SaveMeta(newMeta("dst", "/p"))
+
+			if err := p.CopyMessages("src", "dst"); err != nil {
+				t.Fatalf("CopyMessages from a never-written source must succeed (empty copy), got: %v", err)
+			}
+			msgs, err := p.LoadMessages("dst", 0)
+			if err != nil {
+				t.Fatalf("LoadMessages: %v", err)
+			}
+			if len(msgs) != 0 {
+				t.Errorf("expected dst to have 0 messages, got %d", len(msgs))
+			}
+		})
+	}
+}
+
 func TestPortDeleteSession(t *testing.T) {
 	for name, p := range ports(t) {
 		t.Run(name, func(t *testing.T) {

@@ -212,6 +212,70 @@ func TestSessionToolsEndpointEndToEnd(t *testing.T) {
 	<-done
 }
 
+// TestMaxIterCommandEndToEnd verifies the "max-iter" session command end to
+// end: exec via client.Client.ExecCommand (POST /api/sessions/{id}/commands)
+// reaches server.handleExecCommand's new case, which calls
+// Session.SetMaxIterations — confirmed by re-fetching GET
+// /api/sessions/{id}/info and seeing the updated max_iterations, and by an
+// out-of-range value correctly failing with an error instead of silently
+// applying.
+func TestMaxIterCommandEndToEnd(t *testing.T) {
+	a := NewAgent(AgentWithStore(store.NewInMemoryStore()))
+	models := a.Models()
+	if len(models) < 1 {
+		t.Skip("need at least 1 active model in this environment")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	addr := "127.0.0.1:18966" // fixed, unlikely-collision test-only port
+
+	done := make(chan error, 1)
+	go func() { done <- RunServer(ctx, a, ServerWithAddr(addr), ServerWithLogger(NewNilLogger())) }()
+
+	c := NewClient(addr)
+	var sess *client.Session
+	var err error
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		sess, err = c.CreateSession(models[0].Model, t.TempDir(), "")
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	// Valid value takes effect.
+	if _, err := c.ExecCommand(sess.ID, "max-iter", map[string]any{"value": "321"}); err != nil {
+		t.Fatalf("ExecCommand max-iter: %v", err)
+	}
+	info, err := c.GetSessionInfo(sess.ID)
+	if err != nil {
+		t.Fatalf("GetSessionInfo: %v", err)
+	}
+	if info.Session.MaxIterations != 321 {
+		t.Errorf("max_iterations after ExecCommand = %d, want 321", info.Session.MaxIterations)
+	}
+
+	// Out-of-range value is rejected, and must NOT change the prior value.
+	if _, err := c.ExecCommand(sess.ID, "max-iter", map[string]any{"value": "1001"}); err == nil {
+		t.Error("expected an error for max-iter value 1001 (above the 1000 ceiling)")
+	}
+	info, err = c.GetSessionInfo(sess.ID)
+	if err != nil {
+		t.Fatalf("GetSessionInfo (after rejected update): %v", err)
+	}
+	if info.Session.MaxIterations != 321 {
+		t.Errorf("max_iterations after a REJECTED update = %d, want unchanged 321", info.Session.MaxIterations)
+	}
+
+	cancel()
+	<-done
+}
+
 // TestRunAcpAliasIsWiredEndToEnd verifies RunAcp (and AcpWithStdin/
 // AcpWithStdout) are genuinely wired to acp.Run by driving a real
 // "initialize" JSON-RPC round trip through the facade's aliases alone.

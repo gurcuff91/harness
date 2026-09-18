@@ -33,6 +33,12 @@ type SessionMeta struct {
 	// Runtime state — mutable, persisted on change
 	Model    string `json:"model"`    // "provider/model"
 	Thinking string `json:"thinking"` // thinking level ("off" if disabled)
+	// MaxIterations is a per-session override of the ReAct iteration budget
+	// per turn, set via Session.SetMaxIterations (0 = unset, meaning "use
+	// whatever the owning Agent's own default is" — see newSession's restore
+	// logic). Persisted so a resumed session keeps whatever override was
+	// explicitly configured, mirroring how Thinking already survives resume.
+	MaxIterations int `json:"max_iterations,omitempty"`
 
 	// Compaction — CompactOffset is the ABSOLUTE index, in the message log, of
 	// the current checkpoint (working set starts here). CompactCount is audit.
@@ -296,6 +302,7 @@ func (s *Session) Fork(name string) (*Session, error) {
 		Name:          name,
 		Model:         parentMeta.Model,
 		Thinking:      parentMeta.Thinking,
+		MaxIterations: parentMeta.MaxIterations, // carry over any per-session SetMaxIterations override, same as Thinking
 		CompactOffset: parentMeta.CompactOffset,
 		CompactCount:  parentMeta.CompactCount,
 		Stats:         parentMeta.Stats,

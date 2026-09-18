@@ -134,6 +134,27 @@ type AgentOptions struct {
 // subagentMaxIterations (see the Subagent tool wiring below).
 const defaultMaxIterations = 50
 
+// minMaxIterations/maxMaxIterations bound any EXPLICIT max_iterations value
+// — AgentOptions.MaxIterations when set (0/negative still falls back to
+// defaultMaxIterations, untouched by this bound) and Session.SetMaxIterations'
+// per-session runtime override. 1 as a floor (not higher) deliberately keeps
+// fetchSummarizeMaxIterations (5, an internal single-turn budget) valid
+// without needing a special case.
+const (
+	minMaxIterations = 1
+	maxMaxIterations = 1000
+)
+
+// validateMaxIterations reports whether n is a legal explicit max_iterations
+// value — shared by agent.New (AgentOptions.MaxIterations) and
+// Session.SetMaxIterations so both enforce the exact same bound.
+func validateMaxIterations(n int) error {
+	if n < minMaxIterations || n > maxMaxIterations {
+		return fmt.Errorf("max_iterations must be between %d and %d (got %d)", minMaxIterations, maxMaxIterations, n)
+	}
+	return nil
+}
+
 // subagentMaxIterations is the DEFAULT iteration budget for a subagent —
 // used when the Subagent tool's caller doesn't request an override via its
 // optional 'max_iterations' param (see tools.subagentMinIterations/
@@ -166,6 +187,13 @@ const fetchSummarizeMaxIterations = 5
 func New(opts AgentOptions) *Agent {
 	if opts.MaxIterations <= 0 {
 		opts.MaxIterations = defaultMaxIterations
+	} else if opts.MaxIterations > maxMaxIterations {
+		// New() never fails (documented contract) — an explicit value ABOVE
+		// the ceiling is clamped silently rather than rejected. Below the
+		// floor can't happen here: any value <=0 already took the default
+		// branch above, and minMaxIterations is 1, so every remaining
+		// positive value already satisfies the floor.
+		opts.MaxIterations = maxMaxIterations
 	}
 	if opts.SystemPrompt == "" {
 		opts.SystemPrompt = defaultSystemPrompt
@@ -664,6 +692,15 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 		thinkingLvl = meta.Thinking
 	}
 
+	// A per-session SetMaxIterations override survives resume the same way
+	// thinkingLvl does above — meta.MaxIterations is 0 (omitempty) unless
+	// the session explicitly set one, in which case it wins over the owning
+	// Agent's own default.
+	maxIterations := a.maxIterations
+	if meta.MaxIterations > 0 {
+		maxIterations = meta.MaxIterations
+	}
+
 	maxTokens := a.maxTokens
 	if maxTokens == 0 {
 		if m := provider.ModelMeta(modelID); m != nil && m.MaxTokens > 0 {
@@ -689,7 +726,7 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 	sess = newSession(storeInst,
 		provider, modelID, thinkingLvl,
 		resumeTools, tl, resumePrompt, pl,
-		a.maxIterations, maxTokens,
+		maxIterations, maxTokens,
 		skills, readSkill,
 		a.memStore != nil, a.opts.EnableSessionInfo)
 	sess.agent = a
@@ -737,6 +774,15 @@ func (a *Agent) ForkSession(sessionID string) (*Session, error) {
 	}
 
 	thinkingLvl := meta.Thinking
+
+	// Same restore-over-default logic as ResumeSession: Fork already copies
+	// MaxIterations onto the fork's own persisted meta (see store.Session.Fork),
+	// so this just decides what the LIVE session uses.
+	maxIterations := a.maxIterations
+	if meta.MaxIterations > 0 {
+		maxIterations = meta.MaxIterations
+	}
+
 	maxTokens := a.maxTokens
 	if maxTokens == 0 {
 		if m := provider.ModelMeta(modelID); m != nil && m.MaxTokens > 0 {
@@ -762,7 +808,7 @@ func (a *Agent) ForkSession(sessionID string) (*Session, error) {
 	sess = newSession(forkStore,
 		provider, modelID, thinkingLvl,
 		forkTools, tl, forkPrompt, pl,
-		a.maxIterations, maxTokens,
+		maxIterations, maxTokens,
 		skills, readSkill,
 		a.memStore != nil, a.opts.EnableSessionInfo)
 	sess.agent = a

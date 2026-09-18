@@ -959,6 +959,31 @@ func (s *Session) SwitchThinking(level string) error {
 	return nil
 }
 
+// SetMaxIterations overrides this session's per-turn ReAct iteration budget
+// (bounded by validateMaxIterations — [1, 1000]), taking effect on the very
+// next turn and persisted so it survives a resume (see newSession's restore
+// logic, which prefers meta.MaxIterations over the owning Agent's own
+// default whenever it's set). Mirrors SwitchThinking's exact shape: validate
+// first (no session state touched on a bad value), mutate s.maxIterations
+// under s.mu (the same lock promptSync holds for the whole turn — this is
+// what makes reading s.maxIterations inside the ReAct loop's `for i := range
+// s.maxIterations - 1` race-free without any separate lock-free snapshot,
+// unlike CurrentModel/CurrentThinking: nothing reads max_iterations from
+// INSIDE a tool executor mid-turn, only server.go's HTTP handlers, which
+// never run while promptSync holds s.mu), then persist to the store.
+func (s *Session) SetMaxIterations(n int) error {
+	if err := validateMaxIterations(n); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.maxIterations = n
+	meta := s.store.Meta()
+	meta.MaxIterations = n
+	s.store.UpdateMeta(meta)
+	s.mu.Unlock()
+	return nil
+}
+
 // CurrentThinking returns the session's active thinking level, reflecting
 // any SwitchThinking call made after the session (and its tools, including
 // SessionInfo's closure) were built. Lock-free — see thinkingStr's doc

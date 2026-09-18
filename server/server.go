@@ -1165,6 +1165,13 @@ var commands = []commandDef{
 		},
 	},
 	{
+		Name:        "max-iter",
+		Description: "Override the max ReAct iterations allowed per turn for this session (1-1000)",
+		Params: []paramDef{
+			{Name: "value", Type: "integer", Required: true},
+		},
+	},
+	{
 		Name:        "compact",
 		Description: "Compact the conversation via LLM summary",
 		Params:      []paramDef{},
@@ -1291,6 +1298,37 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 		// invalid model never mutates session state.
 		if err := proxy.session.SwitchModel(context.Background(), model); err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeStatus(w, http.StatusOK, "ok", "")
+
+	case "max-iter":
+		// Params travel over JSON as map[string]any — the TUI/CLI always send
+		// it as a string (client.ExecCommand's params are built from typed
+		// user input, same as "model"/"thinking"), but a direct API caller
+		// could reasonably send a JSON number instead, so accept both rather
+		// than requiring one specific wire representation.
+		var n int
+		switch v := req.Params["value"].(type) {
+		case string:
+			parsed, err := strconv.Atoi(v)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "param 'value' must be an integer", nil)
+				return
+			}
+			n = parsed
+		case float64: // encoding/json decodes a bare JSON number into float64
+			n = int(v)
+		default:
+			writeError(w, http.StatusBadRequest, "param 'value' is required", nil)
+			return
+		}
+		// SetMaxIterations validates the [1, 1000] bound itself — same
+		// pattern as SwitchThinking above: invalid input never touches
+		// session state, mapped to 422 like SwitchThinking's
+		// ErrInvalidThinkingLevel.
+		if err := proxy.session.SetMaxIterations(n); err != nil {
+			writeErr(w, http.StatusUnprocessableEntity, err)
 			return
 		}
 		writeStatus(w, http.StatusOK, "ok", "")
