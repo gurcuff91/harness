@@ -110,6 +110,7 @@ func TestEngineStandardCronFires(t *testing.T) {
 	s.Set("minutely", "* * * * *", "run", "sess-A") // every minute
 	var fired []string
 	eng := NewEngine(s, func(slug, prompt, owner string) { fired = append(fired, slug) })
+	eng.AddSession("sess-A") // must be watched — see TestEngineIgnoresUnwatchedSessions
 
 	// Engine started at 09:00:30, never run. By 09:01:05 the 09:01:00 tick has
 	// passed → fires once.
@@ -137,6 +138,7 @@ func TestEngineEveryFires(t *testing.T) {
 	s.Set("tick", "@every 1m", "run", "sess-A")
 	var fired []string
 	eng := NewEngine(s, func(slug, prompt, owner string) { fired = append(fired, slug) })
+	eng.AddSession("sess-A")
 
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.Local)
 	// Before 1m elapsed → not due.
@@ -158,6 +160,7 @@ func TestEngineFiresWithOwner(t *testing.T) {
 	s.Set("tick", "* * * * *", "run", "session-abc")
 	var gotOwner string
 	eng := NewEngine(s, func(slug, prompt, owner string) { gotOwner = owner })
+	eng.AddSession("session-abc")
 	start := time.Date(2026, 1, 1, 9, 0, 30, 0, time.Local)
 	eng.evaluate(start, time.Date(2026, 1, 1, 9, 1, 5, 0, time.Local))
 	if gotOwner != "session-abc" {
@@ -182,6 +185,7 @@ func TestEngineReadsFreshEachEval(t *testing.T) {
 	s := newTestStore(t)
 	var fired []string
 	eng := NewEngine(s, func(slug, prompt, owner string) { fired = append(fired, slug) })
+	eng.AddSession("sess-A")
 
 	start := time.Date(2026, 1, 1, 9, 0, 30, 0, time.Local)
 	now := time.Date(2026, 1, 1, 9, 1, 5, 0, time.Local)

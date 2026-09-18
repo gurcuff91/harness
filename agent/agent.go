@@ -267,16 +267,22 @@ func New(opts AgentOptions) *Agent {
 // session named by the schedule's owner — ONLY if that session is already
 // active in THIS instance. If it isn't, the prompt is dropped silently (the
 // engine still records the run via RecordRun, so no catch-up pileup). This
-// is deliberate, not a gap: exactly one instance should run --scheduler, and
-// it should fire only into sessions IT itself has live — never resurrect an
-// arbitrary session from disk on the engine's own initiative. A transport
-// that wants its sessions to keep receiving scheduled prompts across
-// restarts (Telegram/Slack) is responsible for keeping them active itself
-// (see prewarmPumps in transports/telegram, transports/slack), not this
-// engine reaching into the store behind the transport's back.
+// is deliberate, not a gap: an instance should fire only into sessions IT
+// itself has live — never resurrect an arbitrary session from disk on the
+// engine's own initiative. A transport that wants its sessions to keep
+// receiving scheduled prompts across restarts (Telegram/Slack) is
+// responsible for keeping them active itself (see prewarmPumps in
+// transports/telegram, transports/slack), not this engine reaching into the
+// store behind the transport's back.
 //
-// owner == "" is the single-session fallback (e.g. the TUI): if exactly one
-// session is active, it receives the prompt.
+// In practice schedEngine.evaluate (see agent/schedule/engine.go) already
+// filters to only THIS engine's watched sessions before ever calling this
+// function, so owner not resolving here would mean a session closed in the
+// narrow window between evaluate's check and this call — a legitimate,
+// harmless drop, not the routine case it used to be before that filter
+// existed. Several harness processes, each running --scheduler and each
+// watching only their own live sessions, is now a safe, intended
+// deployment shape — see Engine's own doc comment for the full story.
 func (a *Agent) fireScheduledPrompt(slug, prompt, owner string) {
 	if sess := a.resolveScheduledSession(owner); sess != nil {
 		sess.Prompt(context.Background(), prompt, PromptWithOriginScheduled())
@@ -296,18 +302,29 @@ func (a *Agent) resolveScheduledSession(owner string) *Session {
 	return a.activeSessions[owner]
 }
 
-// registerSession adds a live session to the active set (keyed by id). Called by
-// NewSession/ResumeSession. unregisterSession removes it (called on Close).
+// registerSession adds a live session to the active set (keyed by id). Called
+// by NewSession/ResumeSession/ForkSession. unregisterSession removes it
+// (called on Close). Also tells schedEngine (nil unless EnableScheduler) to
+// start/stop watching this session's id — see Engine.AddSession's doc
+// comment for why: this is what makes it safe for several harness processes
+// to each run their own engine over the same shared schedules.json, each
+// firing only into the sessions IT itself has live.
 func (a *Agent) registerSession(s *Session) {
 	a.sessMu.Lock()
 	a.activeSessions[s.id] = s
 	a.sessMu.Unlock()
+	if a.schedEngine != nil {
+		a.schedEngine.AddSession(s.id)
+	}
 }
 
 func (a *Agent) unregisterSession(id string) {
 	a.sessMu.Lock()
 	delete(a.activeSessions, id)
 	a.sessMu.Unlock()
+	if a.schedEngine != nil {
+		a.schedEngine.DelSession(id)
+	}
 }
 
 // scheduleAdapter exposes the agent's schedule store to the Schedule* tools.

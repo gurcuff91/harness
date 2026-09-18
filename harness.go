@@ -185,8 +185,13 @@ func AgentWithMemory() AgentOption {
 // records the id of the session that created it; when due, the engine
 // routes the prompt back to that session ONLY IF it's already active in
 // THIS instance (otherwise the prompt is dropped, not resurrected from
-// disk — see agent.fireScheduledPrompt). Only one agent per process should
-// enable this, so prompts don't fire twice. Off by default.
+// disk — see agent.fireScheduledPrompt). Only one agent WITHIN A GIVEN
+// PROCESS should enable this, so prompts don't fire twice from the same
+// process — but several SEPARATE harness processes, each with its own
+// agent enabling this over the same shared schedules.json, is a safe,
+// intended deployment shape: each engine only ever fires into the
+// sessions it itself has active (see agent/schedule.Engine's doc
+// comment). Off by default.
 func AgentWithScheduler() AgentOption {
 	return func(o *agent.AgentOptions) { o.EnableScheduler = true }
 }

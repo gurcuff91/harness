@@ -139,3 +139,99 @@ func TestScheduleAdapterNonNilWithEnableScheduler(t *testing.T) {
 		t.Error("scheduleAdapter() must be non-nil when EnableScheduler is on")
 	}
 }
+
+// ── registerSession/unregisterSession ↔ Engine.AddSession/DelSession wiring ──
+//
+// These confirm the fix for a second real, field-reported bug: with
+// multiple harness processes each running --scheduler over the SAME shared
+// schedules.json, whichever process's tick landed first could steal a
+// schedule's fire+RecordRun even if it had no matching active session at
+// all — because the Engine used to evaluate every schedule in the store
+// unconditionally. The fix threads registerSession/unregisterSession
+// through to the engine's watched-session set (see
+// agent/schedule/engine_watch_test.go for the Engine-level coverage of the
+// actual two-engine race this closes); these tests confirm the AGENT side
+// of that wiring — that creating/closing a session really does add/remove
+// it from schedEngine's watched set, not just that Engine's own API works
+// in isolation.
+
+// TestNewSessionAddsToSchedEngineWatchedSet confirms NewSession's call to
+// registerSession reaches the schedule engine.
+func TestNewSessionAddsToSchedEngineWatchedSet(t *testing.T) {
+	a := New(AgentOptions{Store: store.NewInMemoryStore(), EnableScheduler: true})
+	defer a.Close()
+
+	models := a.Models()
+	if len(models) < 1 {
+		t.Skip("need at least 1 active model in this environment")
+	}
+
+	sess, err := a.NewSession(t.TempDir(), models[0].Model)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer sess.Close()
+
+	if a.schedEngine == nil {
+		t.Fatal("EnableScheduler=true must have started a schedEngine")
+	}
+	if !a.schedEngine.Watching(sess.ID()) {
+		t.Error("NewSession must register the new session with schedEngine via registerSession → AddSession")
+	}
+}
+
+// TestSessionCloseRemovesFromSchedEngineWatchedSet confirms Close's call to
+// unregisterSession reaches the schedule engine too — a closed session must
+// stop being eligible for fired prompts (this is what makes
+// fireScheduledPrompt's drop-if-inactive behavior and the engine's
+// watched-set filter agree with each other).
+func TestSessionCloseRemovesFromSchedEngineWatchedSet(t *testing.T) {
+	a := New(AgentOptions{Store: store.NewInMemoryStore(), EnableScheduler: true})
+	defer a.Close()
+
+	models := a.Models()
+	if len(models) < 1 {
+		t.Skip("need at least 1 active model in this environment")
+	}
+
+	sess, err := a.NewSession(t.TempDir(), models[0].Model)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	id := sess.ID()
+
+	if !a.schedEngine.Watching(id) {
+		t.Fatal("test setup invalid: session was never watched after NewSession")
+	}
+
+	sess.Close()
+
+	if a.schedEngine.Watching(id) {
+		t.Error("Close must remove the session from schedEngine's watched set via unregisterSession → DelSession")
+	}
+}
+
+// TestSchedEngineNilWithoutEnableScheduler confirms registerSession/
+// unregisterSession are safe (no panic) when EnableScheduler is off — the
+// nil-check on a.schedEngine must actually gate the calls, not just be
+// decorative.
+func TestSchedEngineNilWithoutEnableScheduler(t *testing.T) {
+	a := New(AgentOptions{Store: store.NewInMemoryStore()})
+	defer a.Close()
+
+	if a.schedEngine != nil {
+		t.Fatal("test setup invalid: schedEngine should be nil without EnableScheduler")
+	}
+
+	models := a.Models()
+	if len(models) < 1 {
+		t.Skip("need at least 1 active model in this environment")
+	}
+
+	// Must not panic on nil a.schedEngine.
+	sess, err := a.NewSession(t.TempDir(), models[0].Model)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	sess.Close()
+}
