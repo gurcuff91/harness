@@ -118,6 +118,32 @@ func TestGetSchedulesOwnerFilter(t *testing.T) {
 	}
 }
 
+// TestGetSessionToolsHitsExpectedPath verifies GetSessionTools requests the
+// correct endpoint and decodes the response into []types.ToolDef.
+func TestGetSessionToolsHitsExpectedPath(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Write([]byte(`[{"name":"Bash","description":"run shell","input_schema":{"type":"object"}}]`))
+	}))
+	defer srv.Close()
+	c := New(srv.Listener.Addr().String())
+
+	defs, err := c.GetSessionTools("sess-abc")
+	if err != nil {
+		t.Fatalf("GetSessionTools: %v", err)
+	}
+	if gotPath != "/api/sessions/sess-abc/tools" {
+		t.Errorf("path = %q, want /api/sessions/sess-abc/tools", gotPath)
+	}
+	if len(defs) != 1 || defs[0].Name != "Bash" || defs[0].Description != "run shell" {
+		t.Errorf("unexpected decoded defs: %+v", defs)
+	}
+	if len(defs[0].InputSchema) == 0 {
+		t.Error("expected a non-empty input_schema to survive the round trip")
+	}
+}
+
 // TestListSessionsCWDFilter mirrors TestGetSchedulesOwnerFilter for the
 // sessions listing (all-cwds vs a single cwd).
 func TestListSessionsCWDFilter(t *testing.T) {

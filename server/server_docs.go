@@ -416,6 +416,18 @@ const openAPISpecTemplate = `{
           "200": { "description": "Context breakdown", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContextBreakdown" } } } }
         }
       }
+    },
+    "/api/sessions/{id}/tools": {
+      "get": {
+        "tags": ["sessions"],
+        "summary": "List session tools",
+        "description": "Returns the full set of tool definitions (name, description, input_schema) currently registered for the session — the exact set sent to the provider on the next turn, including any MCP tools and SDK-supplied tools alongside the built-ins. Pure introspection, not tied to any transport.",
+        "operationId": "getSessionTools",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": {
+          "200": { "description": "Tool definitions", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ToolDef" } } } } }
+        }
+      }
     }
   },
   "components": {
@@ -640,6 +652,14 @@ const openAPISpecTemplate = `{
           "name":        { "type": "string" },
           "description": { "type": "string" },
           "params":      { "type": "array", "items": { "$ref": "#/components/schemas/ParamDef" } }
+        }
+      },
+      "ToolDef": {
+        "type": "object",
+        "properties": {
+          "name":         { "type": "string", "example": "Bash" },
+          "description":  { "type": "string" },
+          "input_schema": { "type": "object", "description": "JSON Schema for the tool's input arguments", "additionalProperties": true }
         }
       },
       "ParamDef": {

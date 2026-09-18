@@ -130,6 +130,7 @@ func (s *Server) handler() http.Handler {
 	r.Post("/api/sessions/{id}/stop", s.handleStopSession)
 	r.Get("/api/sessions/{id}/info", s.handleSessionInfo)
 	r.Get("/api/sessions/{id}/context", s.handleSessionContext)
+	r.Get("/api/sessions/{id}/tools", s.handleListTools)
 
 	// TEMPORARY diagnostic endpoint (not net/http/pprof's DefaultServeMux
 	// auto-registration — that only wires up on import side effects, and this
@@ -1105,6 +1106,25 @@ func (s *Server) handleSessionContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, proxy.session.ContextBreakdown())
+}
+
+// handleListTools handles GET /api/sessions/{id}/tools. Returns the full
+// set of tool definitions (name, description, input_schema) currently
+// registered for the session — the exact set sent to the provider on the
+// next turn, including any MCP tools and SDK-supplied AgentOptions.Tools
+// alongside the built-ins. Pure introspection: this is NOT tied to any
+// transport and doesn't affect what the model can call — it only tells a
+// caller what's available. Only valid for active sessions.
+func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	s.mu.RLock()
+	proxy, ok := s.sessions[id]
+	s.mu.RUnlock()
+	if !ok {
+		writeError(w, http.StatusBadRequest, "session is not active", nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, proxy.session.Tools())
 }
 
 // --- Commands ---

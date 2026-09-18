@@ -11,6 +11,7 @@ import (
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
+	"github.com/gurcuff91/harness/client"
 )
 
 // TestNewAgentDefaults verifies the zero-option facade constructor produces
@@ -137,6 +138,78 @@ func TestRunServerAliasIsWiredEndToEnd(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("RunServer did not return after ctx was cancelled")
 	}
+}
+
+// TestSessionToolsEndpointEndToEnd verifies GET /api/sessions/{id}/tools —
+// wired via server.handleListTools and client.Client.GetSessionTools — end
+// to end: a real RunServer instance, a real session, a real HTTP round
+// trip, decoding into real types.ToolDef values that match what the
+// session's own Session.Tools() reports directly (not just "some JSON came
+// back").
+func TestSessionToolsEndpointEndToEnd(t *testing.T) {
+	a := NewAgent(AgentWithStore(store.NewInMemoryStore()))
+	models := a.Models()
+	if len(models) < 1 {
+		t.Skip("need at least 1 active model in this environment")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	addr := "127.0.0.1:18965" // fixed, unlikely-collision test-only port
+
+	done := make(chan error, 1)
+	go func() { done <- RunServer(ctx, a, ServerWithAddr(addr), ServerWithLogger(NewNilLogger())) }()
+
+	c := NewClient(addr)
+	var sess *client.Session
+	var err error
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		sess, err = c.CreateSession(models[0].Model, t.TempDir(), "")
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	defs, err := c.GetSessionTools(sess.ID)
+	if err != nil {
+		t.Fatalf("GetSessionTools: %v", err)
+	}
+	if len(defs) == 0 {
+		t.Fatal("expected at least one tool definition (built-ins are always registered)")
+	}
+
+	names := map[string]bool{}
+	for _, d := range defs {
+		if d.Name == "" {
+			t.Error("tool definition with empty name")
+		}
+		if d.Description == "" {
+			t.Errorf("tool %q has empty description", d.Name)
+		}
+		if len(d.InputSchema) == 0 {
+			t.Errorf("tool %q has empty input_schema", d.Name)
+		}
+		names[d.Name] = true
+	}
+	for _, want := range []string{"Bash", "Read", "Write", "Edit"} {
+		if !names[want] {
+			t.Errorf("expected built-in tool %q in the response, got %v", want, names)
+		}
+	}
+
+	// Session-not-active must 400, same as every other /api/sessions/{id}/*
+	// endpoint — GetSessionTools against a bogus id must surface that.
+	if _, err := c.GetSessionTools("not-a-real-session-id"); err == nil {
+		t.Error("expected an error for a non-active session id")
+	}
+
+	cancel()
+	<-done
 }
 
 // TestRunAcpAliasIsWiredEndToEnd verifies RunAcp (and AcpWithStdin/

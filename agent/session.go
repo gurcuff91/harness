@@ -490,6 +490,16 @@ func (s *Session) PromptAndWait(ctx context.Context, text string, opts ...Prompt
 // Skills returns the discovered skills for this session.
 func (s *Session) Skills() []resources.SkillInfo { return s.skills }
 
+// Tools returns the JSON tool definitions (name, description, input schema)
+// currently registered for this session — the exact set sent to the
+// provider on the next turn, including any MCP tools (namespaced
+// mcp__<server>__<tool>) and SDK-supplied AgentOptions.Tools alongside the
+// built-ins. Read-only introspection: s.tools is fixed for the lifetime of
+// the session (populated once by buildSessionTools at construction, never
+// mutated afterward), and Definitions() already returns a fresh copy, so
+// this is safe to call from anywhere with no locking.
+func (s *Session) Tools() []types.ToolDef { return s.tools.Definitions() }
+
 // ReadSkill returns the content of a skill by name plus the absolute directory
 // it lives in (for resolving relative paths the skill references).
 func (s *Session) ReadSkill(name string) (content string, dir string, err error) {

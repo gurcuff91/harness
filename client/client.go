@@ -425,6 +425,15 @@ func (c *Client) GetMessages(sessionID string) ([]types.Message, error) {
 	return decode[[]types.Message](c, "GET", "/api/sessions/"+sessionID+"/messages", nil)
 }
 
+// GetSessionTools returns the tool definitions (name, description, input
+// schema) currently registered for an active session — the exact set sent
+// to the provider on the next turn, including any MCP tools and
+// SDK-supplied tools alongside the built-ins. Pure introspection, not tied
+// to any transport.
+func (c *Client) GetSessionTools(sessionID string) ([]types.ToolDef, error) {
+	return decode[[]types.ToolDef](c, "GET", "/api/sessions/"+sessionID+"/tools", nil)
+}
+
 // ── Session commands ─────────────────────────────────────────────────────
 
 // ListCommands returns the dynamic command set the session accepts (built-ins

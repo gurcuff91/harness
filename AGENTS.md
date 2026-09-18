@@ -306,9 +306,9 @@ Keep files focused. Current largest files for reference:
 
 | File | Lines | Role |
 |------|-------|------|
-| `agent/session.go` | ~1790 | Session lifecycle, ReAct loop, history, tool pairing |
-| `server/server.go` | ~1410 | HTTP/SSE routes + handlers |
-| `agent/agent.go` | ~1255 | Agent factory, MCP/memory/scheduler/SessionInfo+SessionSearch wiring, prompt assembly |
+| `agent/session.go` | ~1860 | Session lifecycle, ReAct loop, history, tool pairing |
+| `server/server.go` | ~1430 | HTTP/SSE routes + handlers |
+| `agent/agent.go` | ~1330 | Agent factory, MCP/memory/scheduler/SessionInfo+SessionSearch wiring, prompt assembly |
 | `internal/tui/components/markdown.go` | ~1280 | Faithful streaming markdown renderer (complex by nature) |
 | `internal/providers/codex_oauth.go` | ~990 | Codex OAuth + Responses-dialect streaming |
 | `agent/store/file.go` | ~680 | Filesystem SessionStore — meta/log I/O plus per-session FTS5 SearchMessages |

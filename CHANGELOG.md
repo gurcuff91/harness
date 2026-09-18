@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.81] - 2026-09-18
+
+### Feature — `GET /api/sessions/{id}/tools`: list a session's available tools
+- New read-only endpoint returning the full set of tool definitions (`name`, `description`, `input_schema`) currently registered for an active session — the exact set sent to the provider on the next turn, including any MCP tools (namespaced `mcp__<server>__<tool>`) and SDK-supplied `AgentOptions.Tools` alongside the built-ins. Pure introspection: doesn't affect what the model can call, isn't tied to any transport, and requires no new aggregation logic — `agent/session.go`'s `Session.Tools()` just exposes the same `s.tools.Definitions()` the session already sends the provider every turn.
+- Same validation as every other `/api/sessions/{id}/*` endpoint: `400 "session is not active"` if the session isn't live.
+- New `client.Client.GetSessionTools(sessionID) ([]types.ToolDef, error)`, alongside `GetSessionInfo`/`GetSessionContext`/`ListCommands`.
+- Documented in the hand-written OpenAPI spec (`server/server_docs.go`) — new `/api/sessions/{id}/tools` path and `ToolDef` schema.
+- Tests: `agent/session_tools_test.go` (built-ins present, optional tools like `SessionInfo` correctly present/absent based on `AgentOptions.EnableX`), `client/client_test.go`'s `TestGetSessionToolsHitsExpectedPath` (URL/decode correctness against a mock server), and `harness_test.go`'s `TestSessionToolsEndpointEndToEnd` (real `RunServer` + real session + real HTTP round trip end to end, plus the inactive-session 400 case).
+
 ## [0.76.80] - 2026-09-18
 
 ### Fix — multiple `--scheduler` instances could steal each other's schedule fires
