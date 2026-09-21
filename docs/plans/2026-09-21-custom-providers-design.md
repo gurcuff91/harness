@@ -56,11 +56,13 @@ type CustomProvider struct {
 }
 ```
 
-`settings.json` gains a new top-level keyed collection, sibling to `"mcp"`:
+`settings.json` gains a new top-level keyed collection, sibling to `"mcp"` —
+named `"provider"` (singular), matching `"mcp"`'s own singular naming style
+exactly:
 
 ```json
 {
-  "custom_providers": {
+  "provider": {
     "my-proxy": {
       "type": "openai",
       "url": "https://my-proxy.internal/v1",
@@ -78,10 +80,11 @@ struct — same as MCP servers.
 
 ## Persistence — `internal/config/settings.go`
 
-Mirrors the MCP section exactly:
+Mirrors the MCP section exactly, including the singular JSON key style
+(`"mcp"`, not `"mcp_servers"` — so `"provider"`, not `"custom_providers"`):
 
-- `settingsData` gains `CustomProviders map[string]types.CustomProvider
-  \`json:"custom_providers,omitempty"\``.
+- `settingsData` gains `Provider map[string]types.CustomProvider
+  \`json:"provider,omitempty"\``.
 - `SettingsManager.CustomProviders() map[string]CustomProvider` — defensive
   copy, same as `MCPServers()`.
 - `SettingsManager.CustomProvider(name string) (CustomProvider, bool)`.
@@ -191,13 +194,15 @@ current one.
 
 ## HTTP API — `server/server.go`
 
-Exact structural mirror of the MCP server endpoints:
+Exact structural mirror of the MCP server endpoints, including the
+singular path segment (`/api/settings/mcp/{name}` → `/api/settings/provider/{name}`,
+not `/custom-providers/{name}`):
 
-- `GET /api/settings/custom-providers` → `config.GetSettingsManager().CustomProviders()`.
-- `PUT /api/settings/custom-providers/{name}` → decode body into
+- `GET /api/settings/provider` → `config.GetSettingsManager().CustomProviders()`.
+- `PUT /api/settings/provider/{name}` → decode body into
   `config.CustomProvider`, `SetCustomProvider(name, cfg)`, map
   `ErrInvalidCustomProvider` to 422.
-- `DELETE /api/settings/custom-providers/{name}` → 404 if not found (same
+- `DELETE /api/settings/provider/{name}` → 404 if not found (same
   existence check `handleDeleteMCPServer` does), else `DeleteCustomProvider`.
 
 `GET /api/providers` (`handleProviders`) needs NO changes — it already
@@ -242,7 +247,7 @@ type providerRmCmd struct {
 `RunProviderAdd`/`RunProviderList`/`RunProviderRm` in
 `internal/cli/settings.go` (alongside the existing `RunMCPAdd`/etc.), thin
 adapters calling the client's new `PUT`/`GET`/`DELETE
-/api/settings/custom-providers/...` methods — same shape as
+/api/settings/provider/...` methods — same shape as
 `RunMCPAdd`/`RunMCPRm`. `--header KEY:VAL` parsed the same way
 `RunMCPAdd`'s `--env`/`--header` flags already are (repeatable flag →
 `map[string]string` via the existing `parseKV` helper in `kong_run.go`).
@@ -290,7 +295,7 @@ already looks up the provider by name via `GET /api/providers` and drives
   never appears in `initRegistry()`'s resulting `All`; a name colliding
   with a reserved built-in is skipped even if it somehow got past
   `SetCustomProvider`'s validation (defense in depth).
-- `server`: `GET/PUT/DELETE /api/settings/custom-providers/{name}` — same
+- `server`: `GET/PUT/DELETE /api/settings/provider/{name}` — same
   shape of tests as any existing settings endpoint (decode/validate/422
   mapping/404-on-missing-delete).
 - CLI: `RunProviderAdd`/`RunProviderList`/`RunProviderRm` — thin, tested at
