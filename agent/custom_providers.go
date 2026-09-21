@@ -16,7 +16,7 @@ import (
 type customProviderConfig struct {
 	display     string
 	headers     map[string]string
-	fetchModels func(apiKey string) ([]types.ModelMeta, error)
+	fetchModels func() ([]types.ModelMeta, error)
 }
 
 // CustomProviderOption configures a NewOpenAIProvider call.
@@ -29,8 +29,13 @@ func ProviderWithDisplay(display string) CustomProviderOption {
 	return func(c *customProviderConfig) { c.display = display }
 }
 
-// ProviderWithHeaders sets extra HTTP headers sent on every request this
-// provider makes — both chat completions and model listing.
+// ProviderWithHeaders sets the HTTP headers sent on every request this
+// provider makes — both chat completions and model listing. This is where
+// ANY authentication goes: there is no separate API key concept for a
+// custom provider (see NewOpenAIProvider's doc comment for why) — set
+// whatever the endpoint needs here, e.g.
+// map[string]string{"Authorization": "Bearer " + token} or
+// map[string]string{"X-Api-Key": key}.
 func ProviderWithHeaders(headers map[string]string) CustomProviderOption {
 	return func(c *customProviderConfig) { c.headers = headers }
 }
@@ -43,8 +48,10 @@ func ProviderWithHeaders(headers map[string]string) CustomProviderOption {
 // for an arbitrary custom backend). Use this when a deployment needs
 // something the default can't do: a static model list, a differently
 // shaped listing endpoint, additional client-side capability enrichment,
-// etc. fn receives the API key NewOpenAIProvider was given.
-func ProviderWithFetchModels(fn func(apiKey string) ([]types.ModelMeta, error)) CustomProviderOption {
+// etc. fn takes no arguments — if it needs credentials, capture them in
+// its own closure (same as ProviderWithHeaders, there's no separate apiKey
+// threaded through).
+func ProviderWithFetchModels(fn func() ([]types.ModelMeta, error)) CustomProviderOption {
 	return func(c *customProviderConfig) { c.fetchModels = fn }
 }
 
@@ -62,19 +69,26 @@ func ProviderWithFetchModels(fn func(apiKey string) ([]types.ModelMeta, error)) 
 // (`harness provider add`, backed by types.CustomProvider): there's no
 // Disabled flag here (simply don't call this to leave a provider out) and
 // no ModelsURL (use ProviderWithFetchModels for non-default model
-// discovery) — apiKey is used directly and held only in memory, never
-// written to credentials.json, the same way a built-in api-key provider
-// behaves when activated via its environment variable instead of
-// `harness connect`.
+// discovery).
 //
-//	err := agent.NewOpenAIProvider("my-proxy", "https://my-proxy.internal/v1", apiKey,
+// There is no apiKey parameter — authentication is ALWAYS carried in
+// ProviderWithHeaders, symmetric with the declarative settings.json path
+// (whose Headers field is likewise the only place authentication lives).
+// Neither path has a separate "API key" concept: there is no reliable way
+// to guess, for an arbitrary custom backend, whether it expects
+// "Authorization: Bearer <token>", a custom header ("X-Api-Key: ..."), or
+// several headers combined. `harness connect <name> <key>` does NOT apply
+// to a custom provider (rejected, same as it already is for auto-detected
+// Ollama) — the provider is always active once registered.
+//
+//	err := agent.NewOpenAIProvider("my-proxy", "https://my-proxy.internal/v1",
 //		agent.ProviderWithDisplay("Acme Internal Proxy"),
-//		agent.ProviderWithHeaders(map[string]string{"X-Org-Id": "acme"}),
+//		agent.ProviderWithHeaders(map[string]string{"X-Api-Key": apiKey}),
 //	)
-func NewOpenAIProvider(name, url, apiKey string, opts ...CustomProviderOption) error {
+func NewOpenAIProvider(name, url string, opts ...CustomProviderOption) error {
 	var cfg customProviderConfig
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	return providers.RegisterOpenAI(name, url, apiKey, cfg.display, cfg.headers, cfg.fetchModels)
+	return providers.RegisterOpenAI(name, url, cfg.display, cfg.headers, cfg.fetchModels)
 }

@@ -401,7 +401,7 @@ func TestNewOpenAIProviderFacadeAliasIsWired(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := NewOpenAIProvider("facade-proxy", srv.URL, "key",
+	if err := NewOpenAIProvider("facade-proxy", srv.URL,
 		ProviderWithDisplay("Facade Proxy"),
 		ProviderWithHeaders(map[string]string{"X-Test": "1"}),
 	); err != nil {
@@ -425,7 +425,7 @@ func TestNewOpenAIProviderFacadeAliasIsWired(t *testing.T) {
 	}
 
 	// Reserved-name rejection also reaches through the facade.
-	if err := NewOpenAIProvider("openai", srv.URL, "key"); err == nil {
+	if err := NewOpenAIProvider("openai", srv.URL); err == nil {
 		t.Error("expected an error registering a reserved built-in provider name via the facade")
 	}
 }

@@ -14,19 +14,33 @@ import (
 // CustomOpenAI implements Provider for a user-configured, OpenAI Chat
 // Completions-compatible endpoint (a proxy, gateway, or self-hosted
 // server) — the "type": "openai" case of types.CustomProvider. It is
-// OpenAI's structural twin: same credential handling, same streaming
-// dialect (llm.DoOpenAIStream), but every network-facing detail (name,
-// base URL, models URL, extra headers) comes from configuration instead
-// of being hardcoded, and — critically — FetchModels here is a genuinely
-// separate code path from OpenAI's own, NOT a parametrized reuse of it.
-// See fetchCustomOpenAIModels' doc comment for why that separation matters.
+// OpenAI's structural twin for the wire dialect (same streaming code,
+// llm.DoOpenAIStream), but every network-facing detail (name, base URL,
+// models URL, extra headers) comes from configuration instead of being
+// hardcoded, and — critically — FetchModels here is a genuinely separate
+// code path from OpenAI's own, NOT a parametrized reuse of it. See
+// fetchCustomOpenAIModels' doc comment for why that separation matters.
+//
+// Authentication is ALWAYS via Headers, never a separate API key — there
+// is no way to guess, for an arbitrary custom backend, whether it expects
+// "Authorization: Bearer <token>", a custom header ("X-Api-Key: ..."), or
+// several headers combined (a real field example: a gateway needing
+// X-Api-Key + X-Actor + X-Card-Id together). Forcing a single well-known
+// "the API key" concept onto that would be actively wrong for backends
+// that don't use Bearer auth at all. So CustomOpenAI carries no apiKey
+// field, sends no automatic Authorization header, and treats itself as
+// always-active — structurally identical to how auto-detected Ollama
+// (CredTypeNone, Connect/Disconnect always rejected) already models "this
+// provider's activation isn't credential-based" for a different reason
+// (a local ping instead of headers). Both the declarative (settings.json)
+// and programmatic (agent.NewOpenAIProvider) registration paths land here
+// identically — there is no per-path branching in this file at all.
 type CustomOpenAI struct {
 	name        string
 	displayName string
 	baseURL     string
 	modelsURL   string // "" means derive baseURL+"/models" at fetch time
 	headers     map[string]string
-	apiKey      string
 	client      *http.Client
 	cache       map[string]types.ModelMeta
 	mu          sync.RWMutex
@@ -36,17 +50,16 @@ type CustomOpenAI struct {
 	// programmatic registration path, via agent.NewOpenAIProvider) exposes
 	// as ProviderWithFetchModels. nil for every settings.json-configured
 	// custom provider (types.CustomProvider carries no such field — it has
-	// no JSON representation, so it can only ever come from Go code).
-	fetchModelsFn func(apiKey string) ([]types.ModelMeta, error)
+	// no JSON representation, so it can only ever come from Go code). Any
+	// authentication the hook needs is the caller's own closure capture —
+	// there's no apiKey parameter to thread through (see the type's own
+	// doc comment for why).
+	fetchModelsFn func() ([]types.ModelMeta, error)
 }
 
 // NewCustomOpenAI builds a CustomOpenAI provider named name from cfg.
-// Credentials are resolved eagerly (mirroring NewOpenAI/NewAnthropic),
-// keyed under name in the credentials store — never an environment
-// variable (there's no well-known env var name to invent per arbitrary
-// custom provider, unlike the built-ins).
 func NewCustomOpenAI(name string, cfg types.CustomProvider) *CustomOpenAI {
-	o := &CustomOpenAI{
+	return &CustomOpenAI{
 		name:        name,
 		displayName: cfg.Display,
 		baseURL:     cfg.URL,
@@ -55,49 +68,32 @@ func NewCustomOpenAI(name string, cfg types.CustomProvider) *CustomOpenAI {
 		client:      &http.Client{},
 		cache:       make(map[string]types.ModelMeta),
 	}
-	o.ResolveCredentials() //nolint:errcheck
-	return o
 }
 
-func (o *CustomOpenAI) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
+// CredentialType is CredTypeNone — authentication is entirely via Headers,
+// never a separate credential the CLI/API could manage. Mirrors Ollama's
+// own CredTypeNone for the same underlying reason: this provider's
+// activation isn't gated by anything Connect/Disconnect could meaningfully
+// mutate.
+func (o *CustomOpenAI) CredentialType() types.CredentialType { return types.CredTypeNone }
 
+// ResolveCredentials always succeeds with CredTypeNone — there is nothing
+// to resolve. Mirrors Ollama.ResolveCredentials exactly.
 func (o *CustomOpenAI) ResolveCredentials() (types.Credentials, error) {
-	if o.apiKey != "" {
-		return types.APIKeyCredentials(o.apiKey), nil
-	}
-	// No env var fallback — see NewCustomOpenAI's doc comment.
-	if v, src := resolveAPIKey(o.name, ""); src != ActivationNone {
-		o.apiKey = v
-		return types.APIKeyCredentials(v), nil
-	}
-	return types.Credentials{}, fmt.Errorf("no credentials found")
+	return types.Credentials{Type: types.CredTypeNone}, nil
 }
 
-func (o *CustomOpenAI) Connect(creds types.Credentials) error {
-	if creds.Type != types.CredTypeAPIKey {
-		return fmt.Errorf("%s expects api_key credentials, got %s", o.name, creds.Type)
-	}
-	if creds.APIKey == "" {
-		return fmt.Errorf("api_key cannot be empty")
-	}
-
-	o.apiKey = creds.APIKey
-	o.mu.Lock()
-	o.cache = make(map[string]types.ModelMeta)
-	o.mu.Unlock()
-	if _, err := o.FetchModels(); err != nil {
-		o.apiKey = ""
-		return fmt.Errorf("invalid credentials: %w", err)
-	}
-	return storeAPIKey(o.name, creds.APIKey)
+// Connect is not supported — a custom provider's authentication is fixed
+// at registration time (via Headers, either settings.json's "headers" or
+// agent.ProviderWithHeaders), not something `harness connect` can
+// meaningfully change. Mirrors Ollama.Connect's exact rejection pattern.
+func (o *CustomOpenAI) Connect(_ types.Credentials) error {
+	return fmt.Errorf("%s authenticates entirely via its configured headers — connect/disconnect not applicable", o.name)
 }
 
+// Disconnect is not supported — see Connect's doc comment.
 func (o *CustomOpenAI) Disconnect() error {
-	o.mu.Lock()
-	o.cache = make(map[string]types.ModelMeta)
-	o.mu.Unlock()
-	o.apiKey = ""
-	return deleteCredential(o.name)
+	return fmt.Errorf("%s authenticates entirely via its configured headers — connect/disconnect not applicable", o.name)
 }
 
 func (o *CustomOpenAI) Name() string { return o.name }
@@ -114,15 +110,17 @@ func (o *CustomOpenAI) DisplayName() string {
 
 func (o *CustomOpenAI) Description() string { return describeState(o) }
 
-func (o *CustomOpenAI) ActivationSource() ActivationSource {
-	_, src := resolveAPIKey(o.name, "")
-	return src
-}
+// ActivationSource is always ActivationAuto — same reasoning as
+// CredentialType: nothing about this provider's activation is
+// credential-chain-driven (env var vs. credentials.json), it's simply
+// always on once registered. Mirrors Ollama.ActivationSource's shape
+// (though Ollama's is conditional on a live ping; this one has no
+// analogous "is it actually reachable" check, so it's unconditional).
+func (o *CustomOpenAI) ActivationSource() ActivationSource { return ActivationAuto }
 
-func (o *CustomOpenAI) IsActive() bool {
-	_, err := o.ResolveCredentials()
-	return err == nil
-}
+// IsActive is always true — see the type's own doc comment for why there
+// is no credential to be missing.
+func (o *CustomOpenAI) IsActive() bool { return true }
 
 func (o *CustomOpenAI) Models() []types.ModelMeta {
 	o.mu.RLock()
@@ -148,9 +146,9 @@ func (o *CustomOpenAI) FetchModels() ([]types.ModelMeta, error) {
 	var metas []types.ModelMeta
 	var err error
 	if o.fetchModelsFn != nil {
-		metas, err = o.fetchModelsFn(o.apiKey)
+		metas, err = o.fetchModelsFn()
 	} else {
-		metas, err = fetchCustomOpenAIModels(o.name, o.apiKey, o.baseURL, o.modelsURL, o.headers)
+		metas, err = fetchCustomOpenAIModels(o.name, o.baseURL, o.modelsURL, o.headers)
 	}
 	if err != nil {
 		return nil, err
@@ -180,7 +178,12 @@ func (o *CustomOpenAI) FetchModels() ([]types.ModelMeta, error) {
 // own non-standardized extension, no shared contract), so accepting
 // everything is the correct default for arbitrary user-configured
 // endpoints, not a shortcut.
-func fetchCustomOpenAIModels(providerName, apiKey, baseURL, modelsURL string, headers map[string]string) ([]types.ModelMeta, error) {
+//
+// No Authorization header is ever set here — headers carries whatever
+// authentication (if any) the endpoint needs, exactly as configured. See
+// CustomOpenAI's own doc comment for why there's no separate apiKey
+// concept.
+func fetchCustomOpenAIModels(providerName, baseURL, modelsURL string, headers map[string]string) ([]types.ModelMeta, error) {
 	url := modelsURL
 	if url == "" {
 		url = baseURL + "/models"
@@ -189,7 +192,6 @@ func fetchCustomOpenAIModels(providerName, apiKey, baseURL, modelsURL string, he
 	if err != nil {
 		return nil, fmt.Errorf("provider unreachable")
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -199,7 +201,7 @@ func fetchCustomOpenAIModels(providerName, apiKey, baseURL, modelsURL string, he
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
-		return nil, fmt.Errorf("invalid API key")
+		return nil, fmt.Errorf("invalid credentials")
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, types.NewProviderAPIError(providerName, resp.StatusCode, nil)
@@ -221,6 +223,24 @@ func fetchCustomOpenAIModels(providerName, apiKey, baseURL, modelsURL string, he
 	return metas, nil
 }
 
+// CompleteStream sends no Authorization header of its own — headers
+// (extraHeaders below) carries whatever authentication the endpoint
+// needs, exactly as configured. See the type's own doc comment.
+//
+// AllowCleanEOF is set unconditionally: an arbitrary custom endpoint may
+// be a direct backend OR a proxy/gateway fronting one (the motivating
+// case: a gateway forwarding to MiniMax, which closes its SSE response
+// after a final finish_reason chunk without ever sending [DONE] — see
+// internal/providers/minimax.go's own CompleteStream and commit
+// b3f42d7's "fix: accept MiniMax clean SSE completion"). parseOpenAIStream
+// only honors AllowCleanEOF when it actually observed a finish_reason
+// chunk before the connection closed (sawTerminalChunk) — a connection
+// that drops mid-response with no terminal chunk still errors exactly as
+// before, so enabling this unconditionally here doesn't mask a genuinely
+// dropped connection, it just stops penalizing backends (reachable only
+// through this generic path, where the real dialect can't be known in
+// advance) that legitimately omit [DONE].
 func (o *CustomOpenAI) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
-	return llm.DoOpenAIStream(ctx, o.client, o.baseURL+"/chat/completions", o.apiKey, &llm.OpenAIRequest{Request: req}, o.headers, cb)
+	return llm.DoOpenAIStream(ctx, o.client, o.baseURL+"/chat/completions", "",
+		&llm.OpenAIRequest{Request: req, AllowCleanEOF: true}, o.headers, cb)
 }

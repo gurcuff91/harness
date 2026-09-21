@@ -208,20 +208,28 @@ For a genuinely new API dialect or auth flow, follow the steps below (a real
 OpenAI Chat Completions-compatible endpoint (a proxy, gateway, or self-hosted
 server) that just needs a name/URL/headers, no code change is needed at all —
 two paths, both landing on the same `internal/providers.CustomOpenAI`:
-- **Declarative**: `harness provider add <name> --url <url>` writes a
-  `types.CustomProvider` entry to `settings.json`'s `"provider"` collection
-  (singular, same style as `"mcp"`), and `internal/providers/registry.go`'s
+These providers have **no credential concept of their own** — no
+`CredentialType`, `harness connect` is rejected outright (same fixed-error
+pattern as auto-detected local `Ollama`), and they're always reported active.
+Any auth a gateway needs (bearer token, `X-Api-Key`, custom scheme, whatever)
+travels as static request headers configured up front — never a stored key:
+- **Declarative**: `harness provider add <name> --url <url> --header
+  X-Api-Key:<key> ...` writes a `types.CustomProvider` entry (with its
+  `Headers` map) to `settings.json`'s `"provider"` collection (singular,
+  same style as `"mcp"`), and `internal/providers/registry.go`'s
   `initRegistry()` constructs a `CustomOpenAI` for each enabled entry at the
-  next process start.
-- **Programmatic (SDK)**: `agent.NewOpenAIProvider(name, url, apiKey,
-  ...opts)` (aliased in `harness.go`) registers one directly in Go code —
-  global to the process (same as the declarative path; `providers.All` has
-  no per-`Agent` isolation, unlike `mcp.Manager`), memory-only credentials
-  (never written to `credentials.json`), with an optional
-  `agent.ProviderWithFetchModels` hook for fully custom model discovery.
-  Call it once, early (typically in `main()`, before constructing any
-  `Agent` — see `internal/providers/registry.go`'s `registryMu` doc comment
-  for why registration ordering matters).
+  next process start. Headers are sent on every request, including model
+  discovery.
+- **Programmatic (SDK)**: `agent.NewOpenAIProvider(name, url, ...opts)`
+  (aliased in `harness.go`) registers one directly in Go code — global to
+  the process (same as the declarative path; `providers.All` has no
+  per-`Agent` isolation, unlike `mcp.Manager`). Auth goes through
+  `agent.ProviderWithHeaders(map[string]string{...})`; an optional
+  `agent.ProviderWithFetchModels(func() ([]types.ModelMeta, error))` hook
+  replaces model discovery entirely — capture whatever auth it needs in its
+  own closure. Call it once, early (typically in `main()`, before
+  constructing any `Agent` — see `internal/providers/registry.go`'s
+  `registryMu` doc comment for why registration ordering matters).
 
 See `internal/providers/custom_openai.go`,
 `docs/plans/2026-09-21-custom-providers-design.md` (including its

@@ -430,3 +430,136 @@ isolate `HOME` via `t.Setenv` (config.GetSettingsManager()'s singleton
 caveat — see `server/create_session_thinking_test.go`) and
 snapshot/restore `providers.All` so registrations never leak across tests
 in the same binary.
+
+## Addendum 2 — auth is always via `Headers`, never a stored API key
+
+**The trigger.** Gus's real deployment target for this feature is his
+Kaiban gateway — and it authenticates via a custom header (`X-Api-Key`,
+alongside an `X-Actor` header identifying the caller), not
+`Authorization: Bearer <token>`. The original design (this doc's body plus
+Addendum 1) baked in an `apiKey string` field on `CustomOpenAI` and sent it
+as a hardcoded `Authorization: Bearer` header — correct for a plain OpenAI
+clone, wrong for the actual first consumer of this feature. Rather than
+special-case a second auth channel alongside `Headers` (which would leave
+two places to look for "how does this provider authenticate"), the fix
+removes the `apiKey` concept entirely: **a custom OpenAI-compatible
+provider has no credentials of its own — only configured headers**, and
+whatever a specific gateway needs (bearer token, `X-Api-Key`, both,
+neither) is just another entry in that map.
+
+**What changed, concretely:**
+- `internal/providers.CustomOpenAI` lost its `apiKey` field entirely.
+  `CredentialType()` returns `providers.CredTypeNone`. `IsActive()` always
+  returns `true` — same posture as auto-detected local `Ollama`, which also
+  has no credential concept. `Connect()`/`Disconnect()` are unconditionally
+  rejected with a fixed error (again mirroring `Ollama`'s pattern — "this
+  provider doesn't use `harness connect`"), so there is no code path that
+  could ever persist a secret for this provider type into
+  `credentials.json`. `ActivationSource()` always reports
+  `providers.ActivationAuto`.
+- `fetchCustomOpenAIModels` lost its `apiKey` parameter — it no longer
+  sends an automatic `Authorization: Bearer` header at all. Any header the
+  discovery request needs (auth or otherwise) must already be present in
+  the `headers map[string]string` the function is given, and it sends
+  exactly that map, nothing more.
+- `CompleteStream` now passes `""` as the apiKey argument into
+  `llm.DoOpenAIStream` — verified that call already guards with `if apiKey
+  != ""` before setting an `Authorization` header, so passing empty simply
+  means "no automatic bearer header", leaving `Headers` as the only
+  channel that ever reaches the wire.
+- `internal/providers.RegisterOpenAI` dropped `apiKey` from its signature:
+  `func RegisterOpenAI(name, url, display string, headers
+  map[string]string, fetchModels func() ([]types.ModelMeta, error)) error`.
+- `agent.NewOpenAIProvider` dropped `apiKey` from its signature: `func
+  NewOpenAIProvider(name, url string, opts ...CustomProviderOption) error`.
+  Auth now travels exclusively through `agent.ProviderWithHeaders(map[string
+  ]string{...})` — e.g. `{"X-Api-Key": key, "X-Actor": actor}` for the
+  Kaiban case that triggered this change.
+- `agent.ProviderWithFetchModels`'s function type changed from `func(apiKey
+  string) ([]types.ModelMeta, error)` to `func() ([]types.ModelMeta,
+  error)` — any auth the hook needs is captured in its own closure instead
+  of being handed a blessed `apiKey` parameter it may not even want in that
+  shape (a hook might need a bearer token AND a custom header, or none at
+  all; a single string parameter was already the wrong abstraction once a
+  second real consumer showed up).
+- `types.CustomProvider`'s doc comment (the settings.json-facing struct)
+  now states explicitly that authentication is always via `Headers` and
+  that `harness connect` is rejected for this provider type — it already
+  had no `APIKey` field, so this is a comment-only clarification, not a
+  schema change.
+- `internal/cli/kong.go`: `providerCmd`'s doc comment corrected (it
+  previously said `harness connect` applied to custom providers — it does
+  not), and `--header`'s help text now calls out that this is where
+  authentication goes, since there is no other mechanism.
+
+**Declarative path unaffected in shape, only in semantics.** `harness
+provider add <name> --url <url> --header X-Api-Key:<key>` already existed
+and already stored auth in `Headers` — this addendum doesn't change the CLI
+surface at all, only removes a redundant/misleading `Authorization: Bearer`
+auto-injection that never should have existed alongside it, and hardens
+`Connect()`/`IsActive()`/`CredentialType()` to make the "no separate
+credential" contract impossible to violate by accident later.
+
+**Tests rewritten to prove the new contract**, not just updated for the
+signature change: `TestCustomOpenAI_AlwaysActiveNoCredentials`,
+`TestCustomOpenAI_ConnectAndDisconnectAreRejected`,
+`TestFetchCustomOpenAIModels_HeadersCarryCustomAuth` (reproduces the actual
+Kaiban gateway shape — `X-Api-Key` + `X-Actor`, no `Authorization` header
+at all, and the request succeeds), and
+`TestFetchCustomOpenAIModels_SendsConfiguredHeaders` now asserts
+`Authorization` is empty on the wire rather than asserting it was
+auto-populated. `internal/providers/register_openai_test.go` gained
+`TestRegisterOpenAI_ConnectRejected`; `agent/custom_providers_test.go`
+gained `TestNewOpenAIProvider_AlwaysActiveNoConnectStep`. All existing
+tests across the four files were updated for the new signatures (no
+`apiKey` argument anywhere) rather than left passing stale arguments.
+
+## Addendum 3 — `AllowCleanEOF` for custom providers proxying MiniMax-like backends
+
+**The trigger.** Live-tested Gus's Kaiban gateway (`minimax-cm-dev`,
+proxying to MiniMax) end-to-end: model discovery worked, but every actual
+turn in the TUI failed with `stream ended unexpectedly before completion
+(no [DONE] marker received) — the connection likely dropped mid-response`.
+
+**Root cause.** This is NOT a new bug — it's a known MiniMax quirk that
+was already fixed once for the BUILT-IN `minimax` provider (commit
+`b3f42d7`, "fix: accept MiniMax clean SSE completion", pre-dating custom
+providers entirely): MiniMax's real API emits a final chunk carrying
+`finish_reason`, then closes the SSE connection without ever sending the
+OpenAI-dialect `[DONE]` sentinel. `internal/providers/llm/openai.go`'s
+`parseOpenAIStream` treats that as an error UNLESS the caller opts in via
+`OpenAIRequest.AllowCleanEOF` — and even then only when it actually
+observed a `finish_reason` chunk (`sawTerminalChunk`) before the
+connection closed, so a genuinely dropped connection with no terminal
+chunk still errors regardless. `internal/providers/minimax.go`'s own
+`CompleteStream` already sets `AllowCleanEOF: true` — but
+`CustomOpenAI.CompleteStream` (added later, this design doc's whole
+subject) never did, so any custom provider that happens to front a
+MiniMax-flavored backend (directly, or — as here — through a gateway
+proxying to one) inherited the same silent-drop-looking behavior on every
+single turn, even though the full response had already arrived intact.
+
+**Fix.** `CustomOpenAI.CompleteStream` now sets `AllowCleanEOF: true`
+unconditionally, matching `minimax.go`. This is deliberately NOT
+conditional on anything provider-specific (no attempt to sniff "is this
+secretly MiniMax") — a custom provider is by definition an unknown
+backend behind a generic OpenAI-dialect adapter, so there's no reliable
+way to know in advance whether it will omit `[DONE]` the way MiniMax does.
+Since `AllowCleanEOF`'s guard already requires a real terminal chunk
+before ever tolerating a missing `[DONE]`, enabling it unconditionally
+here doesn't weaken detection of an actually-dropped connection (no
+terminal chunk still errors exactly as before) — it only stops
+misclassifying "the model finished, the backend just doesn't send
+`[DONE]`" as a dropped connection.
+
+**Tests** (`internal/providers/custom_openai_test.go`):
+`TestCustomOpenAI_CompleteStreamAcceptsCleanEOFAfterTerminalChunk`
+reproduces the exact incident (a `finish_reason` chunk followed by a
+clean EOF, no `[DONE]`) and asserts a real, complete response comes back;
+`TestCustomOpenAI_CompleteStreamStillRejectsCleanEOFWithoutTerminalChunk`
+proves the fix didn't turn into a blanket "ignore dropped connections" —
+a stream with no terminal chunk and no `[DONE]` still errors. Reproduced
+live: temporarily reverted the `AllowCleanEOF: true` change and confirmed
+the first test fails with the exact error message Gus saw in the TUI,
+then restored the fix and confirmed it passes. Full suite + `go vet` +
+`-race` on `internal/providers` green; `gofmt -l` clean.

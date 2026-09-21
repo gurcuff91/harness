@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.85] - 2026-09-21
+
+### Fix — custom OpenAI-compatible providers accept MiniMax-style clean SSE completion (no `[DONE]` marker)
+Found live-testing Gus's Kaiban gateway (`minimax-cm-dev`, proxying to MiniMax): model discovery worked, but every turn failed in the TUI with `stream ended unexpectedly before completion (no [DONE] marker received) — the connection likely dropped mid-response`. Not a new bug — MiniMax's real API emits a final `finish_reason` chunk then closes its SSE connection without ever sending `[DONE]`, already worked around for the BUILT-IN `minimax` provider via `OpenAIRequest.AllowCleanEOF` (commit `b3f42d7`). `CustomOpenAI.CompleteStream` — added later — never set that flag, so any custom provider fronting a MiniMax-flavored backend (directly, or through a gateway, as here) hit the same false "dropped connection" error on every single turn.
+
+- `internal/providers/custom_openai.go`: `CompleteStream` now sets `AllowCleanEOF: true` unconditionally — safe because the flag's own guard (`sawTerminalChunk`) still requires a real terminal chunk before tolerating a missing `[DONE]`, so a genuinely dropped connection still errors exactly as before; this only stops misclassifying "the backend just doesn't send `[DONE]`" as a dropped connection.
+- New tests: `TestCustomOpenAI_CompleteStreamAcceptsCleanEOFAfterTerminalChunk` (reproduces the exact incident — terminal chunk + clean EOF, no `[DONE]` — asserts a complete response), `TestCustomOpenAI_CompleteStreamStillRejectsCleanEOFWithoutTerminalChunk` (proves a genuinely dropped connection with no terminal chunk still errors). Reproduced live by temporarily reverting the fix and confirming the exact error message Gus saw in the TUI. Full suite + `go vet` + `-race` on `internal/providers` green; `gofmt -l` clean. Full rationale: `docs/plans/2026-09-21-custom-providers-design.md`'s Addendum 3.
+
+## [0.76.84] - 2026-09-21
+
+### Fix — custom OpenAI-compatible providers authenticate only via `Headers`, never a stored API key
+Triggered by a real deployment target (Gus's Kaiban gateway, which authenticates via `X-Api-Key`/`X-Actor` headers, not `Authorization: Bearer`). The v0.76.83 design baked in an `apiKey` field and auto-sent it as `Authorization: Bearer` — wrong for any gateway using a different scheme, and a second, redundant auth channel alongside `Headers`. Removed the concept entirely: a custom OpenAI-compatible provider has **no credentials of its own**, only configured headers. Full rationale: `docs/plans/2026-09-21-custom-providers-design.md`'s Addendum 2.
+
+- `internal/providers.CustomOpenAI` lost its `apiKey` field. `CredentialType()` → `CredTypeNone`. `IsActive()` always `true`. `Connect()`/`Disconnect()` unconditionally rejected with a fixed error (same posture as auto-detected local `Ollama`). `ActivationSource()` always `ActivationAuto`. No code path can ever persist a secret for this provider type into `credentials.json`.
+- `fetchCustomOpenAIModels` dropped its `apiKey` parameter — no automatic `Authorization: Bearer` header. Whatever a discovery request needs must already be in the configured `Headers` map.
+- `CompleteStream` now passes `""` as apiKey into `llm.DoOpenAIStream` (already guarded with `if apiKey != ""` before setting a header) — `Headers` is the only channel that reaches the wire.
+- `internal/providers.RegisterOpenAI` dropped `apiKey`: `func RegisterOpenAI(name, url, display string, headers map[string]string, fetchModels func() ([]types.ModelMeta, error)) error`.
+- `agent.NewOpenAIProvider` dropped `apiKey`: `func NewOpenAIProvider(name, url string, opts ...CustomProviderOption) error` — auth now goes exclusively through `agent.ProviderWithHeaders(map[string]string{"X-Api-Key": key, ...})`.
+- `agent.ProviderWithFetchModels`'s hook signature changed from `func(apiKey string) (...)` to `func() (...)` — any auth the hook needs is captured in its own closure.
+- `types.CustomProvider`'s doc comment and `internal/cli/kong.go`'s `providerCmd`/`--header` help text updated to state authentication is always via `Headers` and that `harness connect` is rejected for this provider type. The declarative CLI surface (`harness provider add --header K:V`) is unchanged — this only removes the redundant auto-`Authorization` injection and hardens the "no separate credential" contract against future accidents.
+- Tests rewritten to prove the new contract (not just updated for the signature change): `TestCustomOpenAI_AlwaysActiveNoCredentials`, `TestCustomOpenAI_ConnectAndDisconnectAreRejected`, `TestFetchCustomOpenAIModels_HeadersCarryCustomAuth` (reproduces the real Kaiban gateway shape), `TestFetchCustomOpenAIModels_SendsConfiguredHeaders` (now asserts `Authorization` stays empty), `TestRegisterOpenAI_ConnectRejected`, `TestNewOpenAIProvider_AlwaysActiveNoConnectStep`. All green under `go vet`, `go test ./...`, and `-race` on the touched packages; `gofmt -l` clean.
+
 ## [0.76.83] - 2026-09-21
 
 ### Feature — custom OpenAI-compatible providers (declarative + programmatic)

@@ -264,9 +264,11 @@ type mcpDisableCmd struct {
 // Distinct from the existing, plural `harness providers` (providersCmd
 // above) — that one is the read-only listing of EVERY registered provider,
 // built-in and custom alike. This one (singular) manages the custom ones a
-// user configures, mirroring mcpCmd's own shape. Connecting a custom
-// provider (saving its API key) uses the already-generic `harness connect
-// <name> <key>` — no dedicated subcommand needed here for that.
+// user configures, mirroring mcpCmd's own shape. A custom provider
+// authenticates entirely via --header (whatever the endpoint needs —
+// "Authorization: Bearer <token>", "X-Api-Key: ...", or several combined) —
+// `harness connect <name> <key>` does NOT apply here and is rejected, same
+// as it already is for auto-detected Ollama.
 
 type providerCmd struct {
 	List providerListCmd `cmd:"" default:"1" help:"List custom providers"`
@@ -282,7 +284,7 @@ type providerAddCmd struct {
 	URL       string `required:"" help:"Base URL for chat completions"`
 	ModelsURL string `help:"Models listing URL (default: <url>/models)"`
 	// []string (not map[string]string) — same repeatable-flag UX as mcpAddCmd.Header.
-	Header   []string `help:"HTTP header KEY:VAL (repeatable)"`
+	Header   []string `help:"HTTP header KEY:VAL (repeatable) — put any authentication here (e.g. Authorization:Bearer <token> or X-Api-Key:...)"`
 	Display  string   `help:"Human-friendly display name (default: the provider name)"`
 	Disabled bool     `help:"Add the provider disabled (default: enabled)"`
 }

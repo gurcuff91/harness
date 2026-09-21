@@ -38,7 +38,7 @@ func TestNewOpenAIProvider_RegistersAndResolvableThroughAgent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := NewOpenAIProvider("agent-sdk-proxy", srv.URL, "key",
+	if err := NewOpenAIProvider("agent-sdk-proxy", srv.URL,
 		ProviderWithDisplay("Agent SDK Proxy"),
 		ProviderWithHeaders(map[string]string{"X-Test": "1"}),
 	); err != nil {
@@ -83,7 +83,7 @@ func TestNewOpenAIProvider_RegistersAndResolvableThroughAgent(t *testing.T) {
 func TestNewOpenAIProvider_RejectsReservedName(t *testing.T) {
 	withCleanProviderRegistry(t)
 
-	if err := NewOpenAIProvider("openai", "https://x", "key"); err == nil {
+	if err := NewOpenAIProvider("openai", "https://x"); err == nil {
 		t.Error("expected an error registering a reserved built-in provider name")
 	}
 }
@@ -91,8 +91,8 @@ func TestNewOpenAIProvider_RejectsReservedName(t *testing.T) {
 func TestProviderWithFetchModels_OverridesDiscovery(t *testing.T) {
 	withCleanProviderRegistry(t)
 
-	if err := NewOpenAIProvider("static-proxy", "https://unused.invalid", "key",
-		ProviderWithFetchModels(func(apiKey string) ([]types.ModelMeta, error) {
+	if err := NewOpenAIProvider("static-proxy", "https://unused.invalid",
+		ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
 			return []types.ModelMeta{{ID: "static-1"}, {ID: "static-2"}}, nil
 		}),
 	); err != nil {
@@ -111,4 +111,31 @@ func TestProviderWithFetchModels_OverridesDiscovery(t *testing.T) {
 	if count != 2 {
 		t.Errorf("got %d models from static-proxy, want 2 (from the ProviderWithFetchModels hook)", count)
 	}
+}
+
+// TestNewOpenAIProvider_AlwaysActiveNoConnectStep confirms an SDK-registered
+// provider is immediately active without any connect step — authentication
+// lives entirely in ProviderWithHeaders, there's no apiKey parameter and no
+// "not connected" state to resolve.
+func TestNewOpenAIProvider_AlwaysActiveNoConnectStep(t *testing.T) {
+	withCleanProviderRegistry(t)
+
+	if err := NewOpenAIProvider("always-active-proxy", "https://x",
+		ProviderWithHeaders(map[string]string{"X-Api-Key": "secret"}),
+	); err != nil {
+		t.Fatalf("NewOpenAIProvider: %v", err)
+	}
+
+	a := New(AgentOptions{Store: store.NewInMemoryStore()})
+	defer a.Close()
+
+	for _, p := range a.Providers() {
+		if p.Name == "always-active-proxy" {
+			if !p.Active {
+				t.Error("Active = false, want true — no connect step should be needed")
+			}
+			return
+		}
+	}
+	t.Fatal("always-active-proxy not found in a.Providers()")
 }

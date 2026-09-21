@@ -453,8 +453,6 @@ func (f searchBackendsLookupFunc) ActiveSearchBackends() []tools.SearchBackend {
 	return f()
 }
 
-
-
 // RegisterTool adds a tool to the agent's registry so all future sessions
 // created by this agent include it. Must be called before NewSession/ResumeSession.
 // Idempotent: re-registering the same name replaces the previous entry.
@@ -1324,8 +1322,6 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) (string,
 			}
 		}
 	}
-
-
 
 	// Deliberately brief — just a pointer that this capability exists.
 	// Each tool's own Description carries the actual detail (what it

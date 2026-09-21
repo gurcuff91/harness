@@ -170,7 +170,7 @@ func (t *TUI) captureValue(value string) {
 		return
 	}
 
-// OAuth code capture (phase two of the native flow started in cmdConnect):
+	// OAuth code capture (phase two of the native flow started in cmdConnect):
 	// the value is an authorization code, not a command argument. Exchange it
 	// for tokens and connect. Done off the event goroutine — Exchange makes an
 	// HTTP call — so the UI stays responsive.
@@ -346,7 +346,7 @@ func (t *TUI) cmdConnect(args []string) {
 		apiKey = strings.Join(args[1:], " ")
 	}
 
-// Subscription/OAuth providers (e.g. claude-oauth) authenticate via the
+	// Subscription/OAuth providers (e.g. claude-oauth) authenticate via the
 	// native OAuth PKCE flow, driven entirely through the server's stateless
 	// POST /api/oauth/{provider} endpoint: StartOAuth returns the URL to open
 	// AND the verifier this TUI must hold onto — the server itself keeps no

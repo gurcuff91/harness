@@ -92,16 +92,16 @@ func EnsureRegistry() {
 // agent.NewOpenAIProvider (a public, SDK-safe wrapper never exposing this
 // package's Provider interface or any other internal/… type) calls this.
 // Returns an error if name collides with a reserved built-in provider
-// name; never touches settings.json or credentials.json — apiKey is used
-// directly and only held in memory, exactly like a built-in api-key
-// provider activated via its environment variable rather than `harness
-// connect`.
+// name; never touches settings.json or credentials.json. There is no
+// apiKey parameter — CustomOpenAI authenticates entirely via headers
+// (see its own doc comment for why), symmetric with the declarative
+// settings.json path: neither carries a separate "API key" concept.
 //
 // fetchModels, if non-nil, becomes the provider's FetchModels — see
 // CustomOpenAI.fetchModelsFn's doc comment. Passing nil uses the default
 // HTTP-GET-<url>/models discovery (unfiltered, same as any
 // settings.json-configured custom provider).
-func RegisterOpenAI(name, url, apiKey, display string, headers map[string]string, fetchModels func(apiKey string) ([]types.ModelMeta, error)) error {
+func RegisterOpenAI(name, url, display string, headers map[string]string, fetchModels func() ([]types.ModelMeta, error)) error {
 	if config.IsReservedProviderName(name) {
 		return fmt.Errorf("%q is a built-in provider name and cannot be used for a custom provider", name)
 	}
@@ -119,7 +119,6 @@ func RegisterOpenAI(name, url, apiKey, display string, headers map[string]string
 		displayName:   display,
 		baseURL:       url,
 		headers:       headers,
-		apiKey:        apiKey,
 		fetchModelsFn: fetchModels,
 		client:        &http.Client{},
 		cache:         make(map[string]types.ModelMeta),

@@ -72,4 +72,3 @@ func TestPromptWithDisplayTextSetsOverride(t *testing.T) {
 		t.Errorf("origin = %q, want default %q unaffected by PromptWithDisplayText", c.origin, OriginUser)
 	}
 }
-

@@ -368,5 +368,3 @@ func normalizePastedCode(input string) string {
 	}
 	return strings.TrimSpace(s)
 }
-
-

@@ -150,19 +150,26 @@ read-only `Agent.Providers()` and `Agent.Models()`. This keeps interactive
 flows (OAuth, secrets) out of embedded code.
 
 **Custom OpenAI-compatible providers are the one exception** — register one
-programmatically, globally for the process, before building any `Agent`:
+programmatically, globally for the process, before building any `Agent`.
+These providers have no `harness connect` concept: they're always active,
+and any auth they need travels as static request headers you configure —
+never a stored API key:
 
 ```go
-harness.NewOpenAIProvider("my-proxy", "https://my-proxy.internal/v1", apiKey,
+harness.NewOpenAIProvider("my-proxy", "https://my-proxy.internal/v1",
 	harness.ProviderWithDisplay("Acme Internal Proxy"),
-	harness.ProviderWithHeaders(map[string]string{"X-Org-Id": "acme"}),
+	harness.ProviderWithHeaders(map[string]string{
+		"X-Api-Key": apiKey, // or Authorization, or whatever the gateway expects
+		"X-Org-Id":  "acme",
+	}),
 )
 // now usable like any built-in: a.NewSession(cwd, "my-proxy/some-model")
 ```
 
-No `settings.json` entry needed — the API key stays in memory only. Use
-`harness.ProviderWithFetchModels(func(apiKey string) ([]types.ModelMeta, error))`
-to replace the default `<url>/models` discovery with custom logic.
+No `settings.json` entry needed. Use
+`harness.ProviderWithFetchModels(func() ([]types.ModelMeta, error))` to
+replace the default `<url>/models` discovery with custom logic — capture
+whatever auth the hook needs in its own closure.
 
 The agent is configured with functional options: `AgentWithThinking`,
 `AgentWithMCPs`, `AgentWithMemory`, `AgentWithScheduler`, `AgentWithColleagues`,
@@ -213,11 +220,15 @@ OpenAI-compatible provider** — any proxy, gateway, or self-hosted endpoint
 speaking the OpenAI Chat Completions dialect. Configured in `settings.json`'s
 `"provider"` collection (same singular style as `"mcp"`), read once at
 process start (no hot reload — same trade-off MCP servers already accept).
-Once added, `harness connect <name> <key>` and `<name>/<model>` work exactly
-like any built-in provider — no further setup needed.
+These providers have no credential concept of their own — `harness connect`
+is rejected for them — so any auth the gateway needs (a bearer token, an
+`X-Api-Key`, whatever) goes in `--header` at add time and is sent on every
+request. Once added, `<name>/<model>` works exactly like any built-in
+provider — no further setup needed.
 
 SDK embedders can instead register one programmatically —
-`harness.NewOpenAIProvider(name, url, apiKey, ...opts)` — without touching
+`harness.NewOpenAIProvider(name, url, ...opts)` with
+`harness.ProviderWithHeaders(...)` carrying the auth — without touching
 `settings.json` at all; see [Embedding the SDK](#embedding-the-sdk) below.
 
 ## Commands
