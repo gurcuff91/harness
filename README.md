@@ -144,10 +144,25 @@ answer, _ := sess.PromptAndWait(context.Background(), "Explain goroutines, brief
 fmt.Println(answer)
 ```
 
-**Provider administration lives in the CLI, not the SDK** — `harness connect`,
-`harness disconnect`, `harness providers`. The SDK exposes read-only
-`Agent.Providers()` and `Agent.Models()`. This keeps interactive flows (OAuth,
-secrets) out of embedded code.
+**Built-in provider administration lives in the CLI, not the SDK** —
+`harness connect`, `harness disconnect`, `harness providers`. The SDK exposes
+read-only `Agent.Providers()` and `Agent.Models()`. This keeps interactive
+flows (OAuth, secrets) out of embedded code.
+
+**Custom OpenAI-compatible providers are the one exception** — register one
+programmatically, globally for the process, before building any `Agent`:
+
+```go
+harness.NewOpenAIProvider("my-proxy", "https://my-proxy.internal/v1", apiKey,
+	harness.ProviderWithDisplay("Acme Internal Proxy"),
+	harness.ProviderWithHeaders(map[string]string{"X-Org-Id": "acme"}),
+)
+// now usable like any built-in: a.NewSession(cwd, "my-proxy/some-model")
+```
+
+No `settings.json` entry needed — the API key stays in memory only. Use
+`harness.ProviderWithFetchModels(func(apiKey string) ([]types.ModelMeta, error))`
+to replace the default `<url>/models` discovery with custom logic.
 
 The agent is configured with functional options: `AgentWithThinking`,
 `AgentWithMCPs`, `AgentWithMemory`, `AgentWithScheduler`, `AgentWithColleagues`,
@@ -193,6 +208,18 @@ time it's passed in.
 | `ollama-cloud` | `OLLAMA_CLOUD_API_KEY` | `/v1/models` + `/api/show` | `/api/show` (context, vision, thinking) |
 | `ollama` | None (auto-detect) | `/api/tags` + `/api/show` | `/api/show` |
 
+Beyond these built-ins, `harness provider add` registers a **custom
+OpenAI-compatible provider** — any proxy, gateway, or self-hosted endpoint
+speaking the OpenAI Chat Completions dialect. Configured in `settings.json`'s
+`"provider"` collection (same singular style as `"mcp"`), read once at
+process start (no hot reload — same trade-off MCP servers already accept).
+Once added, `harness connect <name> <key>` and `<name>/<model>` work exactly
+like any built-in provider — no further setup needed.
+
+SDK embedders can instead register one programmatically —
+`harness.NewOpenAIProvider(name, url, apiKey, ...opts)` — without touching
+`settings.json` at all; see [Embedding the SDK](#embedding-the-sdk) below.
+
 ## Commands
 
 Run `harness` for the interactive TUI, or use subcommands directly:
@@ -229,6 +256,9 @@ harness mcp add <name> ...    — Add an MCP server (--command → local, --url 
 harness mcp rm <name>         — Remove an MCP server
 harness mcp enable <name>     — Enable a server
 harness mcp disable <name>    — Disable a server (keeps its config)
+harness provider [list]       — List custom OpenAI-compatible providers
+harness provider add <name> --url <url> [--models-url <url>] [--header K:V ...] [--display <name>] [--disabled]
+harness provider rm <name>    — Remove a custom provider
 
 harness memo [<query>]        — List (no query) or search memories
 harness memo <query> --all    — Search across ALL projects
@@ -265,7 +295,7 @@ All data stored in `~/.harness/`:
 ```
 ~/.harness/
 ├── credentials.json        — API keys + OAuth tokens (0600)
-├── settings.json           — Active model, thinking level, providers, MCP servers
+├── settings.json           — Active model, thinking level, MCP servers, custom providers
 ├── instances.json          — Registry of running server instances (for colleagues)
 ├── schedules.json          — Cron-scheduled prompts
 ├── telegram.json           — Telegram bot token + paired chats

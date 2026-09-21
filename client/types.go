@@ -146,6 +146,11 @@ type SessionInfo struct {
 // SettingsManager, so this is the same struct end to end.
 type MCPServer = types.MCPServer
 
+// CustomProvider is the settings-collection payload for a user-configured
+// LLM provider. Same reasoning as MCPServer: reuses types' own shape
+// verbatim, since the endpoints pass it straight through SettingsManager.
+type CustomProvider = types.CustomProvider
+
 // MCPStatus is one element of GET /api/mcp/status — a configured MCP server's
 // live connection state. Mirrors mcp.Status locally (rather than importing the
 // mcp package, which pulls in the tools + config graph) since this HTTP client

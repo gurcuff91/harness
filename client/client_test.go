@@ -144,6 +144,64 @@ func TestGetSessionToolsHitsExpectedPath(t *testing.T) {
 	}
 }
 
+// TestCustomProviderClientMethodsHitExpectedPaths verifies
+// GetCustomProviders/PutCustomProvider/DeleteCustomProvider request the
+// correct singular "/api/settings/provider" paths (matching MCP's own
+// singular "/api/settings/mcp" style) and decode/encode correctly.
+func TestCustomProviderClientMethodsHitExpectedPaths(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		if r.Body != nil {
+			json.NewDecoder(r.Body).Decode(&gotBody)
+		}
+		switch r.Method {
+		case "GET":
+			w.Write([]byte(`{"my-proxy":{"type":"openai","url":"https://x"}}`))
+		case "PUT":
+			w.Write([]byte(`{"type":"openai","url":"https://my-proxy.internal/v1","display":"My Proxy"}`))
+		case "DELETE":
+			w.Write([]byte(`{"status":{"code":"deleted"}}`))
+		}
+	}))
+	defer srv.Close()
+	c := New(srv.Listener.Addr().String())
+
+	all, err := c.GetCustomProviders()
+	if err != nil {
+		t.Fatalf("GetCustomProviders: %v", err)
+	}
+	if gotMethod != "GET" || gotPath != "/api/settings/provider" {
+		t.Errorf("GET: method=%q path=%q, want GET /api/settings/provider", gotMethod, gotPath)
+	}
+	if _, ok := all["my-proxy"]; !ok {
+		t.Errorf("unexpected decoded collection: %+v", all)
+	}
+
+	saved, err := c.PutCustomProvider("my-proxy", CustomProvider{Type: "openai", URL: "https://my-proxy.internal/v1", Display: "My Proxy"})
+	if err != nil {
+		t.Fatalf("PutCustomProvider: %v", err)
+	}
+	if gotMethod != "PUT" || gotPath != "/api/settings/provider/my-proxy" {
+		t.Errorf("PUT: method=%q path=%q, want PUT /api/settings/provider/my-proxy", gotMethod, gotPath)
+	}
+	if gotBody["type"] != "openai" || gotBody["url"] != "https://my-proxy.internal/v1" {
+		t.Errorf("PUT body missing expected fields: %+v", gotBody)
+	}
+	if saved.Display != "My Proxy" {
+		t.Errorf("unexpected saved provider: %+v", saved)
+	}
+
+	if _, err := c.DeleteCustomProvider("my-proxy"); err != nil {
+		t.Fatalf("DeleteCustomProvider: %v", err)
+	}
+	if gotMethod != "DELETE" || gotPath != "/api/settings/provider/my-proxy" {
+		t.Errorf("DELETE: method=%q path=%q, want DELETE /api/settings/provider/my-proxy", gotMethod, gotPath)
+	}
+}
+
 // TestListSessionsCWDFilter mirrors TestGetSchedulesOwnerFilter for the
 // sessions listing (all-cwds vs a single cwd).
 func TestListSessionsCWDFilter(t *testing.T) {

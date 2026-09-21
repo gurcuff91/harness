@@ -292,3 +292,119 @@ func RunMCPRemove(ctx context.Context, a *agent.Agent, name, output string) erro
 	fmt.Printf("MCP server removed: %s\n", name)
 	return nil
 }
+
+// ── Custom providers ─────────────────────────────────────────────────────
+// Same shape as the MCP functions above — see their comments for the
+// general pattern (thin CLI adapter over the client's PUT/GET/DELETE
+// /api/settings/provider/... calls, content validation happens server-side
+// in SettingsManager.SetCustomProvider, 422s surfaced verbatim).
+
+// RunProviderList prints the configured custom providers.
+func RunProviderList(ctx context.Context, a *agent.Agent, output string) error {
+	server, addr, err := startInternalServer(a)
+	if err != nil {
+		return err
+	}
+	defer server.Close()
+	c := newClient(addr)
+
+	providers, err := c.GetCustomProviders()
+	if err != nil {
+		return fmt.Errorf("list providers: %w", err)
+	}
+
+	switch output {
+	case "json":
+		b, _ := json.MarshalIndent(providers, "", "  ")
+		fmt.Println(string(b))
+	default:
+		if len(providers) == 0 {
+			fmt.Println("No custom providers configured.")
+			return nil
+		}
+		names := make([]string, 0, len(providers))
+		for n := range providers {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			p := providers[n]
+			state := "enabled"
+			if p.Disabled {
+				state = "disabled"
+			}
+			display := p.Display
+			if display == "" {
+				display = n
+			}
+			fmt.Printf("%-16s %-8s %-40s %s  %s\n", n, p.Type, p.URL, display, state)
+		}
+	}
+	return nil
+}
+
+// ProviderAddOpts carries the parsed flags for `harness provider add`.
+type ProviderAddOpts struct {
+	Type      string
+	URL       string
+	ModelsURL string
+	Headers   map[string]string
+	Display   string
+	Disabled  bool
+}
+
+// RunProviderAdd creates (or replaces) a custom provider. The name is
+// positional. Content validation (type/url/reserved-name) happens
+// server-side (422 surfaced verbatim) — this is a thin pass-through.
+func RunProviderAdd(ctx context.Context, a *agent.Agent, name string, opts ProviderAddOpts, output string) error {
+	if name == "" {
+		return fmt.Errorf("provider name required: harness provider add <name> --url <url>")
+	}
+
+	p := client.CustomProvider{
+		Type:      opts.Type,
+		URL:       opts.URL,
+		ModelsURL: opts.ModelsURL,
+		Headers:   opts.Headers,
+		Display:   opts.Display,
+		Disabled:  opts.Disabled,
+	}
+
+	server, addr, err := startInternalServer(a)
+	if err != nil {
+		return err
+	}
+	defer server.Close()
+	c := newClient(addr)
+
+	saved, err := c.PutCustomProvider(name, p)
+	if err != nil {
+		return fmt.Errorf("add provider %q: %w", name, err)
+	}
+	if output == "json" {
+		b, _ := json.Marshal(saved)
+		fmt.Println(string(b))
+	} else {
+		fmt.Printf("Custom provider added: %s\n", name)
+	}
+	return nil
+}
+
+// RunProviderRemove deletes a custom provider (404 surfaced as a clean error).
+func RunProviderRemove(ctx context.Context, a *agent.Agent, name, output string) error {
+	if name == "" {
+		return fmt.Errorf("provider name required: harness provider rm <name>")
+	}
+	server, addr, err := startInternalServer(a)
+	if err != nil {
+		return err
+	}
+	defer server.Close()
+	c := newClient(addr)
+
+	if _, err := c.DeleteCustomProvider(name); err != nil {
+		return fmt.Errorf("remove provider %q: %w", name, err)
+	}
+	fmt.Printf("Custom provider removed: %s\n", name)
+	return nil
+}

@@ -18,10 +18,44 @@ import (
 // defined once, in types.
 type MCPServer = types.MCPServer
 
+// CustomProvider mirrors MCPServer's own alias pattern — the shape lives
+// once in types, this package owns validation/persistence.
+type CustomProvider = types.CustomProvider
+
 // ErrInvalidMCPServer is returned by SetMCPServer when the server config fails
 // validation. Callers (e.g. the HTTP API) can detect it with errors.Is to map
 // it to a 422 Unprocessable Entity.
 var ErrInvalidMCPServer = errors.New("invalid mcp server")
+
+// ErrInvalidCustomProvider is returned by SetCustomProvider when the
+// provider config fails validation. Same errors.Is → 422 mapping as
+// ErrInvalidMCPServer.
+var ErrInvalidCustomProvider = errors.New("invalid custom provider")
+
+// reservedProviderNames are the built-in provider Name() values
+// (internal/providers/*.go) a custom provider must never collide with —
+// kept here (not in internal/providers) because that package already
+// imports internal/config (for credential/settings access), so the
+// dependency can only point this direction without creating an import
+// cycle. internal/providers/registry.go's initRegistry re-checks this same
+// set defensively before constructing a CustomOpenAI (belt and suspenders:
+// this validation at write time is the primary guard, that one guards
+// against a config file hand-edited to bypass it).
+var reservedProviderNames = map[string]bool{
+	"anthropic":    true,
+	"claude-oauth": true,
+	"codex-oauth":  true,
+	"minimax":      true,
+	"ollama-cloud": true,
+	"ollama":       true,
+	"openai":       true,
+	"opencode-go":  true,
+}
+
+// IsReservedProviderName reports whether name collides with a built-in
+// provider's Name() — exported so internal/providers/registry.go's
+// initRegistry can defensively re-check it without duplicating the set.
+func IsReservedProviderName(name string) bool { return reservedProviderNames[name] }
 
 // ErrInvalidThinkingLevel is returned by SetThinkingLevel for an unknown level.
 // Detectable with errors.Is for a 422 mapping.
@@ -68,8 +102,9 @@ type settingsData struct {
 	ActiveModel   string `json:"active_model,omitempty"`
 	ThinkingLevel string `json:"thinking_level,omitempty"`
 
-	// Keyed collection (dynamic entries by name).
-	MCP map[string]MCPServer `json:"mcp,omitempty"` // key = server name
+	// Keyed collections (dynamic entries by name).
+	MCP      map[string]MCPServer      `json:"mcp,omitempty"`      // key = server name
+	Provider map[string]CustomProvider `json:"provider,omitempty"` // key = provider name — same singular style as "mcp"
 }
 
 func newSettingsManager() *SettingsManager {
@@ -249,6 +284,91 @@ func (m *SettingsManager) DeleteMCPServer(name string) error {
 	defer m.mu.Unlock()
 	m.load()
 	delete(m.data.MCP, name)
+	return m.save()
+}
+
+// ── Custom providers collection ─────────────────────────────────────────
+// Exact same agnostic pattern as MCP servers above: keyed by provider name,
+// stored verbatim. internal/providers/registry.go's initRegistry reads this
+// collection once at process start (no hot reload — same trade-off MCP
+// servers already accept) to construct a CustomOpenAI per enabled entry.
+
+// CustomProvider returns the stored config for a custom provider by name.
+func (m *SettingsManager) CustomProvider(name string) (CustomProvider, bool) {
+	m.reloadIfStale()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	p, ok := m.data.Provider[name]
+	return p, ok
+}
+
+// CustomProviders returns a defensive copy of the whole custom-provider
+// collection.
+func (m *SettingsManager) CustomProviders() map[string]CustomProvider {
+	m.reloadIfStale()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string]CustomProvider, len(m.data.Provider))
+	for k, v := range m.data.Provider {
+		out[k] = v
+	}
+	return out
+}
+
+// validateCustomProvider enforces: Type must be the one currently supported
+// dialect ("openai"); URL must be set; and name must not collide with a
+// RESERVED built-in provider name (see reservedProviderNames) — a custom
+// provider shadowing e.g. "anthropic" would be genuinely ambiguous (which
+// one does "anthropic/claude-..." resolve to?) and is rejected outright
+// rather than deciding an implicit precedence order.
+func validateCustomProvider(name string, p CustomProvider) error {
+	if p.Type != "openai" {
+		return fmt.Errorf("%w: unsupported type %q (only \"openai\" is supported for now)", ErrInvalidCustomProvider, p.Type)
+	}
+	if p.URL == "" {
+		return fmt.Errorf("%w: \"url\" is required", ErrInvalidCustomProvider)
+	}
+	if IsReservedProviderName(name) {
+		return fmt.Errorf("%w: %q is a built-in provider name and cannot be used for a custom provider", ErrInvalidCustomProvider, name)
+	}
+	return nil
+}
+
+// SetCustomProvider validates and stores (or replaces) a custom provider's
+// config. Same lock-reload-mutate-save sequence as SetMCPServer.
+func (m *SettingsManager) SetCustomProvider(name string, p CustomProvider) error {
+	if err := validateCustomProvider(name, p); err != nil {
+		return err
+	}
+	release, err := AcquireFileLock(m.path)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.load()
+	if m.data.Provider == nil {
+		m.data.Provider = make(map[string]CustomProvider)
+	}
+	m.data.Provider[name] = p
+	return m.save()
+}
+
+// DeleteCustomProvider removes a custom provider's config. Same
+// lock-then-reload pattern as DeleteMCPServer.
+func (m *SettingsManager) DeleteCustomProvider(name string) error {
+	release, err := AcquireFileLock(m.path)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.load()
+	delete(m.data.Provider, name)
 	return m.save()
 }
 

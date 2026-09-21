@@ -229,6 +229,36 @@ func AgentWithSessionInfo() AgentOption {
 	return func(o *agent.AgentOptions) { o.EnableSessionInfo = true }
 }
 
+// ── Custom providers ─────────────────────────────────────────────────────
+//
+// Registers a custom OpenAI Chat Completions-compatible provider globally
+// for this process — usable by any Agent built afterward via "name/model".
+// Call once, early (typically in main(), before constructing any Agent).
+// See agent.NewOpenAIProvider's doc comment for the full contract
+// (why apiKey is memory-only, how this differs from the declarative
+// `harness provider add` / settings.json path, registration-ordering
+// requirements).
+
+// NewOpenAIProvider registers a custom OpenAI-compatible provider. See
+// [agent.NewOpenAIProvider].
+var NewOpenAIProvider = agent.NewOpenAIProvider
+
+// CustomProviderOption configures a NewOpenAIProvider call. See
+// [agent.CustomProviderOption].
+type CustomProviderOption = agent.CustomProviderOption
+
+// ProviderWithDisplay sets the human-friendly display name. See
+// [agent.ProviderWithDisplay].
+var ProviderWithDisplay = agent.ProviderWithDisplay
+
+// ProviderWithHeaders sets extra HTTP headers sent on every request. See
+// [agent.ProviderWithHeaders].
+var ProviderWithHeaders = agent.ProviderWithHeaders
+
+// ProviderWithFetchModels overrides model discovery entirely. See
+// [agent.ProviderWithFetchModels].
+var ProviderWithFetchModels = agent.ProviderWithFetchModels
+
 // ── Runners ──────────────────────────────────────────────────────────────
 //
 // Each RunX is a direct alias for its package's own Run(ctx, *agent.Agent,

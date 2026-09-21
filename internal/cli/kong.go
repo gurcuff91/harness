@@ -68,6 +68,8 @@ var CLI struct {
 
 	MCP mcpCmd `cmd:"" help:"Manage MCP servers"`
 
+	Provider providerCmd `cmd:"" help:"Manage custom OpenAI-compatible providers"`
+
 	Memo memoCmd `cmd:"" help:"Search/list memories (read-only — the agent writes memories via its tools)"`
 
 	Schedules schedulesCmd `cmd:"" help:"List cron-scheduled prompts (read-only — the agent creates them via its tools)"`
@@ -255,6 +257,38 @@ type mcpEnableCmd struct {
 
 type mcpDisableCmd struct {
 	Name string `arg:"" help:"Server name"`
+}
+
+// ── provider ─────────────────────────────────────────────────────────────
+//
+// Distinct from the existing, plural `harness providers` (providersCmd
+// above) — that one is the read-only listing of EVERY registered provider,
+// built-in and custom alike. This one (singular) manages the custom ones a
+// user configures, mirroring mcpCmd's own shape. Connecting a custom
+// provider (saving its API key) uses the already-generic `harness connect
+// <name> <key>` — no dedicated subcommand needed here for that.
+
+type providerCmd struct {
+	List providerListCmd `cmd:"" default:"1" help:"List custom providers"`
+	Add  providerAddCmd  `cmd:"" help:"Add a custom OpenAI-compatible provider"`
+	Rm   providerRmCmd   `cmd:"" aliases:"remove" help:"Remove a custom provider"`
+}
+
+type providerListCmd struct{}
+
+type providerAddCmd struct {
+	Name      string `arg:"" help:"Provider name (must not collide with a built-in provider)"`
+	Type      string `default:"openai" help:"API dialect (only \"openai\" is supported for now)"`
+	URL       string `required:"" help:"Base URL for chat completions"`
+	ModelsURL string `help:"Models listing URL (default: <url>/models)"`
+	// []string (not map[string]string) — same repeatable-flag UX as mcpAddCmd.Header.
+	Header   []string `help:"HTTP header KEY:VAL (repeatable)"`
+	Display  string   `help:"Human-friendly display name (default: the provider name)"`
+	Disabled bool     `help:"Add the provider disabled (default: enabled)"`
+}
+
+type providerRmCmd struct {
+	Name string `arg:"" help:"Provider name"`
 }
 
 // ── memo ─────────────────────────────────────────────────────────────────

@@ -320,3 +320,113 @@ already looks up the provider by name via `GET /api/providers` and drives
   `openai` is sufficient for now; revisit only if a real need for an
   Anthropic-dialect custom provider shows up (would require giving
   `Anthropic` a configurable `baseURL` first, which it doesn't have today).
+
+## Addendum — programmatic (SDK) registration: `agent.NewOpenAIProvider`
+
+Added in a follow-up round of the same brainstorm, once the declarative
+(`settings.json`/`harness provider add`) path above was implemented and
+working. The need: an SDK embedder wants to register a custom provider
+directly in Go code (`main()`), without touching `settings.json` at all —
+the same relationship `MINIMAX_API_KEY` (env var) already has to `harness
+connect minimax <key>` (CLI/credentials.json), just for custom providers.
+
+**Global, not per-Agent.** Investigated live whether `providers.All` is
+per-process or per-`Agent`: it's a single package-level variable
+(`var All = []Provider{}`), populated once via `sync.Once`
+(`initOnce.Do(initRegistry)`), shared by every `Agent` in the process — this
+is genuinely different from `mcp.Manager`, which IS per-`Agent` (a struct
+field, `a.mcpManager`, each `Agent` with `EnableMCPs: true` gets its own).
+Confirmed explicitly with Gus that global registration (matching how
+`providers.All` already works, not inventing per-Agent isolation) is the
+correct model — "el user en su main u otro lugar registra N providers,
+luego ya crea el agente y pues todo lo demás le funciona".
+
+**No `types.CustomProvider`/no interface exposed.** Two API shapes were
+considered: (A) accept the same `types.CustomProvider` struct
+programmatically, or (B) a public `Provider` interface the caller
+implements themselves (full control, including their own auth/streaming).
+Settled on neither exactly — Option A's shape, MINUS `ModelsURL` and
+`Disabled` (neither makes sense for code-level registration: a disabled
+provider is simply never registered, and "URL" the caller doesn't like is
+replaced via the `FetchModels` hook below, not a second URL field), PLUS an
+optional `FetchModels` override for exactly the one piece of per-provider
+customization Gus wanted ("pero con la posibilidad e q implemneten el Fetch
+model"). Option B (a fully open `Provider` interface) was explicitly
+rejected — `internal/providers.Provider` is an 11-method interface designed
+around the CLI's connect/disconnect/credential-persistence model; exposing
+it (or a public subset) would either force SDK callers to implement
+irrelevant methods or require maintaining a second, parallel provider
+contract. A functional-options constructor over primitives is simpler and
+sufficient for the stated need.
+
+**Public surface (`agent/custom_providers.go`, aliased in `harness.go`):**
+
+```go
+func NewOpenAIProvider(name, url, apiKey string, opts ...CustomProviderOption) error
+
+type CustomProviderOption func(*customProviderConfig) // customProviderConfig unexported — never leaked
+
+func ProviderWithDisplay(display string) CustomProviderOption
+func ProviderWithHeaders(headers map[string]string) CustomProviderOption
+func ProviderWithFetchModels(fn func(apiKey string) ([]types.ModelMeta, error)) CustomProviderOption
+```
+
+No `internal/providers` type appears in any of these signatures — the
+unexported `customProviderConfig` accumulator is mutated by
+`CustomProviderOption` closures inside the `agent` package, then translated
+to a `internal/providers.CustomOpenAI` construction inside
+`NewOpenAIProvider`'s body only (legal: `agent` is in the same module,
+already imports `internal/providers` directly elsewhere in `agent.go`).
+
+**Credentials: memory-only, no `credentials.json` write.** `apiKey` is
+passed directly into the constructed `CustomOpenAI` and held only in
+memory — confirmed as the correct model by cross-checking how built-in
+api-key providers ALREADY behave when activated via their environment
+variable (`ANTHROPIC_API_KEY`, `MINIMAX_API_KEY`, …) instead of `harness
+connect`: `resolveAPIKey`'s cascade checks the env var FIRST, falling back
+to `credentials.json` only if unset — an env-var-activated built-in never
+writes to `credentials.json` either. `RegisterOpenAI`'s memory-only apiKey
+is the exact same pattern, just supplied as a function argument instead of
+an environment variable.
+
+**New `internal/providers.RegisterOpenAI`** — the real construction/
+registration entry point `agent.NewOpenAIProvider` wraps:
+```go
+func RegisterOpenAI(name, url, apiKey, display string, headers map[string]string,
+    fetchModels func(apiKey string) ([]types.ModelMeta, error)) error
+```
+Rejects a reserved built-in name (reusing `config.IsReservedProviderName`,
+the same check `validateCustomProvider`/`buildCustomProviders` already use)
+and a duplicate registration of the same name. Calls `EnsureRegistry()`
+first (so the built-in + settings.json-configured providers are already in
+`All` before appending), then appends under a new `registryMu sync.Mutex` —
+added specifically because `All` previously had ZERO write protection
+(only ever mutated once, inside `initOnce.Do`); `RegisterOpenAI` is a
+SECOND, arbitrary-timing writer, so concurrent registration calls (or a
+registration racing `initRegistry`'s own first-run construction) needed a
+real lock. Reads throughout the codebase (`agent.go`, `server.go`,
+`Resolve` itself) remain deliberately unprotected — the documented
+contract is "register everything in `main()`, before constructing any
+`Agent`", so registration finishes before any reader goroutine exists in
+normal use; `registryMu` only needs to protect writers against each other.
+
+**`CustomOpenAI.fetchModelsFn`** — new optional field, checked first in
+`FetchModels()`; falls back to the existing `fetchCustomOpenAIModels` HTTP
+path (unfiltered, per the addendum above) when nil. `types.CustomProvider`
+(the settings.json-facing struct) does NOT gain this field — it has no
+JSON representation, so a declaratively-configured provider always uses
+the default HTTP discovery; only the programmatic path can supply custom
+logic.
+
+**Tests**: `internal/providers/register_openai_test.go` (registration
+fields, reserved-name/duplicate-name rejection, the `FetchModels` hook
+actually being called instead of the default HTTP path — proven by a
+server that fails the test if hit, `Resolve("name/model")` working
+end-to-end), `agent/custom_providers_test.go` (the same coverage through
+`agent.NewOpenAIProvider` and a real `*Agent`), `harness_test.go`'s
+`TestNewOpenAIProviderFacadeAliasIsWired` (the facade aliases genuinely
+reach `agent.NewOpenAIProvider`, not just type-check). All three test files
+isolate `HOME` via `t.Setenv` (config.GetSettingsManager()'s singleton
+caveat — see `server/create_session_thinking_test.go`) and
+snapshot/restore `providers.All` so registrations never leak across tests
+in the same binary.

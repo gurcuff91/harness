@@ -263,6 +263,24 @@ func (c *Client) GetMCPStatus() ([]MCPStatus, error) {
 	return decode[[]MCPStatus](c, "GET", "/api/mcp/status", nil)
 }
 
+// ── Custom providers ─────────────────────────────────────────────────────
+
+// GetCustomProviders returns the whole custom-provider collection, keyed by
+// name.
+func (c *Client) GetCustomProviders() (map[string]CustomProvider, error) {
+	return decode[map[string]CustomProvider](c, "GET", "/api/settings/provider", nil)
+}
+
+// PutCustomProvider stores (or replaces) one custom provider.
+func (c *Client) PutCustomProvider(name string, p CustomProvider) (*CustomProvider, error) {
+	return ptr(decode[CustomProvider](c, "PUT", "/api/settings/provider/"+name, p))
+}
+
+// DeleteCustomProvider removes one custom provider.
+func (c *Client) DeleteCustomProvider(name string) (*Status, error) {
+	return c.decodeStatus("DELETE", "/api/settings/provider/"+name, nil)
+}
+
 // ── Memories (read-only) ─────────────────────────────────────────────────
 
 // GetMemories queries the read-only memories endpoint. rawQuery is the URL

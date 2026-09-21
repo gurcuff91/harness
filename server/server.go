@@ -107,6 +107,9 @@ func (s *Server) handler() http.Handler {
 	r.Put("/api/settings/mcp/{name}", s.handlePutMCPServer)
 	r.Delete("/api/settings/mcp/{name}", s.handleDeleteMCPServer)
 	r.Get("/api/mcp/status", s.handleMCPStatus)
+	r.Get("/api/settings/provider", s.handleListCustomProviders)
+	r.Put("/api/settings/provider/{name}", s.handlePutCustomProvider)
+	r.Delete("/api/settings/provider/{name}", s.handleDeleteCustomProvider)
 	r.Get("/api/memories", s.handleListMemories)
 	r.Get("/api/schedules", s.handleListSchedules)
 	r.Get("/api/providers", s.handleProviders)
@@ -482,6 +485,50 @@ func (s *Server) handleDeleteMCPServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := sm.DeleteMCPServer(name); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeStatus(w, http.StatusOK, "deleted", "")
+}
+
+// handleListCustomProviders handles GET /api/settings/provider. Exact
+// structural mirror of handleListMCPServers.
+func (s *Server) handleListCustomProviders(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, config.GetSettingsManager().CustomProviders())
+}
+
+// handlePutCustomProvider stores (or replaces) one custom provider. Name in
+// URL, CustomProvider in the body. Same pass-through shape as
+// handlePutMCPServer — validation (type/url/reserved-name) happens in
+// SetCustomProvider, not here.
+func (s *Server) handlePutCustomProvider(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	var p config.CustomProvider
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
+		return
+	}
+	if err := config.GetSettingsManager().SetCustomProvider(name, p); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, config.ErrInvalidCustomProvider) {
+			status = http.StatusUnprocessableEntity // 422: well-formed JSON, invalid content
+		}
+		writeErr(w, status, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+// handleDeleteCustomProvider handles DELETE /api/settings/provider/{name}.
+// Same 404-if-missing shape as handleDeleteMCPServer.
+func (s *Server) handleDeleteCustomProvider(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	sm := config.GetSettingsManager()
+	if _, ok := sm.CustomProvider(name); !ok {
+		writeError(w, http.StatusNotFound, "custom provider not found: "+name, nil)
+		return
+	}
+	if err := sm.DeleteCustomProvider(name); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}

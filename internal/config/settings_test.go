@@ -286,3 +286,114 @@ func TestValidThinkingLevel(t *testing.T) {
 		}
 	}
 }
+
+// ── Custom providers ─────────────────────────────────────────────────────
+
+func TestCustomProviderValidation(t *testing.T) {
+	m := newTestSettings(t, "")
+
+	bad := map[string]CustomProvider{
+		"unsupported-type": {Type: "anthropic", URL: "https://x"},
+		"empty-type":       {URL: "https://x"},
+		"missing-url":      {Type: "openai"},
+	}
+	for name, p := range bad {
+		if err := m.SetCustomProvider(name, p); err == nil {
+			t.Errorf("%s: expected error, got nil", name)
+		} else if !errors.Is(err, ErrInvalidCustomProvider) {
+			t.Errorf("%s: expected ErrInvalidCustomProvider, got %v", name, err)
+		}
+		if _, ok := m.CustomProvider(name); ok {
+			t.Errorf("%s: invalid provider was persisted", name)
+		}
+	}
+
+	if err := m.SetCustomProvider("my-proxy", CustomProvider{Type: "openai", URL: "https://my-proxy.internal/v1"}); err != nil {
+		t.Errorf("well-formed provider: expected success, got %v", err)
+	}
+}
+
+// TestCustomProviderReservedNames confirms every built-in provider name is
+// rejected — this set must never drift silently from the real registry
+// (internal/providers/*.go's Name() values).
+func TestCustomProviderReservedNames(t *testing.T) {
+	m := newTestSettings(t, "")
+	reserved := []string{"anthropic", "claude-oauth", "codex-oauth", "minimax", "ollama-cloud", "ollama", "openai", "opencode-go"}
+	for _, name := range reserved {
+		err := m.SetCustomProvider(name, CustomProvider{Type: "openai", URL: "https://x"})
+		if err == nil {
+			t.Errorf("%s: expected rejection as a reserved built-in name, got nil error", name)
+		} else if !errors.Is(err, ErrInvalidCustomProvider) {
+			t.Errorf("%s: expected ErrInvalidCustomProvider, got %v", name, err)
+		}
+	}
+	// A name that merely CONTAINS a reserved name isn't reserved itself.
+	if err := m.SetCustomProvider("my-openai-proxy", CustomProvider{Type: "openai", URL: "https://x"}); err != nil {
+		t.Errorf("non-colliding name should be accepted, got %v", err)
+	}
+}
+
+// TestCustomProviderCollection verifies custom providers round-trip through
+// disk, including all optional fields, and delete.
+func TestCustomProviderCollection(t *testing.T) {
+	m := newTestSettings(t, "")
+	p := CustomProvider{
+		Type:      "openai",
+		URL:       "https://my-proxy.internal/v1",
+		ModelsURL: "https://my-proxy.internal/v1/custom-models",
+		Headers:   map[string]string{"X-Org-Id": "acme"},
+		Display:   "Acme Proxy",
+		Disabled:  false,
+	}
+	if err := m.SetCustomProvider("my-proxy", p); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+
+	// Reload from disk.
+	m2 := newTestSettings(t, "")
+	m2.path = m.path
+	m2.load()
+	got, ok := m2.CustomProvider("my-proxy")
+	if !ok {
+		t.Fatal("provider not persisted")
+	}
+	if got.Type != "openai" || got.URL != p.URL || got.ModelsURL != p.ModelsURL ||
+		got.Headers["X-Org-Id"] != "acme" || got.Display != "Acme Proxy" {
+		t.Errorf("provider round-trip mismatch: %+v", got)
+	}
+
+	all := m2.CustomProviders()
+	if len(all) != 1 {
+		t.Errorf("CustomProviders() len = %d, want 1", len(all))
+	}
+
+	if err := m2.DeleteCustomProvider("my-proxy"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, ok := m2.CustomProvider("my-proxy"); ok {
+		t.Error("provider still present after delete")
+	}
+}
+
+// TestCustomProviderDisabledField confirms Disabled round-trips and
+// defaults to false (enabled) when omitted — same omitempty contract as
+// MCPServer.Disabled.
+func TestCustomProviderDisabledField(t *testing.T) {
+	m := newTestSettings(t, "")
+	if err := m.SetCustomProvider("p1", CustomProvider{Type: "openai", URL: "https://x", Disabled: true}); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	got, ok := m.CustomProvider("p1")
+	if !ok || !got.Disabled {
+		t.Errorf("Disabled did not round-trip: %+v ok=%v", got, ok)
+	}
+
+	raw, _ := os.ReadFile(m.path)
+	var out map[string]map[string]map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("reparse: %v", err)
+	}
+	if out["provider"]["p1"]["disabled"] != true {
+		t.Errorf("disabled:true missing from raw JSON: %s", raw)
+	}
+}

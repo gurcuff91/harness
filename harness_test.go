@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/client"
+	"github.com/gurcuff91/harness/internal/providers"
 )
 
 // TestNewAgentDefaults verifies the zero-option facade constructor produces
@@ -274,6 +276,158 @@ func TestMaxIterCommandEndToEnd(t *testing.T) {
 
 	cancel()
 	<-done
+}
+
+// TestCustomProviderEndToEnd verifies the full custom-provider settings
+// lifecycle over real HTTP: PUT /api/settings/provider/{name} (validation
+// + persistence), GET /api/settings/provider (listing), the provider
+// showing up automatically in GET /api/providers once EnsureRegistry runs
+// again, and DELETE /api/settings/provider/{name}. Exercised via
+// client.Client.PutCustomProvider/GetCustomProviders/DeleteCustomProvider —
+// wired through server.handleListCustomProviders/handlePutCustomProvider/
+// handleDeleteCustomProvider.
+//
+// config.GetSettingsManager() is a process-wide sync.Once singleton (see
+// server/create_session_thinking_test.go's identical caveat) — this test
+// isolates HOME via t.Setenv BEFORE any settings access, so it never
+// touches the real developer/CI ~/.harness/settings.json. It does NOT call
+// providers.EnsureRegistry() itself (that's a SEPARATE providers-package
+// singleton with its own irreversible sync.Once, already fired once for
+// every other test in this binary needing a real model) — GET
+// /api/providers reflecting the new custom provider requires a fresh
+// process, which is exactly the documented no-hot-reload behavior custom
+// providers share with MCP servers, not something this test can observe
+// within one binary.
+func TestCustomProviderEndToEnd(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	a := NewAgent(AgentWithStore(store.NewInMemoryStore()))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	addr := "127.0.0.1:18967" // fixed, unlikely-collision test-only port
+
+	done := make(chan error, 1)
+	go func() { done <- RunServer(ctx, a, ServerWithAddr(addr), ServerWithLogger(NewNilLogger())) }()
+
+	c := NewClient(addr)
+	deadline := time.Now().Add(3 * time.Second)
+	var reached bool
+	for time.Now().Before(deadline) {
+		if _, err := c.GetCustomProviders(); err == nil {
+			reached = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !reached {
+		t.Fatal("server never became reachable")
+	}
+
+	// Reject: unsupported type.
+	if _, err := c.PutCustomProvider("bad-type", client.CustomProvider{Type: "anthropic", URL: "https://x"}); err == nil {
+		t.Error("expected an error for an unsupported custom provider type")
+	}
+	// Reject: missing url.
+	if _, err := c.PutCustomProvider("bad-url", client.CustomProvider{Type: "openai"}); err == nil {
+		t.Error("expected an error for a missing url")
+	}
+	// Reject: reserved built-in name.
+	if _, err := c.PutCustomProvider("openai", client.CustomProvider{Type: "openai", URL: "https://x"}); err == nil {
+		t.Error("expected an error for a reserved built-in provider name")
+	}
+
+	// Well-formed provider is accepted and persisted.
+	saved, err := c.PutCustomProvider("my-proxy", client.CustomProvider{
+		Type:    "openai",
+		URL:     "https://my-proxy.internal/v1",
+		Headers: map[string]string{"X-Org-Id": "acme"},
+		Display: "My Proxy",
+	})
+	if err != nil {
+		t.Fatalf("PutCustomProvider: %v", err)
+	}
+	if saved.URL != "https://my-proxy.internal/v1" || saved.Display != "My Proxy" {
+		t.Errorf("unexpected saved provider: %+v", saved)
+	}
+
+	all, err := c.GetCustomProviders()
+	if err != nil {
+		t.Fatalf("GetCustomProviders: %v", err)
+	}
+	if _, ok := all["my-proxy"]; !ok {
+		t.Errorf("my-proxy missing from GetCustomProviders(): %+v", all)
+	}
+
+	// Delete removes it.
+	if _, err := c.DeleteCustomProvider("my-proxy"); err != nil {
+		t.Fatalf("DeleteCustomProvider: %v", err)
+	}
+	all, err = c.GetCustomProviders()
+	if err != nil {
+		t.Fatalf("GetCustomProviders (after delete): %v", err)
+	}
+	if _, ok := all["my-proxy"]; ok {
+		t.Error("my-proxy still present after DeleteCustomProvider")
+	}
+
+	// Delete of a non-existent provider is a clean 404-mapped error.
+	if _, err := c.DeleteCustomProvider("never-existed"); err == nil {
+		t.Error("expected an error deleting a non-existent custom provider")
+	}
+
+	cancel()
+	<-done
+}
+
+// TestNewOpenAIProviderFacadeAliasIsWired verifies harness.NewOpenAIProvider
+// (and its ProviderWith* options) are genuinely wired to
+// agent.NewOpenAIProvider — not just type-checking aliases — by registering
+// a real custom provider through the facade alone and confirming it's
+// resolvable via a real Agent built afterward.
+//
+// config.GetSettingsManager() is a process-wide sync.Once singleton (see
+// server/create_session_thinking_test.go's identical caveat) — isolates HOME
+// before any settings access. Also snapshots/restores the internal provider
+// registry so this test's registration never leaks into another test
+// running later in the same binary.
+func TestNewOpenAIProviderFacadeAliasIsWired(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	providers.EnsureRegistry()
+	snapshot := append([]providers.Provider{}, providers.All...)
+	defer func() { providers.All = snapshot }()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":[{"id":"facade-model"}]}`))
+	}))
+	defer srv.Close()
+
+	if err := NewOpenAIProvider("facade-proxy", srv.URL, "key",
+		ProviderWithDisplay("Facade Proxy"),
+		ProviderWithHeaders(map[string]string{"X-Test": "1"}),
+	); err != nil {
+		t.Fatalf("NewOpenAIProvider: %v", err)
+	}
+
+	a := NewAgent(AgentWithStore(store.NewInMemoryStore()))
+	defer a.Close()
+
+	var found bool
+	for _, p := range a.Providers() {
+		if p.Name == "facade-proxy" {
+			found = true
+			if p.DisplayName != "Facade Proxy" {
+				t.Errorf("DisplayName = %q, want Facade Proxy", p.DisplayName)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("facade-proxy not found in a.Providers() after registration via the harness facade")
+	}
+
+	// Reserved-name rejection also reaches through the facade.
+	if err := NewOpenAIProvider("openai", srv.URL, "key"); err == nil {
+		t.Error("expected an error registering a reserved built-in provider name via the facade")
+	}
 }
 
 // TestRunAcpAliasIsWiredEndToEnd verifies RunAcp (and AcpWithStdin/

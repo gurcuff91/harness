@@ -132,6 +132,37 @@ const openAPISpecTemplate = `{
         }
       }
     },
+    "/api/settings/provider": {
+      "get": {
+        "tags": ["settings"],
+        "summary": "List custom provider configs",
+        "description": "Custom OpenAI-compatible providers (proxies, gateways, self-hosted endpoints) configured under settings.json's \"provider\" collection. Takes effect on the next process start (no hot reload), same as MCP servers.",
+        "operationId": "listCustomProviders",
+        "responses": {
+          "200": { "description": "Custom provider config map", "content": { "application/json": { "schema": { "type": "object" } } } }
+        }
+      }
+    },
+    "/api/settings/provider/{name}": {
+      "put": {
+        "tags": ["settings"],
+        "summary": "Upsert custom provider config",
+        "operationId": "putCustomProvider",
+        "parameters": [{ "name": "name", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Provider name — must not collide with a built-in provider" }],
+        "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CustomProvider" } } } },
+        "responses": {
+          "200": { "description": "Saved config", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CustomProvider" } } } },
+          "422": { "description": "Invalid config (unsupported type, missing url, or reserved name)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      },
+      "delete": {
+        "tags": ["settings"],
+        "summary": "Delete custom provider config",
+        "operationId": "deleteCustomProvider",
+        "parameters": [{ "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Deleted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } } }
+      }
+    },
     "/api/memories": {
       "get": {
         "tags": ["memory"],
@@ -510,6 +541,18 @@ const openAPISpecTemplate = `{
           "connected":  { "type": "boolean" },
           "tool_count": { "type": "integer" },
           "error":      { "type": "string" }
+        }
+      },
+      "CustomProvider": {
+        "type": "object",
+        "required": ["type", "url"],
+        "properties": {
+          "type":       { "type": "string", "enum": ["openai"], "description": "API dialect — only \"openai\" is supported for now" },
+          "url":        { "type": "string", "example": "https://my-proxy.internal/v1", "description": "Base URL for chat completions" },
+          "models_url": { "type": "string", "description": "Models listing URL; defaults to \"<url>/models\" when omitted" },
+          "headers":    { "type": "object", "additionalProperties": { "type": "string" }, "description": "Extra HTTP headers sent on every request" },
+          "display":    { "type": "string", "description": "Human-friendly display name; defaults to the provider name (the map key) when omitted" },
+          "disabled":   { "type": "boolean", "description": "Enabled by default; set true to skip loading this provider" }
         }
       },
       "Schedule": {

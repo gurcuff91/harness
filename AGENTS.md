@@ -203,6 +203,31 @@ make install              # build + install to ~/go/bin
 
 ### Adding a New Provider
 
+For a genuinely new API dialect or auth flow, follow the steps below (a real
+`internal/providers/<name>.go` file, built into the binary). For a user's own
+OpenAI Chat Completions-compatible endpoint (a proxy, gateway, or self-hosted
+server) that just needs a name/URL/headers, no code change is needed at all —
+two paths, both landing on the same `internal/providers.CustomOpenAI`:
+- **Declarative**: `harness provider add <name> --url <url>` writes a
+  `types.CustomProvider` entry to `settings.json`'s `"provider"` collection
+  (singular, same style as `"mcp"`), and `internal/providers/registry.go`'s
+  `initRegistry()` constructs a `CustomOpenAI` for each enabled entry at the
+  next process start.
+- **Programmatic (SDK)**: `agent.NewOpenAIProvider(name, url, apiKey,
+  ...opts)` (aliased in `harness.go`) registers one directly in Go code —
+  global to the process (same as the declarative path; `providers.All` has
+  no per-`Agent` isolation, unlike `mcp.Manager`), memory-only credentials
+  (never written to `credentials.json`), with an optional
+  `agent.ProviderWithFetchModels` hook for fully custom model discovery.
+  Call it once, early (typically in `main()`, before constructing any
+  `Agent` — see `internal/providers/registry.go`'s `registryMu` doc comment
+  for why registration ordering matters).
+
+See `internal/providers/custom_openai.go`,
+`docs/plans/2026-09-21-custom-providers-design.md` (including its
+Addendum section for the programmatic path). Only `type: "openai"` is
+supported either way today.
+
 1. Create `providers/<name>.go`
 2. Implement the `providers.Provider` interface
 3. Add the constructor to `internal/providers/registry.go`'s `initRegistry()`, appending to the `All` slice

@@ -130,6 +130,43 @@ func (c *mcpDisableCmd) Run() error {
 	return RunMCPSetEnabled(ctx, a, c.Name, false, "text")
 }
 
+func (c *providerListCmd) Run() error {
+	a := newAgent()
+	defer a.Close()
+	ctx, cancel := signalContext()
+	defer cancel()
+	return RunProviderList(ctx, a, "text")
+}
+
+func (c *providerAddCmd) Run() error {
+	a := newAgent()
+	defer a.Close()
+	ctx, cancel := signalContext()
+	defer cancel()
+
+	headers, err := parseKV(c.Header, ":")
+	if err != nil {
+		return err
+	}
+	opts := ProviderAddOpts{
+		Type:      c.Type,
+		URL:       c.URL,
+		ModelsURL: c.ModelsURL,
+		Headers:   headers,
+		Display:   c.Display,
+		Disabled:  c.Disabled,
+	}
+	return RunProviderAdd(ctx, a, c.Name, opts, "text")
+}
+
+func (c *providerRmCmd) Run() error {
+	a := newAgent()
+	defer a.Close()
+	ctx, cancel := signalContext()
+	defer cancel()
+	return RunProviderRemove(ctx, a, c.Name, "text")
+}
+
 // parseKV parses a slice of "key<sep>value" strings into a map — the []string
 // (not map[string]string) field type is what preserves today's repeatable
 // --env A=B --env C=D UX; see the comment on MCP.Add.Env in kong.go.

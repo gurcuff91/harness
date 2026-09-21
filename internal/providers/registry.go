@@ -2,14 +2,30 @@ package providers
 
 import (
 	"fmt"
+	"net/http"
+	"sort"
 	"strings"
 	"sync"
+
+	"github.com/gurcuff91/harness/internal/config"
+	"github.com/gurcuff91/harness/types"
 )
 
 // All is the fixed registry of provider instances.
 var All = []Provider{}
 
 var initOnce sync.Once
+
+// registryMu guards WRITES to All — initRegistry's own construction and
+// RegisterOpenAI's append. Reads throughout the codebase (agent.go,
+// server.go, Resolve below, …) remain unprotected by design: the
+// documented usage pattern is "call RegisterOpenAI in main(), before
+// constructing any Agent" (see agent.NewOpenAIProvider's doc comment) —
+// registration finishes before any reader goroutine exists, so this mutex
+// only needs to protect concurrent registration calls against EACH OTHER
+// and against initRegistry's own first-run construction, not against the
+// wider read traffic that starts once Agents are up and running.
+var registryMu sync.Mutex
 
 func initRegistry() {
 	All = []Provider{}
@@ -27,10 +43,88 @@ func initRegistry() {
 		NewOllamaCloud(),
 		NewOllama(),
 	)
+
+	// Custom providers (settings.json's "provider" collection) — same
+	// no-hot-reload contract as MCP servers: read once here, take effect
+	// on the next process start.
+	All = append(All, buildCustomProviders(config.GetSettingsManager().CustomProviders())...)
+}
+
+// buildCustomProviders constructs a Provider for each ENABLED, non-reserved
+// entry in custom, in deterministic (sorted-by-name) order — same
+// reasoning as mcp.Manager.Start()'s own sorted iteration. Pulled out of
+// initRegistry as a pure function (takes the map instead of reading the
+// config.GetSettingsManager() singleton itself) specifically so it's
+// testable without touching the real ~/.harness/settings.json.
+//
+// A Disabled entry is skipped entirely — never constructed, never appears
+// in the result, identical to how mcp.Manager.Start() treats a disabled
+// MCP server. Names colliding with a reserved built-in are also skipped —
+// defense in depth: SetCustomProvider already rejects that at write time,
+// this only guards a hand-edited settings.json bypassing that check.
+func buildCustomProviders(custom map[string]config.CustomProvider) []Provider {
+	names := make([]string, 0, len(custom))
+	for name := range custom {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var out []Provider
+	for _, name := range names {
+		cfg := custom[name]
+		if cfg.Disabled || config.IsReservedProviderName(name) {
+			continue
+		}
+		switch cfg.Type {
+		case "openai":
+			out = append(out, NewCustomOpenAI(name, cfg))
+		}
+	}
+	return out
 }
 
 func EnsureRegistry() {
 	initOnce.Do(initRegistry)
+}
+
+// RegisterOpenAI builds a CustomOpenAI provider and appends it to the
+// global registry — the internal implementation
+// agent.NewOpenAIProvider (a public, SDK-safe wrapper never exposing this
+// package's Provider interface or any other internal/… type) calls this.
+// Returns an error if name collides with a reserved built-in provider
+// name; never touches settings.json or credentials.json — apiKey is used
+// directly and only held in memory, exactly like a built-in api-key
+// provider activated via its environment variable rather than `harness
+// connect`.
+//
+// fetchModels, if non-nil, becomes the provider's FetchModels — see
+// CustomOpenAI.fetchModelsFn's doc comment. Passing nil uses the default
+// HTTP-GET-<url>/models discovery (unfiltered, same as any
+// settings.json-configured custom provider).
+func RegisterOpenAI(name, url, apiKey, display string, headers map[string]string, fetchModels func(apiKey string) ([]types.ModelMeta, error)) error {
+	if config.IsReservedProviderName(name) {
+		return fmt.Errorf("%q is a built-in provider name and cannot be used for a custom provider", name)
+	}
+	EnsureRegistry() // make sure the built-in/settings.json-configured providers are already in All
+
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	for _, p := range All {
+		if p.Name() == name {
+			return fmt.Errorf("provider %q is already registered", name)
+		}
+	}
+	All = append(All, &CustomOpenAI{
+		name:          name,
+		displayName:   display,
+		baseURL:       url,
+		headers:       headers,
+		apiKey:        apiKey,
+		fetchModelsFn: fetchModels,
+		client:        &http.Client{},
+		cache:         make(map[string]types.ModelMeta),
+	})
+	return nil
 }
 
 // Resolve returns the provider and bare model ID for a "provider/model" string.
