@@ -345,12 +345,13 @@ func RunProviderList(ctx context.Context, a *agent.Agent, output string) error {
 
 // ProviderAddOpts carries the parsed flags for `harness provider add`.
 type ProviderAddOpts struct {
-	Type      string
-	URL       string
-	ModelsURL string
-	Headers   map[string]string
-	Display   string
-	Disabled  bool
+	Type           string
+	URL            string
+	ModelsURL      string
+	Headers        map[string]string
+	Display        string
+	Disabled       bool
+	ReasoningSplit bool
 }
 
 // RunProviderAdd creates (or replaces) a custom provider. The name is
@@ -362,12 +363,13 @@ func RunProviderAdd(ctx context.Context, a *agent.Agent, name string, opts Provi
 	}
 
 	p := client.CustomProvider{
-		Type:      opts.Type,
-		URL:       opts.URL,
-		ModelsURL: opts.ModelsURL,
-		Headers:   opts.Headers,
-		Display:   opts.Display,
-		Disabled:  opts.Disabled,
+		Type:           opts.Type,
+		URL:            opts.URL,
+		ModelsURL:      opts.ModelsURL,
+		Headers:        opts.Headers,
+		Display:        opts.Display,
+		Disabled:       opts.Disabled,
+		ReasoningSplit: opts.ReasoningSplit,
 	}
 
 	server, addr, err := startInternalServer(a)

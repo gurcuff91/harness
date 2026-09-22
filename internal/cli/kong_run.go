@@ -149,12 +149,13 @@ func (c *providerAddCmd) Run() error {
 		return err
 	}
 	opts := ProviderAddOpts{
-		Type:      c.Type,
-		URL:       c.URL,
-		ModelsURL: c.ModelsURL,
-		Headers:   headers,
-		Display:   c.Display,
-		Disabled:  c.Disabled,
+		Type:           c.Type,
+		URL:            c.URL,
+		ModelsURL:      c.ModelsURL,
+		Headers:        headers,
+		Display:        c.Display,
+		Disabled:       c.Disabled,
+		ReasoningSplit: c.ReasoningSplit,
 	}
 	return RunProviderAdd(ctx, a, c.Name, opts, "text")
 }

@@ -259,6 +259,11 @@ var ProviderWithHeaders = agent.ProviderWithHeaders
 // [agent.ProviderWithFetchModels].
 var ProviderWithFetchModels = agent.ProviderWithFetchModels
 
+// ProviderWithReasoningSplit sends "reasoning_split": true on every
+// request — needed for a custom provider fronting a MiniMax-compatible
+// backend. See [agent.ProviderWithReasoningSplit].
+var ProviderWithReasoningSplit = agent.ProviderWithReasoningSplit
+
 // ── Runners ──────────────────────────────────────────────────────────────
 //
 // Each RunX is a direct alias for its package's own Run(ctx, *agent.Agent,

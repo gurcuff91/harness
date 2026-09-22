@@ -287,6 +287,11 @@ type providerAddCmd struct {
 	Header   []string `help:"HTTP header KEY:VAL (repeatable) — put any authentication here (e.g. Authorization:Bearer <token> or X-Api-Key:...)"`
 	Display  string   `help:"Human-friendly display name (default: the provider name)"`
 	Disabled bool     `help:"Add the provider disabled (default: enabled)"`
+	// ReasoningSplit: opt-in wire flag some MiniMax-compatible backends
+	// need to route thinking into reasoning_content instead of leaking it
+	// inline inside content as literal "<think>...</think>" — see
+	// types.CustomProvider.ReasoningSplit's doc comment.
+	ReasoningSplit bool `help:"Send \"reasoning_split\": true on every request — needed for MiniMax-compatible backends to separate thinking from the final answer (default: off)"`
 }
 
 type providerRmCmd struct {

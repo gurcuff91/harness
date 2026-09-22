@@ -563,3 +563,168 @@ live: temporarily reverted the `AllowCleanEOF: true` change and confirmed
 the first test fails with the exact error message Gus saw in the TUI,
 then restored the fix and confirmed it passes. Full suite + `go vet` +
 `-race` on `internal/providers` green; `gofmt -l` clean.
+
+## Addendum 4 — opt-in `ReasoningSplit` for MiniMax-compatible custom providers
+
+**The trigger.** Continued live-testing the same Kaiban gateway
+(`minimax-cm-dev`) after Addendum 3's SSE fix: turns completed, but the
+model's thinking never showed up as a separate thinking block in the
+TUI — it appeared inline, at the start of the answer text, wrapped in
+literal `<think>...</think>` tags. Gus recalled this had already been
+solved once for the BUILT-IN `minimax` provider and asked for the same fix
+to extend additively to custom providers (any custom provider, not just
+one proxying MiniMax specifically — the fix must not touch or regress
+behavior for a custom provider hitting a plain OpenAI-dialect backend).
+
+**Root cause, confirmed live with two direct calls against the actual
+gateway** (`POST …/chat/completions`, `stream:false`, same prompt, only
+`reasoning_split` toggled):
+- WITHOUT `"reasoning_split": true` → MiniMax's response `content` field
+  contains `"<think>\n...reasoning...\n</think>\n\n<final answer>"` — the
+  entire reasoning trace inline, ahead of the real answer, inside the
+  field harness's parser treats as plain response text.
+- WITH `"reasoning_split": true` → the SAME reasoning trace instead
+  arrives in a separate `reasoning_content` field, `content` starts empty
+  and only fills with the real answer — exactly the field
+  `parseOpenAIStream` (`internal/providers/llm/openai.go`) already parses
+  into `types.StreamThinkingDelta` → `EventStreamThinkingDelta`.
+
+This is the exact same MiniMax quirk `internal/providers/minimax.go`
+already works around — its `CompleteStream` always sets
+`ReasoningSplit: true` on the shared `llm.OpenAIRequest`. `CustomOpenAI`
+(added by this design doc, after that fix already existed) simply never
+threaded an equivalent flag through — there was no field on
+`types.CustomProvider`/`CustomOpenAI` to carry it at all, so a custom
+provider fronting a MiniMax-flavored backend had no way to opt in.
+`stripThinkingTags` (the existing defense-in-depth tag stripper) only
+removes the literal `<think>`/`</think>` delimiters themselves — it
+doesn't relocate the reasoning text into a thinking block, so the net
+effect without this fix was the model's full chain-of-thought rendering
+as ordinary response text, tags stripped but content still misplaced.
+
+**Fix — additive by construction.** A new field threads through both
+registration paths, opt-in and `false` by default everywhere:
+- `types.CustomProvider.ReasoningSplit bool` (`json:"reasoning_split,
+  omitempty"`) — the settings.json-facing field. `omitempty` means an
+  existing `settings.json` with custom providers configured before this
+  change is byte-for-byte unaffected on next read; the field is simply
+  absent and defaults to Go's zero value, `false`.
+- `CustomOpenAI.reasoningSplit bool` — carried from `NewCustomOpenAI`'s
+  `cfg.ReasoningSplit` and from `RegisterOpenAI`'s new `reasoningSplit
+  bool` parameter (inserted before `fetchModels`, the last parameter,
+  to minimize churn at call sites — every existing call site needed a
+  single extra `false` argument, verified by `go vet` catching all of
+  them). `CompleteStream` passes it straight into
+  `llm.OpenAIRequest{..., ReasoningSplit: o.reasoningSplit}` — the SAME
+  field `minimax.go` already sets unconditionally to `true`; this is
+  not a new wire mechanism, just the existing one made reachable from
+  the generic custom-provider path.
+- `agent.customProviderConfig.reasoningSplit` + new
+  `agent.ProviderWithReasoningSplit(bool) CustomProviderOption` — the
+  SDK-facing option, following the exact shape of every other
+  `ProviderWithX` option in `agent/custom_providers.go`.
+- `internal/cli/kong.go`'s `providerAddCmd` gained `--reasoning-split`
+  (bool flag, default off) threaded through `internal/cli/settings.go`'s
+  `ProviderAddOpts`/`RunProviderAdd` into `client.CustomProvider` (a type
+  alias for `types.CustomProvider`, so no separate wire shape to
+  maintain).
+
+**Why unconditional-when-set is safe and additive.** The flag is a pure
+pass-through with no conditional logic anywhere in `CustomOpenAI` — a
+custom provider that never sets it (every provider configured before this
+change, and every NEW provider that doesn't need it) sends no
+`reasoning_split` key at all (`omitempty` on the wire request struct too,
+already true before this change), byte-identical request body to before.
+Only a caller who explicitly opts in sees any behavior change at all.
+
+**Tests**: `internal/providers/custom_openai_test.go` gained
+`TestCustomOpenAI_ReasoningSplitDefaultsToFalseNotSentOnWire` (the
+additive-safety half — proves the key is absent from the wire when
+unset) and `TestCustomOpenAI_ReasoningSplitSendsWireFlagWhenConfigured`
+(reproduces the real incident's shape — asserts the key IS present and
+`true` when configured). `internal/providers/register_openai_test.go`
+gained `TestRegisterOpenAI_ReasoningSplitPropagatesToConstructedProvider`
+(same coverage through the SDK's lower-level registration entry point).
+`agent/custom_providers_test.go` gained
+`TestNewOpenAIProvider_ReasoningSplitReachesTheWire` (same coverage
+through the full public `agent.NewOpenAIProvider` +
+`agent.ProviderWithReasoningSplit` surface). All four existing test files'
+`RegisterOpenAI(...)` call sites were mechanically updated for the new
+parameter (a plain `false` inserted at every existing call, verified
+against `go vet`'s own error output listing every broken call site one at
+a time). Reproduced live: temporarily removed the
+`ReasoningSplit: o.reasoningSplit` wiring in `CompleteStream` and
+confirmed both new `CustomOpenAI`-level tests fail exactly as expected,
+then restored it and confirmed all four new tests pass. Full suite +
+`go vet` + `-race` on `internal/providers`, `agent`, and the root package
+green; `gofmt -l` clean.
+
+## Addendum 5 — parser-side extraction considered and rejected; DX polish on `ProviderWithReasoningSplit`
+
+**Alternative considered: make the parser itself relocate wrapped
+`<think>...</think>` content instead of asking the caller to opt in.**
+After Addendum 4 shipped, Gus asked whether `parseOpenAIStream` could be
+made fully provider-agnostic instead — rather than stripping
+`<think>`/`</think>` delimiters and leaving the wrapped text in `content`
+(today's `stripThinkingTags` behavior), the parser would extract that
+wrapped text and re-emit it as `StreamThinkingDelta`, so no
+`reasoning_split` concept would be needed anywhere.
+
+Investigated live whether this is even viable: streamed a real request
+against the Kaiban MiniMax gateway with `stream:true` and inspected the
+raw SSE chunks. Confirmed the tag can straddle an arbitrary boundary
+WITHIN a single delta, not just across deltas — one real chunk observed:
+`content: " is asking... 5 + 3 = 8\n</think>\n\n5"`, where the closing tag
+and the start of the real final answer arrive concatenated in the exact
+same delta, no chunk boundary to key off of at all. Handling this
+correctly requires a genuine state machine (buffering partial tag
+prefixes across deltas, tracking an inside/outside-thinking mode, careful
+handling of a tag opening and closing within one delta) built on top of
+untrusted third-party text streams — exactly the kind of parsing surface
+prone to subtle bugs (a tag split byte-for-byte across a delta boundary,
+or a false-positive match inside content that legitimately contains
+literal angle brackets) that's hard to fully trust without exhaustive
+fuzzing.
+
+**Decision: rejected.** Gus's call: `reasoning_split` (the mechanism
+Addendum 4 already built and shipped) is simpler, already proven correct
+against the real incident, and doesn't add any streaming-text parsing
+risk to a code path every single OpenAI-dialect provider shares
+(`openai`, `minimax`, `opencode-go`, `ollama`, `ollama-cloud`, DeepSeek,
+and every custom provider). The existing `stripThinkingTags` defense (tag
+removal only, no relocation) stays exactly as-is — it already does the
+right thing for providers that only occasionally leak a bare delimiter at
+a thinking→answer boundary; MiniMax fully wrapping its answer in tags
+when `reasoning_split` is left off is a different, more invasive failure
+mode that the wire flag solves at the source instead of trying to
+reverse-engineer client-side.
+
+**DX polish: `ProviderWithReasoningSplit()` takes no argument.** Initially
+shipped as `ProviderWithReasoningSplit(v bool)` (Addendum 4), matching
+`ProviderWithHeaders`' shape. Gus flagged this as awkward: there's no
+real use case for explicitly passing `false` (simply omitting the option
+already means "off"), so carrying a bool parameter only adds noise at
+every call site. Changed to `func ProviderWithReasoningSplit()
+CustomProviderOption` — calling it always means "on". Updated: the
+option's own implementation (`agent/custom_providers.go`), its existing
+test call site (`agent/custom_providers_test.go`), the doc comment in
+`internal/providers/register_openai_test.go` referencing it, README.md,
+and AGENTS.md. Also caught and fixed a gap from Addendum 4: the facade
+alias `harness.ProviderWithReasoningSplit` was never added to `harness.go`
+in the first place (only `ProviderWithDisplay`/`ProviderWithHeaders`/
+`ProviderWithFetchModels` were aliased) — added it, and extended
+`TestNewOpenAIProviderFacadeAliasIsWired` (`harness_test.go`) to actually
+drive a `CompleteStream` call through the facade-registered provider and
+assert `"reasoning_split":true` reaches the wire, closing the one gap
+where the facade's own alias for this option had zero test coverage.
+
+**Tests**: no new test files — `agent/custom_providers_test.go`'s
+`TestNewOpenAIProvider_ReasoningSplitReachesTheWire` and
+`internal/providers/register_openai_test.go`'s
+`TestRegisterOpenAI_ReasoningSplitPropagatesToConstructedProvider` were
+already passing (their behavioral assertions didn't change, only the
+call-site syntax from `ProviderWithReasoningSplit(true)` to
+`ProviderWithReasoningSplit()`); `harness_test.go`'s
+`TestNewOpenAIProviderFacadeAliasIsWired` gained the new wire-assertion
+described above. Full suite + `go vet` + `-race` on `internal/providers`,
+`agent`, and the root package green; `gofmt -l` clean.

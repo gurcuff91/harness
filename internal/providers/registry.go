@@ -101,7 +101,7 @@ func EnsureRegistry() {
 // CustomOpenAI.fetchModelsFn's doc comment. Passing nil uses the default
 // HTTP-GET-<url>/models discovery (unfiltered, same as any
 // settings.json-configured custom provider).
-func RegisterOpenAI(name, url, display string, headers map[string]string, fetchModels func() ([]types.ModelMeta, error)) error {
+func RegisterOpenAI(name, url, display string, headers map[string]string, reasoningSplit bool, fetchModels func() ([]types.ModelMeta, error)) error {
 	if config.IsReservedProviderName(name) {
 		return fmt.Errorf("%q is a built-in provider name and cannot be used for a custom provider", name)
 	}
@@ -115,13 +115,14 @@ func RegisterOpenAI(name, url, display string, headers map[string]string, fetchM
 		}
 	}
 	All = append(All, &CustomOpenAI{
-		name:          name,
-		displayName:   display,
-		baseURL:       url,
-		headers:       headers,
-		fetchModelsFn: fetchModels,
-		client:        &http.Client{},
-		cache:         make(map[string]types.ModelMeta),
+		name:           name,
+		displayName:    display,
+		baseURL:        url,
+		headers:        headers,
+		reasoningSplit: reasoningSplit,
+		fetchModelsFn:  fetchModels,
+		client:         &http.Client{},
+		cache:          make(map[string]types.ModelMeta),
 	})
 	return nil
 }

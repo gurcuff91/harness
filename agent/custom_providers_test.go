@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gurcuff91/harness/agent/store"
@@ -138,4 +141,51 @@ func TestNewOpenAIProvider_AlwaysActiveNoConnectStep(t *testing.T) {
 		}
 	}
 	t.Fatal("always-active-proxy not found in a.Providers()")
+}
+
+// TestNewOpenAIProvider_ReasoningSplitReachesTheWire reproduces the real
+// incident through the fully PROGRAMMATIC (SDK) registration path — a
+// custom provider fronting a MiniMax-compatible gateway (Gus's Kaiban
+// deployment) needs "reasoning_split": true on every request to get its
+// thinking routed into reasoning_content instead of leaking inline inside
+// content as literal "<think>...</think>". Without
+// ProviderWithReasoningSplit, this flag never reaches the wire at all
+// (proven by TestNewOpenAIProvider_RegistersAndResolvableThroughAgent's
+// sibling coverage of the default path via internal/providers' own
+// TestCustomOpenAI_ReasoningSplitDefaultsToFalseNotSentOnWire) — this test
+// is the additive opt-in half of that story.
+func TestNewOpenAIProvider_ReasoningSplitReachesTheWire(t *testing.T) {
+	withCleanProviderRegistry(t)
+
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	if err := NewOpenAIProvider("minimax-gateway", srv.URL,
+		ProviderWithReasoningSplit(),
+	); err != nil {
+		t.Fatalf("NewOpenAIProvider: %v", err)
+	}
+
+	var found providers.Provider
+	for _, p := range providers.All {
+		if p.Name() == "minimax-gateway" {
+			found = p
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("minimax-gateway not found in providers.All")
+	}
+	req := &types.Request{Model: "MiniMax-M2", Messages: []types.Message{}, MaxTokens: 10}
+	if _, err := found.CompleteStream(context.Background(), req, func(types.StreamEvent) {}); err != nil {
+		t.Fatalf("CompleteStream: %v", err)
+	}
+	if !strings.Contains(string(gotBody), `"reasoning_split":true`) {
+		t.Errorf("request body = %s, want it to contain \"reasoning_split\":true", gotBody)
+	}
 }

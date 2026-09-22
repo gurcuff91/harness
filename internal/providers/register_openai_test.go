@@ -1,8 +1,11 @@
 package providers
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gurcuff91/harness/types"
@@ -31,7 +34,7 @@ func withCleanRegistry(t *testing.T) {
 func TestRegisterOpenAI_AppearsInAllWithCorrectFields(t *testing.T) {
 	withCleanRegistry(t)
 
-	if err := RegisterOpenAI("sdk-proxy", "https://my-proxy.internal/v1", "SDK Proxy", map[string]string{"X-Api-Key": "secret"}, nil); err != nil {
+	if err := RegisterOpenAI("sdk-proxy", "https://my-proxy.internal/v1", "SDK Proxy", map[string]string{"X-Api-Key": "secret"}, false, nil); err != nil {
 		t.Fatalf("RegisterOpenAI: %v", err)
 	}
 
@@ -56,11 +59,50 @@ func TestRegisterOpenAI_AppearsInAllWithCorrectFields(t *testing.T) {
 	}
 }
 
+// TestRegisterOpenAI_ReasoningSplitPropagatesToConstructedProvider proves
+// the SDK registration path threads reasoningSplit through to the
+// constructed CustomOpenAI, not just the settings.json-declarative path
+// (NewCustomOpenAI, covered separately in custom_openai_test.go) — i.e.
+// agent.NewOpenAIProvider + agent.ProviderWithReasoningSplit() actually
+// results in "reasoning_split": true reaching the wire.
+func TestRegisterOpenAI_ReasoningSplitPropagatesToConstructedProvider(t *testing.T) {
+	withCleanRegistry(t)
+
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	if err := RegisterOpenAI("reasoning-split-proxy", srv.URL, "", nil, true, nil); err != nil {
+		t.Fatalf("RegisterOpenAI: %v", err)
+	}
+	var found Provider
+	for _, p := range All {
+		if p.Name() == "reasoning-split-proxy" {
+			found = p
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("reasoning-split-proxy not found in All after RegisterOpenAI")
+	}
+	req := &types.Request{Model: "MiniMax-M2", Messages: []types.Message{}, MaxTokens: 10}
+	if _, err := found.CompleteStream(context.Background(), req, func(types.StreamEvent) {}); err != nil {
+		t.Fatalf("CompleteStream: %v", err)
+	}
+	if !strings.Contains(string(gotBody), `"reasoning_split":true`) {
+		t.Errorf("request body = %s, want it to contain \"reasoning_split\":true", gotBody)
+	}
+}
+
 func TestRegisterOpenAI_RejectsReservedName(t *testing.T) {
 	withCleanRegistry(t)
 
 	for _, name := range []string{"anthropic", "openai", "minimax", "ollama", "ollama-cloud", "opencode-go", "claude-oauth", "codex-oauth"} {
-		if err := RegisterOpenAI(name, "https://x", "", nil, nil); err == nil {
+		if err := RegisterOpenAI(name, "https://x", "", nil, false, nil); err == nil {
 			t.Errorf("%s: expected rejection as a reserved built-in name, got nil error", name)
 		}
 	}
@@ -69,10 +111,10 @@ func TestRegisterOpenAI_RejectsReservedName(t *testing.T) {
 func TestRegisterOpenAI_RejectsDuplicateName(t *testing.T) {
 	withCleanRegistry(t)
 
-	if err := RegisterOpenAI("dup-proxy", "https://a", "", nil, nil); err != nil {
+	if err := RegisterOpenAI("dup-proxy", "https://a", "", nil, false, nil); err != nil {
 		t.Fatalf("first RegisterOpenAI: %v", err)
 	}
-	if err := RegisterOpenAI("dup-proxy", "https://b", "", nil, nil); err == nil {
+	if err := RegisterOpenAI("dup-proxy", "https://b", "", nil, false, nil); err == nil {
 		t.Error("expected an error registering the same name twice")
 	}
 }
@@ -80,7 +122,7 @@ func TestRegisterOpenAI_RejectsDuplicateName(t *testing.T) {
 func TestRegisterOpenAI_DisplayFallsBackToName(t *testing.T) {
 	withCleanRegistry(t)
 
-	if err := RegisterOpenAI("no-display-proxy", "https://x", "", nil, nil); err != nil {
+	if err := RegisterOpenAI("no-display-proxy", "https://x", "", nil, false, nil); err != nil {
 		t.Fatalf("RegisterOpenAI: %v", err)
 	}
 	for _, p := range All {
@@ -102,7 +144,7 @@ func TestRegisterOpenAI_DisplayFallsBackToName(t *testing.T) {
 func TestRegisterOpenAI_ConnectRejected(t *testing.T) {
 	withCleanRegistry(t)
 
-	if err := RegisterOpenAI("connect-rejected-proxy", "https://x", "", nil, nil); err != nil {
+	if err := RegisterOpenAI("connect-rejected-proxy", "https://x", "", nil, false, nil); err != nil {
 		t.Fatalf("RegisterOpenAI: %v", err)
 	}
 	for _, p := range All {
@@ -137,7 +179,7 @@ func TestRegisterOpenAI_FetchModelsHookIsUsed(t *testing.T) {
 		return []types.ModelMeta{{ID: "static-a"}, {ID: "static-b"}}, nil
 	}
 
-	if err := RegisterOpenAI("hook-proxy", srv.URL, "", nil, hook); err != nil {
+	if err := RegisterOpenAI("hook-proxy", srv.URL, "", nil, false, hook); err != nil {
 		t.Fatalf("RegisterOpenAI: %v", err)
 	}
 
@@ -172,7 +214,7 @@ func TestRegisterOpenAI_NilFetchModelsUsesDefaultHTTPPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := RegisterOpenAI("default-fetch-proxy", srv.URL, "", nil, nil); err != nil {
+	if err := RegisterOpenAI("default-fetch-proxy", srv.URL, "", nil, false, nil); err != nil {
 		t.Fatalf("RegisterOpenAI: %v", err)
 	}
 	var found Provider
@@ -205,7 +247,7 @@ func TestRegisterOpenAI_ResolveWorksEndToEnd(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := RegisterOpenAI("resolve-proxy", srv.URL, "", nil, nil); err != nil {
+	if err := RegisterOpenAI("resolve-proxy", srv.URL, "", nil, false, nil); err != nil {
 		t.Fatalf("RegisterOpenAI: %v", err)
 	}
 

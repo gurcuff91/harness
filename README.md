@@ -171,6 +171,16 @@ No `settings.json` entry needed. Use
 replace the default `<url>/models` discovery with custom logic — capture
 whatever auth the hook needs in its own closure.
 
+If the endpoint fronts a MiniMax-compatible backend, add
+`harness.ProviderWithReasoningSplit()` — without it, MiniMax emits its
+thinking *inline* inside the answer as literal `<think>...</think>`
+instead of a separate reasoning stream; this sends `"reasoning_split":
+true` on every request so thinking routes to `EventStreamThinkingDelta`
+like any other provider's. The option takes no argument (calling it always
+means "on" — simply omit it to leave the flag off, which is the default
+for any other backend); the real OpenAI API rejects an unrecognized
+`reasoning_split` argument outright, so this must stay opt-in.
+
 The agent is configured with functional options: `AgentWithThinking`,
 `AgentWithMCPs`, `AgentWithMemory`, `AgentWithScheduler`, `AgentWithColleagues`,
 `AgentWithWebSearch`, `AgentWithSessionInfo`, `AgentWithMaxIterations`,
@@ -268,7 +278,7 @@ harness mcp rm <name>         — Remove an MCP server
 harness mcp enable <name>     — Enable a server
 harness mcp disable <name>    — Disable a server (keeps its config)
 harness provider [list]       — List custom OpenAI-compatible providers
-harness provider add <name> --url <url> [--models-url <url>] [--header K:V ...] [--display <name>] [--disabled]
+harness provider add <name> --url <url> [--models-url <url>] [--header K:V ...] [--display <name>] [--disabled] [--reasoning-split]
 harness provider rm <name>    — Remove a custom provider
 
 harness memo [<query>]        — List (no query) or search memories

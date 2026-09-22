@@ -231,6 +231,21 @@ travels as static request headers configured up front — never a stored key:
   constructing any `Agent` — see `internal/providers/registry.go`'s
   `registryMu` doc comment for why registration ordering matters).
 
+Both paths also accept an opt-in `ReasoningSplit`/`--reasoning-split`/
+`agent.ProviderWithReasoningSplit()` flag (default `false`, additive —
+every existing custom provider is unaffected). The SDK option takes no
+argument — calling it always means "on" (there's no use case for
+explicitly passing `false`; just omit the option). It sends
+`"reasoning_split": true` on every chat-completions request, the same wire flag the
+built-in `minimax` provider (`internal/providers/minimax.go`) always
+sends. Needed for a custom provider fronting a MiniMax-compatible backend:
+confirmed live (a real gateway proxying to MiniMax) that WITHOUT this
+flag, thinking is emitted inline inside `content` as literal
+`<think>...</think>` wrapping the final answer, instead of the separate
+`reasoning_content` field
+`parseOpenAIStream` already routes to `EventStreamThinkingDelta`. Leave it
+off for any other backend.
+
 See `internal/providers/custom_openai.go`,
 `docs/plans/2026-09-21-custom-providers-design.md` (including its
 Addendum section for the programmatic path). Only `type: "openai"` is

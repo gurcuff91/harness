@@ -3,9 +3,11 @@ package harness
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/client"
 	"github.com/gurcuff91/harness/internal/providers"
+	"github.com/gurcuff91/harness/types"
 )
 
 // TestNewAgentDefaults verifies the zero-option facade constructor produces
@@ -396,14 +399,22 @@ func TestNewOpenAIProviderFacadeAliasIsWired(t *testing.T) {
 	snapshot := append([]providers.Provider{}, providers.All...)
 	defer func() { providers.All = snapshot }()
 
+	var gotBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"data":[{"id":"facade-model"}]}`))
+		if r.URL.Path == "/models" {
+			w.Write([]byte(`{"data":[{"id":"facade-model"}]}`))
+			return
+		}
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer srv.Close()
 
 	if err := NewOpenAIProvider("facade-proxy", srv.URL,
 		ProviderWithDisplay("Facade Proxy"),
 		ProviderWithHeaders(map[string]string{"X-Test": "1"}),
+		ProviderWithReasoningSplit(),
 	); err != nil {
 		t.Fatalf("NewOpenAIProvider: %v", err)
 	}
@@ -422,6 +433,20 @@ func TestNewOpenAIProviderFacadeAliasIsWired(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("facade-proxy not found in a.Providers() after registration via the harness facade")
+	}
+
+	// ProviderWithReasoningSplit() (no argument, always means "on") must
+	// genuinely reach the wire through the facade alias, not just type-check.
+	req := &types.Request{Model: "facade-model", Messages: []types.Message{}, MaxTokens: 10}
+	for _, prov := range providers.All {
+		if prov.Name() == "facade-proxy" {
+			if _, err := prov.CompleteStream(context.Background(), req, func(types.StreamEvent) {}); err != nil {
+				t.Fatalf("CompleteStream: %v", err)
+			}
+		}
+	}
+	if !strings.Contains(string(gotBody), `"reasoning_split":true`) {
+		t.Errorf("request body = %s, want it to contain \"reasoning_split\":true", gotBody)
 	}
 
 	// Reserved-name rejection also reaches through the facade.

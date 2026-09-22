@@ -14,9 +14,10 @@ import (
 // internal/… type in a public signature — see AGENTS.md's "SDK boundary"
 // rule.
 type customProviderConfig struct {
-	display     string
-	headers     map[string]string
-	fetchModels func() ([]types.ModelMeta, error)
+	display        string
+	headers        map[string]string
+	reasoningSplit bool
+	fetchModels    func() ([]types.ModelMeta, error)
 }
 
 // CustomProviderOption configures a NewOpenAIProvider call.
@@ -38,6 +39,27 @@ func ProviderWithDisplay(display string) CustomProviderOption {
 // map[string]string{"X-Api-Key": key}.
 func ProviderWithHeaders(headers map[string]string) CustomProviderOption {
 	return func(c *customProviderConfig) { c.headers = headers }
+}
+
+// ProviderWithReasoningSplit sends "reasoning_split": true on every
+// chat-completions request this provider makes — the same wire flag the
+// built-in `minimax` provider always sends. Takes no argument: calling it
+// means "turn this on" (there is no meaningful use case for explicitly
+// passing false — simply omit the option instead), matching the terse
+// on/off idiom of options like ProviderWithFetchModels rather than forcing
+// every call site to write ProviderWithReasoningSplit(true). Off when the
+// option is omitted entirely: most OpenAI-compatible backends neither
+// recognize nor need this field (confirmed live: the real OpenAI API
+// rejects an unrecognized "reasoning_split" argument outright with a 400,
+// so this must stay opt-in, never a default). Set it for a custom
+// provider fronting a MiniMax-compatible backend — without it, that
+// backend emits its thinking INLINE inside `content` as literal
+// "<think>...</think>" wrapping the final answer, instead of the separate
+// `reasoning_content` field harness already parses into
+// EventStreamThinkingDelta (confirmed live against a real gateway proxying
+// to MiniMax). Leave it off for everything else.
+func ProviderWithReasoningSplit() CustomProviderOption {
+	return func(c *customProviderConfig) { c.reasoningSplit = true }
 }
 
 // ProviderWithFetchModels overrides model discovery entirely. The default
@@ -90,5 +112,5 @@ func NewOpenAIProvider(name, url string, opts ...CustomProviderOption) error {
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	return providers.RegisterOpenAI(name, url, cfg.display, cfg.headers, cfg.fetchModels)
+	return providers.RegisterOpenAI(name, url, cfg.display, cfg.headers, cfg.reasoningSplit, cfg.fetchModels)
 }

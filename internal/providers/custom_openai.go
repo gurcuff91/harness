@@ -45,6 +45,15 @@ type CustomOpenAI struct {
 	cache       map[string]types.ModelMeta
 	mu          sync.RWMutex
 
+	// reasoningSplit, when true, sends "reasoning_split": true on every
+	// chat-completions request — same wire flag internal/providers/
+	// minimax.go's CompleteStream always sends. Opt-in, false by default:
+	// see types.CustomProvider.ReasoningSplit's doc comment for the full
+	// rationale (a backend that mirrors MiniMax's inline "<think>" tags
+	// inside `content` needs this to get thinking routed to the
+	// dedicated reasoning_content field harness already parses).
+	reasoningSplit bool
+
 	// fetchModelsFn, if set, REPLACES the default HTTP-GET-<url>/models
 	// discovery in FetchModels — the hook RegisterOpenAI (the SDK's
 	// programmatic registration path, via agent.NewOpenAIProvider) exposes
@@ -60,13 +69,14 @@ type CustomOpenAI struct {
 // NewCustomOpenAI builds a CustomOpenAI provider named name from cfg.
 func NewCustomOpenAI(name string, cfg types.CustomProvider) *CustomOpenAI {
 	return &CustomOpenAI{
-		name:        name,
-		displayName: cfg.Display,
-		baseURL:     cfg.URL,
-		modelsURL:   cfg.ModelsURL,
-		headers:     cfg.Headers,
-		client:      &http.Client{},
-		cache:       make(map[string]types.ModelMeta),
+		name:           name,
+		displayName:    cfg.Display,
+		baseURL:        cfg.URL,
+		modelsURL:      cfg.ModelsURL,
+		headers:        cfg.Headers,
+		client:         &http.Client{},
+		cache:          make(map[string]types.ModelMeta),
+		reasoningSplit: cfg.ReasoningSplit,
 	}
 }
 
@@ -242,5 +252,5 @@ func fetchCustomOpenAIModels(providerName, baseURL, modelsURL string, headers ma
 // advance) that legitimately omit [DONE].
 func (o *CustomOpenAI) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
 	return llm.DoOpenAIStream(ctx, o.client, o.baseURL+"/chat/completions", "",
-		&llm.OpenAIRequest{Request: req, AllowCleanEOF: true}, o.headers, cb)
+		&llm.OpenAIRequest{Request: req, AllowCleanEOF: true, ReasoningSplit: o.reasoningSplit}, o.headers, cb)
 }

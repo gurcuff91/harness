@@ -294,6 +294,63 @@ func TestCustomOpenAI_CompleteStreamStillRejectsCleanEOFWithoutTerminalChunk(t *
 	}
 }
 
+// ── ReasoningSplit wire flag ──────────────────────────────────────────────
+
+// TestCustomOpenAI_ReasoningSplitDefaultsToFalseNotSentOnWire proves the
+// new opt-in field is additive: a custom provider configured WITHOUT
+// ReasoningSplit (every provider that existed before this field was added)
+// behaves identically to before — no "reasoning_split" key reaches the
+// wire at all (omitempty), same as any other OpenAI-compatible provider
+// that never touches this flag.
+func TestCustomOpenAI_ReasoningSplitDefaultsToFalseNotSentOnWire(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	o := NewCustomOpenAI("plain-proxy", types.CustomProvider{Type: "openai", URL: srv.URL})
+	req := &types.Request{Model: "some-model", Messages: []types.Message{}, MaxTokens: 10}
+	_, _ = o.CompleteStream(context.Background(), req, func(types.StreamEvent) {})
+
+	if _, present := gotBody["reasoning_split"]; present {
+		t.Errorf("reasoning_split present on the wire = %v, want absent when not configured", gotBody["reasoning_split"])
+	}
+}
+
+// TestCustomOpenAI_ReasoningSplitSendsWireFlagWhenConfigured reproduces the
+// real incident: a custom provider fronting a MiniMax-compatible gateway
+// (Gus's Kaiban deployment). Confirmed live against the actual gateway —
+// without "reasoning_split": true, MiniMax emits its thinking INLINE
+// inside `content` as literal "<think>...</think>" wrapping the final
+// answer, instead of the separate `reasoning_content` field harness
+// already parses into EventStreamThinkingDelta. This test only proves the
+// wire flag reaches the request when configured — the routing of
+// reasoning_content itself is exercised by parseOpenAIStream's own
+// existing tests in internal/providers/llm/openai_test.go.
+func TestCustomOpenAI_ReasoningSplitSendsWireFlagWhenConfigured(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	o := NewCustomOpenAI("minimax-gateway", types.CustomProvider{
+		Type: "openai", URL: srv.URL, ReasoningSplit: true,
+	})
+	req := &types.Request{Model: "MiniMax-M2", Messages: []types.Message{}, MaxTokens: 10}
+	_, _ = o.CompleteStream(context.Background(), req, func(types.StreamEvent) {})
+
+	rs, _ := gotBody["reasoning_split"].(bool)
+	if !rs {
+		t.Errorf("reasoning_split on the wire = %v, want true when ReasoningSplit is configured", gotBody["reasoning_split"])
+	}
+}
+
 // ── JSON shape sanity ────────────────────────────────────────────────────
 
 func TestFetchCustomOpenAIModels_ParsesDataShape(t *testing.T) {

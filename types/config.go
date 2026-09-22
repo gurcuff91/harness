@@ -69,4 +69,23 @@ type CustomProvider struct {
 	Headers   map[string]string `json:"headers,omitempty"`    // extra HTTP headers, sent on every request — this is where ANY authentication goes
 	Display   string            `json:"display,omitempty"`    // optional human-friendly name; falls back to the map key
 	Disabled  bool              `json:"disabled,omitempty"`   // enabled by default; set true to skip
+
+	// ReasoningSplit, when true, adds "reasoning_split": true to every
+	// chat-completions request — the same wire flag the built-in
+	// `minimax` provider always sends. Opt-in and false by default: most
+	// OpenAI-compatible backends don't recognize this field at all (an
+	// unrecognized field is normally ignored, but there's no universal
+	// guarantee of that), and plenty that DO recognize it don't need it
+	// (they either have no thinking mode, or already separate it some
+	// other way). Backends that mirror MiniMax's own behavior — emitting
+	// reasoning inline inside the `content` field as literal
+	// "<think>...</think>" wrapping the final answer when this flag is
+	// left off — need it set to get their thinking routed to the
+	// dedicated `reasoning_content` field instead, which harness already
+	// parses into EventStreamThinkingDelta. Confirmed live against a
+	// Kaiban gateway proxying to MiniMax: identical behavior to the
+	// direct MiniMax API. Set this to true for any custom provider
+	// fronting a MiniMax-compatible backend; leave it off (the default)
+	// for everything else.
+	ReasoningSplit bool `json:"reasoning_split,omitempty"`
 }
