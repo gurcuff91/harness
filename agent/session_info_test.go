@@ -127,6 +127,88 @@ func TestSessionInfoGettersDoNotDeadlockUnderPromptSyncLock(t *testing.T) {
 	}
 }
 
+// TestCurrentMetaDoesNotBlockUnderPromptSyncLock is the regression test for
+// a real bug reported against GET /api/sessions/{id}/info and
+// GET /api/sessions/{id}: both used to build their response from Meta(),
+// which takes s.mu — the SAME lock promptSync holds for the entire
+// duration of a running turn — so a request against a busy session blocked
+// until turn_end (confirmed live: 9.9s-60s+ depending on the turn). Mirrors
+// TestSessionInfoGettersDoNotDeadlockUnderPromptSyncLock's exact "simulate
+// promptSync holding s.mu" technique, but for CurrentMeta()/
+// CurrentMaxIterations() (the fix) instead of the individual getters
+// SessionInfo already used correctly.
+func TestCurrentMetaDoesNotBlockUnderPromptSyncLock(t *testing.T) {
+	a := New(AgentOptions{Store: store.NewInMemoryStore()})
+	defer a.Close()
+
+	models := a.Models()
+	if len(models) < 1 {
+		t.Skip("need at least 1 active model in this environment")
+	}
+
+	sess, err := a.NewSession(t.TempDir(), models[0].Model)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer sess.Close()
+
+	// Simulate promptSync holding s.mu for the duration of a turn.
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// Exactly what handleSessionInfo/handleGetSession do post-fix — if
+		// either took s.mu, this goroutine would block forever right here.
+		_ = sess.CurrentMeta()
+		_ = sess.CurrentMaxIterations()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("CurrentMeta()/CurrentMaxIterations() blocked — one of them took s.mu while s.mu was held by the simulated turn (promptSync). This is the exact blocking bug reported against GET /api/sessions/{id}/info.")
+	}
+}
+
+// TestCurrentMaxIterationsReflectsSetMaxIterations confirms the new
+// lock-free maxIterationsVal accessor genuinely tracks SetMaxIterations —
+// not just "doesn't block", but actually correct: it must reflect an
+// override made AFTER the session was built, exactly like
+// CurrentModel()/CurrentThinking() already do for SwitchModel/
+// SwitchThinking.
+func TestCurrentMaxIterationsReflectsSetMaxIterations(t *testing.T) {
+	a := New(AgentOptions{Store: store.NewInMemoryStore(), MaxIterations: 50})
+	defer a.Close()
+
+	models := a.Models()
+	if len(models) < 1 {
+		t.Skip("need at least 1 active model in this environment")
+	}
+
+	sess, err := a.NewSession(t.TempDir(), models[0].Model)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer sess.Close()
+
+	if got := sess.CurrentMaxIterations(); got != 50 {
+		t.Fatalf("CurrentMaxIterations() before override = %d, want 50 (the Agent's default)", got)
+	}
+
+	if err := sess.SetMaxIterations(7); err != nil {
+		t.Fatalf("SetMaxIterations: %v", err)
+	}
+	if got := sess.CurrentMaxIterations(); got != 7 {
+		t.Errorf("CurrentMaxIterations() after SetMaxIterations(7) = %d, want 7", got)
+	}
+	// MaxIterations() must agree — it's now implemented via CurrentMaxIterations().
+	if got := sess.MaxIterations(); got != 7 {
+		t.Errorf("MaxIterations() after SetMaxIterations(7) = %d, want 7", got)
+	}
+}
+
 // TestSessionSearchMessagesDoesNotDeadlockUnderPromptSyncLock guards
 // against the SAME deadlock class for SearchMessages after the
 // SessionSearch-into-SessionStore migration: Session.SearchMessages must

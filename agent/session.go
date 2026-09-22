@@ -102,6 +102,18 @@ type Session struct {
 	maxIterations int
 	maxTokens     int
 
+	// maxIterationsVal mirrors maxIterations for lock-free reads, same exact
+	// reasoning as modelStr/thinkingStr/statsSnapshot below: server.go's
+	// GET /api/sessions/{id}/info (and /{id}) handlers used to read this
+	// through Meta()/MaxIterations(), which either takes s.mu directly or
+	// (for MaxIterations() specifically) read the plain s.maxIterations
+	// field with NO lock at all — a genuine data race under Go's memory
+	// model, since SetMaxIterations writes it under s.mu. Written under
+	// s.mu in newSession (initial) and SetMaxIterations (on override), read
+	// lock-free by CurrentMaxIterations(). atomic.Int64 (not atomic.Value)
+	// since it's already a plain int — no boxing needed.
+	maxIterationsVal atomic.Int64
+
 	// modelStr is the session's active "provider/model" string, stored in an
 	// atomic.Value so it can be read lock-free from CurrentModel(). The value
 	// is written under s.mu (in newSession and SwitchModel — the same lock
@@ -275,6 +287,7 @@ func newSession(storeInst *store.Session,
 	s.loadModelMeta(modelID)
 	s.modelStr.Store(provider.Name() + "/" + modelID)
 	s.thinkingStr.Store(thinkingLvl)
+	s.maxIterationsVal.Store(int64(maxIterations))
 	s.snapshotStatsLocked() // no lock needed yet — s isn't reachable by any other goroutine until newSession returns
 
 	// Restore lastInputTokens from persisted stats so ContextBreakdown() shows
@@ -977,6 +990,7 @@ func (s *Session) SetMaxIterations(n int) error {
 	}
 	s.mu.Lock()
 	s.maxIterations = n
+	s.maxIterationsVal.Store(int64(n)) // lock-free snapshot for CurrentMaxIterations()
 	meta := s.store.Meta()
 	meta.MaxIterations = n
 	s.store.UpdateMeta(meta)
@@ -1317,8 +1331,29 @@ func (s *Session) Name() string { return s.name }
 // MaxIterations returns the max ReAct iterations allowed per turn for this
 // session (AgentOptions.MaxIterations, default 50). Exposed read-only so
 // clients (e.g. the TUI footer) can show progress like "(3/25)" without
-// duplicating the limit.
-func (s *Session) MaxIterations() int { return s.maxIterations }
+// duplicating the limit. Implemented via CurrentMaxIterations() (lock-free)
+// rather than reading s.maxIterations directly — this used to read the
+// plain field with no lock at all, a genuine data race against
+// SetMaxIterations' write under s.mu (found and fixed alongside
+// GET /api/sessions/{id}/info's own s.mu-blocking bug: see
+// CurrentMaxIterations' doc comment).
+func (s *Session) MaxIterations() int { return s.CurrentMaxIterations() }
+
+// CurrentMaxIterations returns the max ReAct iterations allowed per turn,
+// reflecting any SetMaxIterations call made after the session was built —
+// lock-free, mirroring CurrentModel/CurrentThinking/CurrentStats' exact
+// pattern. Written under s.mu in newSession (initial) and SetMaxIterations
+// (on override); read here with no lock. Added specifically so
+// server.go's GET /api/sessions/{id}/info and GET /api/sessions/{id}
+// handlers can report live session state without going through
+// Meta()/Stats() — which take s.mu, the SAME lock promptSync holds for the
+// entire duration of a running turn, so those endpoints used to block for
+// as long as a turn was in flight (confirmed live: 9.9s–60s+ depending on
+// the turn). CurrentModel/CurrentThinking/CurrentStats already solved this
+// for their own fields; MaxIterations was the one field left reading
+// through the blocking path (worse: through an outright unguarded field
+// read, not even Meta()'s lock).
+func (s *Session) CurrentMaxIterations() int { return int(s.maxIterationsVal.Load()) }
 
 // Rename sets a friendly display name.
 func (s *Session) Rename(name string) error {
@@ -1460,6 +1495,49 @@ func (s *Session) Meta() store.SessionMeta {
 
 	m := s.store.Meta()
 	// Always inject current context window so it's available before the first turn
+	if s.contextWindow > 0 && m.Stats.ContextWindow == 0 {
+		m.Stats.ContextWindow = s.contextWindow
+	}
+	return m
+}
+
+// CurrentMeta returns a session-metadata snapshot WITHOUT ever taking s.mu —
+// the lock promptSync holds for the entire duration of a running turn. Built
+// specifically for server.go's GET /api/sessions/{id}/info and
+// GET /api/sessions/{id} handlers, which used to call Meta() (which takes
+// s.mu up front, purely to drain pendingDelegatedCost) and therefore blocked
+// for as long as any turn was in flight — confirmed live: a real request
+// against a busy session blocked 9.9s–60s+ depending on the turn, an actual
+// regression against those endpoints' own documented "fast, read-only
+// snapshot" contract.
+//
+// This is NOT simply Meta() with the lock removed — Model/Thinking/Stats/
+// MaxIterations are overwritten with their dedicated lock-free accessors
+// (CurrentModel/CurrentThinking/CurrentStats/CurrentMaxIterations, the same
+// atomic.Value/atomic.Int64 snapshots CurrentModel() et al. already use so
+// the Subagent tool's executor can read live session state from inside a
+// running turn), so a caller mid-turn sees the CURRENT values, not whatever
+// was last persisted before this turn started. s.store.Meta() itself is
+// still called to get the fields that only ever live in the store (ID, CWD,
+// Name, CreatedAt, LastActiveAt, CompactOffset, CompactCount) — this takes
+// the store.Session's OWN mutex, a short-lived lock never held for an entire
+// turn (the same one AllMessages()/SearchMessages() already take this way;
+// GET /api/sessions/{id}/messages is the "already unaffected" baseline this
+// fix is measured against), not agent.Session's s.mu.
+//
+// One trade-off, accepted deliberately: pendingDelegatedCost (Subagent/Fetch
+// cost accounting from a delegated execution that finished in the
+// background) is NOT drained here, unlike Meta(). Draining requires s.mu
+// (drainPendingDelegatedCost mutates s.stats, which is only ever safe to
+// touch under that lock) — exactly the blocking this fix exists to avoid.
+// CurrentStats() already carries this same staleness window for any
+// concurrent reader (see its own doc comment), so this isn't a new gap.
+func (s *Session) CurrentMeta() store.SessionMeta {
+	m := s.store.Meta()
+	m.Model = s.CurrentModel()
+	m.Thinking = s.CurrentThinking()
+	m.Stats = s.CurrentStats()
+	m.MaxIterations = s.CurrentMaxIterations()
 	if s.contextWindow > 0 && m.Stats.ContextWindow == 0 {
 		m.Stats.ContextWindow = s.contextWindow
 	}

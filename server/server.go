@@ -858,13 +858,16 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	// Already active? Return the live session (idempotent — supports scheduler
-	// auto-resume and transport reconnect without 409 errors).
+	// auto-resume and transport reconnect without 409 errors). CurrentMeta()
+	// (not Meta()) since this session could be mid-turn — same blocking risk
+	// and fix as handleSessionInfo/handleGetSession; see CurrentMeta()'s doc
+	// comment.
 	s.mu.RLock()
 	if proxy, ok := s.sessions[id]; ok {
 		s.mu.RUnlock()
 		writeJSON(w, http.StatusOK, sessionDetailDTO{
-			SessionMeta:   proxy.session.Meta(),
-			MaxIterations: proxy.session.MaxIterations(),
+			SessionMeta:   proxy.session.CurrentMeta(),
+			MaxIterations: proxy.session.CurrentMaxIterations(),
 		})
 		return
 	}
@@ -900,14 +903,17 @@ type sessionDetailDTO struct {
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	// Check in-memory first (active sessions)
+	// Check in-memory first (active sessions). CurrentMeta() (not Meta()) so
+	// this read-only lookup never blocks on a running turn — see
+	// handleSessionInfo's identical comment and CurrentMeta()'s own doc
+	// comment for the full rationale.
 	s.mu.RLock()
 	proxy, ok := s.sessions[id]
 	s.mu.RUnlock()
 	if ok {
 		writeJSON(w, http.StatusOK, sessionDetailDTO{
-			SessionMeta:   proxy.session.Meta(),
-			MaxIterations: proxy.session.MaxIterations(),
+			SessionMeta:   proxy.session.CurrentMeta(),
+			MaxIterations: proxy.session.CurrentMaxIterations(),
 		})
 		return
 	}
@@ -1127,11 +1133,21 @@ func (s *Server) handleSessionInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// CurrentMeta() (not Meta()) is deliberate: this endpoint is documented as
+	// a fast, read-only snapshot, but Meta() takes s.mu — the SAME lock
+	// promptSync holds for the entire duration of a running turn — so a call
+	// against a busy session used to block until turn_end (confirmed live:
+	// 9.9s-60s+ depending on the turn). CurrentMeta() is built entirely from
+	// the same lock-free accessors (CurrentModel/CurrentThinking/CurrentStats/
+	// CurrentMaxIterations) the Subagent tool's executor already relies on to
+	// read live session state from inside a running turn — see its own doc
+	// comment for the full contract (including the one accepted trade-off:
+	// delegated Subagent/Fetch cost isn't drained here).
 	writeJSON(w, http.StatusOK, sessionInfoDTO{
 		Version: version.Version,
 		Session: sessionDetailDTO{
-			SessionMeta:   sess.Meta(),
-			MaxIterations: sess.MaxIterations(),
+			SessionMeta:   sess.CurrentMeta(),
+			MaxIterations: sess.CurrentMaxIterations(),
 		},
 		Busy:          sess.IsBusy(),
 		QueueDepth:    sess.FollowUpCount(),
