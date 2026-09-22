@@ -146,6 +146,25 @@ type Session struct {
 	// reader, not a new one introduced by this snapshot.
 	statsSnapshot atomic.Value // types.SessionStats
 
+	// providerNameVal/lastInputTokensVal/contextWindowVal mirror
+	// modelStr/maxIterationsVal's exact reasoning, for the three fields
+	// ContextBreakdown() reads — found and fixed as a follow-up bug report
+	// against GET /api/sessions/{id}/context (the same "documented as a
+	// fast read-only snapshot, actually blocks for a whole turn" class as
+	// Meta()'s own fix): ContextBreakdown() used to take s.mu just to read
+	// s.provider.Name()/s.lastInputTokens/s.contextWindow, and none of the
+	// three had a lock-free twin at all, unlike modelStr/thinkingStr/
+	// statsSnapshot/maxIterationsVal. Written under s.mu at every point the
+	// guarded field mutates (newSession/restore, loadModelMeta —called from
+	// both newSession and SwitchModel—, compactWithTarget, updateStats),
+	// read lock-free by ContextBreakdown(). providerNameVal is an
+	// atomic.Value (string, like modelStr) since a provider's Name() is a
+	// string; lastInputTokensVal/contextWindowVal are atomic.Int64 (already
+	// plain ints — no boxing needed, same as maxIterationsVal).
+	providerNameVal    atomic.Value // string
+	lastInputTokensVal atomic.Int64
+	contextWindowVal   atomic.Int64
+
 	// Follow-up prompts — separate mutex to avoid deadlock with mu
 	followMu      sync.Mutex
 	followCond    *sync.Cond // signals when the queue drains (busy → false); lazily created
@@ -285,7 +304,8 @@ func newSession(storeInst *store.Session,
 	s.modelStr.Store(provider.Name() + "/" + modelID)
 	s.thinkingStr.Store(thinkingLvl)
 	s.maxIterationsVal.Store(int64(maxIterations))
-	s.snapshotStatsLocked() // no lock needed yet — s isn't reachable by any other goroutine until newSession returns
+	s.providerNameVal.Store(provider.Name()) // lock-free snapshot for ContextBreakdown()
+	s.snapshotStatsLocked()                  // no lock needed yet — s isn't reachable by any other goroutine until newSession returns
 
 	// Restore lastInputTokens from persisted stats so ContextBreakdown() shows
 	// meaningful "actual" + "free space" values immediately on resume, without
@@ -294,6 +314,7 @@ func newSession(storeInst *store.Session,
 	if meta.Stats.ContextUsage > 0 && s.contextWindow > 0 {
 		s.lastInputTokens = int(meta.Stats.ContextUsage * float64(s.contextWindow))
 	}
+	s.lastInputTokensVal.Store(int64(s.lastInputTokens)) // lock-free snapshot for ContextBreakdown()
 
 	return s
 }
@@ -304,9 +325,11 @@ func (s *Session) loadModelMeta(modelID string) {
 	meta := s.provider.ModelMeta(modelID)
 	if meta == nil {
 		s.contextWindow = 128000
+		s.contextWindowVal.Store(int64(s.contextWindow)) // lock-free snapshot for ContextBreakdown()
 		return
 	}
 	s.contextWindow = meta.ContextWindow
+	s.contextWindowVal.Store(int64(s.contextWindow)) // lock-free snapshot for ContextBreakdown()
 	// Update maxTokens to match the new model's capability
 	if meta.MaxTokens > 0 {
 		s.maxTokens = meta.MaxTokens
@@ -452,6 +475,7 @@ func (s *Session) Reset() error {
 	s.mu.Lock()
 	s.stats = types.SessionStats{}
 	s.lastInputTokens = 0
+	s.lastInputTokensVal.Store(0) // lock-free snapshot for ContextBreakdown()
 	s.snapshotStatsLocked()
 	s.mu.Unlock()
 	return nil
@@ -949,7 +973,8 @@ func (s *Session) SwitchModel(ctx context.Context, fullModel string) error {
 	s.provider = provider
 	s.modelID = modelID
 	s.loadModelMeta(modelID)
-	s.modelStr.Store(fullModel) // update lock-free snapshot for Model()
+	s.modelStr.Store(fullModel)              // update lock-free snapshot for Model()
+	s.providerNameVal.Store(provider.Name()) // update lock-free snapshot for ContextBreakdown()
 	meta := s.store.Meta()
 	meta.Model = fullModel
 	s.store.UpdateMeta(meta)
@@ -1056,6 +1081,7 @@ func (s *Session) compactWithTarget(ctx context.Context, provider providers.Prov
 	// from); the accumulated input/output token totals are historical — they
 	// already happened and drive cost/stats, so they must be preserved.
 	s.lastInputTokens = 0
+	s.lastInputTokensVal.Store(0) // lock-free snapshot for ContextBreakdown()
 	s.stats.ContextUsage = 0
 	s.snapshotStatsLocked()
 	meta := s.store.Meta()
@@ -1419,14 +1445,18 @@ type ContextBreakdown struct {
 //
 // LastRealTotal and ContextWindow come directly from the provider response.
 func (s *Session) ContextBreakdown() ContextBreakdown {
+	// Lock-free reads (providerNameVal/lastInputTokensVal/contextWindowVal)
+	// instead of s.mu — this endpoint used to block for the entire
+	// duration of a running turn (s.mu is the same lock promptSync holds
+	// from turn_start to turn_end), a real bug reported against
+	// GET /api/sessions/{id}/context, the same class as Meta()'s own fix.
+	// See providerNameVal's doc comment for the full rationale.
+	provName, _ := s.providerNameVal.Load().(string)
+	lastReal := int(s.lastInputTokensVal.Load())
+	ctxWin := int(s.contextWindowVal.Load())
+
 	// Derive tokenizer family from the current provider — always reflects the
 	// active model even after SwitchModel, no extra stored field needed.
-	s.mu.Lock()
-	provName := s.provider.Name()
-	lastReal := s.lastInputTokens
-	ctxWin := s.contextWindow
-	s.mu.Unlock()
-
 	family := llm.FamilyForProvider(provName)
 	cpt := family.CharsPerToken()
 
@@ -1727,7 +1757,8 @@ func (s *Session) updateStats(se types.StreamEvent) {
 	// while the real context ran to the window limit — losing the turn to a
 	// provider overflow error instead of compacting in time.
 	s.lastInputTokens = se.InputTokens + se.CacheRead + se.CacheWrite
-	s.stats.ContextWindow = s.contextWindow // persist current model's context window
+	s.lastInputTokensVal.Store(int64(s.lastInputTokens)) // lock-free snapshot for ContextBreakdown()
+	s.stats.ContextWindow = s.contextWindow              // persist current model's context window
 	if s.contextWindow > 0 {
 		s.stats.ContextUsage = float64(s.lastInputTokens) / float64(s.contextWindow)
 	}

@@ -184,6 +184,81 @@ func TestMaxIterationsReflectsSetMaxIterations(t *testing.T) {
 	}
 }
 
+// TestContextBreakdownDoesNotBlockUnderPromptSyncLock is the regression
+// test for a follow-up bug report against GET /api/sessions/{id}/context:
+// Session.ContextBreakdown() used to take s.mu just to read
+// s.provider.Name()/s.lastInputTokens/s.contextWindow, none of which had a
+// lock-free twin at all — the same class of bug Meta()/Model()/Thinking()/
+// Stats()/MaxIterations() were already fixed for. Mirrors
+// TestMetaDoesNotBlockUnderPromptSyncLock's exact "simulate promptSync
+// holding s.mu" technique.
+func TestContextBreakdownDoesNotBlockUnderPromptSyncLock(t *testing.T) {
+	a := New(AgentOptions{Store: store.NewInMemoryStore()})
+	defer a.Close()
+
+	models := a.Models()
+	if len(models) < 1 {
+		t.Skip("need at least 1 active model in this environment")
+	}
+
+	sess, err := a.NewSession(t.TempDir(), models[0].Model)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer sess.Close()
+
+	// Simulate promptSync holding s.mu for the duration of a turn.
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// Exactly what handleSessionContext does post-fix — if
+		// ContextBreakdown() took s.mu, this goroutine would block forever
+		// right here.
+		_ = sess.ContextBreakdown()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ContextBreakdown() blocked — it took s.mu while s.mu was held by the simulated turn (promptSync). This is the exact blocking bug reported against GET /api/sessions/{id}/context.")
+	}
+}
+
+// TestContextBreakdownReflectsSwitchModel confirms the lock-free
+// providerNameVal/contextWindowVal accessors genuinely track SwitchModel —
+// not just "doesn't block", but actually correct: ContextBreakdown()'s
+// tokenizer-family derivation and ContextWindow must reflect the NEW
+// model, not whatever was active when the session was built.
+func TestContextBreakdownReflectsSwitchModel(t *testing.T) {
+	a := New(AgentOptions{Store: store.NewInMemoryStore()})
+	defer a.Close()
+
+	models := a.Models()
+	if len(models) < 2 {
+		t.Skip("need at least 2 active models in this environment to test switching between them")
+	}
+
+	sess, err := a.NewSession(t.TempDir(), models[0].Model)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer sess.Close()
+
+	before := sess.ContextBreakdown()
+
+	if err := sess.SwitchModel(t.Context(), models[1].Model); err != nil {
+		t.Fatalf("SwitchModel: %v", err)
+	}
+
+	after := sess.ContextBreakdown()
+	if before.ContextWindow == after.ContextWindow && models[0].ContextWindow != models[1].ContextWindow {
+		t.Errorf("ContextBreakdown().ContextWindow did not change after SwitchModel: before=%d after=%d", before.ContextWindow, after.ContextWindow)
+	}
+}
+
 // TestResetClearsInMemoryStats is the regression test for a real bug found
 // live while extending SessionInfo with usage stats: Reset() called
 // s.store.Reset() (which correctly clears Stats on the PERSISTED meta) but

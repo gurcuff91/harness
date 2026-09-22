@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.91] - 2026-09-22
+
+### Fix — `GET /api/sessions/{id}/context` (`Session.ContextBreakdown()`) still blocked for the entire duration of an in-flight turn
+Follow-up bug report to the `handleSessionInfo` fix in v0.76.88/89/90: that fix covered `GET /api/sessions/{id}/info` and `/{id}` (`Meta()`/`Model()`/`Thinking()`/`Stats()`/`MaxIterations()`), but `ContextBreakdown()` — backing `GET /api/sessions/{id}/context` — still took `s.mu` (the same mutex `promptSync` holds for the entire turn) just to read `s.provider.Name()`/`s.lastInputTokens`/`s.contextWindow`, and none of those three fields had a lock-free twin at all, unlike `modelStr`/`thinkingStr`/`statsSnapshot`/`maxIterationsVal`. Same class of bug, same fix shape.
+
+- New `providerNameVal atomic.Value` (string), `lastInputTokensVal`/`contextWindowVal atomic.Int64` on `*Session`, written at every point the guarded fields mutate (`newSession`/restore, `loadModelMeta` — called from both `newSession` and `SwitchModel` — `compactWithTarget`, `updateStats`, `Reset`), read lock-free by `ContextBreakdown()`.
+- `ContextBreakdown()` no longer takes `s.mu` at all.
+- `server/server.go`'s `handleSessionContext` needed no code change — it already just calls `ContextBreakdown()` directly; only its doc comment updated to note the endpoint no longer blocks.
+- New tests: `TestContextBreakdownDoesNotBlockUnderPromptSyncLock`/`TestContextBreakdownReflectsSwitchModel` (`agent/`, mirroring `TestMetaDoesNotBlockUnderPromptSyncLock`'s technique) and `TestSessionContextDoesNotBlockDuringInFlightTurn` (`server/`, the suggested acceptance test — starts a real turn, polls until busy, races a real `GET /context` request against it). Reproduced live: temporarily reverted the fix and confirmed `GET /context`'s response time tracked the turn's own duration almost exactly (341.5ms vs. 341.6ms in one run); restored the fix and confirmed sub-millisecond response regardless of turn length. Full suite + `go vet` + `-race` on `agent`/`server`/root green; `gofmt -l` clean.
+
 ## [0.76.90] - 2026-09-22
 
 ### Breaking (SDK) — `SessionSearch` removed entirely; `SessionInfo` is now always-on

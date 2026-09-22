@@ -1161,7 +1161,9 @@ func (s *Server) handleSessionInfo(w http.ResponseWriter, r *http.Request) {
 
 // handleSessionContext handles GET /api/sessions/{id}/context. Returns a
 // token-usage breakdown of the session's context window, estimated per
-// component. Only valid for active sessions.
+// component. Only valid for active sessions. ContextBreakdown() itself is
+// lock-free (see its own doc comment) — this endpoint never blocks on an
+// in-flight turn, same as handleSessionInfo/handleGetSession.
 func (s *Server) handleSessionContext(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	s.mu.RLock()
