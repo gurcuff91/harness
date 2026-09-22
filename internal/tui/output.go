@@ -213,8 +213,6 @@ func toolStyle(name string) (colorFn func(string) string, icon string) {
 		return ansi.Accent, "⇄" // back-and-forth: request/response with another agent
 	case "WebSearch":
 		return ansi.Accent, "◌" // diana/objetivo (U+25CC): live web search
-	case "SessionSearch":
-		return ansi.Accent, "⟲" // circular back-arrow (U+27F2): recover something from this session's own history
 	case "SessionInfo":
 		return ansi.Accent, "ℹ" // info symbol (U+2139): snapshot of session identity/config, not an action
 	default:

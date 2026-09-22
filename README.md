@@ -34,7 +34,7 @@ Providers can also be connected from inside the TUI command palette.
 - **Thinking support** — extended thinking with configurable levels (off/low/medium/high/xhigh), mapped per-provider
 - **Tool execution** — Bash, Read, Write, Edit, Fetch, Skill, Subagent — plus tool calls run in parallel within a turn
 - **Web search** — live web search (MiniMax primary, Ollama Cloud fallback) via the `WebSearch` tool
-- **Session recall** — `SessionInfo`/`SessionSearch` give the model its own identity plus full-text search over this session's ENTIRE conversation history, even turns already folded into a compaction checkpoint
+- **Session awareness** — `SessionInfo` gives the model a snapshot of its own identity, config, environment, and accumulated usage
 - **MCP** — external tools via Model Context Protocol (local stdio + remote HTTP servers)
 - **Persistent memory** — project-scoped + global memories (SQLite + FTS5), recalled across sessions
 - **Scheduled prompts** — cron-scheduled prompts that fire back into the session that created them
@@ -183,11 +183,14 @@ for any other backend); the real OpenAI API rejects an unrecognized
 
 The agent is configured with functional options: `AgentWithThinking`,
 `AgentWithMCPs`, `AgentWithMemory`, `AgentWithScheduler`, `AgentWithColleagues`,
-`AgentWithWebSearch`, `AgentWithSessionInfo`, `AgentWithMaxIterations`,
+`AgentWithWebSearch`, `AgentWithMaxIterations`,
 `AgentWithMaxTokens`, `AgentWithSystemPrompt`, `AgentWithDirectives`,
 `AgentWithTools`, `AgentWithDisallowedTools`, `AgentWithStore`,
 `AgentWithResourceLoader` (and `AgentWithOptions` to apply a pre-built
 config). `NewAgent()` with no options returns a sensible default agent.
+`SessionInfo` (a small, purely informational session snapshot) is always
+registered like any other built-in tool — no dedicated option; pass it to
+`AgentWithDisallowedTools("SessionInfo")` to turn it off.
 
 ### Running a transport on an embedded agent
 
@@ -323,8 +326,6 @@ All data stored in `~/.harness/`:
 ├── slack.json              — Slack credentials + admin list
 └── agent/
     ├── sessions/<cwd>/     — Session history (JSONL, partitioned by project)
-    │   └── <session-id>.search.db — Lazy FTS5 index for SessionSearch (built
-    │                                 only when the tool is enabled and used)
     ├── skills/             — Discovered skills
     ├── memory.db           — Persistent memory (SQLite + FTS5, WAL mode)
     └── SYSTEM.md           — Optional user-level system prompt addendum — a
@@ -345,18 +346,18 @@ All data stored in `~/.harness/`:
 | `Subagent` | Spawn a scoped autonomous sub-agent (parallelizable) |
 | `WebSearch` | Web search (MiniMax primary, Ollama Cloud fallback) |
 | `SessionInfo` | Snapshot of the current session — identity (id/cwd/name/model/thinking/created_at), environment (harness version, connected MCPs, owned schedules), and accumulated usage (tokens/cache/cost/context) |
-| `SessionSearch` | Full-text search over this session's complete history, including pre-compaction content |
 | `MemoWrite` / `MemoSearch` / `MemoDelete` | Persistent project + global memory |
 | `Schedule` / `ScheduleList` / `ScheduleDelete` | Cron-scheduled prompts |
 | `ColleagueList` / `ColleagueAsk` | Discover and delegate to other running instances |
 
-The memory tools require `AgentWithMemory` (or the CLI's memory-enabled path);
-`WebSearch` requires `AgentWithWebSearch` and a connected search backend
-(minimax or ollama-cloud); `SessionInfo`/`SessionSearch` are both gated by the
-single `AgentWithSessionInfo` option (on by default for the CLI's interactive
-transports); `Schedule*` management tools AND the engine that fires them both
-require `--scheduler` / `AgentWithScheduler` — they travel together, so an
-instance without it neither manages nor executes schedules;
+`SessionInfo` is always registered, like Bash/Read/Write/Edit/Fetch — no
+dedicated option, just `AgentWithDisallowedTools("SessionInfo")` to turn it
+off. The memory tools require `AgentWithMemory` (or the CLI's
+memory-enabled path); `WebSearch` requires `AgentWithWebSearch` and a
+connected search backend (minimax or ollama-cloud); `Schedule*` management
+tools AND the engine that fires them both require `--scheduler` /
+`AgentWithScheduler` — they travel together, so an instance without it
+neither manages nor executes schedules;
 `Colleague*` requires `AgentWithColleagues`. External tools can be added via
 **MCP** servers (`harness mcp add`), namespaced as `mcp__<server>__<tool>`.
 

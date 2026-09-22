@@ -1,26 +1,22 @@
-// Package tools — SessionInfo + SessionSearch built-in tools.
+// Package tools — the SessionInfo built-in tool: a small, purely
+// informational snapshot of the session's own identity/config
+// (id, cwd, name, model, thinking, created_at), environment (harness
+// version, connected MCPs, owned schedules), and accumulated usage
+// (tokens/cache/cost/context). Always registered like any other built-in
+// (see agent.go's buildSessionTools) — no dedicated AgentOptions.EnableX
+// flag; DisallowedTools is the only way to turn it off.
 //
-// Two views of the same concept ("information about this session"), gated
-// behind the single AgentOptions.EnableSessionInfo flag:
-//   - SessionInfo returns a small snapshot of the session's own identity/
-//     config (id, cwd, name, model, thinking, created_at).
-//   - SessionSearch full-text searches the ENTIRE conversation history
-//     (including anything already folded into a compaction checkpoint) via
-//     the session's own SessionStore.SearchMessages — this tool is a thin
-//     adapter over that, with NO knowledge of which backend implements it
-//     (FTS5-over-SQLite for FileStore, ErrSearchNotSupported for
-//     InMemoryStore, or whatever a future custom SessionStore does). See
-//     docs/plans/2026-09-16-sessionsearch-into-store-design.md.
+// This package used to also hold SessionSearch (full-text search over the
+// session's own history) — removed for being largely unused in practice
+// and redundant with persistent memory (MemoWrite/MemoSearch); see
+// docs/plans/2026-09-22-sessionsearch-removal.md.
 package tools
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"strings"
 
-	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -78,83 +74,6 @@ func SessionInfo(provider SessionInfoProvider) Tool {
 			out, err := json.MarshalIndent(snap, "", "  ")
 			if err != nil {
 				return "", fmt.Errorf("marshal session info: %w", err)
-			}
-			return string(out), nil
-		},
-	}
-}
-
-// ── SessionSearch ──────────────────────────────────────────────────────────
-
-// sessionSearchInput is the JSON input schema for the SessionSearch tool.
-type sessionSearchInput struct {
-	Query string `json:"query" validate:"required"`
-	Limit int    `json:"limit,omitempty"`
-}
-
-const (
-	sessionSearchDefaultLimit = 10
-	sessionSearchMaxLimit     = 25
-)
-
-// SessionSearchFunc performs the actual search — the agent injects a
-// closure over its own Session.SearchMessages(query, limit), keeping this
-// tool free of any knowledge of WHICH SessionStore backend is behind it
-// (FileStore, InMemoryStore, or a future custom SDK port). A backend that
-// doesn't support search returns store.ErrSearchNotSupported, which the
-// tool surfaces as a plain, honest error — not a silent empty result.
-type SessionSearchFunc func(query string, limit int) ([]store.SearchResult, error)
-
-// SessionSearch returns the SessionSearch tool: full-text search over the
-// session's entire conversation history (plain text only — no tool_call,
-// no tool_result, no thinking; the filtering rules live in whichever
-// SessionStore backend implements SearchMessages).
-func SessionSearch(search SessionSearchFunc) Tool {
-	return Tool{
-		Def: types.ToolDef{
-			Name:        ToolSessionSearch,
-			Description: "Full-text search over the complete conversation history of this session — every user and assistant message ever exchanged here. Returns matching snippets, most relevant first. Use this to recover something discussed earlier in this conversation that is no longer visible in the current context.",
-			InputSchema: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"query": {"type": "string", "description": "Search terms."},
-					"limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 10, "description": "Maximum number of results to return."}
-				},
-				"required": ["query"]
-			}`),
-		},
-		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
-			var args sessionSearchInput
-			if err := json.Unmarshal(input, &args); err != nil {
-				return fmt.Sprintf("Error parsing input: %v", err), err
-			}
-			if err := requireFields(&args); err != nil {
-				return err.Error(), err
-			}
-			if strings.TrimSpace(args.Query) == "" {
-				return "", fmt.Errorf("query is required")
-			}
-			limit := args.Limit
-			switch {
-			case limit <= 0:
-				limit = sessionSearchDefaultLimit
-			case limit > sessionSearchMaxLimit:
-				limit = sessionSearchMaxLimit
-			}
-
-			results, err := search(args.Query, limit)
-			if errors.Is(err, store.ErrSearchNotSupported) {
-				return "", fmt.Errorf("this session's storage backend does not support search")
-			}
-			if err != nil {
-				return "", fmt.Errorf("session search: %w", err)
-			}
-			if results == nil {
-				results = []store.SearchResult{}
-			}
-			out, err := json.MarshalIndent(results, "", "  ")
-			if err != nil {
-				return "", fmt.Errorf("marshal session search results: %w", err)
 			}
 			return string(out), nil
 		},

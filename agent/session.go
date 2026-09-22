@@ -50,15 +50,13 @@ type Session struct {
 	tools        *tools.Registry
 	systemPrompt string
 	// hasMemory mirrors Agent.memStore != nil — the same condition that gates
-	// the "## Memory" block in buildSystemPrompt. hasSessionSearch mirrors
-	// AgentOptions.EnableSessionInfo. Both feed the compaction checkpoint's
-	// reminder (see buildCompactionCheckpoint/memoryCompactionReminder):
-	// right after compaction the model's nearest context is a dense summary,
-	// not the system prompt, so a reminder naming whichever recovery tool(s)
-	// are actually available is easy to lose track of exactly when "lack
-	// context about earlier work" is most likely to be true.
-	hasMemory        bool
-	hasSessionSearch bool
+	// the "## Memory" block in buildSystemPrompt. Feeds the compaction
+	// checkpoint's reminder (see buildCompactionCheckpoint/
+	// memoryCompactionReminder): right after compaction the model's nearest
+	// context is a dense summary, not the system prompt, so a reminder that
+	// persistent memory is available is easy to lose track of exactly when
+	// "lack context about earlier work" is most likely to be true.
+	hasMemory bool
 
 	// Stats — accumulated over the session lifetime
 	stats           types.SessionStats
@@ -258,27 +256,26 @@ func newSession(storeInst *store.Session,
 	toolReg *tools.Registry, tl toolLens, systemPrompt string, pl promptLens,
 	maxIterations, maxTokens int,
 	skills []resources.SkillInfo, readSkill func(string) (content string, dir string, err error),
-	hasMemory, hasSessionSearch bool) *Session {
+	hasMemory bool) *Session {
 
 	meta := storeInst.Meta()
 	s := &Session{
-		id:               meta.ID,
-		cwd:              meta.CWD,
-		name:             meta.Name,
-		createdAt:        meta.CreatedAt,
-		store:            storeInst,
-		provider:         provider,
-		modelID:          modelID,
-		thinkingLvl:      thinkingLvl,
-		tools:            toolReg,
-		systemPrompt:     systemPrompt,
-		maxIterations:    maxIterations,
-		maxTokens:        maxTokens,
-		stats:            meta.Stats, // restore accumulated stats
-		skills:           skills,
-		readSkill:        readSkill,
-		hasMemory:        hasMemory,
-		hasSessionSearch: hasSessionSearch,
+		id:            meta.ID,
+		cwd:           meta.CWD,
+		name:          meta.Name,
+		createdAt:     meta.CreatedAt,
+		store:         storeInst,
+		provider:      provider,
+		modelID:       modelID,
+		thinkingLvl:   thinkingLvl,
+		tools:         toolReg,
+		systemPrompt:  systemPrompt,
+		maxIterations: maxIterations,
+		maxTokens:     maxTokens,
+		stats:         meta.Stats, // restore accumulated stats
+		skills:        skills,
+		readSkill:     readSkill,
+		hasMemory:     hasMemory,
 		// Context breakdown lens — write-once, from builder functions.
 		sysPromptLen: pl.total,
 		toolsLen:     tl.totalBytes,
@@ -1048,7 +1045,7 @@ func (s *Session) compactWithTarget(ctx context.Context, provider providers.Prov
 	// gets the memory nudge appended (when memory is enabled for this session);
 	// the event below keeps the LLM's summary as-is so the UI shows a clean
 	// summary, not the internal reminder.
-	checkpoint := buildCompactionCheckpoint(summary, s.hasMemory, s.hasSessionSearch)
+	checkpoint := buildCompactionCheckpoint(summary, s.hasMemory)
 	if err := s.store.AddCompactionSummary(checkpoint); err != nil {
 		s.emit(types.Event{Type: types.EventError, Message: fmt.Sprintf("compact checkpoint failed: %v", err)})
 		return fmt.Errorf("compact: checkpoint: %w", err)
@@ -1477,15 +1474,6 @@ func (s *Session) AllMessages() []types.Message {
 	return s.store.AllMessages()
 }
 
-// SearchMessages full-text searches this session's complete conversation
-// history via the underlying store.Session/SessionStore. Returns
-// store.ErrSearchNotSupported if the backend doesn't implement search — the
-// SessionSearch tool translates that into a plain, honest error for the
-// model rather than treating it as "no matches".
-func (s *Session) SearchMessages(query string, limit int) ([]store.SearchResult, error) {
-	return s.store.SearchMessages(query, limit)
-}
-
 // syncMeta returns the full session metadata from the store (id, cwd, name,
 // model, thinking, stats, timestamps), first draining any delegated cost
 // (Subagent/Fetch condensing) that finished in the background after this
@@ -1539,8 +1527,8 @@ func (s *Session) syncMeta() store.SessionMeta {
 // s.store.Meta() itself is still called to get the fields that only ever
 // live in the store (ID, CWD, Name, CreatedAt, LastActiveAt, CompactOffset,
 // CompactCount) — this takes the store.Session's OWN mutex, a short-lived
-// lock never held for an entire turn (the same one AllMessages()/
-// SearchMessages() already take this way), not agent.Session's s.mu.
+// lock never held for an entire turn (the same one AllMessages() already
+// takes this way), not agent.Session's s.mu.
 //
 // One trade-off, accepted deliberately: pendingDelegatedCost (Subagent/
 // Fetch cost accounting from a delegated execution that finished in the

@@ -48,33 +48,32 @@ func TestSessionToolsReturnsBuiltinDefinitions(t *testing.T) {
 	}
 }
 
-// TestSessionToolsReflectsEnabledExtras confirms optional tools (gated by
-// AgentOptions.EnableX) show up in Session.Tools() when enabled, and are
-// genuinely absent when not — the same wiring SessionInfo/SessionSearch's
-// own gating tests cover, exercised here through the Tools() getter
-// instead.
-func TestSessionToolsReflectsEnabledExtras(t *testing.T) {
-	aOff := New(AgentOptions{Store: store.NewInMemoryStore()})
-	defer aOff.Close()
-	aOn := New(AgentOptions{Store: store.NewInMemoryStore(), EnableSessionInfo: true})
-	defer aOn.Close()
+// TestSessionToolsAlwaysIncludesSessionInfoUnlessDisallowed confirms
+// SessionInfo is registered like any other built-in (Bash/Read/Write/Edit/
+// Fetch) — no dedicated AgentOptions.EnableX flag, always present by
+// default, and absent only when explicitly excluded via DisallowedTools.
+func TestSessionToolsAlwaysIncludesSessionInfoUnlessDisallowed(t *testing.T) {
+	aDefault := New(AgentOptions{Store: store.NewInMemoryStore()})
+	defer aDefault.Close()
+	aDisallowed := New(AgentOptions{Store: store.NewInMemoryStore(), DisallowedTools: []string{"SessionInfo"}})
+	defer aDisallowed.Close()
 
-	models := aOn.Models()
+	models := aDefault.Models()
 	if len(models) < 1 {
 		t.Skip("need at least 1 active model in this environment")
 	}
 
-	sessOff, err := aOff.NewSession(t.TempDir(), models[0].Model)
+	sessDefault, err := aDefault.NewSession(t.TempDir(), models[0].Model)
 	if err != nil {
-		t.Fatalf("NewSession (off): %v", err)
+		t.Fatalf("NewSession (default): %v", err)
 	}
-	defer sessOff.Close()
+	defer sessDefault.Close()
 
-	sessOn, err := aOn.NewSession(t.TempDir(), models[0].Model)
+	sessDisallowed, err := aDisallowed.NewSession(t.TempDir(), models[0].Model)
 	if err != nil {
-		t.Fatalf("NewSession (on): %v", err)
+		t.Fatalf("NewSession (disallowed): %v", err)
 	}
-	defer sessOn.Close()
+	defer sessDisallowed.Close()
 
 	hasSessionInfo := func(defs []types.ToolDef) bool {
 		for _, d := range defs {
@@ -85,10 +84,10 @@ func TestSessionToolsReflectsEnabledExtras(t *testing.T) {
 		return false
 	}
 
-	if hasSessionInfo(sessOff.Tools()) {
-		t.Error("SessionInfo must NOT appear in Tools() when EnableSessionInfo is off")
+	if !hasSessionInfo(sessDefault.Tools()) {
+		t.Error("SessionInfo must appear in Tools() by default — no EnableX flag needed")
 	}
-	if !hasSessionInfo(sessOn.Tools()) {
-		t.Error("SessionInfo must appear in Tools() when EnableSessionInfo is on")
+	if hasSessionInfo(sessDisallowed.Tools()) {
+		t.Error("SessionInfo must NOT appear in Tools() when explicitly excluded via DisallowedTools")
 	}
 }

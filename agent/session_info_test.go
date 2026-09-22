@@ -9,15 +9,14 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
-// TestSessionInfoAndSessionSearchToolsReachRealTurn is the live integration
-// test for the new EnableSessionInfo flag: confirms both SessionInfo and
-// SessionSearch are genuinely registered and callable end-to-end against a
-// real provider — not just unit-testable in isolation (see
-// agent/store/search_test.go for the focused unit coverage of the FTS5
-// sync/query logic itself, and agent/tools/session_test.go for the tool's
-// own input-parsing/delegation responsibilities).
-func TestSessionInfoAndSessionSearchToolsReachRealTurn(t *testing.T) {
-	a := New(AgentOptions{EnableSessionInfo: true, Store: store.NewInMemoryStore()})
+// TestSessionInfoToolReachesRealTurn is the live integration test
+// confirming SessionInfo is genuinely registered and callable end-to-end
+// against a real provider — not just unit-testable in isolation (see
+// agent/tools/session_test.go for the tool's own JSON-shape coverage).
+// SessionInfo is always registered (no dedicated EnableX flag; see
+// buildSessionTools), so this only needs a plain Agent.
+func TestSessionInfoToolReachesRealTurn(t *testing.T) {
+	a := New(AgentOptions{Store: store.NewInMemoryStore()})
 	defer a.Close()
 
 	models := a.Models()
@@ -31,24 +30,18 @@ func TestSessionInfoAndSessionSearchToolsReachRealTurn(t *testing.T) {
 	}
 	defer sess.Close()
 
-	var sawSessionInfo, sawSessionSearch bool
+	var sawSessionInfo bool
 	done := make(chan struct{})
 	sess.Subscribe(func(e types.Event) {
-		if e.Type == types.EventToolResult {
-			switch e.ToolName {
-			case "SessionInfo":
-				sawSessionInfo = true
-			case "SessionSearch":
-				sawSessionSearch = true
-			}
+		if e.Type == types.EventToolResult && e.ToolName == "SessionInfo" {
+			sawSessionInfo = true
 		}
 		if e.Type == types.EventTurnEnd {
 			close(done)
 		}
 	})
 	sess.Prompt(context.Background(),
-		"Call the SessionInfo tool exactly once, then call the SessionSearch tool exactly once "+
-			"searching for the word 'test'. Report back whatever each returned verbatim.")
+		"Call the SessionInfo tool exactly once. Report back whatever it returned verbatim.")
 
 	select {
 	case <-done:
@@ -58,20 +51,6 @@ func TestSessionInfoAndSessionSearchToolsReachRealTurn(t *testing.T) {
 
 	if !sawSessionInfo {
 		t.Skip("model did not invoke SessionInfo this run (nondeterministic tool use) — rerun to exercise this path")
-	}
-	if !sawSessionSearch {
-		t.Skip("model did not invoke SessionSearch this run (nondeterministic tool use) — rerun to exercise this path")
-	}
-}
-
-// TestSessionInfoDisabledByDefault confirms EnableSessionInfo defaults to
-// false — the staged-rollout flag must not leak into agents that never
-// opted in (matches every other EnableX flag's own zero-value default).
-func TestSessionInfoDisabledByDefault(t *testing.T) {
-	a := New(AgentOptions{Store: store.NewInMemoryStore()})
-	defer a.Close()
-	if a.opts.EnableSessionInfo {
-		t.Error("EnableSessionInfo defaulted to true — it must default to false")
 	}
 }
 
@@ -202,50 +181,6 @@ func TestMaxIterationsReflectsSetMaxIterations(t *testing.T) {
 	}
 	if got := sess.MaxIterations(); got != 7 {
 		t.Errorf("MaxIterations() after SetMaxIterations(7) = %d, want 7", got)
-	}
-}
-
-// TestSessionSearchMessagesDoesNotDeadlockUnderPromptSyncLock guards
-// against the SAME deadlock class for SearchMessages after the
-// SessionSearch-into-SessionStore migration: Session.SearchMessages must
-// mirror AllMessages()'s locking shape (briefly take s.mu only to read the
-// immutable s.id, release before calling the port) — never hold s.mu for
-// the actual search. If a future change accidentally routed this through
-// something that takes s.mu (like the unexported syncMeta()), this test
-// would hang and fail exactly like
-// TestSessionInfoGettersDoNotDeadlockUnderPromptSyncLock does for that bug.
-func TestSessionSearchMessagesDoesNotDeadlockUnderPromptSyncLock(t *testing.T) {
-	a := New(AgentOptions{EnableSessionInfo: true, Store: store.NewInMemoryStore()})
-	defer a.Close()
-
-	models := a.Models()
-	if len(models) < 1 {
-		t.Skip("need at least 1 active model in this environment")
-	}
-
-	sess, err := a.NewSession(t.TempDir(), models[0].Model)
-	if err != nil {
-		t.Fatalf("NewSession: %v", err)
-	}
-	defer sess.Close()
-
-	// Simulate promptSync holding s.mu for the duration of a turn.
-	sess.mu.Lock()
-	defer sess.mu.Unlock()
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		// InMemoryStore returns ErrSearchNotSupported immediately — what
-		// matters here is only that the call returns AT ALL rather than
-		// blocking forever on s.mu.
-		_, _ = sess.SearchMessages("anything", 10)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("SearchMessages deadlocked — it must never take s.mu (mirrors AllMessages()'s locking shape), but something in this path blocked waiting for s.mu while s.mu was held by the simulated turn (promptSync).")
 	}
 }
 

@@ -218,17 +218,6 @@ func AgentWithWebSearch() AgentOption {
 	return func(o *agent.AgentOptions) { o.EnableWebSearch = true }
 }
 
-// AgentWithSessionInfo enables the built-in SessionInfo and SessionSearch
-// tools — two views of the same concept ("information about this
-// session"), gated behind this single option. SessionInfo returns a
-// snapshot of the session's own identity/config/environment/accumulated
-// usage; SessionSearch full-text searches the session's ENTIRE
-// conversation history, including anything already folded into a
-// compaction checkpoint. Off by default.
-func AgentWithSessionInfo() AgentOption {
-	return func(o *agent.AgentOptions) { o.EnableSessionInfo = true }
-}
-
 // ── Custom providers ─────────────────────────────────────────────────────
 //
 // Registers a custom OpenAI Chat Completions-compatible provider globally

@@ -7,7 +7,6 @@
 package store
 
 import (
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -53,20 +52,6 @@ type SessionMeta struct {
 	LastActiveAt time.Time `json:"last_active_at"`
 }
 
-// ── SearchResult ─────────────────────────────────────────────────────────
-
-// SearchResult is one match returned by SessionStore.SearchMessages.
-type SearchResult struct {
-	Role    string `json:"role"`
-	Snippet string `json:"snippet"`
-}
-
-// ErrSearchNotSupported is returned by SearchMessages when the backend has
-// no full-text search capability (e.g. InMemoryStore). Callers should treat
-// this as "this backend can't do this", never as "no matches" — an empty
-// slice with a nil error means the latter.
-var ErrSearchNotSupported = errors.New("store: message search not supported by this backend")
-
 // ── SessionStore: the persistence port (what SDK users implement) ─────────
 
 // SessionStore is a minimal, backend-agnostic persistence port. It stores
@@ -108,14 +93,6 @@ type SessionStore interface {
 	// dstID must already exist (its meta saved). srcID's log is read atomically;
 	// any existing log for dstID is overwritten.
 	CopyMessages(srcID, dstID string) error
-
-	// SearchMessages performs a full-text search over sessionID's complete
-	// message history (everything ever appended, including messages folded
-	// into a compaction checkpoint) and returns matching results, most
-	// relevant first, capped to limit. Implementations that cannot support
-	// full-text search return ErrSearchNotSupported — not an empty slice,
-	// so callers can tell "no matches" apart from "not supported".
-	SearchMessages(sessionID string, query string, limit int) ([]SearchResult, error)
 
 	// Close releases any backend resources (open files, DB handles, …).
 	Close() error
@@ -217,19 +194,6 @@ func (s *Session) AllMessages() []types.Message {
 		return out
 	}
 	return msgs
-}
-
-// SearchMessages full-text searches this session's complete message
-// history via the underlying store. Returns ErrSearchNotSupported if the
-// backend doesn't implement search. Mirrors AllMessages()'s locking shape:
-// s.mu is only held briefly to read the immutable s.id, then released
-// before calling the port — so a search (however long it takes) never
-// blocks promptSync's hold on s.mu for the rest of the turn, and vice versa.
-func (s *Session) SearchMessages(query string, limit int) ([]SearchResult, error) {
-	s.mu.Lock()
-	id := s.id
-	s.mu.Unlock()
-	return s.port.SearchMessages(id, query, limit)
 }
 
 // AddMessage appends a message to the log — cached in the working set and

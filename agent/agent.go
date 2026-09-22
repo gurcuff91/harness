@@ -114,16 +114,6 @@ type AgentOptions struct {
 	// call time, so it's safe to enable unconditionally without a pre-flight
 	// provider check. Mirrors EnableMCPs' opt-in style for "extra" tools.
 	EnableWebSearch bool
-
-	// EnableSessionInfo registers BOTH the SessionInfo and SessionSearch
-	// built-in tools — two views of the same concept ("information about
-	// this session"), gated behind a single flag. SessionInfo returns a
-	// snapshot of the session's own identity/config/environment/usage;
-	// SessionSearch full-text searches the ENTIRE conversation history
-	// (including anything already folded into a compaction checkpoint) via
-	// the session's own SessionStore.SearchMessages — see
-	// docs/plans/2026-09-16-sessionsearch-into-store-design.md.
-	EnableSessionInfo bool
 }
 
 // defaultMaxIterations is the fallback used when AgentOptions.MaxIterations
@@ -650,7 +640,7 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 		sessionTools, tl, systemPrompt, pl,
 		a.maxIterations, maxTokens,
 		res.Skills, loader.ReadSkill,
-		a.memStore != nil, a.opts.EnableSessionInfo)
+		a.memStore != nil)
 	sess.agent = a
 	a.registerSession(sess)
 	return sess, nil
@@ -726,7 +716,7 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 		resumeTools, tl, resumePrompt, pl,
 		maxIterations, maxTokens,
 		skills, readSkill,
-		a.memStore != nil, a.opts.EnableSessionInfo)
+		a.memStore != nil)
 	sess.agent = a
 	a.registerSession(sess)
 	return sess, nil
@@ -808,7 +798,7 @@ func (a *Agent) ForkSession(sessionID string) (*Session, error) {
 		forkTools, tl, forkPrompt, pl,
 		maxIterations, maxTokens,
 		skills, readSkill,
-		a.memStore != nil, a.opts.EnableSessionInfo)
+		a.memStore != nil)
 	sess.agent = a
 	a.registerSession(sess)
 	return sess, nil
@@ -1066,76 +1056,76 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 		reg.Register(tools.WebSearch(a.webSearchLookup(), nil))
 	}
 
-	// SessionInfo / SessionSearch — two views of "information about this
-	// session", gated behind one flag. Both closures read from *sessRef at
-	// EXECUTION time (same pattern buildFetchSummarizer/Subagent's executor
-	// already use for Model()) so they always reflect live state, not
-	// whatever was true when buildSessionTools ran.
-	if a.opts.EnableSessionInfo {
-		if a.isToolAllowed(tools.ToolSessionInfo) {
-			// Deliberately built from the lock-free public getters (ID/CWD/
-			// Name/Model/Thinking/CreatedAt/Stats — every one of these is
-			// safe by construction: none of them take s.mu), NEVER the
-			// unexported syncMeta()/syncStats() (which DO take s.mu to
-			// drain+persist pending delegated cost). This closure runs
-			// INSIDE a tool executor while promptSync holds s.mu for the
-			// whole turn — calling syncMeta()/syncStats() here would
-			// deadlock instantly with no timeout, no error — exactly the
-			// class of bug Model() was introduced to fix (see its own doc
-			// comment and the subagent-timeout-background project memory
-			// this mirrors).
-			//
-			// MCPStatuses()/Schedules() below take THEIR OWN locks
-			// (mcp.Manager.mu / schedule.Store.mu respectively) — never
-			// s.mu — so calling them from inside this closure carries no
-			// deadlock risk at all, same reasoning server.go's
-			// handleSessionInfo already relies on for the identical data.
-			reg.Register(tools.SessionInfo(func() tools.SessionInfoSnapshot {
-				sess := *sessRef
-				stats := sess.Stats()
+	// SessionInfo — a simple, purely informational snapshot of this
+	// session's own identity/config/environment/usage. Always registered
+	// (like Bash/Read/Write/Edit/Fetch) — no separate AgentOptions.EnableX
+	// flag; DisallowedTools is the only way to turn it off. It used to
+	// share a single EnableSessionInfo flag with SessionSearch (full-text
+	// search over the session's own history), removed for being largely
+	// unused in practice and redundant with persistent memory
+	// (MemoWrite/MemoSearch) — see docs/plans/2026-09-22-sessionsearch-removal.md.
+	//
+	// The closure reads from *sessRef at EXECUTION time (same pattern
+	// buildFetchSummarizer/Subagent's executor already use for Model()) so
+	// it always reflects live state, not whatever was true when
+	// buildSessionTools ran.
+	if a.isToolAllowed(tools.ToolSessionInfo) {
+		// Deliberately built from the lock-free public getters (ID/CWD/
+		// Name/Model/Thinking/CreatedAt/Stats — every one of these is safe
+		// by construction: none of them take s.mu), NEVER the unexported
+		// syncMeta()/syncStats() (which DO take s.mu to drain+persist
+		// pending delegated cost). This closure runs INSIDE a tool executor
+		// while promptSync holds s.mu for the whole turn — calling
+		// syncMeta()/syncStats() here would deadlock instantly with no
+		// timeout, no error — exactly the class of bug Model() was
+		// introduced to fix (see its own doc comment and the
+		// subagent-timeout-background project memory this mirrors).
+		//
+		// MCPStatuses()/Schedules() below take THEIR OWN locks
+		// (mcp.Manager.mu / schedule.Store.mu respectively) — never s.mu —
+		// so calling them from inside this closure carries no deadlock
+		// risk at all, same reasoning server.go's handleSessionInfo
+		// already relies on for the identical data.
+		reg.Register(tools.SessionInfo(func() tools.SessionInfoSnapshot {
+			sess := *sessRef
+			stats := sess.Stats()
 
-				mcpConnected := 0
-				for _, st := range a.MCPStatuses() {
-					if st.Connected {
-						mcpConnected++
+			mcpConnected := 0
+			for _, st := range a.MCPStatuses() {
+				if st.Connected {
+					mcpConnected++
+				}
+			}
+			scheduleCount := 0
+			if sc := a.Schedules(); sc != nil {
+				for _, s := range sc.List() {
+					if s.Owner == sessionID {
+						scheduleCount++
 					}
 				}
-				scheduleCount := 0
-				if sc := a.Schedules(); sc != nil {
-					for _, s := range sc.List() {
-						if s.Owner == sessionID {
-							scheduleCount++
-						}
-					}
-				}
+			}
 
-				return tools.SessionInfoSnapshot{
-					ID:        sess.ID(),
-					CWD:       sess.CWD(),
-					Name:      sess.Name(),
-					Model:     sess.Model(),
-					Thinking:  sess.Thinking(),
-					CreatedAt: sess.CreatedAt().Format(time.RFC3339),
+			return tools.SessionInfoSnapshot{
+				ID:        sess.ID(),
+				CWD:       sess.CWD(),
+				Name:      sess.Name(),
+				Model:     sess.Model(),
+				Thinking:  sess.Thinking(),
+				CreatedAt: sess.CreatedAt().Format(time.RFC3339),
 
-					Version:       version.Version,
-					MCPConnected:  mcpConnected,
-					ScheduleCount: scheduleCount,
+				Version:       version.Version,
+				MCPConnected:  mcpConnected,
+				ScheduleCount: scheduleCount,
 
-					InputTokens:   stats.InputTokens,
-					OutputTokens:  stats.OutputTokens,
-					CacheRead:     stats.CacheRead,
-					CacheWrite:    stats.CacheWrite,
-					CostUSD:       stats.CostUSD,
-					ContextUsage:  stats.ContextUsage,
-					ContextWindow: stats.ContextWindow,
-				}
-			}))
-		}
-		if a.isToolAllowed(tools.ToolSessionSearch) {
-			reg.Register(tools.SessionSearch(func(query string, limit int) ([]store.SearchResult, error) {
-				return (*sessRef).SearchMessages(query, limit)
-			}))
-		}
+				InputTokens:   stats.InputTokens,
+				OutputTokens:  stats.OutputTokens,
+				CacheRead:     stats.CacheRead,
+				CacheWrite:    stats.CacheWrite,
+				CostUSD:       stats.CostUSD,
+				ContextUsage:  stats.ContextUsage,
+				ContextWindow: stats.ContextWindow,
+			}
+		}))
 	}
 
 	// Subagent tool — only if allowed (excluded for sub-agents themselves)
@@ -1333,10 +1323,13 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) (string,
 	}
 
 	// Deliberately brief — just a pointer that this capability exists.
-	// Each tool's own Description carries the actual detail (what it
+	// SessionInfo's own Description carries the actual detail (what it
 	// returns, when to use it); duplicating that here would be redundant.
-	if a.opts.EnableSessionInfo {
-		b.WriteString("\n\n## Session Tools\n\nYou have SessionInfo (this session's own identity/config) and SessionSearch (full-text search over this session's complete conversation history) available — use them when you need information about the current session itself.")
+	// Gated on isToolAllowed (not a dedicated EnableX flag — SessionInfo is
+	// always registered like any other built-in; DisallowedTools is the
+	// only way to turn it off, see buildSessionTools' own comment).
+	if a.isToolAllowed(tools.ToolSessionInfo) {
+		b.WriteString("\n\n## Session Tools\n\nYou have SessionInfo (this session's own identity/config) available — use it when you need information about the current session itself.")
 	}
 
 	// Gated on EnableScheduler, matching scheduleAdapter()'s exact

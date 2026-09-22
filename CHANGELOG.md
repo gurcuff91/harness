@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.90] - 2026-09-22
+
+### Breaking (SDK) — `SessionSearch` removed entirely; `SessionInfo` is now always-on
+Observed in practice: the model almost never reaches for `SessionSearch` (full-text search over a session's own history) — it consistently prefers persistent memory (`MemoWrite`/`MemoSearch`) to recover lost context instead. The two tools solved overlapping problems, but `SessionSearch` added significant infrastructure (a per-session SQLite FTS5 index, a dedicated `SessionStore` interface method) for a capability that wasn't earning its keep. Full rationale: `docs/plans/2026-09-22-sessionsearch-removal.md`.
+
+- **Removed**: the `SessionSearch` tool, `SessionStore.SearchMessages`/`SearchResult`/`ErrSearchNotSupported` from the public `agent/store` interface, both backend implementations (`FileStore`'s entire FTS5 subsystem — index, incremental sync, filter-version invalidation, per-session locks; `InMemoryStore`'s not-supported stub), and `Session.SearchMessages()`. No known external `SessionStore` implementation exists outside this repo (no HTTP endpoint ever exposed this capability), so the breaking-change surface is contained to this repo's own tests.
+- **`AgentOptions.EnableSessionInfo` / `harness.AgentWithSessionInfo()` removed.** `SessionInfo` — a small, purely informational, side-effect-free session snapshot — no longer needs a dedicated gate now that it doesn't share one with `SessionSearch`. It's now registered unconditionally in `buildSessionTools()`, exactly like Bash/Read/Write/Edit/Fetch: always on, opt out via `AgentWithDisallowedTools("SessionInfo")` (or the CLI's `DisallowedTools`) if you don't want it.
+- `agent/prompts.go`'s compaction-checkpoint reminder simplified to only ever point at persistent memory (dropped the now-dead "or SessionSearch" branch).
+- `internal/tui`: `SessionSearch`'s tool icon/primary-param mapping removed.
+- `README.md`/`AGENTS.md` updated: no more `SessionSearch`/`EnableSessionInfo`/`AgentWithSessionInfo` mentions; `SessionInfo` documented as always-on.
+- Tests: removed `agent/store/search_test.go` entirely, the `SessionSearch` half of `agent/tools/session_test.go`, and every other `SessionSearch`-specific case across `agent/store/store_test.go`, `agent/session_info_test.go`, `internal/tui/toolfmt_test.go`. `agent/session_tools_test.go`'s coverage flipped from "SessionInfo absent by default" to `TestSessionToolsAlwaysIncludesSessionInfoUnlessDisallowed` — present by default, absent only via `DisallowedTools`. Full suite + `go vet` + `-race` (agent, agent/store, agent/tools, internal/tui, root) green; `gofmt -l` clean.
+
 ## [0.76.89] - 2026-09-21
 
 ### Breaking (SDK) — `*Session`'s read-side contract consolidated: one lock-free name per concept
