@@ -19,7 +19,7 @@ import (
 // both executors right before the ephemeral sub-agent's Close()), so it MUST
 // be lock-free. This reproduces the same "hold s.mu like promptSync does,
 // call the method from another goroutine" pattern already proven for
-// CurrentModel() (TestCurrentModelDoesNotDeadlockUnderPromptSyncLock).
+// Model() (TestModelDoesNotDeadlockUnderPromptSyncLock).
 func TestAddDelegatedCostDoesNotDeadlockUnderPromptSyncLock(t *testing.T) {
 	a := New(AgentOptions{Store: store.NewInMemoryStore()})
 	defer a.Close()
@@ -51,7 +51,7 @@ func TestAddDelegatedCostDoesNotDeadlockUnderPromptSyncLock(t *testing.T) {
 	case <-done:
 		// Unblocked — lock-free as required.
 	case <-time.After(3 * time.Second):
-		t.Fatal("addDelegatedCost deadlocked — it blocked waiting for s.mu while s.mu was held by the simulated turn (promptSync). This is the exact deadlock class documented for CurrentModel() (subagent-timeout-background memory, bug #3).")
+		t.Fatal("addDelegatedCost deadlocked — it blocked waiting for s.mu while s.mu was held by the simulated turn (promptSync). This is the exact deadlock class documented for Model() (subagent-timeout-background memory, bug #3).")
 	}
 }
 
@@ -61,6 +61,12 @@ func TestAddDelegatedCostDoesNotDeadlockUnderPromptSyncLock(t *testing.T) {
 // those describe the parent's OWN context occupancy, computed solely from
 // its own most recent provider call (see updateStats), and must stay
 // unaffected by tokens that were never part of that call.
+//
+// Uses syncStats() (not the public, lock-free Stats()) deliberately: no
+// turn runs in this test at all, so nothing else would ever drain
+// addDelegatedCost's pending atomics into s.stats — syncStats() is the one
+// call that does that drain-and-persist itself, which is exactly the
+// behavior this test needs to observe the delta synchronously.
 func TestAddDelegatedCostIsInvisibleToContextUsage(t *testing.T) {
 	a := New(AgentOptions{Store: store.NewInMemoryStore()})
 	defer a.Close()
@@ -76,7 +82,7 @@ func TestAddDelegatedCostIsInvisibleToContextUsage(t *testing.T) {
 	}
 	defer sess.Close()
 
-	before := sess.Stats()
+	before := sess.syncStats()
 
 	sess.addDelegatedCost(types.SessionStats{
 		InputTokens:  1_000_000, // deliberately huge — would swamp any window if it leaked into ContextUsage
@@ -86,7 +92,7 @@ func TestAddDelegatedCostIsInvisibleToContextUsage(t *testing.T) {
 		CostUSD:      12.34,
 	})
 
-	after := sess.Stats()
+	after := sess.syncStats()
 
 	if after.ContextUsage != before.ContextUsage {
 		t.Errorf("ContextUsage changed from %v to %v — a delegated sub-agent's tokens must never affect it", before.ContextUsage, after.ContextUsage)
@@ -112,13 +118,16 @@ func TestAddDelegatedCostIsInvisibleToContextUsage(t *testing.T) {
 	}
 }
 
-// TestAddDelegatedCostDrainedByMeta covers the "background call finished
-// after the launching turn already ended" case: nothing else would ever call
-// updateStats again for this session, so Meta() (what server.go and every
-// transport actually call for session info) must itself drain and persist
-// the pending delegated cost — otherwise it would sit invisible in the
-// atomics forever.
-func TestAddDelegatedCostDrainedByMeta(t *testing.T) {
+// TestAddDelegatedCostDrainedBySyncMeta covers the "background call
+// finished after the launching turn already ended" case: nothing else
+// would ever call updateStats again for this session, so the unexported
+// syncMeta() (used internally wherever harness itself needs a freshly
+// drained-and-persisted snapshot) must itself drain and persist the
+// pending delegated cost — otherwise it would sit invisible in the atomics
+// forever. The public Meta()/Stats() are deliberately lock-free and do NOT
+// drain (see their own doc comments) — this test is specifically about the
+// unexported drain-and-persist path, not the public accessors.
+func TestAddDelegatedCostDrainedBySyncMeta(t *testing.T) {
 	a := New(AgentOptions{Store: store.NewInMemoryStore()})
 	defer a.Close()
 
@@ -135,27 +144,27 @@ func TestAddDelegatedCostDrainedByMeta(t *testing.T) {
 
 	sess.addDelegatedCost(types.SessionStats{InputTokens: 42, CostUSD: 1.5})
 
-	meta := sess.Meta()
+	meta := sess.syncMeta()
 	if meta.Stats.InputTokens != 42 {
-		t.Errorf("Meta().Stats.InputTokens = %d, want 42 (delegated cost added after the last turn must still surface via Meta())", meta.Stats.InputTokens)
+		t.Errorf("syncMeta().Stats.InputTokens = %d, want 42 (delegated cost added after the last turn must still surface via syncMeta())", meta.Stats.InputTokens)
 	}
 	if meta.Stats.CostUSD != 1.5 {
-		t.Errorf("Meta().Stats.CostUSD = %v, want 1.5", meta.Stats.CostUSD)
+		t.Errorf("syncMeta().Stats.CostUSD = %v, want 1.5", meta.Stats.CostUSD)
 	}
 
 	// Must also be PERSISTED, not just visible in memory — re-reading the
 	// store directly (bypassing the agent.Session wrapper) proves it landed
-	// on disk/in the store, not just in the in-memory snapshot Meta() built.
+	// on disk/in the store, not just in the in-memory snapshot syncMeta() built.
 	persisted := sess.store.Meta()
 	if persisted.Stats.InputTokens != 42 {
-		t.Errorf("persisted store Stats.InputTokens = %d, want 42 — Meta() must persist the drained delegated cost, not just report it", persisted.Stats.InputTokens)
+		t.Errorf("persisted store Stats.InputTokens = %d, want 42 — syncMeta() must persist the drained delegated cost, not just report it", persisted.Stats.InputTokens)
 	}
 }
 
 // TestSubagentDelegatedCostReachesParentSession is an end-to-end integration
 // check of the real wiring in buildSessionTools' Subagent executor (agent.go)
 // — not just the addDelegatedCost primitive in isolation above. Requires a
-// live provider call (same limitation as TestCurrentModelReflectsSwitchModel
+// live provider call (same limitation as TestModelReflectsSwitchModel
 // and TestSubagentMaxIterationsIsCapped — see their comments), so it skips
 // without one rather than faking a response; run it locally with a connected
 // provider to exercise the real path.

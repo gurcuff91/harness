@@ -36,7 +36,7 @@ type Session struct {
 	// createdAt is write-once at construction (never reassigned afterward,
 	// unlike name/thinkingLvl) — safe to read from ANYWHERE, including from
 	// inside a tool executor goroutine while promptSync holds s.mu for the
-	// whole turn (see SessionInfo's doc comment / the CurrentModel()
+	// whole turn (see SessionInfo's doc comment / the Model()
 	// lock-free precedent this mirrors: taking s.mu from inside a tool
 	// deadlocks instantly, no timeout, no error).
 	createdAt time.Time
@@ -75,7 +75,7 @@ type Session struct {
 	// as modelStr above — it's called from a Subagent/Fetch tool's executor,
 	// which runs INSIDE a turn while promptSync holds s.mu for the whole
 	// turn (including parallel tool execution), so taking s.mu there would
-	// deadlock exactly like the bug CurrentModel() was fixed for (see
+	// deadlock exactly like the bug Model() was fixed for (see
 	// modelStr's comment, and the subagent-timeout-background project
 	// memory). updateStats (which DOES run under s.mu, on the main turn
 	// goroutine, never inside a tool) drains and folds this into s.stats on
@@ -110,16 +110,16 @@ type Session struct {
 	// field with NO lock at all — a genuine data race under Go's memory
 	// model, since SetMaxIterations writes it under s.mu. Written under
 	// s.mu in newSession (initial) and SetMaxIterations (on override), read
-	// lock-free by CurrentMaxIterations(). atomic.Int64 (not atomic.Value)
+	// lock-free by MaxIterations(). atomic.Int64 (not atomic.Value)
 	// since it's already a plain int — no boxing needed.
 	maxIterationsVal atomic.Int64
 
 	// modelStr is the session's active "provider/model" string, stored in an
-	// atomic.Value so it can be read lock-free from CurrentModel(). The value
+	// atomic.Value so it can be read lock-free from Model(). The value
 	// is written under s.mu (in newSession and SwitchModel — the same lock
 	// that guards the individual provider/modelID fields) but reads from
-	// CurrentModel() don't need s.mu at all, which is the whole point:
-	// CurrentModel() is called by the Subagent tool's executor, which runs
+	// Model() don't need s.mu at all, which is the whole point:
+	// Model() is called by the Subagent tool's executor, which runs
 	// INSIDE a turn (promptSync holds s.mu for the entire turn, including
 	// tool execution), so taking s.mu there would deadlock. atomic.Value gives
 	// us a safe, consistent snapshot without any lock contention.
@@ -444,7 +444,7 @@ func (s *Session) Reset() error {
 	}
 	// BUG FIX: s.store.Reset() clears Stats on the PERSISTED meta, but the
 	// in-memory s.stats/lastInputTokens this Session handle actually reads
-	// from (Stats(), CurrentStats(), ContextBreakdown(), the auto-compact
+	// from (Stats(), ContextBreakdown(), the auto-compact
 	// threshold check, …) were never cleared here — found live while wiring
 	// SessionInfo's extended stats. A stale s.stats survived Reset() and
 	// would resurface on the very next updateStats/persistStatsLocked call
@@ -527,7 +527,7 @@ func (s *Session) ModelMeta() *types.ModelMeta {
 	return s.provider.ModelMeta(s.modelID)
 }
 
-// CurrentModel returns the session's active model in "provider/model" form,
+// Model returns the session's active model in "provider/model" form,
 // reflecting any SwitchModel call that has happened since the session was
 // created — unlike a plain string captured once at construction time (the
 // bug this exists to fix: the Subagent tool's executor closure in
@@ -537,15 +537,18 @@ func (s *Session) ModelMeta() *types.ModelMeta {
 // model, including one that had since become rate-limited).
 //
 // Lock-free (reads an atomic.Value snapshot written under s.mu by
-// newSession/SwitchModel). This is NOT just an optimization: CurrentModel()
-// is called by the Subagent tool's executor, which runs INSIDE a turn — and
+// newSession/SwitchModel). This is NOT just an optimization: Model() is
+// called by the Subagent tool's executor, which runs INSIDE a turn — and
 // promptSync holds s.mu for the entire turn, including tool execution. A
 // s.mu.Lock() here would deadlock: the tool goroutine would wait for s.mu
 // while promptSync's wg.Wait() waits for the tool goroutine — a circular
 // wait confirmed by a real stack trace from a hung process. atomic.Value
 // breaks the cycle: the reader needs no lock at all, so it can't block on
-// one that the turn already holds.
-func (s *Session) CurrentModel() string {
+// one that the turn already holds. This is the ONLY public accessor for
+// the active model string — there is no separate blocking alternative (the
+// blocking family is Meta()/syncMeta(), which read this same value as part
+// of a fuller snapshot, not a parallel "Model()-but-locked" method).
+func (s *Session) Model() string {
 	if v := s.modelStr.Load(); v != nil {
 		return v.(string)
 	}
@@ -632,21 +635,24 @@ func (s *Session) persistStatsLocked() {
 // snapshotStatsLocked refreshes statsSnapshot from the current s.stats.
 // Caller must already hold s.mu (same "Locked" convention as
 // persistStatsLocked). Must be called at every point s.stats itself
-// mutates, so CurrentStats() never observes a value stale by more than the
+// mutates, so Stats() never observes a value stale by more than the
 // current critical section.
 func (s *Session) snapshotStatsLocked() {
 	s.statsSnapshot.Store(s.stats)
 }
 
-// CurrentStats returns a lock-free snapshot of accumulated token/cost/
-// context stats — safe to call from inside a tool executor while
-// promptSync holds s.mu for the whole turn (mirrors CurrentModel()/
-// CurrentThinking()'s exact pattern; see modelStr's doc comment for why
-// taking s.mu here would deadlock instead). May lag by up to one turn
-// behind delegated cost (Subagent/Fetch) not yet drained — the same
-// staleness window Stats()/Meta() already carry for any concurrent reader,
-// not something new introduced by this snapshot.
-func (s *Session) CurrentStats() types.SessionStats {
+// Stats returns a lock-free snapshot of accumulated token/cost/context
+// stats — safe to call from inside a tool executor while promptSync holds
+// s.mu for the whole turn (mirrors Model()/Thinking()'s exact pattern; see
+// modelStr's doc comment for why taking s.mu here would deadlock instead).
+// May lag by up to one turn behind delegated cost (Subagent/Fetch) not yet
+// drained — the internal syncStats()/syncMeta() drain-and-persist path
+// closes that gap when it runs, but a concurrent lock-free reader can
+// always observe a value that's stale by up to one turn; not something new
+// introduced by this snapshot. This is the ONLY public accessor for
+// accumulated stats — there is no separate blocking alternative exposed by
+// the SDK.
+func (s *Session) Stats() types.SessionStats {
 	v, _ := s.statsSnapshot.Load().(types.SessionStats)
 	return v
 }
@@ -946,7 +952,7 @@ func (s *Session) SwitchModel(ctx context.Context, fullModel string) error {
 	s.provider = provider
 	s.modelID = modelID
 	s.loadModelMeta(modelID)
-	s.modelStr.Store(fullModel) // update lock-free snapshot for CurrentModel()
+	s.modelStr.Store(fullModel) // update lock-free snapshot for Model()
 	meta := s.store.Meta()
 	meta.Model = fullModel
 	s.store.UpdateMeta(meta)
@@ -964,7 +970,7 @@ func (s *Session) SwitchThinking(level string) error {
 	}
 	s.mu.Lock()
 	s.thinkingLvl = level
-	s.thinkingStr.Store(level) // lock-free snapshot for CurrentThinking()
+	s.thinkingStr.Store(level) // lock-free snapshot for Thinking()
 	meta := s.store.Meta()
 	meta.Thinking = level
 	s.store.UpdateMeta(meta)
@@ -981,7 +987,7 @@ func (s *Session) SwitchThinking(level string) error {
 // under s.mu (the same lock promptSync holds for the whole turn — this is
 // what makes reading s.maxIterations inside the ReAct loop's `for i := range
 // s.maxIterations - 1` race-free without any separate lock-free snapshot,
-// unlike CurrentModel/CurrentThinking: nothing reads max_iterations from
+// unlike Model()/Thinking(): nothing reads max_iterations from
 // INSIDE a tool executor mid-turn, only server.go's HTTP handlers, which
 // never run while promptSync holds s.mu), then persist to the store.
 func (s *Session) SetMaxIterations(n int) error {
@@ -990,7 +996,7 @@ func (s *Session) SetMaxIterations(n int) error {
 	}
 	s.mu.Lock()
 	s.maxIterations = n
-	s.maxIterationsVal.Store(int64(n)) // lock-free snapshot for CurrentMaxIterations()
+	s.maxIterationsVal.Store(int64(n)) // lock-free snapshot for MaxIterations()
 	meta := s.store.Meta()
 	meta.MaxIterations = n
 	s.store.UpdateMeta(meta)
@@ -998,11 +1004,11 @@ func (s *Session) SetMaxIterations(n int) error {
 	return nil
 }
 
-// CurrentThinking returns the session's active thinking level, reflecting
-// any SwitchThinking call made after the session (and its tools, including
+// Thinking returns the session's active thinking level, reflecting any
+// SwitchThinking call made after the session (and its tools, including
 // SessionInfo's closure) were built. Lock-free — see thinkingStr's doc
-// comment for why (mirrors CurrentModel() exactly).
-func (s *Session) CurrentThinking() string {
+// comment for why (mirrors Model() exactly).
+func (s *Session) Thinking() string {
 	if v := s.thinkingStr.Load(); v != nil {
 		return v.(string)
 	}
@@ -1329,31 +1335,24 @@ func (s *Session) CreatedAt() time.Time { return s.createdAt }
 func (s *Session) Name() string { return s.name }
 
 // MaxIterations returns the max ReAct iterations allowed per turn for this
-// session (AgentOptions.MaxIterations, default 50). Exposed read-only so
-// clients (e.g. the TUI footer) can show progress like "(3/25)" without
-// duplicating the limit. Implemented via CurrentMaxIterations() (lock-free)
-// rather than reading s.maxIterations directly — this used to read the
-// plain field with no lock at all, a genuine data race against
-// SetMaxIterations' write under s.mu (found and fixed alongside
-// GET /api/sessions/{id}/info's own s.mu-blocking bug: see
-// CurrentMaxIterations' doc comment).
-func (s *Session) MaxIterations() int { return s.CurrentMaxIterations() }
-
-// CurrentMaxIterations returns the max ReAct iterations allowed per turn,
-// reflecting any SetMaxIterations call made after the session was built —
-// lock-free, mirroring CurrentModel/CurrentThinking/CurrentStats' exact
-// pattern. Written under s.mu in newSession (initial) and SetMaxIterations
-// (on override); read here with no lock. Added specifically so
-// server.go's GET /api/sessions/{id}/info and GET /api/sessions/{id}
-// handlers can report live session state without going through
-// Meta()/Stats() — which take s.mu, the SAME lock promptSync holds for the
-// entire duration of a running turn, so those endpoints used to block for
-// as long as a turn was in flight (confirmed live: 9.9s–60s+ depending on
-// the turn). CurrentModel/CurrentThinking/CurrentStats already solved this
-// for their own fields; MaxIterations was the one field left reading
-// through the blocking path (worse: through an outright unguarded field
-// read, not even Meta()'s lock).
-func (s *Session) CurrentMaxIterations() int { return int(s.maxIterationsVal.Load()) }
+// session (AgentOptions.MaxIterations, default 50), reflecting any
+// SetMaxIterations call made after the session was built. Exposed
+// read-only so clients (e.g. the TUI footer) can show progress like
+// "(3/25)" without duplicating the limit.
+//
+// Lock-free (atomic.Int64, mirroring Model()/Thinking()/Stats()' exact
+// pattern) — written under s.mu in newSession (initial) and
+// SetMaxIterations (on override), read here with no lock. This used to be
+// a THIN WRAPPER over a since-removed CurrentMaxIterations(), which in
+// turn replaced an even older implementation that read the plain
+// s.maxIterations field directly with NO lock at all — a genuine data
+// race against SetMaxIterations' write under s.mu, found and fixed
+// alongside GET /api/sessions/{id}/info's own s.mu-blocking bug. Model()/
+// Thinking()/Stats() already solved this class of problem for their own
+// fields; MaxIterations was the one left reading through an unguarded
+// field access. This is the ONLY public accessor for the iteration
+// budget — there is no separate blocking alternative.
+func (s *Session) MaxIterations() int { return int(s.maxIterationsVal.Load()) }
 
 // Rename sets a friendly display name.
 func (s *Session) Rename(name string) error {
@@ -1363,15 +1362,25 @@ func (s *Session) Rename(name string) error {
 	return s.store.UpdateMeta(meta)
 }
 
-// Stats returns a snapshot of the accumulated session stats.
-func (s *Session) Stats() types.SessionStats {
+// syncStats returns a snapshot of the accumulated session stats, first
+// draining any delegated cost (Subagent/Fetch condensing) that finished in
+// the BACKGROUND after this session's last turn already ended — nothing
+// else would ever fold it into s.stats otherwise (updateStats only runs
+// during a turn). Persists the drained total too, so syncMeta()/a resumed
+// session's disk state doesn't lag behind what this call just reported.
+//
+// Unexported and used ONLY by agent.go, right before discarding an
+// ephemeral sub-agent session (folding its final spend into the parent via
+// addDelegatedCost) — the one place harness itself needs the drain-and-
+// persist side effect. Takes s.mu, so it must never be called from inside a
+// tool executor (that's what Stats() — the lock-free accessor — is for;
+// see its own doc comment). Not part of the SDK's public surface: an
+// external caller has no way to trigger the drain this exists for in the
+// first place (pendingDelegatedCost is only ever fed by harness's own
+// built-in Subagent/Fetch tools), so there was never a reason to expose it.
+func (s *Session) syncStats() types.SessionStats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Drain any delegated cost (Subagent/Fetch condensing) that finished in
-	// the BACKGROUND after this session's last turn already ended — nothing
-	// else would ever fold it into s.stats otherwise (updateStats only runs
-	// during a turn). Persist it here too so Meta()/a resumed session's disk
-	// state doesn't lag behind what this call just reported.
 	if s.drainPendingDelegatedCost() {
 		s.persistStatsLocked()
 		s.snapshotStatsLocked()
@@ -1477,15 +1486,27 @@ func (s *Session) SearchMessages(query string, limit int) ([]store.SearchResult,
 	return s.store.SearchMessages(query, limit)
 }
 
-// Meta returns a snapshot of session metadata.
-// Meta returns the full session metadata from the store.
-// Includes: id, cwd, name, model, thinking, stats, timestamps.
-func (s *Session) Meta() store.SessionMeta {
-	// Drain any delegated cost (Subagent/Fetch condensing) that finished in
-	// the background after this session's last turn — see Stats()'s comment
-	// for why this matters. Meta() (not Stats()) is the one server/server.go
-	// and every transport actually call for session info / the API's
-	// SessionMeta response, so it needs the same drain-and-persist.
+// syncMeta returns the full session metadata from the store (id, cwd, name,
+// model, thinking, stats, timestamps), first draining any delegated cost
+// (Subagent/Fetch condensing) that finished in the background after this
+// session's last turn — see syncStats()'s doc comment for why this matters.
+//
+// Unexported: takes s.mu up front purely to drain pendingDelegatedCost, so
+// it must never be called from inside a tool executor OR from any caller
+// that might race a running turn (it would simply queue behind s.mu for as
+// long as the turn takes — confirmed live as a real bug against
+// GET /api/sessions/{id}/info before this was privatized: a request against
+// a busy session blocked 9.9s–60s+ depending on the turn, an actual
+// regression against that endpoint's own documented "fast, read-only
+// snapshot" contract). Meta() (the lock-free accessor every external caller
+// should use instead) exists precisely so nobody outside harness's own
+// internals needs this. Currently has no caller left outside its own
+// package's tests — kept as the one place that pairs "read full metadata"
+// with "drain+persist any pending delegated cost" in a single locked
+// section, in case a future internal need (e.g. a fork/rename path that
+// also wants a freshly-drained snapshot) arises without re-deriving this
+// logic.
+func (s *Session) syncMeta() store.SessionMeta {
 	s.mu.Lock()
 	if s.drainPendingDelegatedCost() {
 		s.persistStatsLocked()
@@ -1501,43 +1522,39 @@ func (s *Session) Meta() store.SessionMeta {
 	return m
 }
 
-// CurrentMeta returns a session-metadata snapshot WITHOUT ever taking s.mu —
-// the lock promptSync holds for the entire duration of a running turn. Built
-// specifically for server.go's GET /api/sessions/{id}/info and
-// GET /api/sessions/{id} handlers, which used to call Meta() (which takes
-// s.mu up front, purely to drain pendingDelegatedCost) and therefore blocked
-// for as long as any turn was in flight — confirmed live: a real request
-// against a busy session blocked 9.9s–60s+ depending on the turn, an actual
-// regression against those endpoints' own documented "fast, read-only
-// snapshot" contract.
+// Meta returns a session-metadata snapshot WITHOUT ever taking s.mu — the
+// lock promptSync holds for the entire duration of a running turn. This is
+// the SDK's public, always-safe way to read session metadata: safe to call
+// from anywhere, including from inside a tool executor (see Model()'s doc
+// comment for why that distinction matters) or an HTTP handler that might
+// be racing a running turn (GET /api/sessions/{id}/info and
+// GET /api/sessions/{id} are built on exactly this).
 //
-// This is NOT simply Meta() with the lock removed — Model/Thinking/Stats/
-// MaxIterations are overwritten with their dedicated lock-free accessors
-// (CurrentModel/CurrentThinking/CurrentStats/CurrentMaxIterations, the same
-// atomic.Value/atomic.Int64 snapshots CurrentModel() et al. already use so
-// the Subagent tool's executor can read live session state from inside a
-// running turn), so a caller mid-turn sees the CURRENT values, not whatever
-// was last persisted before this turn started. s.store.Meta() itself is
-// still called to get the fields that only ever live in the store (ID, CWD,
-// Name, CreatedAt, LastActiveAt, CompactOffset, CompactCount) — this takes
-// the store.Session's OWN mutex, a short-lived lock never held for an entire
-// turn (the same one AllMessages()/SearchMessages() already take this way;
-// GET /api/sessions/{id}/messages is the "already unaffected" baseline this
-// fix is measured against), not agent.Session's s.mu.
+// This is NOT simply syncMeta() with the lock removed — Model/Thinking/
+// Stats/MaxIterations are overwritten with their own dedicated lock-free
+// accessors (the same atomic.Value/atomic.Int64 snapshots Model() et al.
+// already use so the Subagent tool's executor can read live session state
+// from inside a running turn), so a caller mid-turn sees the CURRENT
+// values, not whatever was last persisted before this turn started.
+// s.store.Meta() itself is still called to get the fields that only ever
+// live in the store (ID, CWD, Name, CreatedAt, LastActiveAt, CompactOffset,
+// CompactCount) — this takes the store.Session's OWN mutex, a short-lived
+// lock never held for an entire turn (the same one AllMessages()/
+// SearchMessages() already take this way), not agent.Session's s.mu.
 //
-// One trade-off, accepted deliberately: pendingDelegatedCost (Subagent/Fetch
-// cost accounting from a delegated execution that finished in the
-// background) is NOT drained here, unlike Meta(). Draining requires s.mu
+// One trade-off, accepted deliberately: pendingDelegatedCost (Subagent/
+// Fetch cost accounting from a delegated execution that finished in the
+// background) is NOT drained here. Draining requires s.mu
 // (drainPendingDelegatedCost mutates s.stats, which is only ever safe to
-// touch under that lock) — exactly the blocking this fix exists to avoid.
-// CurrentStats() already carries this same staleness window for any
-// concurrent reader (see its own doc comment), so this isn't a new gap.
-func (s *Session) CurrentMeta() store.SessionMeta {
+// touch under that lock) — exactly the blocking this exists to avoid.
+// Stats() already carries this same staleness window for any concurrent
+// reader (see its own doc comment), so this isn't a new gap.
+func (s *Session) Meta() store.SessionMeta {
 	m := s.store.Meta()
-	m.Model = s.CurrentModel()
-	m.Thinking = s.CurrentThinking()
-	m.Stats = s.CurrentStats()
-	m.MaxIterations = s.CurrentMaxIterations()
+	m.Model = s.Model()
+	m.Thinking = s.Thinking()
+	m.Stats = s.Stats()
+	m.MaxIterations = s.MaxIterations()
 	if s.contextWindow > 0 && m.Stats.ContextWindow == 0 {
 		m.Stats.ContextWindow = s.contextWindow
 	}

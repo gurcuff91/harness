@@ -846,7 +846,7 @@ type toolLens struct {
 // `sess = newSession(...)` into the same variable this points at
 // immediately after building it). The Subagent tool's executor closure
 // captures sessRef (not a model string) specifically so it can read
-// (*sessRef).CurrentModel() at EXECUTION time — reflecting any SwitchModel
+// (*sessRef).Model() at EXECUTION time — reflecting any SwitchModel
 // call made since the session was created — instead of freezing whatever
 // model the session happened to have when its tools were first built. That
 // freeze was a real bug: a session created with a rate-limited model, then
@@ -935,7 +935,7 @@ func (a *Agent) buildFetchSummarizer(cwd string, loader resources.ResourceLoader
 		// closure was built — same reasoning as Subagent's executor (see its
 		// comment on sessRef): a /model switch mid-session must be reflected
 		// in every subsequent Fetch condensing call too.
-		currentModel := (*sessRef).CurrentModel()
+		currentModel := (*sessRef).Model()
 		sess, err := subAgent.NewSession(cwd, currentModel)
 		if err != nil {
 			return "", fmt.Errorf("fetch summarizer: %w", err)
@@ -944,13 +944,17 @@ func (a *Agent) buildFetchSummarizer(cwd string, loader resources.ResourceLoader
 		// session's own totals before it's discarded — see
 		// Session.addDelegatedCost's doc comment for the full reasoning
 		// (billing visibility without ever touching the parent's
-		// ContextUsage/context window). Runs before Close() so Stats() is
-		// captured while still populated; order in this defer chain doesn't
-		// matter for correctness (addDelegatedCost is lock-free), only that
-		// both happen.
+		// ContextUsage/context window). syncStats() (not the lock-free
+		// Stats()) so any of THIS ephemeral session's own delegated cost —
+		// e.g. a nested sub-agent it launched — is drained and folded in
+		// before being read; Stats() alone could still be missing it. Runs
+		// before Close() so the drained total is captured while still
+		// populated; order in this defer chain doesn't matter for
+		// correctness (addDelegatedCost is lock-free), only that both
+		// happen.
 		defer func() {
 			if parent := *sessRef; parent != nil {
-				parent.addDelegatedCost(sess.Stats())
+				parent.addDelegatedCost(sess.syncStats())
 			}
 			sess.Close()
 		}()
@@ -1065,17 +1069,19 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 	// SessionInfo / SessionSearch — two views of "information about this
 	// session", gated behind one flag. Both closures read from *sessRef at
 	// EXECUTION time (same pattern buildFetchSummarizer/Subagent's executor
-	// already use for CurrentModel) so they always reflect live state, not
+	// already use for Model()) so they always reflect live state, not
 	// whatever was true when buildSessionTools ran.
 	if a.opts.EnableSessionInfo {
 		if a.isToolAllowed(tools.ToolSessionInfo) {
-			// Deliberately built from lock-free getters/methods (ID/CWD/
-			// Name/CurrentModel/CurrentThinking/CreatedAt/CurrentStats),
-			// NEVER (*sessRef).Meta() or Stats() — both take s.mu, and this
-			// closure runs INSIDE a tool executor while promptSync holds
-			// s.mu for the whole turn. Calling either here deadlocks
-			// instantly with no timeout, no error — exactly the class of
-			// bug CurrentModel() was introduced to fix (see its own doc
+			// Deliberately built from the lock-free public getters (ID/CWD/
+			// Name/Model/Thinking/CreatedAt/Stats — every one of these is
+			// safe by construction: none of them take s.mu), NEVER the
+			// unexported syncMeta()/syncStats() (which DO take s.mu to
+			// drain+persist pending delegated cost). This closure runs
+			// INSIDE a tool executor while promptSync holds s.mu for the
+			// whole turn — calling syncMeta()/syncStats() here would
+			// deadlock instantly with no timeout, no error — exactly the
+			// class of bug Model() was introduced to fix (see its own doc
 			// comment and the subagent-timeout-background project memory
 			// this mirrors).
 			//
@@ -1086,7 +1092,7 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 			// handleSessionInfo already relies on for the identical data.
 			reg.Register(tools.SessionInfo(func() tools.SessionInfoSnapshot {
 				sess := *sessRef
-				stats := sess.CurrentStats()
+				stats := sess.Stats()
 
 				mcpConnected := 0
 				for _, st := range a.MCPStatuses() {
@@ -1107,8 +1113,8 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 					ID:        sess.ID(),
 					CWD:       sess.CWD(),
 					Name:      sess.Name(),
-					Model:     sess.CurrentModel(),
-					Thinking:  sess.CurrentThinking(),
+					Model:     sess.Model(),
+					Thinking:  sess.Thinking(),
 					CreatedAt: sess.CreatedAt().Format(time.RFC3339),
 
 					Version:       version.Version,
@@ -1215,23 +1221,26 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 			// ever run: the tool it belongs to isn't reachable by the model
 			// until the owning session's Prompt() has been called at least
 			// once, which is well after every call site below assigns it.
-			currentModel := (*sessRef).CurrentModel()
+			currentModel := (*sessRef).Model()
 			sess, err := subAgent.NewSession(cwd, currentModel)
 			if err != nil {
 				return "", fmt.Errorf("sub-agent: %w", err)
 			}
 			// Fold this ephemeral sub-agent's token/cost spend into the
 			// PARENT session's own totals before it's discarded — see
-			// Session.addDelegatedCost's doc comment. Works identically for
-			// the background path too: that goroutine runs this whole
-			// executor closure independently (see runSubagentBackground),
-			// so this defer still fires there, on whatever session *sessRef
-			// points at when the background call eventually finishes — the
-			// parent session is still alive (it owns the sessRef), even if
-			// the TURN that launched the background call already ended.
+			// Session.addDelegatedCost's doc comment. syncStats() (not the
+			// lock-free Stats()) so any of THIS session's own delegated
+			// cost — a sub-sub-agent it launched — is drained first. Works
+			// identically for the background path too: that goroutine runs
+			// this whole executor closure independently (see
+			// runSubagentBackground), so this defer still fires there, on
+			// whatever session *sessRef points at when the background call
+			// eventually finishes — the parent session is still alive (it
+			// owns the sessRef), even if the TURN that launched the
+			// background call already ended.
 			defer func() {
 				if parent := *sessRef; parent != nil {
-					parent.addDelegatedCost(sess.Stats())
+					parent.addDelegatedCost(sess.syncStats())
 				}
 				sess.Close()
 			}()

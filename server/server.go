@@ -858,16 +858,17 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	// Already active? Return the live session (idempotent — supports scheduler
-	// auto-resume and transport reconnect without 409 errors). CurrentMeta()
-	// (not Meta()) since this session could be mid-turn — same blocking risk
-	// and fix as handleSessionInfo/handleGetSession; see CurrentMeta()'s doc
-	// comment.
+	// auto-resume and transport reconnect without 409 errors). Meta() is the
+	// lock-free public accessor — safe here since this session could be
+	// mid-turn (same reasoning as handleSessionInfo/handleGetSession below;
+	// see Meta()'s own doc comment for the full rationale, including why the
+	// unexported syncMeta() would be wrong to use here).
 	s.mu.RLock()
 	if proxy, ok := s.sessions[id]; ok {
 		s.mu.RUnlock()
 		writeJSON(w, http.StatusOK, sessionDetailDTO{
-			SessionMeta:   proxy.session.CurrentMeta(),
-			MaxIterations: proxy.session.CurrentMaxIterations(),
+			SessionMeta:   proxy.session.Meta(),
+			MaxIterations: proxy.session.MaxIterations(),
 		})
 		return
 	}
@@ -903,17 +904,17 @@ type sessionDetailDTO struct {
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	// Check in-memory first (active sessions). CurrentMeta() (not Meta()) so
-	// this read-only lookup never blocks on a running turn — see
-	// handleSessionInfo's identical comment and CurrentMeta()'s own doc
+	// Check in-memory first (active sessions). Meta() is the lock-free
+	// public accessor, so this read-only lookup never blocks on a running
+	// turn — see handleSessionInfo's identical comment and Meta()'s own doc
 	// comment for the full rationale.
 	s.mu.RLock()
 	proxy, ok := s.sessions[id]
 	s.mu.RUnlock()
 	if ok {
 		writeJSON(w, http.StatusOK, sessionDetailDTO{
-			SessionMeta:   proxy.session.CurrentMeta(),
-			MaxIterations: proxy.session.CurrentMaxIterations(),
+			SessionMeta:   proxy.session.Meta(),
+			MaxIterations: proxy.session.MaxIterations(),
 		})
 		return
 	}
@@ -1133,21 +1134,23 @@ func (s *Server) handleSessionInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// CurrentMeta() (not Meta()) is deliberate: this endpoint is documented as
-	// a fast, read-only snapshot, but Meta() takes s.mu — the SAME lock
-	// promptSync holds for the entire duration of a running turn — so a call
-	// against a busy session used to block until turn_end (confirmed live:
-	// 9.9s-60s+ depending on the turn). CurrentMeta() is built entirely from
-	// the same lock-free accessors (CurrentModel/CurrentThinking/CurrentStats/
-	// CurrentMaxIterations) the Subagent tool's executor already relies on to
-	// read live session state from inside a running turn — see its own doc
-	// comment for the full contract (including the one accepted trade-off:
-	// delegated Subagent/Fetch cost isn't drained here).
+	// Meta() (the public, lock-free accessor) is deliberate here: this
+	// endpoint is documented as a fast, read-only snapshot, but the
+	// unexported syncMeta() takes s.mu — the SAME lock promptSync holds for
+	// the entire duration of a running turn — so a call against a busy
+	// session used to block until turn_end back when this endpoint called
+	// what was then the ONLY Meta() (confirmed live: 9.9s-60s+ depending on
+	// the turn). Meta() is built entirely from the same lock-free accessors
+	// (Model/Thinking/Stats/MaxIterations) the Subagent tool's executor
+	// already relies on to read live session state from inside a running
+	// turn — see its own doc comment for the full contract (including the
+	// one accepted trade-off: delegated Subagent/Fetch cost isn't drained
+	// here — that's what syncMeta()/syncStats() are for, internal-only).
 	writeJSON(w, http.StatusOK, sessionInfoDTO{
 		Version: version.Version,
 		Session: sessionDetailDTO{
-			SessionMeta:   sess.CurrentMeta(),
-			MaxIterations: sess.CurrentMaxIterations(),
+			SessionMeta:   sess.Meta(),
+			MaxIterations: sess.MaxIterations(),
 		},
 		Busy:          sess.IsBusy(),
 		QueueDepth:    sess.FollowUpCount(),

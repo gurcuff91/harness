@@ -77,15 +77,15 @@ func TestSessionInfoDisabledByDefault(t *testing.T) {
 
 // TestSessionInfoGettersDoNotDeadlockUnderPromptSyncLock is the regression
 // test for a REAL deadlock found live while implementing SessionInfo: its
-// closure originally called (*sessRef).Meta(), which takes s.mu — but
-// SessionInfo's Execute runs INSIDE a tool executor goroutine while
-// promptSync holds s.mu for the entire turn (including parallel tool
-// execution). Every foreground SessionInfo call hung indefinitely (past
-// any timeout, since it never even reached one) until the closure was
-// rewritten to use ID()/CWD()/Name()/CurrentModel()/CurrentThinking()/
-// CreatedAt() — none of which take s.mu. Mirrors
-// TestCurrentModelDoesNotDeadlockUnderPromptSyncLock exactly (same root
-// cause class, same fix shape — see the subagent-timeout-background
+// closure originally called what was, at the time, the ONLY Meta() — the
+// s.mu-taking version now unexported as syncMeta() — but SessionInfo's
+// Execute runs INSIDE a tool executor goroutine while promptSync holds
+// s.mu for the entire turn (including parallel tool execution). Every
+// foreground SessionInfo call hung indefinitely (past any timeout, since
+// it never even reached one) until the closure was rewritten to use
+// ID()/CWD()/Name()/Model()/Thinking()/CreatedAt() — none of which take
+// s.mu. Mirrors TestModelDoesNotDeadlockUnderPromptSyncLock exactly (same
+// root cause class, same fix shape — see the subagent-timeout-background
 // project memory).
 func TestSessionInfoGettersDoNotDeadlockUnderPromptSyncLock(t *testing.T) {
 	a := New(AgentOptions{Store: store.NewInMemoryStore()})
@@ -114,10 +114,10 @@ func TestSessionInfoGettersDoNotDeadlockUnderPromptSyncLock(t *testing.T) {
 		_ = sess.ID()
 		_ = sess.CWD()
 		_ = sess.Name()
-		_ = sess.CurrentModel()
-		_ = sess.CurrentThinking()
+		_ = sess.Model()
+		_ = sess.Thinking()
 		_ = sess.CreatedAt()
-		_ = sess.CurrentStats()
+		_ = sess.Stats()
 	}()
 
 	select {
@@ -127,17 +127,18 @@ func TestSessionInfoGettersDoNotDeadlockUnderPromptSyncLock(t *testing.T) {
 	}
 }
 
-// TestCurrentMetaDoesNotBlockUnderPromptSyncLock is the regression test for
-// a real bug reported against GET /api/sessions/{id}/info and
-// GET /api/sessions/{id}: both used to build their response from Meta(),
-// which takes s.mu — the SAME lock promptSync holds for the entire
-// duration of a running turn — so a request against a busy session blocked
-// until turn_end (confirmed live: 9.9s-60s+ depending on the turn). Mirrors
-// TestSessionInfoGettersDoNotDeadlockUnderPromptSyncLock's exact "simulate
-// promptSync holding s.mu" technique, but for CurrentMeta()/
-// CurrentMaxIterations() (the fix) instead of the individual getters
-// SessionInfo already used correctly.
-func TestCurrentMetaDoesNotBlockUnderPromptSyncLock(t *testing.T) {
+// TestMetaDoesNotBlockUnderPromptSyncLock is the regression test for a real
+// bug reported against GET /api/sessions/{id}/info and
+// GET /api/sessions/{id}: both used to build their response from what was
+// then the only Meta() — the s.mu-taking version now unexported as
+// syncMeta() — which takes s.mu, the SAME lock promptSync holds for the
+// entire duration of a running turn — so a request against a busy session
+// blocked until turn_end (confirmed live: 9.9s-60s+ depending on the turn).
+// Mirrors TestSessionInfoGettersDoNotDeadlockUnderPromptSyncLock's exact
+// "simulate promptSync holding s.mu" technique, but for the public,
+// lock-free Meta()/MaxIterations() (the fix) instead of the individual
+// getters SessionInfo already used correctly.
+func TestMetaDoesNotBlockUnderPromptSyncLock(t *testing.T) {
 	a := New(AgentOptions{Store: store.NewInMemoryStore()})
 	defer a.Close()
 
@@ -161,24 +162,23 @@ func TestCurrentMetaDoesNotBlockUnderPromptSyncLock(t *testing.T) {
 		defer close(done)
 		// Exactly what handleSessionInfo/handleGetSession do post-fix — if
 		// either took s.mu, this goroutine would block forever right here.
-		_ = sess.CurrentMeta()
-		_ = sess.CurrentMaxIterations()
+		_ = sess.Meta()
+		_ = sess.MaxIterations()
 	}()
 
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
-		t.Fatal("CurrentMeta()/CurrentMaxIterations() blocked — one of them took s.mu while s.mu was held by the simulated turn (promptSync). This is the exact blocking bug reported against GET /api/sessions/{id}/info.")
+		t.Fatal("Meta()/MaxIterations() blocked — one of them took s.mu while s.mu was held by the simulated turn (promptSync). This is the exact blocking bug reported against GET /api/sessions/{id}/info.")
 	}
 }
 
-// TestCurrentMaxIterationsReflectsSetMaxIterations confirms the new
-// lock-free maxIterationsVal accessor genuinely tracks SetMaxIterations —
-// not just "doesn't block", but actually correct: it must reflect an
-// override made AFTER the session was built, exactly like
-// CurrentModel()/CurrentThinking() already do for SwitchModel/
-// SwitchThinking.
-func TestCurrentMaxIterationsReflectsSetMaxIterations(t *testing.T) {
+// TestMaxIterationsReflectsSetMaxIterations confirms the lock-free
+// maxIterationsVal accessor genuinely tracks SetMaxIterations — not just
+// "doesn't block", but actually correct: it must reflect an override made
+// AFTER the session was built, exactly like Model()/Thinking() already do
+// for SwitchModel/SwitchThinking.
+func TestMaxIterationsReflectsSetMaxIterations(t *testing.T) {
 	a := New(AgentOptions{Store: store.NewInMemoryStore(), MaxIterations: 50})
 	defer a.Close()
 
@@ -193,17 +193,13 @@ func TestCurrentMaxIterationsReflectsSetMaxIterations(t *testing.T) {
 	}
 	defer sess.Close()
 
-	if got := sess.CurrentMaxIterations(); got != 50 {
-		t.Fatalf("CurrentMaxIterations() before override = %d, want 50 (the Agent's default)", got)
+	if got := sess.MaxIterations(); got != 50 {
+		t.Fatalf("MaxIterations() before override = %d, want 50 (the Agent's default)", got)
 	}
 
 	if err := sess.SetMaxIterations(7); err != nil {
 		t.Fatalf("SetMaxIterations: %v", err)
 	}
-	if got := sess.CurrentMaxIterations(); got != 7 {
-		t.Errorf("CurrentMaxIterations() after SetMaxIterations(7) = %d, want 7", got)
-	}
-	// MaxIterations() must agree — it's now implemented via CurrentMaxIterations().
 	if got := sess.MaxIterations(); got != 7 {
 		t.Errorf("MaxIterations() after SetMaxIterations(7) = %d, want 7", got)
 	}
@@ -215,9 +211,9 @@ func TestCurrentMaxIterationsReflectsSetMaxIterations(t *testing.T) {
 // mirror AllMessages()'s locking shape (briefly take s.mu only to read the
 // immutable s.id, release before calling the port) — never hold s.mu for
 // the actual search. If a future change accidentally routed this through
-// something that takes s.mu (like Meta()), this test would hang and fail
-// exactly like TestSessionInfoGettersDoNotDeadlockUnderPromptSyncLock does
-// for that bug.
+// something that takes s.mu (like the unexported syncMeta()), this test
+// would hang and fail exactly like
+// TestSessionInfoGettersDoNotDeadlockUnderPromptSyncLock does for that bug.
 func TestSessionSearchMessagesDoesNotDeadlockUnderPromptSyncLock(t *testing.T) {
 	a := New(AgentOptions{EnableSessionInfo: true, Store: store.NewInMemoryStore()})
 	defer a.Close()
@@ -257,12 +253,12 @@ func TestSessionSearchMessagesDoesNotDeadlockUnderPromptSyncLock(t *testing.T) {
 // live while extending SessionInfo with usage stats: Reset() called
 // s.store.Reset() (which correctly clears Stats on the PERSISTED meta) but
 // never cleared the in-memory s.stats/lastInputTokens this Session handle
-// actually reads from — Stats(), CurrentStats(), ContextBreakdown(), and the
-// auto-compact threshold check all kept seeing the pre-reset totals. Worse,
-// the next updateStats/persistStatsLocked call (or draining pending
-// delegated cost) would silently resurrect the stale totals right back onto
-// the just-cleared store. Confirmed failing before the fix (CostUSD
-// survived Reset() unchanged), passing after.
+// actually reads from — Stats(), ContextBreakdown(), and the auto-compact
+// threshold check all kept seeing the pre-reset totals. Worse, the next
+// updateStats/persistStatsLocked call (or draining pending delegated cost)
+// would silently resurrect the stale totals right back onto the
+// just-cleared store. Confirmed failing before the fix (CostUSD survived
+// Reset() unchanged), passing after.
 func TestResetClearsInMemoryStats(t *testing.T) {
 	a := New(AgentOptions{Store: store.NewInMemoryStore()})
 	defer a.Close()
@@ -296,9 +292,9 @@ func TestResetClearsInMemoryStats(t *testing.T) {
 		t.Errorf("in-memory s.stats not cleared by Reset(): %+v", stats)
 	}
 
-	// CurrentStats() (the lock-free snapshot SessionInfo reads) must also
-	// reflect the reset, not just the s.mu-guarded field.
-	if got := sess.CurrentStats(); got.CostUSD != 0 || got.InputTokens != 0 {
-		t.Errorf("CurrentStats() not cleared by Reset(): %+v", got)
+	// Stats() (the lock-free snapshot SessionInfo reads) must also reflect
+	// the reset, not just the s.mu-guarded field.
+	if got := sess.Stats(); got.CostUSD != 0 || got.InputTokens != 0 {
+		t.Errorf("Stats() not cleared by Reset(): %+v", got)
 	}
 }

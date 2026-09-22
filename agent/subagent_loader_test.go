@@ -31,7 +31,7 @@ func (c *copyTrackingLoader) Copy() resources.ResourceLoader {
 // context than the parent session did.
 //
 // This can't drive the bug through the Subagent TOOL end-to-end without a
-// live provider call (same limitation TestCurrentModelReflectsSwitchModel's
+// live provider call (same limitation TestModelReflectsSwitchModel's
 // comment describes), so it verifies the mechanism the fix relies on
 // directly: newLoader (used by NewSession/ResumeSession/ForkSession, and
 // whose result buildSessionTools threads into the Subagent executor's

@@ -25,7 +25,7 @@ import (
 // fired.
 //
 // This test starts a REAL turn (not a simulated lock, unlike
-// agent/session_info_test.go's TestCurrentMetaDoesNotBlockUnderPromptSyncLock
+// agent/session_info_test.go's TestMetaDoesNotBlockUnderPromptSyncLock
 // — that one guards the mechanism, this one proves the actual HTTP endpoint
 // behaves correctly end-to-end) and concurrently hits GET /info from a
 // second HTTP request while the turn is confirmed still in flight (polls

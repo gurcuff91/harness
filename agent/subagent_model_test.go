@@ -8,7 +8,7 @@ import (
 	"github.com/gurcuff91/harness/agent/store"
 )
 
-// TestCurrentModelReflectsSwitchModel is the regression test for the bug
+// TestModelReflectsSwitchModel is the regression test for the bug
 // where the Subagent tool kept spawning sub-agents against a session's
 // ORIGINAL model even after /model (or ACP's session/set_config_option)
 // switched it to a different one — e.g. a session created with a
@@ -23,14 +23,14 @@ import (
 // that already-built tool closure.
 //
 // The fix threads a **Session (sessRef) into buildSessionTools instead of a
-// model string, so the closure can call (*sessRef).CurrentModel() at
+// model string, so the closure can call (*sessRef).Model() at
 // EXECUTION time. This test can't invoke the Subagent tool end-to-end
 // without a live provider call (see TestSubagentMaxIterationsIsCapped's
 // comment for the same limitation), but it exercises the exact mechanism
-// the fix relies on: CurrentModel() must reflect a SwitchModel call made
+// the fix relies on: Model() must reflect a SwitchModel call made
 // after the session — and therefore its tools, including Subagent's
 // closure — were already built.
-func TestCurrentModelReflectsSwitchModel(t *testing.T) {
+func TestModelReflectsSwitchModel(t *testing.T) {
 	a := New(AgentOptions{Store: store.NewInMemoryStore()})
 	defer a.Close()
 
@@ -45,31 +45,31 @@ func TestCurrentModelReflectsSwitchModel(t *testing.T) {
 	}
 	defer sess.Close()
 
-	if got := sess.CurrentModel(); got != models[0].Model {
-		t.Fatalf("CurrentModel() = %q right after creation, want %q", got, models[0].Model)
+	if got := sess.Model(); got != models[0].Model {
+		t.Fatalf("Model() = %q right after creation, want %q", got, models[0].Model)
 	}
 
 	if err := sess.SwitchModel(t.Context(), models[1].Model); err != nil {
 		t.Fatalf("SwitchModel: %v", err)
 	}
 
-	if got := sess.CurrentModel(); got != models[1].Model {
-		t.Errorf("CurrentModel() = %q after SwitchModel(%q), want %q — this is exactly what a Subagent call made AFTER a /model switch must see, not the original model",
+	if got := sess.Model(); got != models[1].Model {
+		t.Errorf("Model() = %q after SwitchModel(%q), want %q — this is exactly what a Subagent call made AFTER a /model switch must see, not the original model",
 			got, models[1].Model, models[1].Model)
 	}
 }
 
-// TestCurrentModelDoesNotDeadlockUnderPromptSyncLock is the regression test
-// for the deadlock introduced when CurrentModel() was first added (v0.74.7):
+// TestModelDoesNotDeadlockUnderPromptSyncLock is the regression test
+// for the deadlock introduced when Model() was first added (v0.74.7):
 // it took s.mu.Lock(), but promptSync — the function that runs every turn —
 // ALSO holds s.mu.Lock() for the ENTIRE turn (including the parallel tool
 // execution phase, which is exactly when the Subagent tool's executor calls
-// CurrentModel()). Result: a circular wait — the tool goroutine blocked
+// Model()). Result: a circular wait — the tool goroutine blocked
 // waiting for s.mu while promptSync's wg.Wait() blocked waiting for the tool
 // goroutine to finish. The hung process's stack trace showed exactly that:
 //
 //	goroutine N [sync.Mutex.Lock, 3 minutes]:
-//	  Session.CurrentModel       ← waiting for s.mu
+//	  Session.Model       ← waiting for s.mu
 //	  Subagent executor
 //	  runStream.func2            ← tool execution goroutine
 //	goroutine M [sync.Mutex.Lock, 3 minutes]:
@@ -78,12 +78,12 @@ func TestCurrentModelReflectsSwitchModel(t *testing.T) {
 //	  promptSync                 ← already holds s.mu
 //
 // This test reproduces the exact condition: it takes s.mu (simulating
-// promptSync's hold during a turn) and then calls CurrentModel() from
+// promptSync's hold during a turn) and then calls Model() from
 // another goroutine (simulating the Subagent executor). With the old
-// s.mu.Lock()-based CurrentModel(), this deadlocks and the test times out.
-// With the atomic.Value-based fix, CurrentModel() returns immediately
+// s.mu.Lock()-based Model(), this deadlocks and the test times out.
+// With the atomic.Value-based fix, Model() returns immediately
 // without needing s.mu, so the test completes instantly.
-func TestCurrentModelDoesNotDeadlockUnderPromptSyncLock(t *testing.T) {
+func TestModelDoesNotDeadlockUnderPromptSyncLock(t *testing.T) {
 	a := New(AgentOptions{Store: store.NewInMemoryStore()})
 	defer a.Close()
 
@@ -106,27 +106,27 @@ func TestCurrentModelDoesNotDeadlockUnderPromptSyncLock(t *testing.T) {
 
 	done := make(chan string, 1)
 	go func() {
-		// This is what the Subagent tool's executor does — if CurrentModel()
+		// This is what the Subagent tool's executor does — if Model()
 		// tries to take s.mu, it blocks forever here.
-		done <- sess.CurrentModel()
+		done <- sess.Model()
 	}()
 
 	select {
 	case got := <-done:
 		if got == "" {
-			t.Fatal("CurrentModel() returned empty string")
+			t.Fatal("Model() returned empty string")
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("CurrentModel() deadlocked — it blocked waiting for s.mu while s.mu was held by the simulated turn (promptSync). This is the exact deadlock that hung every foreground Subagent call.")
+		t.Fatal("Model() deadlocked — it blocked waiting for s.mu while s.mu was held by the simulated turn (promptSync). This is the exact deadlock that hung every foreground Subagent call.")
 	}
 }
 
-// TestCurrentModelConcurrentReadsWhileSwitchModelWrites verifies the
-// atomic.Value-based CurrentModel() is safe under concurrent access —
+// TestModelConcurrentReadsWhileSwitchModelWrites verifies the
+// atomic.Value-based Model() is safe under concurrent access —
 // multiple readers (Subagent executors running in parallel tool execution)
 // while a SwitchModel write is in flight. -race catches any data race that
 // would arise from a non-atomic implementation.
-func TestCurrentModelConcurrentReadsWhileSwitchModelWrites(t *testing.T) {
+func TestModelConcurrentReadsWhileSwitchModelWrites(t *testing.T) {
 	a := New(AgentOptions{Store: store.NewInMemoryStore()})
 	defer a.Close()
 
@@ -144,7 +144,7 @@ func TestCurrentModelConcurrentReadsWhileSwitchModelWrites(t *testing.T) {
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
 
-	// Readers — simulate parallel Subagent executors calling CurrentModel()
+	// Readers — simulate parallel Subagent executors calling Model()
 	for range 10 {
 		wg.Add(1)
 		go func() {
@@ -154,7 +154,7 @@ func TestCurrentModelConcurrentReadsWhileSwitchModelWrites(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					_ = sess.CurrentModel()
+					_ = sess.Model()
 				}
 			}
 		}()
