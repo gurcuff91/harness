@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.92] - 2026-09-22
+
+### Fix — `claude-oauth` impersonated Claude Code version bumped to 2.1.280 (was 2.1.251, now rejected)
+Anthropic's server-side per-model minimal-client-version gating (`claude_code_version_too_old`, the same mechanism `codex_oauth.go`'s own comment already documents) started rejecting the hardcoded `claude-cli/2.1.251` user-agent harness sends when impersonating Claude Code — `400 invalid_request_error`, "Claude Code 2.1.251 does not support this model; version 2.1.280 or newer is required."
+
+- `internal/providers/claude_oauth.go`'s `ccVersion` default bumped from `2.1.251` to `2.1.280` — the single source of truth feeding the `user-agent` header, the anonymous-usage-metadata suffix hash, and the `cc_version=` cookie field. `CLAUDE_CLI_VERSION` env var override unchanged for anyone who needs a different value.
+- Verified live: a real `claude-oauth` request that previously 400'd now succeeds end-to-end.
+
 ## [0.76.91] - 2026-09-22
 
 ### Fix — `GET /api/sessions/{id}/context` (`Session.ContextBreakdown()`) still blocked for the entire duration of an in-flight turn
