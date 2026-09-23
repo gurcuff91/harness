@@ -1157,6 +1157,22 @@ func (s *Session) generateCompactionSummary(ctx context.Context, provider provid
 		Messages:     messages,
 		Tools:        nil, // no tools — pure text
 		MaxTokens:    4096,
+		// ThinkingLevel was missing entirely here since the day this
+		// feature was introduced (a plain oversight, not a deliberate
+		// "summaries don't need thinking" decision — nothing ever
+		// documented that intent). An empty ThinkingLevel is interpreted
+		// downstream as "off", which used to be harmless (legacy models
+		// silently accept {"type":"disabled"}) but is fatal against
+		// adaptive-only models (they reject "disabled" outright — see
+		// BuildAnthropicThinkingFromMeta's own fix). Thinking() (the
+		// lock-free accessor, not the raw s.thinkingLvl field) so the
+		// session's own configured level is used — same as every
+		// regular-turn request already does — without racing
+		// SwitchThinking's write: generateCompactionSummary can run either
+		// from inside promptSync (which holds s.mu) or from the public
+		// Compact() (which does NOT — only checks IsBusy()), so this must
+		// stay lock-free, mirroring Model()'s exact reasoning.
+		ThinkingLevel: s.Thinking(),
 	}
 
 	const maxAttempts = 3

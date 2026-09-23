@@ -28,6 +28,28 @@ func TestBuildCompactionCheckpoint(t *testing.T) {
 	})
 }
 
+// TestCompactSystemPromptWeightsRecencyAndRequiresNextStep is a contract
+// test for the fix to a real reported bug: a session compacted MID-TURN
+// (the common case — promptSync checks context usage at the top of every
+// ReAct iteration, so compaction can fire while a task is still actively
+// running) and the model "forgot" what it had just been doing, because the
+// summary weighted the whole conversation uniformly instead of treating the
+// most recent turn as unfinished, in-progress work. Confirmed live against
+// a real provider: adding these two instructions measurably changed the
+// summary's shape (a dedicated, concrete "next step" anchor instead of a
+// vague restatement buried in "current state"). This test only guards
+// against a FUTURE edit silently dropping either instruction — it can't
+// verify the model actually follows them (that requires a live call, done
+// once during design, not on every test run).
+func TestCompactSystemPromptWeightsRecencyAndRequiresNextStep(t *testing.T) {
+	if !contains(compactSystemPrompt, "Weight recency heavily") {
+		t.Error("compactSystemPrompt must instruct the model to weight recency heavily — mid-turn compaction is the common case, and losing detail on the most recent (in-progress) turn is the exact bug this guards against")
+	}
+	if !contains(compactSystemPrompt, "## Immediate Next Step") {
+		t.Error("compactSystemPrompt must require a dedicated \"## Immediate Next Step\" section — a concrete, anchored continuation point, not a restatement of the goal")
+	}
+}
+
 func assertStartsWithSummary(t *testing.T, got, summary string) {
 	t.Helper()
 	if len(got) <= len(summary) || got[:len(summary)] != summary {

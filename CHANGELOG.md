@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.95] - 2026-09-22
+
+### Fix — compaction summary ran with no thinking level, regardless of the session's own configuration
+Follow-up investigation to v0.76.94's `opus-5`-family 400 fix: traced the full thinking-config flow end-to-end (session resume → model switch → regular-turn request) to rule out a regression from the recent `*Session` lock-free consolidation — found none; `s.thinkingLvl`/`Thinking()` were correct at every step for regular turns. The real, separate, much older bug: `generateCompactionSummary`'s own `*types.Request` never set `ThinkingLevel` at all — a plain oversight present since compaction was first introduced, not a deliberate "summaries don't need thinking" decision (nothing ever documented that intent). An empty `ThinkingLevel` is interpreted downstream as "off", so every compaction summary call — auto-compact mid-turn, or the mandatory compact `SwitchModel` triggers when the new model's window is smaller — silently ran in the cheapest/no-thinking mode regardless of what the session had configured, and (per v0.76.94) could 400 outright against adaptive-only models.
+
+- `generateCompactionSummary`'s request (`agent/session.go`) now sets `ThinkingLevel: s.Thinking()` — the session's own currently-configured level, same as every regular-turn request already uses. `Thinking()` (the lock-free accessor), not the raw `s.thinkingLvl` field, since this function can run either inside `promptSync` (holds `s.mu`) or from the public `Compact()` (does not — only checks `IsBusy()`), so it must stay lock-free.
+- New tests `TestCompactionSummaryUsesSessionThinkingLevel`/`TestCompactionSummaryUsesUpdatedThinkingLevelAfterSwitch` (`agent/compaction_thinking_test.go`) — a minimal fake `providers.Provider` capturing the `ThinkingLevel` of every request it receives, confirming compaction uses the session's configured level (including after a live `SwitchThinking` call), fully deterministic (no live model call needed). Reproduced live: temporarily reverted the fix and confirmed both tests fail exactly as expected; restored and confirmed a real compaction against `claude-opus-5-5` with `thinking:high` configured succeeds end-to-end.
+- Full suite + `go vet` + `-race` (agent, root) green; `gofmt -l` clean.
+
+## [0.76.94] - 2026-09-22
+
+### Fix — `claude-oauth` compaction (and any "no thinking" request) 400'd against opus-5-family models
+Reported: compacting a session on `claude-opus-5-5` failed with `anthropic API error 400: "thinking.type.disabled" is not supported for this model. Use "thinking.type.adaptive" and "output_config.effort" to control thinking behavior.` Root cause: `generateCompactionSummary`'s own request never sets `ThinkingLevel` (lands as `""`), and `buildThinkingConfig`/`BuildAnthropicThinkingFull` unconditionally sent `{"type":"disabled"}` for `level==""`/`"off"` — correct for most models, but several now report `ThinkingAdaptive=true, ThinkingLegacy=false` (confirmed live: `claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-fable-5`, `claude-opus-4-8`, `claude-opus-4-7` — the entire "5"/newest-opus generation) and reject `"disabled"` outright — the API had already dropped legacy thinking-shape support for these models, harness just never checked.
+
+- `BuildAnthropicThinkingFromMeta` (the real production path — both `anthropic.go` and `claude_oauth.go` always call it with the API-reported `ModelMeta`) now derives `legacyOK := meta.ThinkingLegacy || !meta.ThinkingAdaptive` and, when the model has NO legacy fallback, degrades the "off" case to `{"type":"adaptive","output_config":{"effort":"low"}}` instead of `"disabled"` — confirmed live as the correct, accepted equivalent to "off" these models allow. Every model that still supports the legacy shape is completely unaffected (verified: same `"disabled"` output as before).
+- `BuildAnthropicThinkingFull` (the name-heuristic fallback path, used only when no `ModelMeta` is available) got the identical fix via the existing `isAdaptiveOnly` name pattern.
+- This is not compaction-specific — it affects ANY request that resolves to `level==""`/`"off"` against an adaptive-only model, compaction was just the first place it surfaced (its own request simply never sets `ThinkingLevel`).
+- New tests in `internal/providers/llm/anthropic_thinking_test.go` covering the full `(adaptive, legacy)` matrix confirmed live across the real `claude-oauth` model list. Reproduced live: temporarily reverted the fix and confirmed the regression test fails exactly as expected; restored and confirmed a real `claude-opus-5-5` "off"/empty-thinking-level request succeeds end-to-end. Full suite + `go vet` + `-race` (internal/providers, root) green; `gofmt -l` clean.
+
+## [0.76.93] - 2026-09-22
+
+### Fix — compaction summary lost focus on in-progress work when compacting mid-turn
+Reported: after a mid-turn auto-compact (the common case — `promptSync` checks context usage at the top of every ReAct iteration, so a long task can get compacted while it's still actively running, tool calls and all), the model "forgot" what it had just been doing. Root cause: `compactSystemPrompt` weighted the entire conversation uniformly, with no distinction between old background context and the most recent, in-progress turn — a long-running task's concrete details (exact files, commands, tool outputs, partial results) got compressed away just like everything older.
+
+- `compactSystemPrompt` (`agent/prompts.go`) gained two additions, no other code touched: (1) an explicit "weight recency heavily" instruction — compress older/background context freely, but preserve the most recent turn(s) in full concrete detail, as if handing off an unfinished task mid-shift; (2) a mandatory closing `## Immediate Next Step` section stating in 1-3 sentences the concrete next action, not a vague restatement of the goal.
+- Verified live against a real provider (claude-oauth), before/after: with the fix, a simulated mid-task compaction (6 rounds of old background Q&A + a concrete in-progress refactor with 3 file:line call sites, 2 already fixed) produced a summary preserving every exact file/line and ending with a dedicated, actionable next-step anchor; without the fix, the same next step existed but was buried inside a generic "current state" paragraph instead of a dedicated section.
+- New test `TestCompactSystemPromptWeightsRecencyAndRequiresNextStep` (`agent/prompts_test.go`) — a contract test guarding against a future edit silently dropping either instruction (can't verify the model follows them without a live call, done once during design, not on every test run).
+- Full suite + `go vet` + `-race` (agent, root) green; `gofmt -l` clean.
+
 ## [0.76.92] - 2026-09-22
 
 ### Fix — `claude-oauth` impersonated Claude Code version bumped to 2.1.280 (was 2.1.251, now rejected)

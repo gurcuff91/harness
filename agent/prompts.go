@@ -16,8 +16,17 @@ Make reasonable assumptions. Return full results — do not truncate. Never ask 
 // turn, never to go explore or fetch anything itself.
 const fetchSummarizeSystemPrompt = `You are given the text content of a web page or API response, and an instruction for what to extract or summarize from it. Respond with ONLY the requested information — no preamble, no meta-commentary about the page itself, no "Here is..." framing. If the requested information genuinely isn't present in the content, say so in one short sentence.`
 
-// compactSystemPrompt is used when generating a compaction summary of the conversation.
-// The summary replaces the full history when context usage reaches ~98%.
+// compactSystemPrompt is used when generating a compaction summary of the
+// conversation. The summary replaces the full history when context usage
+// reaches ~95% (autoCompactThreshold) — including mid-turn, the common case
+// in practice: the ReAct loop checks usage at the TOP of every iteration
+// (see promptSync), so a long task can get compacted while it's still
+// actively running, tool calls and all. The two paragraphs after the
+// numbered list (recency weighting + the mandatory "Immediate Next Step"
+// section) exist specifically for that case — found live: a real session
+// compacted mid-task and the model "forgot" what it had just been doing,
+// because the summary weighted the whole conversation uniformly instead of
+// treating the most recent turn as unfinished, in-progress work.
 const compactSystemPrompt = `Your task is to produce a concise but complete summary of the conversation so far.
 This summary will REPLACE the full conversation history — it must contain everything
 needed to continue the work without losing context.
@@ -27,6 +36,19 @@ Include:
 2. What has been done (decisions made, files changed, commands run, key findings)
 3. Current state — what is working, what is pending
 4. Any critical context (errors encountered, constraints, important details)
+
+Weight recency heavily: the conversation may be cut off mid-task, with the most
+recent messages representing work IN PROGRESS RIGHT NOW. Compress older/background
+context freely, but preserve the most recent turn(s) in full concrete detail —
+exact file paths, commands run, tool outputs, and partial results — as if you were
+handing off an unfinished task to another engineer mid-shift. Losing this detail
+means the work resuming after this summary will forget what it was just doing.
+
+End the summary with a final section, "## Immediate Next Step", stating in 1-3
+sentences EXACTLY what should happen next to continue the task without missing a
+beat — not a vague restatement of the goal, but the concrete next action (e.g.
+"Re-run the failing test in file X", "Continue editing function Y to add the Z
+case", "Awaiting the output of the last command before proceeding").
 
 Be specific and factual. Use bullet points. Do NOT ask questions or add commentary.
 Respond with ONLY the summary text.`

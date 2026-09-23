@@ -435,11 +435,24 @@ func BuildAnthropicThinking(model, level string, maxTokens int) (map[string]any,
 
 // BuildAnthropicThinkingFull returns full thinking config including output_config.
 func BuildAnthropicThinkingFull(model, level string, maxTokens int) (ThinkingConfig, error) {
+	// isAdaptiveOnly models (opus-5 family, "4-7") have dropped legacy
+	// thinking.type "disabled"/"enabled" support entirely — same fix as
+	// buildThinkingConfig's own legacyOK parameter, just name-heuristic
+	// based here since this path (no ModelMeta available) is only a
+	// fallback; the real production path (BuildAnthropicThinkingFromMeta)
+	// uses the API-reported ThinkingLegacy field directly.
 	if level == "" || level == "off" {
-		return ThinkingConfig{
-			Thinking:  map[string]any{"type": "disabled"},
-			MaxTokens: maxTokens,
-		}, nil
+		if !isAdaptiveOnly(model) {
+			return ThinkingConfig{
+				Thinking:  map[string]any{"type": "disabled"},
+				MaxTokens: maxTokens,
+			}, nil
+		}
+		cfg := ThinkingConfig{Thinking: map[string]any{"type": "adaptive"}, MaxTokens: maxTokens, OutputConfig: map[string]any{"effort": "low"}}
+		if cfg.MaxTokens < 16000 {
+			cfg.MaxTokens = 16000
+		}
+		return cfg, nil
 	}
 	if isAdaptive(model) {
 		cfg := ThinkingConfig{
@@ -502,13 +515,44 @@ func BuildAnthropicThinkingFromMeta(meta *types.ModelMeta, level string, maxToke
 		cfg, _ := BuildAnthropicThinkingFull("", level, maxTokens)
 		return cfg
 	}
-	cfg, _ := buildThinkingConfig(meta.ThinkingAdaptive, level, maxTokens)
+	// legacyOK: whether this model still accepts the old thinking.type
+	// "disabled"/"enabled" shape at all. Some models (confirmed live:
+	// opus-5-5, opus-5, sonnet-5, fable-5, opus-4-8/4-7 — all report
+	// ThinkingAdaptive=true, ThinkingLegacy=false) have DROPPED legacy
+	// support entirely: "off" (level=="off"/"") used to unconditionally
+	// send {"type":"disabled"}, which these models now reject outright
+	// with a 400 ("\"thinking.type.disabled\" is not supported for this
+	// model. Use \"thinking.type.adaptive\" and \"output_config.effort\"
+	// to control thinking behavior.") — found live via a real compaction
+	// call against claude-opus-5-5 (compaction's own request never sets
+	// ThinkingLevel, so it lands here as ""), but the bug affects ANY
+	// "off"/no-thinking-level request against these models, not just
+	// compaction. See buildThinkingConfig's own comment for the fix.
+	legacyOK := meta.ThinkingLegacy || !meta.ThinkingAdaptive
+	cfg, _ := buildThinkingConfig(meta.ThinkingAdaptive, legacyOK, level, maxTokens)
 	return cfg
 }
 
-func buildThinkingConfig(adaptive bool, level string, maxTokens int) (ThinkingConfig, error) {
+// buildThinkingConfig builds the wire thinking config. legacyOK reports
+// whether {"type":"disabled"}/{"type":"enabled"} are still valid shapes for
+// this model — false for adaptive-only models (ThinkingAdaptive=true,
+// ThinkingLegacy=false), which reject "disabled" entirely and must express
+// "no/minimal thinking" as {"type":"adaptive","effort":"low"} instead (the
+// lowest effort Anthropic supports — confirmed live to work as the
+// closest equivalent to "off" these models allow).
+func buildThinkingConfig(adaptive, legacyOK bool, level string, maxTokens int) (ThinkingConfig, error) {
 	if level == "" || level == "off" {
-		return ThinkingConfig{Thinking: map[string]any{"type": "disabled"}, MaxTokens: maxTokens}, nil
+		if legacyOK {
+			return ThinkingConfig{Thinking: map[string]any{"type": "disabled"}, MaxTokens: maxTokens}, nil
+		}
+		// Adaptive-only model with no legacy fallback: "disabled" isn't a
+		// valid shape at all, so degrade to the lowest adaptive effort
+		// instead of erroring — closest available equivalent to "off".
+		cfg := ThinkingConfig{Thinking: map[string]any{"type": "adaptive"}, MaxTokens: maxTokens, OutputConfig: map[string]any{"effort": "low"}}
+		if cfg.MaxTokens < 16000 {
+			cfg.MaxTokens = 16000
+		}
+		return cfg, nil
 	}
 	if adaptive {
 		cfg := ThinkingConfig{Thinking: map[string]any{"type": "adaptive"}, MaxTokens: maxTokens}
