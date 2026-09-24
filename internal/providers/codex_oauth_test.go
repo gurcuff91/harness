@@ -197,8 +197,8 @@ func TestBuildCodexInputMessageKinds(t *testing.T) {
 	if input[1].CallID != "call_abc" || input[1].Name != "Bash" {
 		t.Errorf("function_call = %+v, want call_id=call_abc name=Bash", input[1])
 	}
-	if input[2].CallID != "call_abc" || input[2].Output != "file.txt" {
-		t.Errorf("function_call_output = %+v, want call_id=call_abc output=file.txt", input[2])
+	if input[2].CallID != "call_abc" || string(input[2].Output) != `"file.txt"` {
+		t.Errorf("function_call_output = %+v, want call_id=call_abc output=\"file.txt\"", input[2])
 	}
 	// Assistant text content must use output_text; user input_text.
 	if input[3].Content[0].Type != "output_text" {
@@ -206,6 +206,70 @@ func TestBuildCodexInputMessageKinds(t *testing.T) {
 	}
 	if input[0].Content[0].Type != "input_text" {
 		t.Errorf("user message content type = %q, want input_text", input[0].Content[0].Type)
+	}
+}
+
+// TestBuildCodexInputToolResultWithImageUsesContentArray reproduces a real
+// bug live against gpt-5.6-luna via codex-oauth: a tool result carrying an
+// image (e.g. Read loading a screenshot) previously collapsed to its
+// plain-string Output field, silently dropping ToolResult.Images entirely
+// — the model never received the image bytes and had to fall back to an
+// OCR workaround. function_call_output.Output must instead marshal to a
+// content-part array (input_text + input_image, matching a user message's
+// own image shape) whenever the tool result carries images.
+func TestBuildCodexInputToolResultWithImageUsesContentArray(t *testing.T) {
+	input, err := buildCodexInput([]types.Message{
+		{Role: types.RoleUser, Parts: []types.ContentPart{{
+			ToolResult: &types.ToolResult{
+				ID:     "call_img",
+				Output: "Image loaded: shot.png (image/png, 42 bytes)",
+				Images: []types.ImageData{{MimeType: "image/png", Base64: "ZmFrZWRhdGE="}},
+			},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(input) != 1 || input[0].Type != "function_call_output" {
+		t.Fatalf("input = %+v, want a single function_call_output item", input)
+	}
+	var parts []codexContent
+	if err := json.Unmarshal(input[0].Output, &parts); err != nil {
+		t.Fatalf("Output did not unmarshal as a content-part array: %v (raw: %s)", err, input[0].Output)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("content parts = %+v, want 2 (input_text + input_image)", parts)
+	}
+	if parts[0].Type != "input_text" || parts[0].Text != "Image loaded: shot.png (image/png, 42 bytes)" {
+		t.Errorf("part 0 = %+v, want input_text with the tool's text output", parts[0])
+	}
+	wantURL := "data:image/png;base64,ZmFrZWRhdGE="
+	if parts[1].Type != "input_image" || parts[1].ImageURL != wantURL {
+		t.Errorf("part 1 = %+v, want input_image with url %q", parts[1], wantURL)
+	}
+}
+
+// TestBuildCodexInputToolResultImageOnlyOmitsEmptyText confirms an
+// image-only tool result (empty Output text) doesn't emit a spurious empty
+// input_text part.
+func TestBuildCodexInputToolResultImageOnlyOmitsEmptyText(t *testing.T) {
+	input, err := buildCodexInput([]types.Message{
+		{Role: types.RoleUser, Parts: []types.ContentPart{{
+			ToolResult: &types.ToolResult{
+				ID:     "call_img2",
+				Images: []types.ImageData{{MimeType: "image/jpeg", Base64: "abc123"}},
+			},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var parts []codexContent
+	if err := json.Unmarshal(input[0].Output, &parts); err != nil {
+		t.Fatalf("Output did not unmarshal as a content-part array: %v", err)
+	}
+	if len(parts) != 1 || parts[0].Type != "input_image" {
+		t.Fatalf("parts = %+v, want exactly one input_image part", parts)
 	}
 }
 

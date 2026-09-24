@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.99] - 2026-09-24
+
+### Fix — `codex-oauth` silently dropped images returned by a tool result (e.g. Read loading a screenshot)
+Reported live: asking `gpt-5.6-luna` (via `codex-oauth`) to read and describe an image with the `Read` tool never actually showed it the picture — the model saw only `Read`'s confirmation text (`"Image loaded: ... (image/png, N bytes)"`) and, unable to see any pixels, improvised an OCR workaround (writing and running a Swift/Vision script) instead. Root cause: `buildCodexInput`'s `function_call_output` case only ever copied `ToolResult.Output` (the text) into the wire request — `ToolResult.Images` was read by every other provider (`anthropic.go`, `openai.go` both already forward tool-result images correctly) but never even referenced in `codex_oauth.go`, so any tool that returns rich (text + image) output had its images silently discarded on this provider alone.
+
+- `codexInputItem.Output` changed from a plain `string` to `json.RawMessage` — the Responses API's `function_call_output.output` field accepts either a plain string OR an array of content parts (`input_text`/`input_image`, the same shape a user message's own `content` already uses), confirmed against OpenRouter's Responses tool-calling reference and a real community-reported payload.
+- New `marshalCodexToolOutput`: text-only tool results keep the plain-string shape (unchanged wire behavior, zero risk to any existing non-image tool call); a tool result carrying `Images` now marshals to a `[]codexContent` array (`input_text` for the text, `input_image` with a `data:<mime>;base64,<data>` URL per image — the same URL shape `codex_oauth.go` already sends for a plain user-supplied image).
+- New tests `TestBuildCodexInputToolResultWithImageUsesContentArray`/`TestBuildCodexInputToolResultImageOnlyOmitsEmptyText` confirming the content-part array shape and that an image-only result doesn't emit a spurious empty text part; `TestBuildCodexInputMessageKinds`'s existing text-only assertion updated for the new `json.RawMessage` type (`"file.txt"` now compared as marshaled JSON, not a raw Go string).
+- Full suite + `go vet` + `-race` (root, `-p 1`) green; `gofmt -l` clean.
+
 ## [0.76.98] - 2026-09-24
 
 ### Changed — Codex OAuth uses the advertised maximum context window experimentally

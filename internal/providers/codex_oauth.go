@@ -372,8 +372,14 @@ type codexInputItem struct {
 	Arguments string `json:"arguments,omitempty"`
 	CallID    string `json:"call_id,omitempty"`
 
-	// function_call_output variant
-	Output string `json:"output,omitempty"`
+	// function_call_output variant. Responses API accepts either a plain
+	// JSON string OR an array of content parts ([]codexContent, "input_text"/
+	// "input_image") — the same shape as a message's own Content field.
+	// json.RawMessage lets buildCodexInput emit either wire shape from the
+	// same struct field: a marshaled Go string when the tool result is
+	// text-only, a marshaled []codexContent array when it carries images
+	// (see buildCodexInput's ToolResult case).
+	Output json.RawMessage `json:"output,omitempty"`
 
 	// reasoning variant — summary MUST be present ON REASONING ITEMS (an
 	// empty [] passes; the field being OMITTED there is rejected: 400
@@ -450,6 +456,38 @@ func buildCodexRequest(req *types.Request, sessionID string) (*codexRequest, err
 	return out, nil
 }
 
+// marshalCodexToolOutput builds function_call_output's "output" field.
+// Responses API accepts either a plain string or an array of content parts
+// ("input_text"/"input_image", same shape as a user message's own content)
+// — see OpenRouter's Responses tool-calling reference. Without this, a
+// tool's returned images (e.g. Read loading a screenshot) were silently
+// dropped: the old code always sent the plain-string Output, discarding
+// ToolResult.Images entirely, so a vision-capable model never received the
+// image bytes for its own tool_result — reproduced live against
+// gpt-5.6-luna via codex-oauth (the model had to fall back to an OCR
+// workaround instead of seeing the screenshot).
+//
+// Text-only results keep the plain-string shape (matches Codex CLI's own
+// behavior and avoids any risk of the array shape being rejected where a
+// string was always accepted). Only image-bearing results use the array
+// shape, mirroring anthropic.go/openai.go's own image handling.
+func marshalCodexToolOutput(tr *types.ToolResult) (json.RawMessage, error) {
+	if len(tr.Images) == 0 {
+		return json.Marshal(tr.Output)
+	}
+	var parts []codexContent
+	if tr.Output != "" {
+		parts = append(parts, codexContent{Type: "input_text", Text: tr.Output})
+	}
+	for _, img := range tr.Images {
+		parts = append(parts, codexContent{
+			Type:     "input_image",
+			ImageURL: "data:" + img.MimeType + ";base64," + img.Base64,
+		})
+	}
+	return json.Marshal(parts)
+}
+
 // buildCodexInput translates harness's provider-agnostic messages into the
 // Responses API's tagged input items. Tool-call pairing is keyed by the
 // SAME ids the provider assigned (call_id on function_call, call_id on
@@ -460,10 +498,14 @@ func buildCodexInput(messages []types.Message) ([]codexInputItem, error) {
 		for _, p := range m.Parts {
 			switch {
 			case p.ToolResult != nil:
+				output, err := marshalCodexToolOutput(p.ToolResult)
+				if err != nil {
+					return nil, err
+				}
 				items = append(items, codexInputItem{
 					Type:   "function_call_output",
 					CallID: p.ToolResult.ID,
-					Output: p.ToolResult.Output,
+					Output: output,
 				})
 			case p.ToolCall != nil:
 				args := string(p.ToolCall.Input)
