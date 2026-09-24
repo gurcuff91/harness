@@ -22,16 +22,17 @@ func makeIDToken(claims map[string]any) string {
 	return header + "." + base64.RawURLEncoding.EncodeToString(payload) + ".fakesig"
 }
 
-func TestCodexModelMetadataKeepsProviderContextAuthoritative(t *testing.T) {
-	// The Codex endpoint reports 272k for Luna. EnrichMeta must not replace
-	// that authoritative value with OpenRouter's 1.05M deployment metadata.
+func TestCodexModelMetadataUsesAdvertisedMaximumContext(t *testing.T) {
+	// The Codex endpoint reports 272k as Luna's default and 872k as its
+	// maximum. The experimental provider policy uses the latter as the active
+	// local budget; OpenRouter's unrelated 1.05M deployment must not win.
 	meta := llm.EnrichMeta(types.ModelMeta{
 		ID:            "gpt-5.6-luna",
 		DisplayName:   "GPT-5.6-Luna",
-		ContextWindow: 272000,
+		ContextWindow: 872000,
 	})
-	if meta.ContextWindow != 272000 {
-		t.Fatalf("context window = %d, want provider-authoritative 272000", meta.ContextWindow)
+	if meta.ContextWindow != 872000 {
+		t.Fatalf("context window = %d, want endpoint max 872000", meta.ContextWindow)
 	}
 }
 

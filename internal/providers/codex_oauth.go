@@ -772,6 +772,7 @@ func fetchCodexModels(creds types.Credentials) ([]types.ModelMeta, error) {
 			// fields Codex does not provide, and may describe a different
 			// deployment/configuration of the same model.
 			ContextWindow            int    `json:"context_window"`
+			MaxContextWindow         int    `json:"max_context_window"`
 			Visibility               string `json:"visibility"`
 			Priority                 int    `json:"priority"`
 			DefaultReasoningLevel    string `json:"default_reasoning_level"`
@@ -789,21 +790,23 @@ func fetchCodexModels(creds types.Credentials) ([]types.ModelMeta, error) {
 	// but not shown, "none" is internal-only. Sort by priority descending
 	// (higher first), matching the Codex CLI's own picker ordering.
 	var visible []struct {
-		Slug          string
-		DisplayName   string
-		Visibility    string
-		Priority      int
-		ContextWindow int
+		Slug             string
+		DisplayName      string
+		Visibility       string
+		Priority         int
+		ContextWindow    int
+		MaxContextWindow int
 	}
 	for _, m := range result.Models {
 		if m.Visibility == "list" {
 			visible = append(visible, struct {
-				Slug          string
-				DisplayName   string
-				Visibility    string
-				Priority      int
-				ContextWindow int
-			}{m.Slug, m.DisplayName, m.Visibility, m.Priority, m.ContextWindow})
+				Slug             string
+				DisplayName      string
+				Visibility       string
+				Priority         int
+				ContextWindow    int
+				MaxContextWindow int
+			}{m.Slug, m.DisplayName, m.Visibility, m.Priority, m.ContextWindow, m.MaxContextWindow})
 		}
 	}
 	// priority desc — simple insertion sort over a tiny list (≤ ~15 models),
@@ -816,10 +819,18 @@ func fetchCodexModels(creds types.Credentials) ([]types.ModelMeta, error) {
 
 	var metas []types.ModelMeta
 	for _, m := range visible {
+		contextWindow := m.ContextWindow
+		// NOTE: Codex currently reports 272k as the default context_window and
+		// 872k as max_context_window for GPT-5.6 Luna/Terra. Use the advertised
+		// maximum experimentally as the active budget; revert this preference if
+		// the Responses endpoint starts returning prompt-too-long errors.
+		if m.MaxContextWindow > 0 {
+			contextWindow = m.MaxContextWindow
+		}
 		meta := llm.EnrichMeta(types.ModelMeta{
 			ID:            m.Slug,
 			DisplayName:   m.DisplayName,
-			ContextWindow: m.ContextWindow,
+			ContextWindow: contextWindow,
 			// Codex exposes context capacity here, not a generic output-token
 			// limit; leave MaxTokens empty so EnrichMeta supplies its fallback.
 			MaxTokens: 0,
