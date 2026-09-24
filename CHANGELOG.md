@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.98] - 2026-09-24
+
+### Changed — Codex OAuth uses the advertised maximum context window experimentally
+
+- Codex model metadata now prefers `max_context_window` over `context_window` when the endpoint provides a positive maximum. For the currently reported GPT-5.6 Luna/Terra metadata, Harness therefore uses `872000` tokens instead of the default `272000` for local context accounting, compaction thresholds, and capacity display.
+- This changes Harness-side budgeting only; no context-window parameter is sent to the Codex Responses endpoint. The preference is intentionally experimental and should be reverted if Codex begins returning `prompt too long` errors.
+- Added coverage confirming the advertised maximum remains authoritative over unrelated catalog metadata.
+
 ## [0.76.97] - 2026-09-24
 
 ### Fix — emergency compaction now uses a fixed conservative 2.0 chars/token budget
