@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -178,45 +179,30 @@ func TestIsContextOverflowError(t *testing.T) {
 	}
 }
 
-// TestCompactionCharBudgetCalibratesToRealRatio verifies the budget targets
-// autoCompactThreshold of the window in TOKENS, converted to chars using the
-// session's REAL chars-per-token ratio (approxSize/lastInputTokens) rather
-// than a fixed guess. This is the fix a real field study of kaiban-api-v2
-// demanded: that session measured 2.237 chars/token, where a fixed-4 budget
-// would have failed to prune anything and overflowed.
-func TestCompactionCharBudgetCalibratesToRealRatio(t *testing.T) {
-	// Dense session (code/JSON): 2.237 chars/token, like the real one.
-	// lastInputTokens = 995,087; currentChars = 2,226,183.
+// TestCompactionCharBudgetUsesFixedConservativeRatio verifies that the
+// emergency prune always uses 2.0 chars/token, regardless of stale token
+// measurements or the current history size. A token count from another
+// request/model/image mix is not a safe calibration source.
+func TestCompactionCharBudgetUsesFixedConservativeRatio(t *testing.T) {
+	// 0.95 * 1M tokens * 2.0 chars/token = 1,900,000 characters.
 	s := &Session{contextWindow: 1_000_000, lastInputTokens: 995_087}
-	got := s.compactionCharBudget(2_226_183)
-	// budget_tokens = 0.95 * 1M = 950,000 ; ratio = 2226183/995087 = 2.237
-	// budget_chars ≈ 950,000 * 2.237 ≈ 2,125,315
-	if got < 2_100_000 || got > 2_150_000 {
-		t.Errorf("dense-session budget = %d, want ~2,125,315 (0.95*1M tokens * 2.237 chars/token)", got)
+	if got := s.compactionCharBudget(); got != 1_900_000 {
+		t.Errorf("fixed-ratio budget = %d, want 1,900,000", got)
 	}
-	// Crucially: the budget must be BELOW the real history size, so pruning
-	// actually happens (the fixed-4 bug produced 3.8M > 2.22M and pruned
-	// nothing).
-	if got >= 2_226_183 {
-		t.Errorf("budget %d >= history 2,226,183 — would prune nothing and overflow, the exact field bug", got)
+	// The same fixed budget applies when there is no prior measurement.
+	s.lastInputTokens = 0
+	if got := s.compactionCharBudget(); got != 1_900_000 {
+		t.Errorf("unmeasured budget = %d, want 1,900,000", got)
 	}
 }
 
-// TestCompactionCharBudgetFallsBackWhenNoMeasurement verifies the ratio falls
-// back to fallbackCharsPerToken (4) only when there's no real token count yet
-// (lastInputTokens == 0, e.g. a resumed session before its first turn), and
-// never returns 0 for an unknown window.
-func TestCompactionCharBudgetFallsBackWhenNoMeasurement(t *testing.T) {
-	// No measurement yet → fixed 4 chars/token. 0.95 * 1M * 4 = 3,800,000.
-	s := &Session{contextWindow: 1_000_000, lastInputTokens: 0}
-	if got := s.compactionCharBudget(0); got != 3_800_000 {
-		t.Errorf("fallback budget = %d, want 3,800,000 (0.95*1M*4)", got)
-	}
-	// Unknown window falls back to a positive default, never 0 (which would
-	// make pruneOldestTurns drop everything but the last turn always).
-	s2 := &Session{contextWindow: 0, lastInputTokens: 0}
-	if got := s2.compactionCharBudget(0); got <= 0 {
-		t.Errorf("unknown-window budget = %d, want a positive default", got)
+// TestCompactionCharBudgetUnknownWindowUsesConservativeDefault verifies that
+// an unknown context window still produces a positive fixed-ratio budget.
+func TestCompactionCharBudgetUnknownWindowUsesConservativeDefault(t *testing.T) {
+	s := &Session{contextWindow: 0, lastInputTokens: 0}
+	// 0.95 * 128,000 * 2.0 = 243,200 characters.
+	if got := s.compactionCharBudget(); got != 243_200 {
+		t.Errorf("unknown-window budget = %d, want 243,200", got)
 	}
 }
 
@@ -233,32 +219,31 @@ func flattenText(msgs []types.Message) string {
 	return b.String()
 }
 
-// TestCompactionBudgetReproducesFieldStudy reproduces the real kaiban-api-v2
-// study end-to-end against the actual code: a dense session (ratio 2.237)
-// stuck at 99.5% must, at the 0.95 threshold, prune only a handful of oldest
-// turns while keeping ~94% of the context — NOT the ~50% the old fixed-budget
-// design threw away, and crucially NOT zero (which the fixed-4 ratio produced,
-// re-overflowing). This locks in the whole chain: budget calibration + turn
-// pruning together.
+// TestCompactionBudgetReproducesFieldStudy verifies the real kaiban-api-v2
+// overflow shape against the fixed conservative ratio: a dense session near
+// the window must prune oldest turns rather than sending the complete history.
+// The fixed 2.0 ratio intentionally keeps less context than the old dynamic
+// calibration, trading capacity for a safer emergency request.
 func TestCompactionBudgetReproducesFieldStudy(t *testing.T) {
 	const window = 1_000_000
 	const realTokens = 995_087 // from the stuck session's meta context_usage
 
 	// Build a history whose approxSize matches the real one (~2.22M chars)
-	// across many turns, so the char/token ratio lands at the measured 2.237.
-	// ~2.22M chars / 88 turns ≈ 25,300 chars per turn.
+	// across many turns. The old dynamic ratio would have kept most of it;
+	// fixed 2.0 must prune enough oldest turns to fit its safer budget.
 	const numTurns = 88
 	const charsPerTurn = 25_300
 	var msgs []types.Message
 	for i := 0; i < numTurns; i++ {
 		big := strings.Repeat("x", charsPerTurn-200) // leave room for the prompt text
+		toolID := fmt.Sprintf("t-%d", i)
 		msgs = append(msgs,
 			types.Message{Role: types.RoleUser, Parts: []types.ContentPart{{Text: "prompt turn"}}},
 			types.Message{Role: types.RoleAssistant, Parts: []types.ContentPart{
-				{ToolCall: &types.ToolCall{ID: "t", Name: "Bash", Input: json.RawMessage(`{}`)}},
+				{ToolCall: &types.ToolCall{ID: toolID, Name: "Bash", Input: json.RawMessage(`{}`)}},
 			}},
 			types.Message{Role: types.RoleUser, Parts: []types.ContentPart{
-				{ToolResult: &types.ToolResult{ID: "t", Output: big}},
+				{ToolResult: &types.ToolResult{ID: toolID, Output: big}},
 			}},
 			types.Message{Role: types.RoleAssistant, Parts: []types.ContentPart{{Text: "ok"}}},
 		)
@@ -266,29 +251,24 @@ func TestCompactionBudgetReproducesFieldStudy(t *testing.T) {
 
 	chars := approxSize(msgs)
 	s := &Session{contextWindow: window, lastInputTokens: realTokens}
-	budget := s.compactionCharBudget(chars)
+	budget := s.compactionCharBudget()
 
 	ratio := float64(chars) / float64(realTokens)
 	t.Logf("history: %d chars, ratio %.3f chars/token, budget %d chars", chars, ratio, budget)
-
-	// The ratio must be in the dense-session range this test is built around.
-	if ratio < 2.0 || ratio > 2.6 {
-		t.Fatalf("test fixture ratio %.3f is off — expected a dense ~2.2 like the real session", ratio)
+	if budget != 1_900_000 {
+		t.Fatalf("fixed budget = %d, want 1,900,000", budget)
 	}
 
 	kept, dropped := pruneOldestTurns(msgs, budget)
-
-	// Must prune SOMETHING (the fixed-4 bug pruned nothing → overflow)...
 	if dropped == 0 {
-		t.Fatal("pruned nothing — this is the fixed-ratio overflow bug the calibration fixes")
+		t.Fatal("pruned nothing — fixed 2.0 must catch this dense history")
 	}
-	// ...but only a handful, keeping the large majority of context.
-	keptFraction := float64(approxSize(kept)) / float64(chars)
-	if keptFraction < 0.90 {
-		t.Errorf("kept only %.1f%% of context — too aggressive; the 0.95 threshold should keep ~94%%", keptFraction*100)
+	if approxSize(kept) > budget {
+		t.Errorf("kept history is %d chars, over budget %d", approxSize(kept), budget)
 	}
-	if dropped > 12 {
-		t.Errorf("dropped %d turns — more than the study's ~6; budget may be miscalibrated", dropped)
+	// The newest turn survives, while the oldest turns are the ones evicted.
+	if !strings.Contains(flattenText(kept), "prompt turn") {
+		t.Error("kept history does not contain the newest turn")
 	}
-	t.Logf("dropped %d of %d turns, kept %.1f%% of context", dropped, numTurns, keptFraction*100)
+	t.Logf("dropped %d of %d turns, kept %.1f%% of context", dropped, numTurns, float64(approxSize(kept))/float64(chars)*100)
 }

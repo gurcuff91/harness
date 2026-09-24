@@ -957,11 +957,80 @@ func (s *Session) SwitchModel(ctx context.Context, fullModel string) error {
 		return err
 	}
 
-	// If the new model has a smaller context window than current usage,
-	// compact is mandatory — switch fails if compact fails.
 	if meta := provider.ModelMeta(modelID); meta != nil && meta.ContextWindow > 0 {
-		if s.lastInputTokens > meta.ContextWindow {
-			if compactErr := s.compactWithTarget(ctx, provider, modelID); compactErr != nil {
+		// compactModel/compactModelID: which provider/model actually performs
+		// the (potential) compaction below — origin (s.provider/s.modelID,
+		// the CURRENT one) or destination (provider/modelID, the one being
+		// switched to). Defaults to the destination, matching the ORIGINAL
+		// reason this whole mechanism exists (confirmed live with Gus,
+		// commit 8c09f06 — undocumented at the time, a collateral change
+		// inside an unrelated "Codex context window metadata" commit): a
+		// session whose ORIGIN provider had gone stale/exhausted (expired
+		// OAuth token, rate-limited, out of quota) used to get permanently
+		// stuck on /model — the mandatory compact-before-switch ran against
+		// the already-broken origin and failed every time, so there was no
+		// way to escape to a working model at all. Compacting with the
+		// destination instead means switching TO a healthy model is what
+		// unblocks the stuck session.
+		//
+		// That fix, however, was never conditioned on the destination
+		// actually being large enough to hold the compaction itself — if
+		// the destination's window is SMALLER than the origin's, asking it
+		// to summarize a history that may not even fit ITS OWN window risks
+		// producing the exact "prompt is too long" 400 this mechanism
+		// exists to prevent (confirmed live: a real session accumulated
+		// ~1.2M tokens on a 1.048M-window origin, switched to a 1.000M-window
+		// destination, and the compaction-summary call itself overflowed).
+		// So: prefer whichever of the two has the LARGER window — that's
+		// always safer for holding the full history being summarized. Only
+		// fall back to the destination when it's strictly larger (the
+		// original stuck-session case: an exhausted origin with a genuinely
+		// bigger window doesn't help either, since IT can't complete a
+		// request at all right now).
+		//
+		// Deliberately NO automatic fallback if the chosen (larger) model
+		// turns out to be the stale/exhausted origin: compactWithTarget's
+		// own error (whatever the provider returns — a real 429/401/expired-
+		// token error) propagates straight out of SwitchModel exactly as it
+		// did before the destination-compaction fix existed. Silently
+		// retrying against the destination here would mask that the origin
+		// needs reconnecting/refreshing, and could still fail the exact same
+		// "prompt is too long" way if the destination is smaller.
+		compactProvider, compactModelID := provider, modelID
+		if s.contextWindow > meta.ContextWindow {
+			compactProvider, compactModelID = s.provider, s.modelID
+		}
+
+		// Two independent triggers for compacting before the switch takes
+		// effect, both using compactProvider/compactModelID chosen above:
+		//
+		// 1. Mandatory (pre-existing): the history literally does not fit
+		//    the destination's window at all — the switch would be
+		//    impossible without shrinking it first.
+		//
+		// 2. Preventive (new — the actual fix for the reported bug):
+		//    recompute what ContextUsage WOULD be against the destination's
+		//    window, using the CURRENT s.lastInputTokens (still the origin's
+		//    real token count — accurate regardless of which provider ends
+		//    up compacting). s.stats.ContextUsage itself is not touched
+		//    here; it's only ever refreshed by updateStats (after a real
+		//    turn) or compactWithTarget (after a real compaction), so
+		//    leaving it as-is is correct — this is a LOCAL, one-off check
+		//    for the switch decision, not a lasting mutation.
+		//
+		// Without trigger 2, a switch from a bigger-window model to a
+		// smaller one could land well past the smaller model's own
+		// autoCompactThreshold immediately, with nothing forcing a compact
+		// until the FIRST turn on the new model already overflowed — the
+		// exact bug reported live (a session sitting at 72% of a
+		// 1,048,576-token window switched to a 1,000,000-token model,
+		// which put it at ~75.6% there — not yet over threshold in this
+		// example, but the same gap that let a since-grown, image-heavy
+		// turn overflow before ANY check ran again).
+		mandatory := s.lastInputTokens > meta.ContextWindow
+		preventive := !mandatory && float64(s.lastInputTokens)/float64(meta.ContextWindow) >= autoCompactThreshold
+		if mandatory || preventive {
+			if compactErr := s.compactWithTarget(ctx, compactProvider, compactModelID); compactErr != nil {
 				// Compact already emitted EventError — just return
 				return fmt.Errorf("cannot switch to %s: history (%d tokens) exceeds context window (%d): %w",
 					fullModel, s.lastInputTokens, meta.ContextWindow, compactErr)
@@ -1135,7 +1204,7 @@ func (s *Session) generateCompactionSummary(ctx context.Context, provider provid
 	// essentially always succeeds. A notice records how many turns were
 	// dropped so the summary doesn't pretend continuity it no longer has.
 	chars := approxSize(history)
-	if budget := s.compactionCharBudget(chars); chars > budget {
+	if budget := s.compactionCharBudget(); chars > budget {
 		var dropped int
 		history, dropped = pruneOldestTurns(history, budget)
 		if dropped > 0 {
@@ -1214,43 +1283,27 @@ func (s *Session) generateCompactionSummary(ctx context.Context, provider provid
 	return "", lastErr
 }
 
-// fallbackCharsPerToken is the chars-per-token ratio used ONLY when the
-// session has no real measurement yet (lastInputTokens == 0, e.g. a resumed
-// session that hasn't run a turn). 4 is the classic English-prose estimate —
-// deliberately on the HIGH side so, absent real data, the budget errs toward
-// keeping fewer chars (safer against overflow) rather than more.
-const fallbackCharsPerToken = 4.0
+// compactionCharsPerToken is deliberately conservative. The emergency prune
+// measures history in characters but providers enforce context windows in
+// tokens; using one fixed ratio avoids treating a token measurement from a
+// different request, model, or image mix as if it described the history being
+// compacted. A value of 2.0 leaves enough margin for dense code/JSON and for
+// the compaction system/user prompts while still preserving the newest turns.
+const compactionCharsPerToken = 2.0
 
 // compactionCharBudget returns the CHARACTER budget for the emergency prune in
 // generateCompactionSummary, targeting autoCompactThreshold (0.95) of the
-// model's context window.
-//
-// The subtlety: pruneOldestTurns/approxSize work in CHARS, but the window is
-// in TOKENS, so the token budget must be converted to chars — and the
-// chars-per-token ratio is NOT a constant. It swings from ~2.2 for dense
-// code/JSON (this codebase's own sessions) to ~4 for prose. A fixed ratio is
-// unsafe: a real field study of the stuck kaiban-api-v2 session measured
-// 2.237 chars/token, where a fixed-4 budget (3.8M chars) would have exceeded
-// the actual history (2.22M chars) and pruned NOTHING — sending all 995k
-// tokens and overflowing exactly as before.
-//
-// So calibrate against THIS session's real ratio: approxSize(history) chars
-// over lastInputTokens tokens (the token count the provider actually reported
-// for that same history). currentChars is approxSize(history), passed in so
-// it isn't computed twice. Falls back to fallbackCharsPerToken only when
-// there's no real token measurement yet.
-func (s *Session) compactionCharBudget(currentChars int) int {
+// model's context window. The budget intentionally uses a fixed conservative
+// chars-per-token ratio: currentChars excludes image payloads and
+// lastInputTokens may describe a different request or model, so calibrating
+// one from the other can produce an unsafe budget.
+func (s *Session) compactionCharBudget() int {
 	window := s.contextWindow
 	if window <= 0 {
 		window = 128000 // conservative default when unknown
 	}
 	budgetTokens := autoCompactThreshold * float64(window)
-
-	ratio := fallbackCharsPerToken
-	if s.lastInputTokens > 0 && currentChars > 0 {
-		ratio = float64(currentChars) / float64(s.lastInputTokens)
-	}
-	return int(budgetTokens * ratio)
+	return int(budgetTokens * compactionCharsPerToken)
 }
 
 // approxSize is a cheap, provider-agnostic estimate of a history's size in
