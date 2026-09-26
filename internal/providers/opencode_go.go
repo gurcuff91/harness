@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	llm "github.com/gurcuff91/harness/internal/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
@@ -20,6 +21,18 @@ type OpenCodeGo struct {
 	client *http.Client
 	cache  map[string]types.ModelMeta
 	mu     sync.RWMutex
+	// session is a stable ID sent as x-opencode-session on every request —
+	// OpenCode Go started hard-rejecting requests without it (400
+	// MissingSessionID; reported live, confirmed against multiple other
+	// coding-agent clients hitting the same wall — see e.g.
+	// github.com/earendil-works/pi/issues/9230). Their own docs describe it
+	// as "a stable session ID per conversation" for routing/prompt-cache
+	// purposes; one UUID generated per provider instance (this process'
+	// lifetime) is the same granularity codex-oauth already uses for its
+	// analogous "session-id" header (see CodexOAuth.session) — good enough
+	// for routing/caching, and avoids threading harness's own per-chat
+	// session ID through the provider-agnostic types.Request just for this.
+	session string
 }
 
 const (
@@ -28,8 +41,9 @@ const (
 
 func NewOpenCodeGo() *OpenCodeGo {
 	o := &OpenCodeGo{
-		client: &http.Client{},
-		cache:  make(map[string]types.ModelMeta),
+		client:  &http.Client{},
+		cache:   make(map[string]types.ModelMeta),
+		session: uuid.New().String(),
 	}
 	return o
 }
@@ -135,6 +149,7 @@ func (o *OpenCodeGo) validateKey() bool {
 	req, _ := http.NewRequest("POST", openCodeGoURL+"/chat/completions", body)
 	req.Header.Set("Authorization", "Bearer "+o.apiKey)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-opencode-session", o.session)
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
 		return false
@@ -144,7 +159,16 @@ func (o *OpenCodeGo) validateKey() bool {
 }
 
 func (o *OpenCodeGo) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
-	return llm.DoOpenAIStream(ctx, o.client, openCodeGoURL+"/chat/completions", o.apiKey, &llm.OpenAIRequest{Request: req}, nil, cb)
+	return llm.DoOpenAIStream(ctx, o.client, openCodeGoURL+"/chat/completions", o.apiKey, &llm.OpenAIRequest{Request: req}, openCodeGoSessionHeaders(o.session), cb)
+}
+
+// openCodeGoSessionHeaders builds the extra headers CompleteStream/validateKey
+// send on every request — currently just x-opencode-session (see the
+// OpenCodeGo.session field's doc comment for why it's required and how it's
+// derived). Pulled out as its own pure function so the header-building logic
+// is unit-testable without a live HTTP round-trip.
+func openCodeGoSessionHeaders(session string) map[string]string {
+	return map[string]string{"x-opencode-session": session}
 }
 
 func fetchOpenCodeGoModels(apiKey string) ([]types.ModelMeta, error) {

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.1] - 2026-09-26
+
+### Fix — `opencode-go` rejected every request with `400 MissingSessionID`
+Reported live: every completion against `opencode-go` started failing with `openai API error 400 {"error":{"message":"Request is missing x-opencode-session and cannot be routed efficiently. Please see https://opencode.ai/docs/go/#where-can-i-use-it","type":"MissingSessionID"}}`. Root cause: OpenCode Go tightened its API — a header that used to be a best-practice recommendation for routing/prompt-cache optimization (`x-opencode-session`, a stable ID per conversation) is now a hard requirement, and `internal/providers/opencode_go.go` never sent it on any of its three HTTP call sites. Confirmed as an ecosystem-wide breaking change, not a harness-specific bug — multiple other coding-agent clients (`pi`, `hermes-agent`, `deepseek-harness`, `vibe-trading`) hit the identical `MissingSessionID` wall around the same time.
+
+- `OpenCodeGo` gained a `session` field — one UUID generated per provider instance (`NewOpenCodeGo`, via `uuid.New().String()`), stable for the process' lifetime. Same granularity `codex-oauth`'s own analogous `session-id` header already uses (`CodexOAuth.session`) — good enough for OpenCode Go's routing/caching needs, and avoids threading harness's own per-chat session ID through the provider-agnostic `types.Request` just for this.
+- `CompleteStream` and `validateKey()` (the two `/chat/completions` call sites — the ones that were actually failing) now send `x-opencode-session: <session>` via the new `openCodeGoSessionHeaders()` helper. `fetchOpenCodeGoModels` (`/models`) left untouched — no evidence it requires the header, and the reported failure was specifically on `/chat/completions`.
+- New tests `TestOpenCodeGoSessionHeadersSendsStableID`/`TestNewOpenCodeGoAssignsStableNonEmptySession` (`internal/providers/opencode_go_test.go`) lock in the header's presence/value and that the session ID stays stable across calls on the same instance, without needing a live HTTP round-trip (the endpoint is hardcoded, unlike `CustomOpenAI`'s injectable `baseURL`).
+- Full suite + `go vet` green; `gofmt -l` clean.
+
 ## [0.77.0] - 2026-09-24
 
 ### Breaking (SDK) — `Agent`'s public surface trimmed to what's genuinely the agent's own; `/api/models` unified with `Agent.Models()`; `ModelMeta.IsSubscription` is now real
