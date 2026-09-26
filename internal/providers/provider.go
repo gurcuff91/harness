@@ -142,3 +142,18 @@ func storeAPIKey(provider, key string) error {
 func deleteCredential(provider string) error {
 	return config.GetCredentialsManager().DeleteCredential(provider)
 }
+
+// ── ModelMeta.IsSubscription helpers ───────────────────────────────────────
+// Shared by every provider's FetchModels that needs to mark its models as
+// flat-fee subscriptions (types.ModelListing's doc comment explains the full
+// per-provider policy: unconditional for OAuth-only providers and OpenCode
+// Go, heuristic for MiniMax's "sk-cp-" Token Plan key prefix).
+
+// markAllSubscription sets ModelMeta.IsSubscription = true on every model —
+// used by providers where EVERY model is unconditionally a flat-fee
+// subscription (claude-oauth, codex-oauth, opencode-go).
+func markAllSubscription(metas []types.ModelMeta) {
+	for i := range metas {
+		metas[i].IsSubscription = true
+	}
+}

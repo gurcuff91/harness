@@ -56,11 +56,11 @@ type Provider struct {
 }
 
 // Model is one element of GET /api/models — a model paired with its provider
-// and full capability/pricing metadata (types.ModelMeta, embedded).
+// and full capability/pricing metadata (types.ModelMeta, embedded — this is
+// where IsSubscription now lives; see types.ModelListing's doc comment).
 type Model struct {
-	Provider       string `json:"provider"`
-	Model          string `json:"model"`
-	IsSubscription bool   `json:"is_subscription"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
 	types.ModelMeta
 }
 

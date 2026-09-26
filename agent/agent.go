@@ -466,40 +466,14 @@ func (a *Agent) MCPTools() []tools.Tool {
 // own tools use a scoped adapter over the same store.
 func (a *Agent) Memory() *memory.Store { return a.memStore }
 
-// MaxIterations returns the max ReAct iterations per turn this agent creates
-// sessions with (AgentOptions.MaxIterations, default 50). Every session gets
-// the same value at creation, so this is the right fallback for a session
-// that isn't currently active (no live *Session to ask directly).
-func (a *Agent) MaxIterations() int { return a.maxIterations }
-
-// Providers returns a read-only snapshot of every known provider and its state.
-// This is the SDK's window into provider configuration; administration
-// (connecting/disconnecting, entering API keys, OAuth) is done via the `harness`
-// CLI — which is why no credentials are exposed here. Active providers lazily
-// fetch their model list on first call.
-func (a *Agent) Providers() []types.ProviderInfo {
-	providers.EnsureRegistry()
-	var out []types.ProviderInfo
-	for _, p := range providers.All {
-		models := p.Models()
-		if p.IsActive() && len(models) == 0 {
-			models, _ = p.FetchModels()
-		}
-		out = append(out, types.ProviderInfo{
-			Name:           p.Name(),
-			DisplayName:    p.DisplayName(),
-			Description:    p.Description(),
-			Active:         p.IsActive(),
-			CredentialType: p.CredentialType(),
-			ModelCount:     len(models),
-		})
-	}
-	return out
-}
-
 // Models returns every available model across all ACTIVE providers, each tagged
 // with its provider and a fully-qualified "provider/model" id ready to pass to
 // NewSession. Inactive providers are skipped. Models are lazily fetched.
+//
+// This is the single source of truth for the model listing — server.go's
+// GET /api/models handler calls this directly and serializes the result
+// as-is, rather than keeping a second, hand-duplicated loop over
+// providers.All in sync with this one.
 func (a *Agent) Models() []types.ModelListing {
 	providers.EnsureRegistry()
 	var out []types.ModelListing

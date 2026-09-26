@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -119,6 +120,19 @@ func (o *MiniMax) FetchModels() ([]types.ModelMeta, error) {
 	if err != nil {
 		return nil, err
 	}
+	// MiniMax has two credential kinds sharing the SAME api_key
+	// CredentialType — a pay-as-you-go API Key (metered) and a Token Plan
+	// Subscription Key (flat-fee), and only the latter is billed as a
+	// subscription. Confirmed live/via docs: Subscription Keys carry the
+	// literal "sk-cp-" prefix (e.g. MiniMax's own Xcode/Grok CLI setup
+	// instructions show "sk-cp-..."); regular API Keys don't follow that
+	// pattern. This is a best-effort heuristic, not an authoritative
+	// account-status lookup — MiniMax exposes no endpoint that reports
+	// which kind a given key is. See ModelListing.IsSubscription's doc
+	// comment for the accepted trade-off.
+	if minimaxSubscriptionKeyPrefix(o.apiKey) {
+		markAllSubscription(metas)
+	}
 	o.mu.Lock()
 	o.cache = make(map[string]types.ModelMeta, len(metas))
 	for _, m := range metas {
@@ -126,6 +140,13 @@ func (o *MiniMax) FetchModels() ([]types.ModelMeta, error) {
 	}
 	o.mu.Unlock()
 	return metas, nil
+}
+
+// minimaxSubscriptionKeyPrefix reports whether apiKey looks like a MiniMax
+// Token Plan Subscription Key ("sk-cp-...") rather than a regular
+// pay-as-you-go API Key. See FetchModels' doc comment for the trade-off.
+func minimaxSubscriptionKeyPrefix(apiKey string) bool {
+	return strings.HasPrefix(apiKey, "sk-cp-")
 }
 
 func (o *MiniMax) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {

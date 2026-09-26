@@ -33,20 +33,22 @@ type Credentials struct {
 
 // ── SDK read models ────────────────────────────────────────────────────────
 
-// ProviderInfo is a read-only snapshot of a provider's identity and state,
-// returned by the SDK. Provider administration (connect/disconnect) is done via
-// the `harness` CLI, not the SDK — so this carries no credentials.
-type ProviderInfo struct {
-	Name           string         `json:"name"`            // slug, e.g. "anthropic"
-	DisplayName    string         `json:"display_name"`    // human-friendly name
-	Description    string         `json:"description"`     // live blurb (e.g. "12 models")
-	Active         bool           `json:"active"`          // has valid credentials + reachable
-	CredentialType CredentialType `json:"credential_type"` // none | api_key | oauth
-	ModelCount     int            `json:"model_count"`     // number of available models
-}
-
 // ModelListing pairs a model's metadata with its owning provider, as returned by
 // the SDK's Models() listing. Model is the fully-qualified "provider/model" id.
+//
+// Whether a model is billed as a flat-fee subscription lives on the embedded
+// ModelMeta.IsSubscription — set per-provider in each provider's FetchModels
+// (see internal/providers/{claude_oauth,codex_oauth,minimax,opencode_go}.go):
+// unconditionally true for OAuth-only providers (claude-oauth, codex-oauth)
+// and OpenCode Go (always a flat subscription despite an api_key credential),
+// and heuristically for MiniMax (its "sk-cp-" Token Plan Subscription Key
+// prefix — MiniMax exposes no authoritative endpoint to distinguish it from
+// a regular pay-as-you-go api_key, so this is a best-effort, accepted
+// trade-off, not a guarantee). This is deliberately distinct from
+// Provider.IsSubscription (client/types.go) — the provider-level flag used
+// to branch the /connect UX (OAuth flow vs. API-key prompt) — which stays
+// exactly as-is, keyed off CredentialType == OAuth only, and must NOT be
+// touched by this per-model logic.
 type ModelListing struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"` // "provider/model" — pass to NewSession

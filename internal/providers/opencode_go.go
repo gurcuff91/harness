@@ -115,6 +115,12 @@ func (o *OpenCodeGo) FetchModels() ([]types.ModelMeta, error) {
 	if err != nil {
 		return nil, err
 	}
+	// OpenCode Go is ALWAYS a flat-fee subscription ($10/mo, no per-token
+	// billing) despite authenticating with a plain api_key credential —
+	// unlike MiniMax, there is no separate pay-as-you-go mode for this
+	// provider to disambiguate against. See ModelListing.IsSubscription's
+	// doc comment.
+	markAllSubscription(metas)
 	o.mu.Lock()
 	o.cache = make(map[string]types.ModelMeta, len(metas))
 	for _, m := range metas {

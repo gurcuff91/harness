@@ -226,6 +226,11 @@ func (c *ClaudeOAuth) FetchModels() ([]types.ModelMeta, error) {
 	if err != nil {
 		return nil, err
 	}
+	// This provider authenticates via OAuth (a Claude subscription, e.g. Max)
+	// — every model it serves is billed as a flat fee, unlike the sibling
+	// api-key Anthropic provider (which shares fetchAnthropicModels but must
+	// NOT get this flag). See ModelListing.IsSubscription's doc comment.
+	markAllSubscription(metas)
 	c.mu.Lock()
 	c.cache = make(map[string]types.ModelMeta, len(metas))
 	for _, m := range metas {

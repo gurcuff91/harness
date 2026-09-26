@@ -583,14 +583,6 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, list)
 }
 
-// modelInfo groups a model with its provider.
-type modelInfo struct {
-	Provider       string `json:"provider"`
-	Model          string `json:"model"`
-	IsSubscription bool   `json:"is_subscription"`
-	types.ModelMeta
-}
-
 // connect/disconnect request types
 type connectRequest struct {
 	APIKey           string `json:"api_key,omitempty"`
@@ -665,28 +657,15 @@ func (s *Server) handleDisconnectProvider(w http.ResponseWriter, r *http.Request
 	writeStatus(w, http.StatusOK, "disconnected", "")
 }
 
+// handleModels handles GET /api/models. The listing itself — iterate active
+// providers, lazily fetch models, tag each with its provider and
+// is_subscription — lives in a.Models() (agent/agent.go), the single source
+// of truth; this handler is a thin serialize-as-is wrapper so the wire
+// contract can never drift out of sync with the SDK's own Agent.Models().
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	providers.EnsureRegistry()
-	var list []modelInfo
-	for _, p := range providers.All {
-		if !p.IsActive() {
-			continue
-		}
-		models := p.Models()
-		if len(models) == 0 {
-			models, _ = p.FetchModels()
-		}
-		for _, m := range models {
-			list = append(list, modelInfo{
-				Provider:       p.Name(),
-				Model:          p.Name() + "/" + m.ID,
-				IsSubscription: p.CredentialType() == types.CredTypeOAuth,
-				ModelMeta:      m,
-			})
-		}
-	}
+	list := s.agent.Models()
 	if list == nil {
-		list = []modelInfo{}
+		list = []types.ModelListing{}
 	}
 	writeJSON(w, http.StatusOK, list)
 }
@@ -921,7 +900,8 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 
 	// Fallback: check store (persisted sessions from previous runs). There's no
 	// live *Session to ask, so MaxIterations comes from the agent's configured
-	// default — every session it creates gets the same value.
+	// default (AgentOptions.MaxIterations, already clamped by New()) — every
+	// session it creates gets the same value.
 	sessions, err := s.agent.ListAllSessions()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -931,7 +911,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		if meta.ID == id {
 			writeJSON(w, http.StatusOK, sessionDetailDTO{
 				SessionMeta:   meta,
-				MaxIterations: s.agent.MaxIterations(),
+				MaxIterations: s.agent.Options().MaxIterations,
 			})
 			return
 		}

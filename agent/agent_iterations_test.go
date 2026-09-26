@@ -7,8 +7,8 @@ import "testing"
 // exists so bumping it requires touching this file too.
 func TestDefaultMaxIterations(t *testing.T) {
 	a := New(AgentOptions{})
-	if got := a.MaxIterations(); got != 50 {
-		t.Errorf("default MaxIterations = %d, want 50", got)
+	if got := a.Options().MaxIterations; got != 50 {
+		t.Errorf("default Options().MaxIterations = %d, want 50", got)
 	}
 }
 
@@ -16,13 +16,13 @@ func TestDefaultMaxIterations(t *testing.T) {
 // is honored when set, and that only <= 0 falls back to the default.
 func TestExplicitMaxIterationsOverridesDefault(t *testing.T) {
 	a := New(AgentOptions{MaxIterations: 120})
-	if got := a.MaxIterations(); got != 120 {
-		t.Errorf("MaxIterations = %d, want 120 (explicit)", got)
+	if got := a.Options().MaxIterations; got != 120 {
+		t.Errorf("Options().MaxIterations = %d, want 120 (explicit)", got)
 	}
 
 	a2 := New(AgentOptions{MaxIterations: 0})
-	if got := a2.MaxIterations(); got != 50 {
-		t.Errorf("MaxIterations = %d, want 50 (0 falls back to default)", got)
+	if got := a2.Options().MaxIterations; got != 50 {
+		t.Errorf("Options().MaxIterations = %d, want 50 (0 falls back to default)", got)
 	}
 }
 

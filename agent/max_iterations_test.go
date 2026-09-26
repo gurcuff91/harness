@@ -35,8 +35,8 @@ func TestValidateMaxIterationsBounds(t *testing.T) {
 func TestAgentNewClampsExplicitOverLimitInsteadOfErroring(t *testing.T) {
 	a := New(AgentOptions{Store: store.NewInMemoryStore(), MaxIterations: 5000})
 	defer a.Close()
-	if a.MaxIterations() != maxMaxIterations {
-		t.Errorf("MaxIterations() = %d, want clamped to %d", a.MaxIterations(), maxMaxIterations)
+	if got := a.Options().MaxIterations; got != maxMaxIterations {
+		t.Errorf("Options().MaxIterations = %d, want clamped to %d", got, maxMaxIterations)
 	}
 }
 

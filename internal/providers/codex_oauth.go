@@ -216,6 +216,10 @@ func (c *CodexOAuth) FetchModels() ([]types.ModelMeta, error) {
 	if err != nil {
 		return nil, err
 	}
+	// This provider authenticates via OAuth (a ChatGPT/Codex subscription) —
+	// every model it serves is billed as a flat fee. See
+	// ModelListing.IsSubscription's doc comment.
+	markAllSubscription(metas)
 	c.mu.Lock()
 	c.cache = make(map[string]types.ModelMeta, len(metas))
 	for _, m := range metas {

@@ -51,22 +51,21 @@ func TestNewOpenAIProvider_RegistersAndResolvableThroughAgent(t *testing.T) {
 	a := New(AgentOptions{Store: store.NewInMemoryStore()})
 	defer a.Close()
 
-	var found *types.ProviderInfo
-	for _, p := range a.Providers() {
-		if p.Name == "agent-sdk-proxy" {
-			pp := p
-			found = &pp
+	var found providers.Provider
+	for _, p := range providers.All {
+		if p.Name() == "agent-sdk-proxy" {
+			found = p
 			break
 		}
 	}
 	if found == nil {
-		t.Fatal("agent-sdk-proxy not found in a.Providers()")
+		t.Fatal("agent-sdk-proxy not found in providers.All")
 	}
-	if found.DisplayName != "Agent SDK Proxy" {
-		t.Errorf("DisplayName = %q, want Agent SDK Proxy", found.DisplayName)
+	if found.DisplayName() != "Agent SDK Proxy" {
+		t.Errorf("DisplayName = %q, want Agent SDK Proxy", found.DisplayName())
 	}
-	if !found.Active {
-		t.Error("Active = false, want true")
+	if !found.IsActive() {
+		t.Error("IsActive = false, want true")
 	}
 
 	var foundModel bool
@@ -132,15 +131,15 @@ func TestNewOpenAIProvider_AlwaysActiveNoConnectStep(t *testing.T) {
 	a := New(AgentOptions{Store: store.NewInMemoryStore()})
 	defer a.Close()
 
-	for _, p := range a.Providers() {
-		if p.Name == "always-active-proxy" {
-			if !p.Active {
-				t.Error("Active = false, want true — no connect step should be needed")
+	for _, p := range providers.All {
+		if p.Name() == "always-active-proxy" {
+			if !p.IsActive() {
+				t.Error("IsActive = false, want true — no connect step should be needed")
 			}
 			return
 		}
 	}
-	t.Fatal("always-active-proxy not found in a.Providers()")
+	t.Fatal("always-active-proxy not found in providers.All")
 }
 
 // TestNewOpenAIProvider_ReasoningSplitReachesTheWire reproduces the real

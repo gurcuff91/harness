@@ -422,16 +422,16 @@ func TestNewOpenAIProviderFacadeAliasIsWired(t *testing.T) {
 	defer a.Close()
 
 	var found bool
-	for _, p := range a.Providers() {
-		if p.Name == "facade-proxy" {
+	for _, p := range providers.All {
+		if p.Name() == "facade-proxy" {
 			found = true
-			if p.DisplayName != "Facade Proxy" {
-				t.Errorf("DisplayName = %q, want Facade Proxy", p.DisplayName)
+			if p.DisplayName() != "Facade Proxy" {
+				t.Errorf("DisplayName = %q, want Facade Proxy", p.DisplayName())
 			}
 		}
 	}
 	if !found {
-		t.Fatal("facade-proxy not found in a.Providers() after registration via the harness facade")
+		t.Fatal("facade-proxy not found in providers.All after registration via the harness facade")
 	}
 
 	// ProviderWithReasoningSplit() (no argument, always means "on") must

@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.0] - 2026-09-24
+
+### Breaking (SDK) — `Agent`'s public surface trimmed to what's genuinely the agent's own; `/api/models` unified with `Agent.Models()`; `ModelMeta.IsSubscription` is now real
+Follow-up to an API-vs-SDK coverage audit: harness (the full program — settings, provider administration, the HTTP API) and `agent.Agent`/`agent.Session` (the embeddable core) had drifted into overlapping, sometimes duplicated surfaces. Trimmed `Agent` to what it alone owns and can answer without a server; consolidated the rest to live in exactly one place.
+
+- **Removed `Agent.Providers()` and `types.ProviderInfo`.** Zero real callers existed anywhere in the repo — the TUI, CLI, and `client` package all already reach provider state through `client.GetProviders()` → `GET /api/providers`, and `server.go`'s own `handleProviders` had never called this method either (it reimplemented the same loop by hand, with two extra fields `Agent.Providers()` didn't carry). Provider administration (connect/disconnect/OAuth) is deliberately API/CLI-only territory, never SDK — this removal makes that boundary explicit instead of leaving a dead, misleading method suggesting otherwise.
+- **Removed `Agent.MaxIterations()`.** It was a bare getter over `AgentOptions.MaxIterations` (already clamped by `New()`) — `Agent.Options().MaxIterations` returns the identical value with no information loss. `Session.MaxIterations()`/`Session.SetMaxIterations()` (the only place this number is ever actually changed, per-session) are untouched. The one external caller (`server.go`'s `handleGetSession` fallback for a persisted, non-active session) now reads `s.agent.Options().MaxIterations`.
+- **`Agent.Models()` is now the single source of truth for `GET /api/models`.** `server.go`'s `handleModels` previously hand-duplicated the exact same active-provider iteration + lazy-fetch loop in a separate local type (`modelInfo`) that could silently drift from `Agent.Models()`'s `types.ModelListing` — confirmed it already had (an `IsSubscription` field `ModelListing` lacked). `handleModels` now calls `a.Models()` directly and serializes the result as-is; `modelInfo` is gone. The wire contract for `GET /api/models` is unchanged byte-for-byte (same field set, same JSON key order, same `null`→`[]` normalization) — no client (TUI, CLI, transports) needed any change.
+- **`ModelMeta.IsSubscription` is now populated for real, per-provider, instead of being a permanently-`false` dead field.** `ModelListing`'s OWN `IsSubscription` (added in v0.76.98, computed as `CredentialType == OAuth`) is removed — that logic now lives where it belongs, inside each provider's `FetchModels()`, writing directly into the model metadata every provider already returns:
+  - `claude-oauth` / `codex-oauth`: unconditionally `true` (a Claude/ChatGPT subscription bills flat-fee, no per-model distinction possible).
+  - `opencode-go`: unconditionally `true` — it's ALWAYS a flat $10/mo subscription despite authenticating with a plain `api_key` credential; there's no pay-as-you-go mode for this provider to confuse it with.
+  - `minimax`: conditional on a new heuristic, `minimaxSubscriptionKeyPrefix` — MiniMax's Token Plan Subscription Key carries the literal `sk-cp-` prefix (confirmed against MiniMax's own docs), distinct from a regular metered API key sharing the same `CredentialType: api_key`. Best-effort, not authoritative (MiniMax exposes no endpoint to confirm a key's kind) — an accepted, narrowed trade-off, not a full guarantee.
+  - `anthropic` (the api-key variant sharing `fetchAnthropicModels` with `claude-oauth`) is deliberately left untouched — always `false`.
+  - New shared helper `markAllSubscription` (`internal/providers/provider.go`) avoids repeating the same loop three times.
+  - **`Provider.IsSubscription` (`client/types.go`, from `GET /api/providers`) is UNCHANGED** — it's a distinct, provider-level flag that branches the TUI's `/connect` UX (OAuth flow vs. API-key prompt), keyed off `CredentialType == OAuth` only, and must never be confused with the per-model flag above.
+  - `client.Model`'s own `IsSubscription` field is removed the same way `ModelListing`'s was — the TUI (the only real consumer, driving its footer's `(sub)` tag) needed no code change: the field it reads is still named `IsSubscription`, now resolved by promotion from the embedded `ModelMeta` instead of a sibling field at the same level.
+- New tests: `TestMarkAllSubscriptionSetsEveryModel`/`TestMarkAllSubscriptionEmptySliceIsSafe`/`TestMinimaxSubscriptionKeyPrefix` (`internal/providers/subscription_meta_test.go`) lock in the shared helper and the `sk-cp-` heuristic across 5 cases, no HTTP mocking needed. Existing tests exercising the removed `Agent.Providers()`/`Agent.MaxIterations()` updated to use `providers.All` (already legitimately imported in those test files) and `Agent.Options().MaxIterations` respectively.
+- Full suite + `go vet` green; `gofmt -l` clean.
+
 ## [0.76.99] - 2026-09-24
 
 ### Fix — `codex-oauth` silently dropped images returned by a tool result (e.g. Read loading a screenshot)
