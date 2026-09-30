@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -42,6 +43,12 @@ func newFakeColleagueServer() *fakeColleagueServer {
 
 func (f *fakeColleagueServer) handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/server", func(w http.ResponseWriter, r *http.Request) {
+		// askColleague's liveness probe (GetServerInfo) hits this first, on
+		// every call — must respond for any of the other endpoints below to
+		// ever be reached.
+		json.NewEncoder(w).Encode(map[string]string{"name": "harness", "version": "test"})
+	})
 	mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"active_model": "fake/model-1", "thinking_level": "off"})
 	})
@@ -126,7 +133,7 @@ func TestAskColleagueFreshSessionIsClosedNotDeleted(t *testing.T) {
 	ts := httptest.NewServer(srv.handler())
 	defer ts.Close()
 
-	text, err := askColleague(ts.URL, "hello", "", nil, 5*time.Second)
+	text, err := askColleague(context.Background(), ts.URL, "hello", "", nil, 5*time.Second)
 	if err != nil {
 		t.Fatalf("askColleague: %v", err)
 	}
@@ -154,13 +161,13 @@ func TestAskColleagueResumeContinuesSameSession(t *testing.T) {
 	ts := httptest.NewServer(srv.handler())
 	defer ts.Close()
 
-	first, err := askColleague(ts.URL, "first message", "", nil, 5*time.Second)
+	first, err := askColleague(context.Background(), ts.URL, "first message", "", nil, 5*time.Second)
 	if err != nil {
 		t.Fatalf("first askColleague: %v", err)
 	}
 	sessID := extractSessionID(t, first)
 
-	second, err := askColleague(ts.URL, "second message", sessID, nil, 5*time.Second)
+	second, err := askColleague(context.Background(), ts.URL, "second message", sessID, nil, 5*time.Second)
 	if err != nil {
 		t.Fatalf("second askColleague: %v", err)
 	}
@@ -184,7 +191,7 @@ func TestAskColleagueUnknownSessionFailsClearlyNoFallback(t *testing.T) {
 	ts := httptest.NewServer(srv.handler())
 	defer ts.Close()
 
-	text, err := askColleague(ts.URL, "hello", "does-not-exist", nil, 5*time.Second)
+	text, err := askColleague(context.Background(), ts.URL, "hello", "does-not-exist", nil, 5*time.Second)
 	if err == nil {
 		t.Fatal("expected an error for an unknown session id, got nil")
 	}
@@ -225,6 +232,85 @@ func TestAskColleagueBackgroundPersistsSessionToo(t *testing.T) {
 	}
 	if srv.sessionCount() != 1 {
 		t.Errorf("server has %d sessions, want 1", srv.sessionCount())
+	}
+}
+
+// TestAskColleagueLivenessProbeFailsFastAgainstUnresponsiveColleague
+// reproduces the real incident: a colleague whose process is suspended
+// (SIGTSTP/Ctrl+Z) keeps its TCP listener open — the connection succeeds —
+// but nothing ever answers. Before the liveness probe existed, this hung
+// until Ask's own (120s-scale) timeout; the probe must fail in well under
+// a second here since nothing is actually listening on this port at all
+// (a stronger, easier-to-simulate case than a genuinely stuck TCP accept
+// queue, but it exercises the exact same "the request never returns"
+// code path askColleague's liveness probe exists to catch).
+func TestAskColleagueLivenessProbeFailsFastAgainstUnresponsiveColleague(t *testing.T) {
+	// A real listener that never accepts any connection — closest
+	// same-process approximation of "TCP handshake succeeds, then nothing
+	// ever responds" without actually suspending a process in the test
+	// suite. Using a closed/unused port (connection refused) still proves
+	// the probe fails fast and askColleague never proceeds to create a
+	// session; it just fails at the dial step instead of after a partial
+	// handshake, which is a strictly EASIER failure for the probe to catch
+	// (both are "the request never gets a response in time or at all").
+	unreachable := "http://127.0.0.1:1" // reserved/unassigned — connection refused, fast
+
+	start := time.Now()
+	text, err := askColleague(context.Background(), unreachable, "hello", "", nil, 5*time.Second)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error against an unreachable colleague, got nil")
+	}
+	if elapsed > colleagueLivenessTimeout {
+		t.Errorf("askColleague took %v, want it to fail within the liveness probe's own %v bound", elapsed, colleagueLivenessTimeout)
+	}
+	if !strings.Contains(text, "not responding") {
+		t.Errorf("response = %q, want a clear not-responding message", text)
+	}
+}
+
+// TestAskColleagueRespectsCallerCancellation confirms the whole point of
+// wiring the turn's ctx through client.WithContext: cancelling ctx (what
+// Session.Stop()/Esc does) interrupts an in-flight askColleague call
+// promptly, rather than leaving it hung until some internal timeout
+// eventually fires on its own.
+func TestAskColleagueRespectsCallerCancellation(t *testing.T) {
+	// A server that accepts the connection but never responds to
+	// /api/server — simulates the suspended-process scenario more
+	// faithfully than the unreachable-port case above (a real TCP
+	// handshake succeeds; the liveness probe genuinely hangs waiting for a
+	// response, exactly like the live incident).
+	block := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-block // never responds until the test tears down
+	}))
+	// Order matters: defers run LIFO. block must be closed (unblocking the
+	// handler goroutine above) BEFORE ts.Close() runs — ts.Close() itself
+	// waits for all active connections to finish, which would deadlock the
+	// test teardown against a handler still stuck on <-block.
+	defer ts.Close()
+	defer close(block)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel() // simulates Session.Stop()
+	}()
+
+	start := time.Now()
+	_, err := askColleague(ctx, ts.URL, "hello", "", nil, 5*time.Second)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error when the caller's ctx is cancelled mid-call, got nil")
+	}
+	// Must return promptly after cancellation (well under the liveness
+	// probe's own 5s timeout, let alone Ask's much longer default) — proves
+	// the cancellation actually reached the in-flight HTTP request instead
+	// of being ignored until an unrelated timeout fired.
+	if elapsed > 2*time.Second {
+		t.Errorf("askColleague took %v after ctx cancellation, want it to return promptly (well under colleagueLivenessTimeout=%v)", elapsed, colleagueLivenessTimeout)
 	}
 }
 

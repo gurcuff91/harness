@@ -32,6 +32,30 @@ import (
 type Client struct {
 	baseURL string
 	http    *http.Client
+	// ctx is the PARENT context every request this client makes derives
+	// from — do()/decode() use it directly; Ask/AskWithImages layer their
+	// own timeout on top of it via context.WithTimeout (see askCtx). Never
+	// nil (New defaults it to context.Background()). Setting it via
+	// WithContext lets a caller that already owns a cancellable context
+	// (e.g. an agent turn's ctx, cancelled by Session.Stop()) make EVERY
+	// request this client issues — including ones with no per-call timeout
+	// of their own, like CreateSession/ResumeSession/GetSettings — actually
+	// respect that cancellation, instead of hanging forever against an
+	// unresponsive server no per-call timeout was guarding.
+	ctx context.Context
+}
+
+// Option configures a Client at construction time. See New.
+type Option func(*Client)
+
+// WithContext sets the parent context every request this client makes
+// derives from (default: context.Background(), i.e. no cancellation/
+// deadline beyond whatever a specific call already applies). Pass the
+// caller's own long-lived, cancellable context — e.g. an agent turn's ctx —
+// so cancelling IT (Session.Stop()) also cancels any in-flight request this
+// client is making, even ones with no timeout of their own.
+func WithContext(ctx context.Context) Option {
+	return func(c *Client) { c.ctx = ctx }
 }
 
 // New creates a client for the given server target. Accepts either a bare
@@ -39,22 +63,28 @@ type Client struct {
 // ("http://127.0.0.1:8080", "https://harness.example.com") — the latter is
 // what InstanceInfo.URL (see agent/colleague) and any user-supplied --addr
 // already carry, so both forms just work without the caller normalizing them.
-func New(addr string) *Client {
+func New(addr string, opts ...Option) *Client {
 	base := addr
 	if !strings.Contains(base, "://") {
 		base = "http://" + base
 	}
-	return &Client{
+	c := &Client{
 		baseURL: base,
 		http:    &http.Client{},
+		ctx:     context.Background(),
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
-// do sends one request (no explicit deadline — context.Background()) and
-// returns the raw response body. Thin wrapper over doCtx for the ~40 existing
-// call sites that don't need a caller-supplied timeout.
+// do sends one request bound to c.ctx (context.Background() unless
+// WithContext was passed to New) and returns the raw response body. Thin
+// wrapper over doCtx for the ~40 existing call sites that don't need a
+// caller-supplied timeout beyond whatever c.ctx itself carries.
 func (c *Client) do(method, path string, body any) ([]byte, error) {
-	return c.doCtx(context.Background(), method, path, body)
+	return c.doCtx(c.ctx, method, path, body)
 }
 
 // doCtx is the real transport primitive: sends one request bound to ctx and
@@ -102,7 +132,7 @@ func (c *Client) doCtx(ctx context.Context, method, path string, body any) ([]by
 // decode runs do() and unmarshals the successful body into *T. A transport
 // error is returned as-is; a decode error is wrapped.
 func decode[T any](c *Client, method, path string, body any) (T, error) {
-	return decodeCtx[T](c, context.Background(), method, path, body)
+	return decodeCtx[T](c, c.ctx, method, path, body)
 }
 
 // decodeCtx is decode with a caller-supplied context (see doCtx).
@@ -398,7 +428,7 @@ func (c *Client) AskWithImages(sessionID, text string, images []types.ImageData,
 // (releasing the internal timer as soon as the request returns, not waiting
 // for the deadline), and never leaks the CancelFunc to the caller.
 func (c *Client) askCtx(timeout time.Duration, sessionID string, body any) (string, error) {
-	ctx := context.Background()
+	ctx := c.ctx
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)

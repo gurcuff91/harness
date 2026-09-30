@@ -187,6 +187,55 @@ func instanceAlive(info InstanceInfo) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
+// purgeDeadInstances probes every entry in instances CONCURRENTLY (one
+// goroutine per entry, same pattern agent/session.go already uses for
+// parallel tool execution) and deletes the ones that don't answer. Mutates
+// instances in place and returns how many were removed — purely a courtesy
+// return value for logging, callers don't need to branch on it.
+//
+// Why this exists at all: a process that never runs Server.Close() (crash,
+// SIGKILL, or — the incident that surfaced this — SIGTSTP/Ctrl+Z suspending
+// the process without terminating it) never calls UnregisterInstance, so
+// its entry sits in instances.json forever, offering a permanently
+// unreachable colleague to ColleagueList/ColleagueAsk. Reproduced live: a
+// harness TUI suspended by Ctrl+Z kept its listening socket open (TCP
+// connects fine) while no goroutine was running to ever answer, hanging
+// ColleagueAsk indefinitely with no way to know the colleague was dead
+// without probing it first.
+//
+// Sequential probing (even at instanceAlive's already-short 2s timeout)
+// doesn't scale — a real ~/.harness/instances.json on an active dev
+// machine can carry 100+ entries (accumulated across many ACP/TUI/Kaiban
+// sessions over days), which would make every RegisterInstance call take
+// minutes in the worst case (many entries all timing out). Concurrent
+// probing bounds the wall-clock cost to roughly the SLOWEST single probe
+// (~2s), not the sum of all of them.
+func purgeDeadInstances(instances map[string]InstanceInfo) (removed int) {
+	type result struct {
+		name  string
+		alive bool
+	}
+	results := make(chan result, len(instances))
+	var wg sync.WaitGroup
+	for name, info := range instances {
+		name, info := name, info
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- result{name, instanceAlive(info)}
+		}()
+	}
+	wg.Wait()
+	close(results)
+	for r := range results {
+		if !r.alive {
+			delete(instances, r.name)
+			removed++
+		}
+	}
+	return removed
+}
+
 // generateInstanceName picks a random character + adjective combination
 // that is not already in use by a live instance. When a name is taken,
 // it checks via HTTP whether the existing instance is still alive — if not,
@@ -223,10 +272,21 @@ func generateInstanceName(existing map[string]InstanceInfo) string {
 // RegisterInstance generates a unique name, inserts the instance into the
 // registry, and returns the name. Called by Server.Serve on startup.
 //
-// Holds the cross-process file lock for the ENTIRE read-generate-write cycle
-// — generating the name depends on having seen every other instance's
-// current entries (including live-check probes for reclaiming dead names),
-// so two processes must never interleave their read and write here.
+// Also purges every dead entry from the WHOLE registry first (see
+// purgeDeadInstances) — not just the one colliding with the freshly
+// generated name (generateInstanceName's own narrower reclaim, kept as-is
+// as a defense-in-depth fallback). This is the ONLY place stale entries
+// get cleaned up: a process that never calls Server.Close() (crash,
+// SIGKILL, SIGTSTP) never runs UnregisterInstance, so without this sweep
+// dead entries accumulate forever, each one a colleague ColleagueAsk will
+// try to reach and hang against. Piggybacking on every new registration
+// means no dedicated background sweeper/goroutine is needed — the registry
+// self-heals opportunistically every time ANY harness process starts.
+//
+// Holds the cross-process file lock for the ENTIRE read-purge-generate-write
+// cycle — generating the name depends on having seen every other instance's
+// current (now-purged) entries, so two processes must never interleave
+// their read and write here.
 func RegisterInstance(info InstanceInfo) (string, error) {
 	release, err := acquireFileLock()
 	if err != nil {
@@ -238,6 +298,8 @@ func RegisterInstance(info InstanceInfo) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("load instances: %w", err)
 	}
+
+	purgeDeadInstances(instances)
 
 	name := generateInstanceName(instances)
 	instances[name] = info

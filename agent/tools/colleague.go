@@ -159,17 +159,26 @@ const colleagueAskTimeout = 120 * time.Second
 // harness instance by name, blocking for the response (or, with background:
 // true, returning immediately with a path to a result file).
 //
-// Background mode's goroutine (askColleagueBackground) never touches the
-// ctx this tool is invoked with — askColleague talks to the colleague via
-// client.Client, which builds its own context.Background() per request
-// (see client.Client.askCtx) — so it never inherits agent/session.go's
-// per-turn cancellation the way Subagent's background mode used to (a real
-// bug, fixed by having it stop using that ctx entirely — see
-// runSubagentBackground's doc comment in subagent.go for the full
-// mechanism). ColleagueAsk was never at risk of it in the first place: it
-// delegates over HTTP to a genuinely separate process, and that request's
-// own context was always independent of the local turn's — the ctx
-// parameter below is read for the SYNCHRONOUS (foreground) path only.
+// The SYNCHRONOUS (foreground) path now genuinely respects the turn's own
+// ctx — Session.Stop() cancelling it cancels every in-flight request to the
+// colleague too, including ones with no per-call timeout of their own
+// (CreateSession/ResumeSession/GetSettings), via client.WithContext (see
+// askColleague). This closes a real, reproduced-live gap: a colleague whose
+// PROCESS was suspended (SIGTSTP/Ctrl+Z, not crashed — its listening socket
+// stayed open, so TCP connected fine but nothing ever answered) left a
+// ColleagueAsk call hung indefinitely with no way to interrupt it — Esc/Stop
+// did nothing because the ctx it cancelled was never wired to the HTTP
+// request actually blocking. A short, ctx-derived liveness probe
+// (colleagueLivenessTimeout) now also fails fast in that exact scenario
+// instead of hanging until Ask's own (much longer) timeout.
+//
+// Background mode's goroutine (askColleagueBackground) deliberately does
+// NOT use this ctx (or WithContext) — same reasoning as Subagent's
+// background mode (see runSubagentBackground's doc comment in subagent.go):
+// a turn's ctx is cancelled unconditionally the moment the turn itself
+// ends, which defeats the entire purpose of "outlive this turn, check the
+// result file later." The ctx parameter below is read for the
+// SYNCHRONOUS (foreground) path only.
 func ColleagueAsk() Tool {
 	return Tool{
 		Def: types.ToolDef{
@@ -232,7 +241,7 @@ func ColleagueAsk() Tool {
 			if args.Timeout > 0 {
 				timeout = time.Duration(args.Timeout) * time.Second
 			}
-			return askColleague(url, args.Prompt, args.Session, images, timeout)
+			return askColleague(ctx, url, args.Prompt, args.Session, images, timeout)
 		},
 	}
 }
@@ -247,11 +256,31 @@ func resolveColleagueURL(name string) (string, bool) {
 	return info.URL, true
 }
 
+// colleagueLivenessTimeout bounds the liveness probe askColleague does
+// before touching a colleague — a quick GET /api/server. Reproduced live:
+// a colleague whose PROCESS was suspended (SIGTSTP/Ctrl+Z) keeps its
+// listening socket open (TCP connects fine), but no goroutine is running
+// to ever answer — every request against it, including ones with no
+// per-call timeout of their own, hangs indefinitely. This probe fails
+// fast in that case instead of discovering it only after Ask's own (much
+// longer, colleagueAskTimeout-scale) timeout finally expires. Short
+// because a healthy colleague's /api/server never legitimately takes
+// long — it only reads a couple of static fields under a brief RLock.
+const colleagueLivenessTimeout = 5 * time.Second
+
 // askColleague creates a session on the colleague (using ITS OWN default
 // model — never overridden by the caller, so delegation respects the
 // colleague's autonomy) or resumes an existing one when session is
 // non-empty, asks synchronously, and closes the session (flushing it to
 // the colleague's disk) before returning.
+//
+// ctx is the CALLING TURN's own context (cancelled by Session.Stop()) —
+// every request this function makes, including the liveness probe below,
+// derives from it via client.WithContext, so Stop()/Esc genuinely
+// interrupts a hung call at any point in the chain, not just the final
+// Ask/AskWithImages step. See ColleagueAsk's doc comment for the full
+// incident this closes. askColleagueBackground deliberately does NOT pass
+// the turn's ctx here — see its own doc comment.
 //
 // Conversations persist across calls: unlike the old always-ephemeral
 // behavior, the session is never deleted — only closed (deactivated,
@@ -270,8 +299,21 @@ func resolveColleagueURL(name string) (string, bool) {
 // — ...]" note (both the fresh-session and resumed-session paths) so the
 // calling model can pass that id as `session` on its next ColleagueAsk
 // call to continue this exact conversation.
-func askColleague(url, prompt, session string, images []types.ImageData, timeout time.Duration) (string, error) {
-	c := client.New(url)
+func askColleague(ctx context.Context, url, prompt, session string, images []types.ImageData, timeout time.Duration) (string, error) {
+	// Liveness probe FIRST, before creating/resuming anything — a colleague
+	// that can't even answer GET /api/server (a couple of static fields,
+	// no session/agent work at all) is not going to complete anything
+	// heavier either. Bounded by BOTH its own short timeout AND the turn's
+	// ctx (whichever fires first) — this does NOT touch instances.json;
+	// that cleanup only happens in RegisterInstance (see server/instances.go).
+	pingCtx, cancel := context.WithTimeout(ctx, colleagueLivenessTimeout)
+	defer cancel()
+	if _, err := client.New(url, client.WithContext(pingCtx)).GetServerInfo(); err != nil {
+		err := fmt.Errorf("colleague at %s is not responding: %w", url, err)
+		return "Colleague is not responding (may have crashed or been suspended) — use ColleagueList to pick a different one.", err
+	}
+
+	c := client.New(url, client.WithContext(ctx))
 
 	var sessID string
 	if session != "" {
@@ -344,6 +386,17 @@ func askColleague(url, prompt, session string, images []types.ImageData, timeout
 // for why: nothing is blocked waiting on this goroutine, so there is
 // nothing to protect by cutting it off. session behaves identically to the
 // synchronous path (create-or-resume, close-never-delete when done).
+//
+// Uses context.Background() for the goroutine, NEVER the calling turn's
+// ctx — see ColleagueAsk's doc comment (mirrors runSubagentBackground's
+// identical, already-fixed reasoning in subagent.go): a turn's ctx is
+// cancelled unconditionally the instant the turn itself ends, which would
+// kill this goroutine before a genuinely slow colleague ever finishes —
+// exactly the case background mode exists to tolerate. The liveness probe
+// inside askColleague still applies here (bounded by its own short timeout
+// derived from this same context.Background()), so a suspended/dead
+// colleague still fails fast instead of hanging forever even in
+// background mode.
 func askColleagueBackground(url, colleagueName, prompt, session string, images []types.ImageData) (string, error) {
 	f, err := os.CreateTemp("", "harness-colleague-*.txt")
 	if err != nil {
@@ -353,7 +406,7 @@ func askColleagueBackground(url, colleagueName, prompt, session string, images [
 	f.Close()
 
 	go func() {
-		text, err := askColleague(url, prompt, session, images, 0) // 0 = no timeout
+		text, err := askColleague(context.Background(), url, prompt, session, images, 0) // 0 = no timeout
 		result := text
 		if err != nil {
 			result = fmt.Sprintf("Error: %v\n\n%s", err, text)

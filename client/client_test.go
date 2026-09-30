@@ -1,10 +1,12 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // TestDoSuccessRoundTrip verifies do() sends the method/path/body correctly
@@ -227,5 +229,80 @@ func TestListSessionsCWDFilter(t *testing.T) {
 	// the server decodes it back to /tmp/proj via r.URL.Query().Get.
 	if gotQuery != "cwd=%2Ftmp%2Fproj" {
 		t.Errorf("query = %q, want cwd=%%2Ftmp%%2Fproj", gotQuery)
+	}
+}
+
+// TestNewDefaultsToBackgroundContext confirms New() without WithContext
+// behaves exactly as before this option existed — a plain, uncancellable
+// request succeeds normally. Guards against WithContext's addition
+// accidentally changing the zero-option default.
+func TestNewDefaultsToBackgroundContext(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.Listener.Addr().String())
+	if _, err := c.do("GET", "/api/x", nil); err != nil {
+		t.Fatalf("do with no WithContext: %v", err)
+	}
+}
+
+// TestWithContextCancellationAbortsInFlightRequest is the direct regression
+// test for the real incident this option exists to fix: a caller's context
+// being cancelled (e.g. Session.Stop()) must abort a request THIS client is
+// making, even one with no per-call timeout of its own (do()/decode(), not
+// just Ask/AskWithImages which already had their own timeout mechanism).
+func TestWithContextCancellationAbortsInFlightRequest(t *testing.T) {
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-block // never responds until the test tears down
+	}))
+	defer srv.Close()
+	defer close(block) // must close BEFORE srv.Close() — see colleague_test.go's identical note
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	c := New(srv.Listener.Addr().String(), WithContext(ctx))
+	start := time.Now()
+	_, err := c.do("GET", "/api/x", nil)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error after ctx cancellation, got nil")
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("do() took %v after ctx cancellation, want it to return promptly", elapsed)
+	}
+}
+
+// TestAskStillLayersItsOwnTimeoutOverWithContext confirms Ask/AskWithImages'
+// existing per-call timeout still works ON TOP of a WithContext-supplied
+// parent — askCtx wraps context.WithTimeout(c.ctx, timeout), so a client
+// with WithContext(context.Background()) (the common case: no caller
+// cancellation, just a bounded wait) still honors its own timeout exactly
+// as before this change.
+func TestAskStillLayersItsOwnTimeoutOverWithContext(t *testing.T) {
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-block
+	}))
+	defer srv.Close()
+	defer close(block)
+
+	c := New(srv.Listener.Addr().String(), WithContext(context.Background()))
+	start := time.Now()
+	_, err := c.Ask("some-session", "hello", 200*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected a timeout error, got nil")
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("Ask took %v, want it bounded by its own 200ms timeout", elapsed)
 	}
 }
