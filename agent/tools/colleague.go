@@ -146,6 +146,10 @@ type colleagueAskInput struct {
 	Images     []string `json:"images,omitempty"`
 	Timeout    int      `json:"timeout,omitempty"`
 	Background bool     `json:"background,omitempty"`
+	// Session, when set, resumes an existing conversation with this
+	// colleague instead of starting a new one — see askColleague's doc
+	// comment for the full persistence contract.
+	Session string `json:"session,omitempty"`
 }
 
 // colleagueAskTimeout is the default wait when Timeout isn't specified.
@@ -170,7 +174,7 @@ func ColleagueAsk() Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolColleagueAsk,
-			Description: "Delegate a prompt to a specific colleague by name (see ColleagueList). The colleague answers using ITS OWN model, tools, and project context — not yours; this is real delegation, not a call back to yourself. Attach local image paths via `images` if relevant. Blocks until the colleague finishes and returns its final text — set `background: true` to get a result-file path immediately instead of waiting, if the task might take a while (background has no timeout: use it for genuinely slow tasks instead of passing a large `timeout`).",
+			Description: "Delegate a prompt to a specific colleague by name (see ColleagueList). The colleague answers using ITS OWN model, tools, and project context — not yours; this is real delegation, not a call back to yourself. Attach local image paths via `images` if relevant. Blocks until the colleague finishes and returns its final text — set `background: true` to get a result-file path immediately instead of waiting, if the task might take a while (background has no timeout: use it for genuinely slow tasks instead of passing a large `timeout`). Conversations persist: omit `session` to start a new one (the response includes a session id), then pass that id as `session` on later calls to continue the SAME conversation — the colleague keeps full context/history, no need to resend it.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -178,7 +182,8 @@ func ColleagueAsk() Tool {
 					"prompt": {"type": "string", "description": "The prompt to delegate"},
 					"images": {"type": "array", "items": {"type": "string"}, "description": "Local file paths of images to attach (png, jpg, jpeg, gif, webp)"},
 					"timeout": {"type": "integer", "description": "Seconds to wait for a response (default: 120). Ignored when background is true — background waits as long as needed."},
-					"background": {"type": "boolean", "description": "If true, return immediately with a path to a result file instead of blocking, and wait as long as needed (no timeout). Default false."}
+					"background": {"type": "boolean", "description": "If true, return immediately with a path to a result file instead of blocking, and wait as long as needed (no timeout). Default false."},
+					"session": {"type": "string", "description": "Session id from a previous ColleagueAsk response, to continue that conversation with full prior context. Omit to start a new conversation."}
 				},
 				"required": ["colleague", "prompt"]
 			}`),
@@ -220,14 +225,14 @@ func ColleagueAsk() Tool {
 			// compensate by passing artificially large `timeout` values that
 			// don't actually belong to the concept of "don't block".
 			if args.Background {
-				return askColleagueBackground(url, args.Colleague, args.Prompt, images)
+				return askColleagueBackground(url, args.Colleague, args.Prompt, args.Session, images)
 			}
 
 			timeout := colleagueAskTimeout
 			if args.Timeout > 0 {
 				timeout = time.Duration(args.Timeout) * time.Second
 			}
-			return askColleague(url, args.Prompt, images, timeout)
+			return askColleague(url, args.Prompt, args.Session, images, timeout)
 		},
 	}
 }
@@ -244,38 +249,71 @@ func resolveColleagueURL(name string) (string, bool) {
 
 // askColleague creates a session on the colleague (using ITS OWN default
 // model — never overridden by the caller, so delegation respects the
-// colleague's autonomy), asks synchronously, and closes the session.
-func askColleague(url, prompt string, images []types.ImageData, timeout time.Duration) (string, error) {
+// colleague's autonomy) or resumes an existing one when session is
+// non-empty, asks synchronously, and closes the session (flushing it to
+// the colleague's disk) before returning.
+//
+// Conversations persist across calls: unlike the old always-ephemeral
+// behavior, the session is never deleted — only closed (deactivated,
+// flushed to ~/.harness/agent/sessions/ on the colleague, matching every
+// other harness session's lifecycle). A later call passing the same
+// session id back reopens it via ResumeSession, which reloads the full
+// prior history from disk, so the colleague genuinely remembers the
+// conversation instead of starting fresh every time. Closing (not
+// deleting) is required for that resume to have anything to reload — the
+// defer below MUST keep the Close call even though nothing consumes its
+// result immediately. No automatic cleanup of abandoned conversations
+// exists yet (same trade-off harness already accepts for its own
+// sessions) — accepted for now, revisit if it becomes a real problem.
+//
+// The response text always carries a trailing "[colleague session: <id>
+// — ...]" note (both the fresh-session and resumed-session paths) so the
+// calling model can pass that id as `session` on its next ColleagueAsk
+// call to continue this exact conversation.
+func askColleague(url, prompt, session string, images []types.ImageData, timeout time.Duration) (string, error) {
 	c := client.New(url)
 
-	settings, err := c.GetSettings()
-	if err != nil {
-		return fmt.Sprintf("Error reaching colleague: %v", err), err
-	}
-	model := settings.ActiveModel
-	if model == "" {
-		models, err := c.ListModels()
-		if err != nil || len(models) == 0 {
-			err := fmt.Errorf("colleague has no active model configured")
-			return err.Error(), err
+	var sessID string
+	if session != "" {
+		sess, err := c.ResumeSession(session)
+		if err != nil {
+			// No silent fallback to a fresh session — a resume failure (the
+			// session id is unknown, was hand-edited, or no longer exists on
+			// this colleague) must surface clearly so the caller can decide
+			// whether to retry with session omitted, rather than silently
+			// losing the thread and having the colleague answer as if it
+			// remembered when it doesn't.
+			err := fmt.Errorf("colleague session %q not found: %w", session, err)
+			return fmt.Sprintf("Colleague session %q not found or no longer available. Omit `session` to start a new conversation.", session), err
 		}
-		model = models[0].Model
+		sessID = sess.ID
+	} else {
+		settings, err := c.GetSettings()
+		if err != nil {
+			return fmt.Sprintf("Error reaching colleague: %v", err), err
+		}
+		model := settings.ActiveModel
+		if model == "" {
+			models, err := c.ListModels()
+			if err != nil || len(models) == 0 {
+				err := fmt.Errorf("colleague has no active model configured")
+				return err.Error(), err
+			}
+			model = models[0].Model
+		}
+
+		sess, err := c.CreateSession(model, "", "")
+		if err != nil {
+			return fmt.Sprintf("Error creating session on colleague: %v", err), err
+		}
+		sessID = sess.ID
 	}
 
-	sess, err := c.CreateSession(model, "", "")
-	if err != nil {
-		return fmt.Sprintf("Error creating session on colleague: %v", err), err
-	}
-	// Close deactivates the session (removes it from the colleague's active
-	// set); it does NOT remove its .jsonl/.meta.json from disk. Delegation
-	// sessions are purely ephemeral — nothing in them is worth keeping once the
-	// answer is back — so also delete, or every ColleagueAsk call leaves
-	// permanent litter in the colleague's ~/.harness/agent/sessions/. Runs even
-	// if Ask/AskWithImages below errors (timeout, colleague crash, etc.) —
-	// defer always fires.
+	// Close (never delete) so a later call can ResumeSession this same id —
+	// see this function's doc comment. Runs even if Ask/AskWithImages below
+	// errors (timeout, colleague crash, etc.) — defer always fires.
 	defer func() {
-		c.CloseSession(sess.ID)  //nolint:errcheck
-		c.DeleteSession(sess.ID) //nolint:errcheck
+		c.CloseSession(sessID) //nolint:errcheck
 	}()
 
 	var (
@@ -283,9 +321,9 @@ func askColleague(url, prompt string, images []types.ImageData, timeout time.Dur
 		ask  error
 	)
 	if len(images) > 0 {
-		text, ask = c.AskWithImages(sess.ID, prompt, images, timeout)
+		text, ask = c.AskWithImages(sessID, prompt, images, timeout)
 	} else {
-		text, ask = c.Ask(sess.ID, prompt, timeout)
+		text, ask = c.Ask(sessID, prompt, timeout)
 	}
 	if ask != nil {
 		// A timeout gets a clean, actionable message (no partial exists anyway —
@@ -296,14 +334,17 @@ func askColleague(url, prompt string, images []types.ImageData, timeout time.Dur
 		}
 		return fmt.Sprintf("Colleague error: %v", ask), ask
 	}
-	return text, nil
+	return fmt.Sprintf("%s\n\n[colleague session: %s — pass this as `session` to continue this conversation]", text, sessID), nil
 }
 
 // askColleagueBackground runs askColleague in a goroutine and writes the
-// result to a temp file, returning immediately with that path. No timeout —
-// see the comment at the ColleagueAsk call site for why: nothing is blocked
-// waiting on this goroutine, so there is nothing to protect by cutting it off.
-func askColleagueBackground(url, colleagueName, prompt string, images []types.ImageData) (string, error) {
+// result (including the trailing "[colleague session: ...]" note — see
+// askColleague's doc comment) to a temp file, returning immediately with
+// that path. No timeout — see the comment at the ColleagueAsk call site
+// for why: nothing is blocked waiting on this goroutine, so there is
+// nothing to protect by cutting it off. session behaves identically to the
+// synchronous path (create-or-resume, close-never-delete when done).
+func askColleagueBackground(url, colleagueName, prompt, session string, images []types.ImageData) (string, error) {
 	f, err := os.CreateTemp("", "harness-colleague-*.txt")
 	if err != nil {
 		return fmt.Sprintf("Error creating result file: %v", err), err
@@ -312,7 +353,7 @@ func askColleagueBackground(url, colleagueName, prompt string, images []types.Im
 	f.Close()
 
 	go func() {
-		text, err := askColleague(url, prompt, images, 0) // 0 = no timeout
+		text, err := askColleague(url, prompt, session, images, 0) // 0 = no timeout
 		result := text
 		if err != nil {
 			result = fmt.Sprintf("Error: %v\n\n%s", err, text)

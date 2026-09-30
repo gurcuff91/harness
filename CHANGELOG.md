@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.78.0] - 2026-09-26
+
+### Added — `ColleagueAsk` conversations now persist across calls instead of being torn down every time
+Previously every `ColleagueAsk` call created a session on the colleague, asked it, then closed AND deleted it unconditionally — each delegation was a fresh, memoryless conversation, so a follow-up question required resending all prior context by hand, and the colleague had no way to actually hold a back-and-forth.
+
+- New optional `session` parameter on the `ColleagueAsk` tool. Omit it (default `""`) to start a new conversation — the colleague creates a session, answers, and the response carries a trailing `[colleague session: <id> — pass this as \`session\` to continue this conversation]` note. Pass that id back as `session` on a later call to resume the SAME session (`ResumeSession`, reloading its full prior history from disk) instead of starting over — the colleague genuinely remembers what was discussed.
+- The session is now only ever **closed** (flushed to the colleague's disk, deactivated) when a turn finishes, never deleted — deletion is what made persistence impossible in the first place, since a `ResumeSession` needs something on disk to reload. No automatic cleanup of abandoned conversations exists yet (same trade-off harness already accepts for its own sessions) — deliberately deferred; revisit only if it becomes a real problem in practice.
+- An unknown/invalid `session` id fails with a clear, actionable error (no silent fallback to a fresh session) — silently losing the thread while looking like it continued would be worse than a loud failure the model can react to by retrying with `session` omitted.
+- `background: true` mode got the identical treatment — same create-or-resume/close-never-delete contract, same trailing session note written to the result file.
+- The `## Colleagues` system-prompt section (`agent/agent.go`, only present when `AgentWithColleagues`/`EnableColleagues` is on) no longer claims "each delegation is a fresh session, not a shared memory of past exchanges" — it now explains how to continue a conversation via `session`.
+- New tests (`agent/tools/colleague_test.go`, a minimal in-memory fake colleague server via `httptest`): a fresh call creates-and-closes (never deletes) with the session note present; a follow-up call with `session` resumes the exact same session (no second one created, both turns recorded against it); an unknown `session` fails clearly with zero sessions created; background mode follows the identical contract.
+- Full suite + `go vet` green; `gofmt -l` clean.
+
 ## [0.77.1] - 2026-09-26
 
 ### Fix — `opencode-go` rejected every request with `400 MissingSessionID`
