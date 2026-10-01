@@ -462,19 +462,23 @@ func BuildAnthropicThinkingFull(model, level string, maxTokens int) (ThinkingCon
 		if maxTokens < 16000 {
 			cfg.MaxTokens = 16000
 		}
-		// output_config is TOP-LEVEL in the request body, not inside thinking
+		// output_config is TOP-LEVEL in the request body, not inside
+		// thinking. No ModelMeta available on this fallback path (see
+		// this function's own doc comment), so no real per-model
+		// capability data to validate against — pass the level through
+		// as-is (including "max", now one of harness's universal levels)
+		// and let the provider's own 400 surface if this specific model
+		// genuinely doesn't support it. The real production path
+		// (BuildAnthropicThinkingFromMeta → resolveAnthropicEffort)
+		// degrades silently using actual API-reported capability instead.
 		if level != "" {
-			// Map harness xhigh → Anthropic max (supported: low, medium, high, max)
-			effort := level
-			if effort == "xhigh" {
-				effort = "max"
-			}
-			cfg.OutputConfig = map[string]any{"effort": effort}
+			cfg.OutputConfig = map[string]any{"effort": level}
 		}
 		return cfg, nil
 	}
-	// Legacy budget_tokens for non-adaptive models
-	budget := map[string]int{"low": 2048, "medium": 5000, "high": 10240, "xhigh": 32000}
+	// Legacy budget_tokens for non-adaptive models — "max" has no legacy
+	// budget-based equivalent, collapses to the same ceiling "xhigh" uses.
+	budget := map[string]int{"low": 2048, "medium": 5000, "high": 10240, "xhigh": 32000, "max": 32000}
 	b, ok := budget[level]
 	if !ok {
 		b = 10240
@@ -529,8 +533,52 @@ func BuildAnthropicThinkingFromMeta(meta *types.ModelMeta, level string, maxToke
 	// "off"/no-thinking-level request against these models, not just
 	// compaction. See buildThinkingConfig's own comment for the fix.
 	legacyOK := meta.ThinkingLegacy || !meta.ThinkingAdaptive
-	cfg, _ := buildThinkingConfig(meta.ThinkingAdaptive, legacyOK, level, maxTokens)
+	cfg, _ := buildThinkingConfig(meta.ThinkingAdaptive, legacyOK, level, maxTokens, meta.EffortLevels)
 	return cfg
+}
+
+// anthropicEffortOrder is harness's universal thinking levels, weakest to
+// strongest, restricted to the ones that map to Anthropic's own effort
+// concept (excludes "off", handled separately by the legacyOK branch).
+var anthropicEffortOrder = []string{"low", "medium", "high", "xhigh", "max"}
+
+// resolveAnthropicEffort picks the wire-level effort string to actually
+// send for a requested level, given this model's real, API-reported
+// EffortLevels (see types.ModelMeta.EffortLevels' doc comment). Mirrors
+// Claude Code's own documented behavior for an unsupported level: fall
+// back SILENTLY to the highest supported level at or below the request —
+// never reject the request, never silently upgrade past what was asked.
+//
+// levels == nil (provider reported nothing, e.g. called via the
+// no-ModelMeta fallback path) means "unknown" — returns level unchanged,
+// same as before this function existed, since there's nothing to validate
+// against. A level absent from a non-nil map counts as unsupported (false),
+// consistent with the EffortLevels doc comment.
+func resolveAnthropicEffort(level string, levels map[string]bool) string {
+	if levels == nil {
+		return level
+	}
+	idx := -1
+	for i, l := range anthropicEffortOrder {
+		if l == level {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return level // not one of our known levels — pass through as-is
+	}
+	for i := idx; i >= 0; i-- {
+		if levels[anthropicEffortOrder[i]] {
+			return anthropicEffortOrder[i]
+		}
+	}
+	// Nothing at or below the requested level is supported — every
+	// adaptive model accepts at least "low" in practice (confirmed live
+	// across the whole catalog), so this is intentionally unreachable in
+	// normal operation; returning the original level rather than panicking
+	// or erroring keeps this function total.
+	return level
 }
 
 // buildThinkingConfig builds the wire thinking config. legacyOK reports
@@ -539,8 +587,10 @@ func BuildAnthropicThinkingFromMeta(meta *types.ModelMeta, level string, maxToke
 // ThinkingLegacy=false), which reject "disabled" entirely and must express
 // "no/minimal thinking" as {"type":"adaptive","effort":"low"} instead (the
 // lowest effort Anthropic supports — confirmed live to work as the
-// closest equivalent to "off" these models allow).
-func buildThinkingConfig(adaptive, legacyOK bool, level string, maxTokens int) (ThinkingConfig, error) {
+// closest equivalent to "off" these models allow). effortLevels is this
+// model's real, API-reported per-level support (nil when unknown — see
+// resolveAnthropicEffort).
+func buildThinkingConfig(adaptive, legacyOK bool, level string, maxTokens int, effortLevels map[string]bool) (ThinkingConfig, error) {
 	if level == "" || level == "off" {
 		if legacyOK {
 			return ThinkingConfig{Thinking: map[string]any{"type": "disabled"}, MaxTokens: maxTokens}, nil
@@ -560,16 +610,14 @@ func buildThinkingConfig(adaptive, legacyOK bool, level string, maxTokens int) (
 			cfg.MaxTokens = 16000
 		}
 		if level != "" {
-			// Map harness xhigh → Anthropic max (supported: low, medium, high, max)
-			effort := level
-			if effort == "xhigh" {
-				effort = "max"
-			}
-			cfg.OutputConfig = map[string]any{"effort": effort}
+			cfg.OutputConfig = map[string]any{"effort": resolveAnthropicEffort(level, effortLevels)}
 		}
 		return cfg, nil
 	}
-	budget := map[string]int{"low": 2048, "medium": 5000, "high": 10240, "xhigh": 32000}
+	// Legacy budget_tokens for non-adaptive models — "max" has no legacy
+	// budget-based equivalent (effort is an adaptive-only concept), so it
+	// collapses to the same generous legacy ceiling "xhigh" already used.
+	budget := map[string]int{"low": 2048, "medium": 5000, "high": 10240, "xhigh": 32000, "max": 32000}
 	b, ok := budget[level]
 	if !ok {
 		b = 10240

@@ -111,7 +111,7 @@ func AgentWithOptions(o agent.AgentOptions) AgentOption {
 }
 
 // AgentWithThinking sets the reasoning effort: "off", "low", "medium",
-// "high", or "xhigh".
+// "high", "xhigh", or "max".
 func AgentWithThinking(level string) AgentOption {
 	return func(o *agent.AgentOptions) { o.ThinkingLevel = level }
 }

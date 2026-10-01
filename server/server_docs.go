@@ -503,7 +503,7 @@ const openAPISpecTemplate = `{
         "type": "object",
         "properties": {
           "active_model":   { "type": "string", "example": "anthropic/claude-opus-4-8" },
-          "thinking_level": { "type": "string", "enum": ["off","low","medium","high","xhigh"] }
+          "thinking_level": { "type": "string", "enum": ["off","low","medium","high","xhigh","max"] }
         }
       },
       "Provider": {

@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.79.0] - 2026-09-30
+
+### Added — `max` thinking level (`off|low|medium|high|xhigh|max`), and a real fix for how `xhigh` reaches Anthropic
+Investigated after noticing Anthropic's own docs now list a level beyond `xhigh`. Confirmed live (a real `GET /v1/models` call against `api.anthropic.com` with connected `claude-oauth` credentials) that Anthropic's order is `low → medium → high → xhigh → max` — `xhigh` was never replaced by `max`, they're two distinct, consecutive levels, and support for each is genuinely per-model (e.g. `opus-4-6`/`sonnet-4-6` support `max` but NOT `xhigh` — `xhigh` didn't exist until Opus 4.7).
+
+- **The real bug this surfaced**: harness was unconditionally translating every `xhigh` request into Anthropic's own `"max"` value, for every adaptive model. This silently escalated cost/latency beyond what was actually requested (`xhigh` ≠ `max`), and made Anthropic's genuine `max` level completely unreachable from harness — no path existed to ask for it.
+- **New universal level**: `max` joins `off|low|medium|high|xhigh` everywhere a thinking level is accepted or displayed — `internal/config` (validation), the CLI (`--thinking` enum on `run`/`serve`/`tui`), `harness.go`'s `AgentWithThinking`, all three chat-platform transports (Telegram/Slack/ACP pickers and help text), `server`'s `/thinking` command values and OpenAPI spec, and the TUI banner.
+- **`types.ModelMeta.EffortLevels map[string]bool`**: new generic, provider-agnostic field — any provider whose API reports real per-model effort-level support can populate it (`{"low":true,...,"xhigh":false,"max":true}`); absent from the map (or a nil map) means "unknown", not "unsupported". Anthropic (`internal/providers/anthropic.go`) now parses this from `GET /v1/models`'s `capabilities.effort.<level>.supported` field, confirmed against the real response shape.
+- **Silent fallback, matching the rest of the industry**: researched Claude Code, OpenCode, and Codex's own documented/observed behavior before deciding — all of them degrade a requested-but-unsupported level to the highest one the model actually supports, silently, never rejecting the request. `internal/providers/llm/anthropic.go`'s new `resolveAnthropicEffort` does exactly this using the real `EffortLevels` data (e.g. `xhigh` on an `opus-4-6`-shaped model falls back to `high`, never jumping UP to `max`); falls back to passing the level through unchanged when `EffortLevels` is nil (capability unknown — same as harness's behavior before this existed).
+- **Other providers audited individually** (not all needed changes):
+  - **Codex OAuth**: `max` clamps to `"high"` alongside `xhigh` — Codex has neither level natively, no behavior change beyond covering the new name.
+  - **DeepSeek** (via the OpenAI-compatible dialect): confirmed against DeepSeek's own docs it has exactly 3 real effort values (`low`/`high`/`max`) and collapses anything else server-side. `max` now passes through unchanged (it's a real DeepSeek value) instead of being the ONLY thing harness forced into that slot before.
+  - **Ollama / Ollama Cloud**: confirmed against Ollama's official `/v1/chat/completions` docs that `reasoning_effort` accepts real `"low"/"medium"/"high"/"max"` values, resolved per-model via `/api/show` metadata with a documented safe fallback — harness was previously sending NO reasoning_effort at all to Ollama for any level. New opt-in `OpenAIRequest.OllamaReasoningEffort` flag (model ID alone can't distinguish Ollama from MiniMax/CustomOpenAI/OpenCode Go, which all share the same code path) now wires this through; `xhigh` clamps to Ollama's own `"max"` ceiling.
+  - **MiniMax / CustomOpenAI / OpenCode Go**: confirmed no real effort granularity exists to map (MiniMax's hosted API is a strict on/off/adaptive toggle, no budget or effort concept) — left unaffected.
+- New tests: `resolveAnthropicEffort`'s full fallback matrix including the asymmetric `opus-4-6` case (`internal/providers/llm/anthropic_thinking_test.go`), `applyAnthropicCapabilities` against 3 real, live-captured response shapes (`opus-4-7` full support, `opus-4-6` xhigh-unsupported/max-supported, `haiku-4-5` legacy-only — `internal/providers/anthropic_capabilities_test.go`), and `translateThinkingLevel`'s per-provider matrix for DeepSeek/o-series/Ollama/generic (`internal/providers/llm/thinking_level_test.go`). Existing `internal/config/settings_test.go` cases updated for the new valid level.
+- Full suite + `go vet` green; `gofmt -l` clean.
+
 ## [0.78.1] - 2026-09-30
 
 ### Fix — `ColleagueAsk` hung indefinitely against a suspended colleague, with no way to interrupt it (Esc/Stop did nothing)

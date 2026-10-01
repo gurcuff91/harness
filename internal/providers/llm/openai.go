@@ -23,6 +23,16 @@ type OpenAIRequest struct {
 	// OpenAI-compatible [DONE] sentinel to complete after a terminal chunk.
 	// It is intentionally opt-in: unexpected EOF remains an error by default.
 	AllowCleanEOF bool
+	// OllamaReasoningEffort opts into Ollama's own real "low"/"medium"/
+	// "high"/"max" reasoning_effort values (confirmed against Ollama's
+	// official /v1/chat/completions docs) instead of the generic
+	// provider's default (no reasoning_effort sent at all). Model ID alone
+	// can't distinguish Ollama from other OpenAI-compatible providers
+	// sharing this same code path (MiniMax, CustomOpenAI, OpenCode Go all
+	// route through buildOpenAIBody too) — this explicit opt-in, set only
+	// by internal/providers/ollama.go and ollama_cloud.go, is the correct
+	// signal, same pattern as ReasoningSplit/AllowCleanEOF above.
+	OllamaReasoningEffort bool
 }
 
 // openAIWireRequest is the internal wire format sent to the API.
@@ -55,7 +65,7 @@ type openAIFunction struct {
 func DoOpenAIStream(ctx context.Context, client *http.Client, apiURL, apiKey string,
 	req *OpenAIRequest, extraHeaders map[string]string, cb types.StreamCallback) (*types.Response, error) {
 
-	body, err := buildOpenAIBody(req.Request)
+	body, err := buildOpenAIBody(req)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +181,8 @@ func translateMessageToOpenAI(msg types.Message) []json.RawMessage {
 	return nil
 }
 
-func buildOpenAIBody(req *types.Request) (*openAIRequest, error) {
+func buildOpenAIBody(oaiReq *OpenAIRequest) (*openAIRequest, error) {
+	req := oaiReq.Request
 	messages := make([]json.RawMessage, 0, len(req.Messages)+1)
 	if req.SystemPrompt != "" {
 		sysMsg, _ := json.Marshal(map[string]string{"role": "system", "content": req.SystemPrompt})
@@ -207,7 +218,7 @@ func buildOpenAIBody(req *types.Request) (*openAIRequest, error) {
 		} else {
 			t := true
 			body.Think = &t
-			body.ReasoningEffort = translateThinkingLevel(req.Model, level)
+			body.ReasoningEffort = translateThinkingLevel(req.Model, level, oaiReq.OllamaReasoningEffort)
 			if isDeepSeek {
 				body.Thinking = map[string]any{"type": "enabled"}
 			}
@@ -216,9 +227,27 @@ func buildOpenAIBody(req *types.Request) (*openAIRequest, error) {
 	return body, nil
 }
 
-func translateThinkingLevel(model, level string) string {
+// translateThinkingLevel maps harness's universal thinking level to the
+// wire-level reasoning_effort string for OpenAI-compatible providers.
+// ollamaReasoningEffort is set only by internal/providers/{ollama,
+// ollama_cloud}.go (via OpenAIRequest.OllamaReasoningEffort) — model ID
+// alone can't distinguish Ollama from other providers sharing this same
+// code path (MiniMax, CustomOpenAI, OpenCode Go).
+func translateThinkingLevel(model, level string, ollamaReasoningEffort bool) string {
 	if strings.Contains(model, "deepseek") {
-		if level == "xhigh" {
+		// DeepSeek's own API has exactly 3 real effort values (low, high,
+		// max — confirmed against official docs) and collapses any other
+		// requested name server-side (e.g. xhigh→high, ultra→max). "max"
+		// is one of harness's own universal levels now, so it's passed
+		// through unchanged instead of being forced here — DeepSeek
+		// already accepts it as one of its 3 native values. xhigh still
+		// collapses to "high" (its own documented mapping), matching
+		// DeepSeek's behavior rather than second-guessing it. NOTE: "low"
+		// and "medium" both still fall through to the pre-existing "high"
+		// default below — that's unrelated to this xhigh/max change and
+		// left untouched (see Harness's own docs/changelog for the
+		// decision not to touch it here).
+		if level == "max" {
 			return "max"
 		}
 		return "high"
@@ -230,7 +259,22 @@ func translateThinkingLevel(model, level string) string {
 		case "medium":
 			return "medium"
 		default:
+			// o-series has no xhigh/max of its own — both clamp to "high",
+			// same as the pre-existing high/xhigh handling.
 			return "high"
+		}
+	}
+	if ollamaReasoningEffort {
+		// Ollama's OpenAI-compatible /v1/chat/completions endpoint accepts
+		// reasoning_effort directly with "low"/"medium"/"high"/"max"
+		// (confirmed against Ollama's own docs) — a real native "max", not
+		// a collapsed alias. xhigh has no Ollama equivalent, so it clamps
+		// to the highest level Ollama actually has.
+		switch level {
+		case "low", "medium", "high", "max":
+			return level
+		case "xhigh":
+			return "max"
 		}
 	}
 	return ""

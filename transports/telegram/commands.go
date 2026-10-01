@@ -411,7 +411,7 @@ func (t *Transport) cmdModel(ctx context.Context, chatID int64) {
 }
 
 // thinkingLevels are the valid thinking levels in display order.
-var thinkingLevels = []string{"off", "low", "medium", "high", "xhigh"}
+var thinkingLevels = []string{"off", "low", "medium", "high", "xhigh", "max"}
 
 // cmdThinking sends an inline keyboard so the user can pick a thinking level.
 func (t *Transport) cmdThinking(ctx context.Context, chatID int64) {

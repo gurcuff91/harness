@@ -15,7 +15,7 @@ type Request struct {
 	Messages      []Message `json:"messages"` // provider-agnostic — translated internally
 	Tools         []ToolDef `json:"tools,omitempty"`
 	MaxTokens     int       `json:"max_tokens"`
-	ThinkingLevel string    `json:"thinking_level,omitempty"` // disable|low|medium|high|xhigh
+	ThinkingLevel string    `json:"thinking_level,omitempty"` // disable|low|medium|high|xhigh|max
 }
 
 // Response represents an LLM completion response.

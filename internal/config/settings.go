@@ -69,13 +69,14 @@ var thinkingLevels = map[string]bool{
 	"medium": true,
 	"high":   true,
 	"xhigh":  true,
+	"max":    true,
 }
 
 // ValidThinkingLevel reports whether level is an accepted thinking level
-// (off|low|medium|high|xhigh). Exposed so callers can VALIDATE a level without
-// persisting it — e.g. a session's /thinking command applies the level to the
-// live session only, and must reject an invalid value first without touching
-// the global default that SetThinkingLevel would write.
+// (off|low|medium|high|xhigh|max). Exposed so callers can VALIDATE a level
+// without persisting it — e.g. a session's /thinking command applies the
+// level to the live session only, and must reject an invalid value first
+// without touching the global default that SetThinkingLevel would write.
 func ValidThinkingLevel(level string) bool {
 	return thinkingLevels[level]
 }
@@ -186,11 +187,11 @@ func (m *SettingsManager) ThinkingLevel() string {
 }
 
 // SetThinkingLevel validates and persists the thinking level. Accepted values:
-// off | low | medium | high | xhigh. Validating here means every caller (HTTP
-// PATCH, session command, ...) gets the same guarantee.
+// off | low | medium | high | xhigh | max. Validating here means every
+// caller (HTTP PATCH, session command, ...) gets the same guarantee.
 func (m *SettingsManager) SetThinkingLevel(level string) error {
 	if !thinkingLevels[level] {
-		return fmt.Errorf("%w: %q (want off|low|medium|high|xhigh)", ErrInvalidThinkingLevel, level)
+		return fmt.Errorf("%w: %q (want off|low|medium|high|xhigh|max)", ErrInvalidThinkingLevel, level)
 	}
 	release, err := AcquireFileLock(m.path)
 	if err != nil {

@@ -174,7 +174,10 @@ func (o *OllamaCloud) validateKey() bool {
 }
 
 func (o *OllamaCloud) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
-	return llm.DoOpenAIStream(ctx, o.client, o.baseURL+"/chat/completions", o.apiKey, &llm.OpenAIRequest{Request: req}, nil, cb)
+	// Same OllamaReasoningEffort opt-in as local Ollama — Ollama Cloud
+	// shares the same per-model-metadata reasoning_effort resolution
+	// (confirmed: real hosted endpoint built on the same Ollama backend).
+	return llm.DoOpenAIStream(ctx, o.client, o.baseURL+"/chat/completions", o.apiKey, &llm.OpenAIRequest{Request: req, OllamaReasoningEffort: true}, nil, cb)
 }
 
 func fetchOllamaCloudModelInfo(name string) *types.ModelMeta {

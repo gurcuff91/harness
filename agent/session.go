@@ -1052,12 +1052,12 @@ func (s *Session) SwitchModel(ctx context.Context, fullModel string) error {
 }
 
 // SwitchThinking changes the thinking level for this session. The level is
-// validated (off|low|medium|high|xhigh) — an invalid value (including the
-// empty string) is rejected rather than silently coerced to "off", so a
+// validated (off|low|medium|high|xhigh|max) — an invalid value (including
+// the empty string) is rejected rather than silently coerced to "off", so a
 // caller passing a bad level fails loudly instead of masking a bug.
 func (s *Session) SwitchThinking(level string) error {
 	if !config.ValidThinkingLevel(level) {
-		return fmt.Errorf("%w: %q (want off|low|medium|high|xhigh)", config.ErrInvalidThinkingLevel, level)
+		return fmt.Errorf("%w: %q (want off|low|medium|high|xhigh|max)", config.ErrInvalidThinkingLevel, level)
 	}
 	s.mu.Lock()
 	s.thinkingLvl = level

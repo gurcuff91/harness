@@ -139,6 +139,59 @@ func (a *Anthropic) CompleteStream(ctx context.Context, req *types.Request, cb t
 
 const anthropicAPI = "https://api.anthropic.com/v1/messages"
 
+// anthropicEffortLevelKeys are the effort level names fetchAnthropicModels
+// looks for under capabilities.effort in GET /v1/models' response — kept
+// as a package-level var (not inline in applyAnthropicCapabilities) so it
+// mirrors internal/providers/llm's anthropicEffortOrder as the single
+// source of truth for "which levels harness knows about", without an
+// import cycle between the two packages.
+var anthropicEffortLevelKeys = []string{"low", "medium", "high", "xhigh", "max"}
+
+// applyAnthropicCapabilities fills meta's capability fields from the raw
+// capabilities object GET /v1/models returns for one model — pulled out of
+// fetchAnthropicModels as a pure function (no network) so the parsing
+// logic is unit-testable against a captured real response shape without a
+// live API call. caps may be nil (model had no capabilities object at
+// all); every lookup degrades gracefully to the zero value in that case.
+func applyAnthropicCapabilities(meta *types.ModelMeta, caps map[string]any) {
+	if caps == nil {
+		return
+	}
+	// Vision
+	if img, ok := caps["image_input"].(map[string]any); ok {
+		meta.Vision, _ = img["supported"].(bool)
+	}
+	// Thinking capabilities
+	if t, ok := caps["thinking"].(map[string]any); ok {
+		meta.Thinking, _ = t["supported"].(bool)
+		if types2, ok := t["types"].(map[string]any); ok {
+			if adaptive, ok := types2["adaptive"].(map[string]any); ok {
+				meta.ThinkingAdaptive, _ = adaptive["supported"].(bool)
+			}
+			if enabled, ok := types2["enabled"].(map[string]any); ok {
+				meta.ThinkingLegacy, _ = enabled["supported"].(bool)
+			}
+		}
+	}
+	// Effort levels — confirmed live (GET /v1/models) shape:
+	// capabilities.effort.<level>.supported, per level, for every model
+	// (legacy-only models like haiku-4-5 report every level false,
+	// including the overall capabilities.effort.supported). See
+	// types.ModelMeta.EffortLevels' doc comment for the "absent == unknown,
+	// not unsupported" contract this populates.
+	if e, ok := caps["effort"].(map[string]any); ok {
+		levels := map[string]bool{}
+		for _, lvl := range anthropicEffortLevelKeys {
+			if l, ok := e[lvl].(map[string]any); ok {
+				levels[lvl], _ = l["supported"].(bool)
+			}
+		}
+		if len(levels) > 0 {
+			meta.EffortLevels = levels
+		}
+	}
+}
+
 func fetchAnthropicModels(tokenOrKey string) ([]types.ModelMeta, error) {
 	req, _ := http.NewRequest("GET", "https://api.anthropic.com/v1/models", nil)
 	req.Header.Set("x-api-key", tokenOrKey)
@@ -202,25 +255,7 @@ func fetchAnthropicModels(tokenOrKey string) ([]types.ModelMeta, error) {
 			ContextWindow: cw, MaxTokens: mt,
 		}
 
-		// Parse capabilities
-		if m.Capabilities != nil {
-			// Vision
-			if img, ok := m.Capabilities["image_input"].(map[string]any); ok {
-				meta.Vision, _ = img["supported"].(bool)
-			}
-			// Thinking capabilities
-			if t, ok := m.Capabilities["thinking"].(map[string]any); ok {
-				meta.Thinking, _ = t["supported"].(bool)
-				if types2, ok := t["types"].(map[string]any); ok {
-					if adaptive, ok := types2["adaptive"].(map[string]any); ok {
-						meta.ThinkingAdaptive, _ = adaptive["supported"].(bool)
-					}
-					if enabled, ok := types2["enabled"].(map[string]any); ok {
-						meta.ThinkingLegacy, _ = enabled["supported"].(bool)
-					}
-				}
-			}
-		}
+		applyAnthropicCapabilities(&meta, m.Capabilities)
 
 		llm.ApplyRegistryPricing(&meta)
 		metas = append(metas, meta)

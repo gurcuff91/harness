@@ -1202,7 +1202,7 @@ var commands = []commandDef{
 		Name:        "thinking",
 		Description: "Set the thinking level",
 		Params: []paramDef{
-			{Name: "level", Type: "string", Required: true, Values: []string{"off", "low", "medium", "high", "xhigh"}},
+			{Name: "level", Type: "string", Required: true, Values: []string{"off", "low", "medium", "high", "xhigh", "max"}},
 		},
 	},
 	{

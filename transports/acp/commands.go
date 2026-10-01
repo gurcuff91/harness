@@ -44,6 +44,7 @@ func buildConfigOptions(c *client.Client, sessionID string) ([]sessionConfigOpti
 		{Value: "medium", Name: "Medium"},
 		{Value: "high", Name: "High"},
 		{Value: "xhigh", Name: "XHigh"},
+		{Value: "max", Name: "Max"},
 	}
 
 	thinking := sess.Thinking

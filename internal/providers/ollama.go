@@ -106,7 +106,14 @@ func (o *Ollama) FetchModels() ([]types.ModelMeta, error) {
 }
 
 func (o *Ollama) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
-	return llm.DoOpenAIStream(ctx, o.client, o.baseURL+"/v1/chat/completions", "", &llm.OpenAIRequest{Request: req}, nil, cb)
+	// OllamaReasoningEffort: Ollama's /v1/chat/completions accepts a real
+	// reasoning_effort string ("low"/"medium"/"high"/"max", resolved per-
+	// model via /api/show metadata with a documented safe fallback to the
+	// model's own default for an unsupported name) — confirmed against
+	// Ollama's official docs. See OpenAIRequest.OllamaReasoningEffort's
+	// doc comment for why this needs an explicit opt-in rather than
+	// detecting it from the model name.
+	return llm.DoOpenAIStream(ctx, o.client, o.baseURL+"/v1/chat/completions", "", &llm.OpenAIRequest{Request: req, OllamaReasoningEffort: true}, nil, cb)
 }
 
 func OllamaAvailable() bool {

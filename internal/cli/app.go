@@ -77,7 +77,7 @@ func helpWithHiddenDefaultFlags(options kong.HelpOptions, ctx *kong.Context) err
 
 // enumValuesInHelp wraps kong.DefaultHelpValueFormatter to append an enum
 // flag's actual accepted values to its help text — e.g. "Thinking level
-// (off|low|medium|high|xhigh)" — instead of making the user discover them
+// (off|low|medium|high|xhigh|max)" — instead of making the user discover them
 // only after a validation error. The empty string some of our enums accept
 // as a sentinel for "use the settings default" (see the enum gotcha in
 // kong.go) is never listed: it isn't a value the user would type, and

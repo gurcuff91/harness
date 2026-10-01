@@ -672,14 +672,14 @@ func slackHelp(unknown string) string {
 	b.WriteString("• `/reset` — wipe history and stats, start fresh\n")
 	b.WriteString("• `/info` — show session info (model, thinking, tokens, cost, MCPs)\n")
 	b.WriteString("• `/context` — show context window breakdown (system, tools, conversation, free space)\n")
-	b.WriteString("• `/thinking [level]` — show current thinking level or set it (off/low/medium/high/xhigh)\n")
+	b.WriteString("• `/thinking [level]` — show current thinking level or set it (off/low/medium/high/xhigh/max)\n")
 	b.WriteString("• `/model [model]` — show current model or switch to a new one\n")
 	b.WriteString("• `/help` — show this help")
 	return b.String()
 }
 
 // thinkingLevels are the valid thinking levels in order.
-var thinkingLevels = []string{"off", "low", "medium", "high", "xhigh"}
+var thinkingLevels = []string{"off", "low", "medium", "high", "xhigh", "max"}
 
 // cmdThinking handles /thinking and /thinking <level>.
 func (t *Transport) cmdThinking(ctx context.Context, channelID string, fields []string) {

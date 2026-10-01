@@ -23,7 +23,7 @@ var bannerTips = []string{
 	"Tab autocompletes commands and arguments.",
 	"/resume picks up a previous session.",
 	"Configure MCP servers with the 'harness mcp' command.",
-	"/thinking sets the reasoning effort: off·low·medium·high·xhigh.",
+	"/thinking sets the reasoning effort: off·low·medium·high·xhigh·max.",
 	"Send a message mid-turn and it queues automatically.",
 	"/compact summarizes the conversation to reclaim context.",
 }

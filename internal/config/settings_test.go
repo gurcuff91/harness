@@ -111,12 +111,12 @@ func bumpSettingsMtime(t *testing.T, path string, delta time.Duration) {
 // levels and rejects anything else without persisting.
 func TestThinkingLevelValidation(t *testing.T) {
 	m := newTestSettings(t, `{"thinking_level":"medium"}`)
-	for _, lvl := range []string{"off", "low", "medium", "high", "xhigh"} {
+	for _, lvl := range []string{"off", "low", "medium", "high", "xhigh", "max"} {
 		if err := m.SetThinkingLevel(lvl); err != nil {
 			t.Errorf("level %q: expected accepted, got %v", lvl, err)
 		}
 	}
-	for _, lvl := range []string{"", "disable", "medim", "MEDIUM", "max"} {
+	for _, lvl := range []string{"", "disable", "medim", "MEDIUM", "ultra"} {
 		if err := m.SetThinkingLevel(lvl); err == nil {
 			t.Errorf("level %q: expected rejected, got nil", lvl)
 		} else if !errors.Is(err, ErrInvalidThinkingLevel) {
@@ -124,8 +124,8 @@ func TestThinkingLevelValidation(t *testing.T) {
 		}
 	}
 	// After the rejected writes, the last accepted value must still be intact.
-	if got := m.ThinkingLevel(); got != "xhigh" {
-		t.Errorf("invalid write mutated state: ThinkingLevel = %q, want xhigh", got)
+	if got := m.ThinkingLevel(); got != "max" {
+		t.Errorf("invalid write mutated state: ThinkingLevel = %q, want max", got)
 	}
 }
 
@@ -275,12 +275,12 @@ func TestMCPArgv(t *testing.T) {
 // which must reject an invalid value before applying it to the live session,
 // without writing the global default).
 func TestValidThinkingLevel(t *testing.T) {
-	for _, ok := range []string{"off", "low", "medium", "high", "xhigh"} {
+	for _, ok := range []string{"off", "low", "medium", "high", "xhigh", "max"} {
 		if !ValidThinkingLevel(ok) {
 			t.Errorf("ValidThinkingLevel(%q) = false, want true", ok)
 		}
 	}
-	for _, bad := range []string{"", "OFF", "none", "max", "xxhigh", " high"} {
+	for _, bad := range []string{"", "OFF", "none", "ultra", "xxhigh", " high"} {
 		if ValidThinkingLevel(bad) {
 			t.Errorf("ValidThinkingLevel(%q) = true, want false", bad)
 		}

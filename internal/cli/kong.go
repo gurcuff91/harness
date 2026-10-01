@@ -79,7 +79,7 @@ var CLI struct {
 
 type tuiCmd struct {
 	Model     string `help:"Model (provider/model)"`
-	Thinking  string `enum:",off,low,medium,high,xhigh" default:"" help:"Thinking level"`
+	Thinking  string `enum:",off,low,medium,high,xhigh,max" default:"" help:"Thinking level"`
 	Resume    string `help:"Resume session by id"`
 	Scheduler bool   `help:"Run the cron scheduler engine"`
 	Prompt    string `short:"p" help:"Run a single-turn prompt instead of the interactive TUI"`
@@ -120,7 +120,7 @@ type telegramCmd struct {
 type telegramRunCmd struct {
 	Token       string `env:"TELEGRAM_BOT_TOKEN" help:"Bot token (or set TELEGRAM_BOT_TOKEN)"`
 	Model       string `help:"Model override (provider/model)"`
-	Thinking    string `enum:",off,low,medium,high,xhigh" default:"" help:"Thinking level override"`
+	Thinking    string `enum:",off,low,medium,high,xhigh,max" default:"" help:"Thinking level override"`
 	Scheduler   bool   `help:"Run the cron scheduler engine"`
 	AllowUnpair bool   `name:"allow-unpair" help:"Accept any chat, auto-pairing on first contact"`
 }
@@ -158,7 +158,7 @@ type slackRunCmd struct {
 	XoxC      string `name:"xoxc" env:"SLACK_XOXC" help:"xoxc- session token (or set SLACK_XOXC)"`
 	XoxD      string `name:"xoxd" env:"SLACK_XOXD" help:"xoxd- session cookie (or set SLACK_XOXD)"`
 	Model     string `help:"Model override (provider/model)"`
-	Thinking  string `enum:",off,low,medium,high,xhigh" default:"" help:"Thinking level override"`
+	Thinking  string `enum:",off,low,medium,high,xhigh,max" default:"" help:"Thinking level override"`
 	Scheduler bool   `help:"Run the cron scheduler engine"`
 }
 

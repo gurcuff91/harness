@@ -68,7 +68,7 @@ type Agent struct {
 // AgentOptions configures a new Agent.
 type AgentOptions struct {
 	// ── Thinking ─────────────────────────────────────────────────────────
-	ThinkingLevel string // "disable"|"low"|"medium"|"high"|"xhigh"
+	ThinkingLevel string // "disable"|"low"|"medium"|"high"|"xhigh"|"max"
 
 	// ── Behavior ─────────────────────────────────────────────────────────
 	SystemPrompt  string   // base system prompt for all sessions

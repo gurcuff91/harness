@@ -411,14 +411,14 @@ func buildCodexRequest(req *types.Request, sessionID string) (*codexRequest, err
 	// System prompt → top-level instructions (the backend requires this).
 	instructions := req.SystemPrompt
 
-	// Reasoning effort from thinking level. Codex has no xhigh — clamp to
-	// high. "off" omits the field entirely (the backend picks the model's
-	// own default_reasoning_level).
+	// Reasoning effort from thinking level. Codex has no xhigh/max — clamp
+	// both to high. "off" omits the field entirely (the backend picks the
+	// model's own default_reasoning_level).
 	var reasoning *codexReasoning
 	switch req.ThinkingLevel {
 	case "low", "medium", "high":
 		reasoning = &codexReasoning{Effort: req.ThinkingLevel}
-	case "xhigh":
+	case "xhigh", "max":
 		reasoning = &codexReasoning{Effort: "high"}
 	}
 
