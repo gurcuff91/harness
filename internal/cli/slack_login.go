@@ -38,7 +38,7 @@ func slackLoginStatus(ctx context.Context) error {
 //  2. Ask for xoxd cookie
 //  3. Derive xoxc from workspace page
 //  4. Verify with auth.test
-//  5. Save to ~/.harness/slack.json
+//  5. Save (xoxc/xoxd to credentials.json, the rest to settings.json)
 func slackLoginInteractive(ctx context.Context) error {
 	r := bufio.NewReader(os.Stdin)
 
@@ -85,7 +85,7 @@ func slackLoginInteractive(ctx context.Context) error {
 	}
 
 	fmt.Printf("\n✓ Authenticated as %s  (team: %s)\n", creds.UserID, creds.Team)
-	fmt.Printf("✓ Credentials saved to ~/.harness/slack.json\n")
+	fmt.Printf("✓ Credentials saved\n")
 	fmt.Println("\nYou can now run: harness slack")
 	return nil
 }

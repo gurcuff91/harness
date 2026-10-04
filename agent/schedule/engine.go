@@ -23,7 +23,7 @@ const tickInterval = 30 * time.Second
 // via the tools take effect immediately — no restart needed.
 //
 // Multiple harness processes may each run their OWN Engine over the SAME
-// shared schedules.json (one per --scheduler-enabled instance) — this is the
+// shared settings store (one per --scheduler-enabled instance) — this is the
 // intended deployment shape, not an edge case: e.g. one instance running the
 // TUI and another running `harness slack --scheduler`, both alive at once.
 // Without the watched-session filter below, every engine would evaluate
@@ -144,7 +144,7 @@ func (e *Engine) run(ctx context.Context) {
 // BEFORE any cron parsing, firing, or RecordRun — it never touches the
 // shared store at all for that schedule, leaving it entirely to whichever
 // other engine (if any) does watch its owner. This is what makes several
-// engines safely share one schedules.json: each only ever acts on its own
+// engines safely share one schedule collection: each only ever acts on its own
 // slice, so there's no race to "win" a fire for a schedule two engines both
 // happened to evaluate in the same tick.
 //

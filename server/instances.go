@@ -1,29 +1,26 @@
-// Package colleague implements the "colleague pattern": multiple harness
 package server
 
 // This file owns the "colleague pattern" instance registry: multiple harness
-// server instances running on the same machine register themselves in
-// ~/.harness/instances.json (RegisterInstance on Serve, UnregisterInstance on
-// Close) so other processes can discover them. It is control-plane logic with
-// a single writer (this package) — the file itself, not this Go package, is
-// the interop contract: agent/tools/colleague.go reads the same path directly
-// with its own minimal parser, rather than importing this package (which
-// would need to be public just to hand over a struct + 3 functions no one
-// outside server ever calls).
+// server instances running on the same machine register themselves
+// (RegisterInstance on Serve, UnregisterInstance on Close) so other processes
+// can discover them. Naming, liveness probing and purging live here;
+// persistence goes through harness's settings store (internal/config's
+// SettingsManager, namespace "instances") — the same store
+// agent/tools/colleague.go reads, so they share one source of truth wherever
+// settings live (~/.harness/settings.json by default).
 import (
-	"encoding/json"
 	"fmt"
 	randv2 "math/rand/v2"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/gurcuff91/harness/internal/config"
 )
 
 // InstanceInfo is the metadata stored for each running server instance. It
 // mirrors the server's own /api/server response minus the "name" field (the
-// instance name is the map key in instances.json).
+// instance name is the registry key) — and is the GET /api/instances shape.
 type InstanceInfo struct {
 	Version   string `json:"version"`
 	Transport string `json:"transport"`
@@ -60,116 +57,6 @@ var mkAdjectives = []string{
 	"soul", "timekeeper",
 }
 
-// instanceMu guards concurrent access to instancesPath() from goroutines
-// WITHIN this process. It is NOT sufficient on its own — see lockInstances,
-// which adds a cross-PROCESS lock for the read-modify-write in
-// RegisterInstance/UnregisterInstance.
-var instanceMu sync.Mutex
-
-// instancesPath returns the path to ~/.harness/instances.json.
-func instancesPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".", "instances.json")
-	}
-	return filepath.Join(home, ".harness", "instances.json")
-}
-
-// lockPath is the advisory lock file guarding the read-modify-write cycle in
-// RegisterInstance/UnregisterInstance across DIFFERENT harness processes.
-// instanceMu (a Go-level sync.Mutex) only protects goroutines inside one
-// process; two separate `harness serve` processes each have their own,
-// unrelated instanceMu, so without this file-based lock two processes
-// starting at the same moment can both read the same (empty) registry,
-// independently generate a name, and the second write clobbers the first —
-// exactly the multi-instance scenario this registry exists to serve
-// correctly. Confirmed by reproduction: two `harness serve` launched together
-// both picked "fujin-soul" and the second process's write silently discarded
-// the first's entry.
-func lockPath() string {
-	return instancesPath() + ".lock"
-}
-
-// acquireFileLock creates lockPath() exclusively (O_CREATE|O_EXCL — atomic
-// across processes on every OS Go supports, no per-platform syscalls needed)
-// and retries with backoff if another process holds it. Returns a release
-// function the caller must call (removing the lock file) once done.
-//
-// This is advisory and self-healing: if a process crashes while holding the
-// lock, the file is simply removed by the next successful acquirer after
-// staleLockAge — see the staleness check below — so a dead holder can never
-// wedge every future registration/unregistration permanently.
-func acquireFileLock() (release func(), err error) {
-	const (
-		maxAttempts  = 100
-		retryDelay   = 20 * time.Millisecond
-		staleLockAge = 5 * time.Second // generous: register/unregister do one small read+write
-	)
-	path := lockPath()
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-		if err == nil {
-			f.Close()
-			return func() { _ = os.Remove(path) }, nil
-		}
-		if !os.IsExist(err) {
-			return nil, fmt.Errorf("colleague: create lock: %w", err)
-		}
-		// Lock file already exists — if it's stale (held by a crashed
-		// process that never released it), remove it and retry immediately.
-		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > staleLockAge {
-			_ = os.Remove(path)
-			continue
-		}
-		time.Sleep(retryDelay)
-	}
-	return nil, fmt.Errorf("colleague: timed out waiting for instances.json lock")
-}
-
-// loadInstances reads the instance registry as-is — no pruning. Dead entries
-// from crashed processes are cleaned up lazily: when a name collision occurs
-// during registration, the existing instance is checked via HTTP and reused
-// if it's no longer responding. Safe to call without the file lock — a bare
-// read racing a concurrent write sees either the old or the new file, never a
-// torn write (writeInstances always fully replaces the file in one syscall).
-func loadInstances() (map[string]InstanceInfo, error) {
-	instanceMu.Lock()
-	defer instanceMu.Unlock()
-
-	data, err := os.ReadFile(instancesPath())
-	if err != nil {
-		if os.IsNotExist(err) {
-			return map[string]InstanceInfo{}, nil
-		}
-		return nil, err
-	}
-	var instances map[string]InstanceInfo
-	if err := json.Unmarshal(data, &instances); err != nil {
-		return map[string]InstanceInfo{}, nil
-	}
-	if instances == nil {
-		instances = map[string]InstanceInfo{}
-	}
-	return instances, nil
-}
-
-// writeInstances serializes the registry to disk. Takes instanceMu itself
-// (unlike loadInstances's caller-visible lock/unlock, callers here — both
-// under the cross-process file lock already — call it standalone).
-func writeInstances(instances map[string]InstanceInfo) error {
-	instanceMu.Lock()
-	defer instanceMu.Unlock()
-
-	if err := os.MkdirAll(filepath.Dir(instancesPath()), 0755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(instances, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(instancesPath(), data, 0644)
-}
-
 // instanceAlive checks whether an instance is actually responding by doing
 // a quick HTTP GET to its /api/server endpoint. A 200 response means the
 // instance is live; anything else (connection refused, timeout, non-200)
@@ -187,148 +74,137 @@ func instanceAlive(info InstanceInfo) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-// purgeDeadInstances probes every entry in instances CONCURRENTLY (one
-// goroutine per entry, same pattern agent/session.go already uses for
-// parallel tool execution) and deletes the ones that don't answer. Mutates
-// instances in place and returns how many were removed — purely a courtesy
-// return value for logging, callers don't need to branch on it.
+// purgeDeadInstances probes every registered instance CONCURRENTLY (one
+// goroutine per entry, same pattern agent/session.go uses for parallel tool
+// execution) and removes the ones that don't answer. Returns how many were
+// removed — a courtesy value for logging, callers don't need to branch on it.
 //
-// Why this exists at all: a process that never runs Server.Close() (crash,
-// SIGKILL, or — the incident that surfaced this — SIGTSTP/Ctrl+Z suspending
-// the process without terminating it) never calls UnregisterInstance, so
-// its entry sits in instances.json forever, offering a permanently
-// unreachable colleague to ColleagueList/ColleagueAsk. Reproduced live: a
-// harness TUI suspended by Ctrl+Z kept its listening socket open (TCP
-// connects fine) while no goroutine was running to ever answer, hanging
-// ColleagueAsk indefinitely with no way to know the colleague was dead
-// without probing it first.
+// Why this exists: a process that never runs Server.Close() (crash, SIGKILL,
+// or — the incident that surfaced this — SIGTSTP/Ctrl+Z suspending the
+// process without terminating it) never calls UnregisterInstance, so its
+// entry would stay forever, offering a permanently unreachable colleague to
+// ColleagueList/ColleagueAsk. Reproduced live: a TUI suspended by Ctrl+Z kept
+// its listening socket open (TCP connects fine) while no goroutine was
+// running to answer, hanging ColleagueAsk indefinitely.
 //
-// Sequential probing (even at instanceAlive's already-short 2s timeout)
-// doesn't scale — a real ~/.harness/instances.json on an active dev
-// machine can carry 100+ entries (accumulated across many ACP/TUI/Kaiban
-// sessions over days), which would make every RegisterInstance call take
-// minutes in the worst case (many entries all timing out). Concurrent
-// probing bounds the wall-clock cost to roughly the SLOWEST single probe
-// (~2s), not the sum of all of them.
-func purgeDeadInstances(instances map[string]InstanceInfo) (removed int) {
+// Each removal is conditional on the entry still carrying the PID that was
+// probed (SettingsManager.DeleteInstanceIf): a process that re-registered
+// the same name while the probes ran keeps its fresh registration.
+//
+// Concurrent probing bounds the wall-clock cost to roughly the slowest single
+// probe (~2s), not the sum — a busy dev machine can accumulate 100+ entries.
+func purgeDeadInstances(settings *config.SettingsManager) (removed int) {
 	type result struct {
 		name  string
+		pid   int
 		alive bool
 	}
+	instances := settings.Instances()
 	results := make(chan result, len(instances))
 	var wg sync.WaitGroup
 	for name, info := range instances {
-		name, info := name, info
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results <- result{name, instanceAlive(info)}
+			results <- result{name, info.PID, instanceAlive(fromEntry(info))}
 		}()
 	}
 	wg.Wait()
 	close(results)
 	for r := range results {
-		if !r.alive {
-			delete(instances, r.name)
+		if !r.alive && settings.DeleteInstanceIf(r.name, r.pid) == nil {
 			removed++
 		}
 	}
 	return removed
 }
 
-// generateInstanceName picks a random character + adjective combination
-// that is not already in use by a live instance. When a name is taken,
-// it checks via HTTP whether the existing instance is still alive — if not,
-// the name is reclaimed (dead entry removed). Retries up to 50 times.
+// randomInstanceName picks a random MK11 character + adjective combination.
 //
 // Uses math/rand/v2's auto-seeded global source, NOT a manually-seeded
-// math/rand.New(rand.NewSource(time.Now().UnixNano())). The old code seeded
-// from the wall-clock timestamp, whose real resolution on most OSes is far
-// coarser than "nanosecond" implies; two `harness serve` processes launched
-// within that resolution window (entirely plausible — see the file lock
-// above, added for the SAME multi-launch scenario) got the IDENTICAL seed,
-// which means IDENTICAL output from rand.Intn — not a rare collision, a
-// mathematical certainty (confirmed by reproduction: same seed → same name,
-// every time, 100% of the time). rand/v2's package-level functions are seeded
-// from a real OS entropy source per-process at startup, so two processes
-// starting in the same nanosecond still get independent, uncorrelated streams.
-func generateInstanceName(existing map[string]InstanceInfo) string {
-	for i := 0; i < 50; i++ {
-		name := mkCharacters[randv2.IntN(len(mkCharacters))] + "-" + mkAdjectives[randv2.IntN(len(mkAdjectives))]
-		info, taken := existing[name]
-		if !taken {
-			return name
-		}
-		// Name is taken — check if that instance is still alive.
-		if !instanceAlive(info) {
-			delete(existing, name) // reclaim the name from a dead instance
-			return name
-		}
-	}
-	// Fallback: append a random number.
-	return fmt.Sprintf("%s-%s-%d", mkCharacters[0], mkAdjectives[0], randv2.IntN(9999))
+// math/rand.New(rand.NewSource(time.Now().UnixNano())). Wall-clock seeding
+// gave two processes launched within the clock's real resolution the
+// IDENTICAL seed — and so the identical name, every time (confirmed by
+// reproduction). rand/v2's package-level functions are seeded from OS
+// entropy per process, so simultaneous launches get independent streams.
+func randomInstanceName() string {
+	return mkCharacters[randv2.IntN(len(mkCharacters))] + "-" + mkAdjectives[randv2.IntN(len(mkAdjectives))]
 }
 
-// RegisterInstance generates a unique name, inserts the instance into the
-// registry, and returns the name. Called by Server.Serve on startup.
+// RegisterInstance registers info under a fresh, unique name and returns the
+// name. Called by Server.Serve on startup.
 //
-// Also purges every dead entry from the WHOLE registry first (see
-// purgeDeadInstances) — not just the one colliding with the freshly
-// generated name (generateInstanceName's own narrower reclaim, kept as-is
-// as a defense-in-depth fallback). This is the ONLY place stale entries
-// get cleaned up: a process that never calls Server.Close() (crash,
-// SIGKILL, SIGTSTP) never runs UnregisterInstance, so without this sweep
-// dead entries accumulate forever, each one a colleague ColleagueAsk will
-// try to reach and hang against. Piggybacking on every new registration
-// means no dedicated background sweeper/goroutine is needed — the registry
-// self-heals opportunistically every time ANY harness process starts.
+// First purges every dead entry from the whole registry (see
+// purgeDeadInstances) — the only place stale entries get cleaned up, so the
+// registry self-heals every time ANY harness process starts, with no
+// dedicated background sweeper.
 //
-// Holds the cross-process file lock for the ENTIRE read-purge-generate-write
-// cycle — generating the name depends on having seen every other instance's
-// current (now-purged) entries, so two processes must never interleave
-// their read and write here.
+// Uniqueness is atomic across processes: each candidate name is claimed via
+// SettingsManager.ReserveInstance, which writes only if the name is free, as
+// one SettingsStore.SwapValue — two processes racing for the same name can
+// never both get it; the loser just tries another. A taken name whose holder
+// is dead (missed by the purge, e.g. it died a moment ago) is reclaimed too.
 func RegisterInstance(info InstanceInfo) (string, error) {
-	release, err := acquireFileLock()
-	if err != nil {
-		return "", err
-	}
-	defer release()
+	settings := config.GetSettingsManager()
+	purgeDeadInstances(settings)
 
-	instances, err := loadInstances()
-	if err != nil {
-		return "", fmt.Errorf("load instances: %w", err)
+	entry := toEntry(info)
+	for range 50 {
+		name := randomInstanceName()
+		if name, ok, err := claimInstanceName(settings, name, entry); err != nil || ok {
+			return name, err
+		}
 	}
-
-	purgeDeadInstances(instances)
-
-	name := generateInstanceName(instances)
-	instances[name] = info
-	if err := writeInstances(instances); err != nil {
-		return "", fmt.Errorf("save instances: %w", err)
+	// Fallback for an (almost) exhausted name space: append a random number.
+	for range 50 {
+		name := fmt.Sprintf("%s-%04d", randomInstanceName(), randv2.IntN(10000))
+		if name, ok, err := claimInstanceName(settings, name, entry); err != nil || ok {
+			return name, err
+		}
 	}
-	return name, nil
+	return "", fmt.Errorf("register instance: no free name after 100 attempts")
+}
+
+// claimInstanceName tries to reserve name for entry, reclaiming it first if
+// its current holder is dead. ok reports whether name is now ours.
+func claimInstanceName(settings *config.SettingsManager, name string, entry config.InstanceEntry) (string, bool, error) {
+	reserved, err := settings.ReserveInstance(name, entry)
+	if err != nil || reserved {
+		return name, reserved, err
+	}
+	holder, taken := settings.Instances()[name]
+	if !taken || instanceAlive(fromEntry(holder)) {
+		return name, false, nil
+	}
+	if err := settings.DeleteInstanceIf(name, holder.PID); err != nil {
+		return name, false, err
+	}
+	reserved, err = settings.ReserveInstance(name, entry)
+	return name, reserved, err
 }
 
 // UnregisterInstance removes an instance from the registry by name. Called by
-// Server.Close on graceful shutdown. Idempotent — a missing entry is a no-op.
+// Server.Close on graceful shutdown. Idempotent — a missing entry is a no-op;
+// best-effort, since a leaked entry is purged by the next RegisterInstance.
 func UnregisterInstance(name string) {
-	release, err := acquireFileLock()
-	if err != nil {
-		return // best-effort — a leaked entry is cleaned up by the next
-		// RegisterInstance liveness check (instanceAlive), not fatal here.
-	}
-	defer release()
-
-	instances, err := loadInstances()
-	if err != nil {
-		return
-	}
-	delete(instances, name)
-	_ = writeInstances(instances)
+	_ = config.GetSettingsManager().DeleteInstance(name)
 }
 
 // ListInstances returns all registered instances as-is (no health checking).
-// Consumers can verify liveness by calling each instance's /api/server endpoint.
+// Consumers can verify liveness by calling each instance's /api/server
+// endpoint.
 func ListInstances() (map[string]InstanceInfo, error) {
-	return loadInstances()
+	out := map[string]InstanceInfo{}
+	for name, e := range config.GetSettingsManager().Instances() {
+		out[name] = fromEntry(e)
+	}
+	return out, nil
+}
+
+func toEntry(i InstanceInfo) config.InstanceEntry {
+	return config.InstanceEntry{Version: i.Version, Transport: i.Transport, URL: i.URL, CWD: i.CWD, PID: i.PID, StartedAt: i.StartedAt}
+}
+
+func fromEntry(e config.InstanceEntry) InstanceInfo {
+	return InstanceInfo{Version: e.Version, Transport: e.Transport, URL: e.URL, CWD: e.CWD, PID: e.PID, StartedAt: e.StartedAt}
 }

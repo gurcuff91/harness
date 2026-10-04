@@ -5,14 +5,35 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/gurcuff91/harness/configstore"
+	"github.com/gurcuff91/harness/internal/config"
 )
 
+// newTestStore returns a Store over its own fresh in-memory settings store,
+// isolated from every other test and from the real ~/.harness.
 func newTestStore(t *testing.T) *Store {
-	s, err := Open(filepath.Join(t.TempDir(), "sched.json"))
+	t.Helper()
+	return openWith(config.NewSettingsManager(configstore.NewInMemoryStore()))
+}
+
+// fileBackedPath returns a temp settings file for tests that simulate several
+// harness PROCESSES sharing one settings store: each storeAt(path) is an
+// independent FileStore (own snapshot, own manager), connected to the others
+// only through the file and its cross-process lock — exactly like real
+// processes.
+func fileBackedPath(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "settings.json")
+}
+
+func storeAt(t *testing.T, path string) *Store {
+	t.Helper()
+	fs, err := configstore.NewFileStore(path, 0600)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s
+	return openWith(config.NewSettingsManager(fs))
 }
 
 func TestStoreUpsertAndList(t *testing.T) {
@@ -71,11 +92,11 @@ func TestStoreDelete(t *testing.T) {
 }
 
 func TestStorePersistence(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sched.json")
-	s1, _ := Open(path)
+	path := fileBackedPath(t)
+	s1 := storeAt(t, path)
 	s1.Set("x", "@daily", "prompt", "sess-A")
 	// Reopen and verify it loaded.
-	s2, _ := Open(path)
+	s2 := storeAt(t, path)
 	if len(s2.List()) != 1 {
 		t.Error("schedule should persist across reopen")
 	}
@@ -168,12 +189,12 @@ func TestEngineFiresWithOwner(t *testing.T) {
 	}
 }
 
-// Owner survives a store round-trip (persisted in schedules.json).
+// Owner survives a store round-trip (persisted in the settings store).
 func TestStoreOwnerPersists(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sched.json")
-	s1, _ := Open(path)
+	path := fileBackedPath(t)
+	s1 := storeAt(t, path)
 	s1.Set("x", "@daily", "prompt", "owner-42")
-	s2, _ := Open(path)
+	s2 := storeAt(t, path)
 	for _, sc := range s2.List() {
 		if sc.Slug == "x" && sc.Owner != "owner-42" {
 			t.Errorf("owner not persisted: got %q", sc.Owner)

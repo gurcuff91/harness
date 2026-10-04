@@ -5,7 +5,7 @@
 //
 // It lives in its own internal package so every file-backed store can share
 // it without an import cycle: configstore.FileStore (settings.json /
-// credentials.json) and agent/schedule.Store (schedules.json) both use it.
+// credentials.json) is its only user today.
 package filelock
 
 import (

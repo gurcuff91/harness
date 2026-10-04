@@ -164,7 +164,7 @@ func (s *Server) Serve(l net.Listener) error {
 	s.mu.Unlock()
 	s.logger.Info("server", "listening", "addr", addr)
 
-	// Register this instance in ~/.harness/instances.json.
+	// Register this instance in the colleague registry (settings store).
 	name, err := RegisterInstance(InstanceInfo{
 		Version:   staticServerVersion,
 		Transport: s.transport,
@@ -236,7 +236,7 @@ func (s *Server) Close() error {
 			}
 		}
 
-		// 4. Unregister this instance from ~/.harness/instances.json.
+		// 4. Unregister this instance from the colleague registry.
 		if instanceName != "" {
 			UnregisterInstance(instanceName)
 		}
@@ -298,7 +298,7 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleListInstances returns all registered server instances from
-// ~/.harness/instances.json (dead PIDs are pruned on load).
+// the colleague registry (dead entries are purged on every registration).
 func (s *Server) handleListInstances(w http.ResponseWriter, r *http.Request) {
 	instances, err := ListInstances()
 	if err != nil {

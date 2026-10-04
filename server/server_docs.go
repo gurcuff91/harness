@@ -68,7 +68,7 @@ const openAPISpecTemplate = `{
       "get": {
         "tags": ["server"],
         "summary": "List running instances",
-        "description": "Returns all registered server instances from ~/.harness/instances.json. Dead PIDs are pruned on load.",
+        "description": "Returns all registered server instances (the colleague registry, kept in the settings store). Dead instances are purged whenever an instance registers.",
         "operationId": "listInstances",
         "responses": {
           "200": { "description": "Instance registry", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": { "$ref": "#/components/schemas/InstanceInfo" } } } } }

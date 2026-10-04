@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.81.0] - 2026-10-01
+
+### Breaking — schedules, instances and Telegram/Slack state move into settings.json / credentials.json (manual migration required)
+Every remaining piece of process-global state now goes through the `configstore` ports introduced in 0.80.0, so a custom `SettingsStore`/`CredentialsStore` backend captures **all** of harness's state, not just model and provider config. The standalone files `~/.harness/schedules.json`, `instances.json`, `telegram.json` and `slack.json` are **no longer read** — there's deliberately no automatic migration:
+
+- **settings.json** gains the namespaces `schedules`, `instances`, `telegram_allowlist`, `telegram_sessions`, `slack` (`config` → workspace/user_id/team), `slack_admins` and `slack_sessions`.
+- **credentials.json** gains `telegram.bot_token` and `slack.session` (`{xoxc, xoxd}`) — secrets never land in settings.json.
+- Composite keys (schedule owner+slug, cwd+chat/channel) are a truncated SHA-256 of the parts; the key is never parsed back, identity lives in the value.
+- `instances.json` needs no migration (running instances re-register on start). For the rest: re-create schedules, re-pair Telegram chats (`harness telegram pair`) and re-run `harness slack login`, or move the data over by hand. Close every running harness process first.
+
+### Changed
+- `agent/schedule.Open()` takes no arguments — the store is a thin layer over the settings manager; its public API is otherwise unchanged.
+- `agent/tools` `ColleagueList`/`ColleagueAsk` resolve colleagues through an injected `ColleagueDirectory` instead of reading the instance registry file themselves.
+- Server instance registration claims names atomically via `SwapValue` (`ReserveInstance` / `DeleteInstanceIf`), replacing the dedicated file lock; `internal/filelock` is now used only by `configstore.FileStore`.
+- Test suites swap in in-memory stores (`TestMain`), so running the tests never touches the real `~/.harness`.
+
 ## [0.80.0] - 2026-10-01
 
 ### Breaking — settings.json moves to a namespaced format (manual migration required)

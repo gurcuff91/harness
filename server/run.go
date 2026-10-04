@@ -38,7 +38,7 @@ func WithLogger(l logx.Logger) Option {
 // (net.Listen, Serve in a goroutine, wait for ctx, Close in the right order):
 // close all active sessions, close the agent (MCP subprocesses, memory DB,
 // scheduler engine, store), shut down the HTTP server, and unregister the
-// instance from ~/.harness/instances.json. Run only returns once that full
+// instance from the colleague registry. Run only returns once that full
 // sequence has finished — a caller that exits right after Run returns (e.g.
 // the CLI's os.Exit) is guaranteed not to race the instance-registry cleanup.
 //
@@ -64,7 +64,7 @@ func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
 	// triggered from elsewhere on ctx cancellation. Close() itself calls
 	// httpSrv.Shutdown(), which is what makes Serve() below return — so
 	// Serve() unblocking does NOT mean Close() has finished (it unregisters
-	// the instance from instances.json as its LAST step, after Shutdown).
+	// the instance from the colleague registry as its LAST step, after Shutdown).
 	// Run must wait for the Close() goroutine to actually complete before
 	// returning — see the doc comment above for why.
 	closeDone := make(chan error, 1)

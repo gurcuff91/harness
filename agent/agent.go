@@ -102,7 +102,7 @@ type AgentOptions struct {
 
 	// EnableColleagues turns on the ColleagueList/ColleagueAsk tools: the agent
 	// can discover OTHER running harness server instances on this machine (via
-	// ~/.harness/instances.json, see agent/colleague) and delegate a prompt to
+	// the colleague registry in the settings store) and delegate a prompt to
 	// one of them over HTTP — each colleague answers with its own model, MCPs,
 	// and project context, not the caller's. Off by default; disabled for
 	// subagents and one-shot CLI commands regardless of this flag.
@@ -251,14 +251,14 @@ func New(opts AgentOptions) *Agent {
 
 	// Scheduling: the agent always opens the store — Schedules() serves the
 	// read-only `harness schedules` listing / HTTP endpoint regardless of
-	// EnableScheduler, and schedules.json may be shared across several
+	// EnableScheduler, and the schedules may be shared across several
 	// harness processes on this machine. The Schedule* MANAGEMENT TOOLS and
 	// the engine that fires due prompts both require EnableScheduler (see
 	// scheduleAdapter()) — an instance without it neither manages nor
 	// executes schedules, avoiding schedules created from an instance that
 	// would never run them. Subagents pass EnableScheduler=false and also
 	// disallow the Schedule* tools explicitly (belt and suspenders).
-	if st, err := schedule.Open(""); err == nil {
+	if st, err := schedule.Open(); err == nil {
 		a.schedStore = st
 		if opts.EnableScheduler {
 			a.schedEngine = schedule.NewEngine(st, a.fireScheduledPrompt)
@@ -325,7 +325,7 @@ func (a *Agent) resolveScheduledSession(owner string) *Session {
 // (called on Close). Also tells schedEngine (nil unless EnableScheduler) to
 // start/stop watching this session's id — see Engine.AddSession's doc
 // comment for why: this is what makes it safe for several harness processes
-// to each run their own engine over the same shared schedules.json, each
+// to each run their own engine over the same shared schedules, each
 // firing only into the sessions IT itself has live.
 func (a *Agent) registerSession(s *Session) {
 	a.sessMu.Lock()
@@ -1005,16 +1005,15 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 		}
 	}
 	// Colleague tools — discover and delegate to OTHER running harness
-	// instances on this machine, backed by ~/.harness/instances.json (owned
-	// and written by server; these tools read the same file path
-	// directly with their own minimal parser — see agent/tools/colleague.go).
-	// Off unless EnableColleagues.
+	// instances on this machine, via the instance registry the server package
+	// keeps in the settings store (injected as a ColleagueDirectory, since
+	// agent/tools never imports internal/). Off unless EnableColleagues.
 	if a.opts.EnableColleagues {
 		if a.isToolAllowed(tools.ToolColleagueList) {
-			reg.Register(tools.ColleagueList())
+			reg.Register(tools.ColleagueList(colleagueDirectory))
 		}
 		if a.isToolAllowed(tools.ToolColleagueAsk) {
-			reg.Register(tools.ColleagueAsk())
+			reg.Register(tools.ColleagueAsk(colleagueDirectory))
 		}
 	}
 

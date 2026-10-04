@@ -2,7 +2,6 @@ package schedule
 
 import (
 	"errors"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,8 +9,9 @@ import (
 )
 
 // These mirror internal/config/update_credential_test.go's shape — the same
-// guarantees UpdateCredential provides, applied to schedules. See
-// docs/plans/2026-08-17-schedule-store-lock-hardening-design.md.
+// guarantees UpdateCredential provides, applied to schedules. "Separate
+// processes" are independent FileStores on one settings file (see
+// storeAt): atomicity across them comes from configstore.FileStore.SwapValue.
 
 func TestUpdateSchedule_MissingIsReportedNotWritten(t *testing.T) {
 	s := newTestStore(t)
@@ -75,22 +75,16 @@ func TestUpdateSchedule_FnErrorPropagatesAndSkipsWrite(t *testing.T) {
 // must see the freshest on-disk state a first one just wrote — the guard that
 // prevents a lost write / clobbered audit trail.
 func TestUpdateSchedule_SeesFreshestDiskStateAcrossInstances(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sched.json")
-	writer, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reader, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	path := fileBackedPath(t)
+	writer := storeAt(t, path)
+	reader := storeAt(t, path)
 
 	if err := writer.Set("standup", "@daily", "generate standup", "sess-A"); err != nil {
 		t.Fatal(err)
 	}
 
 	var seenPrompt string
-	err = reader.UpdateSchedule("sess-A", "standup", func(cur Schedule, ok bool) (Schedule, UpdateAction, error) {
+	err := reader.UpdateSchedule("sess-A", "standup", func(cur Schedule, ok bool) (Schedule, UpdateAction, error) {
 		if !ok {
 			t.Fatal("reader did not see the schedule the writer just persisted")
 		}
@@ -109,15 +103,9 @@ func TestUpdateSchedule_SeesFreshestDiskStateAcrossInstances(t *testing.T) {
 // tick) must apply its increment ON TOP of a concurrent edit another process
 // just made — never clobber the whole file with a stale in-memory copy.
 func TestRecordRun_DoesNotClobberConcurrentEdit(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sched.json")
-	engineStore, err := Open(path) // simulates the --scheduler process
-	if err != nil {
-		t.Fatal(err)
-	}
-	userStore, err := Open(path) // simulates a different process's session
-	if err != nil {
-		t.Fatal(err)
-	}
+	path := fileBackedPath(t)
+	engineStore := storeAt(t, path) // simulates the --scheduler process
+	userStore := storeAt(t, path)   // simulates a different process's session
 
 	if err := engineStore.Set("standup", "@daily", "v1 prompt", "sess-A"); err != nil {
 		t.Fatal(err)
@@ -150,9 +138,9 @@ func TestRecordRun_DoesNotClobberConcurrentEdit(t *testing.T) {
 // RecordRun against a schedule deleted by another process must be a no-op —
 // never resurrect a deleted schedule just to record a run against it.
 func TestRecordRun_NoopsIfDeletedConcurrently(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sched.json")
-	engineStore, _ := Open(path)
-	userStore, _ := Open(path)
+	path := fileBackedPath(t)
+	engineStore := storeAt(t, path)
+	userStore := storeAt(t, path)
 
 	if err := engineStore.Set("standup", "@daily", "hi", "sess-A"); err != nil {
 		t.Fatal(err)
@@ -169,12 +157,11 @@ func TestRecordRun_NoopsIfDeletedConcurrently(t *testing.T) {
 	}
 }
 
-// No deadlock, no re-entrant lock: UpdateSchedule owns the file lock
-// internally and there is no way for fn to ask for it again. This also
-// stresses that concurrent UpdateSchedule calls serialize instead of
-// corrupting each other.
+// No deadlock, no re-entrant lock: the store owns its lock internally and
+// there is no way for fn to ask for it again. This also stresses that
+// concurrent UpdateSchedule calls serialize instead of corrupting each other.
 func TestUpdateSchedule_ConcurrentCallsSerializeCleanly(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sched.json")
+	path := fileBackedPath(t)
 	var inside atomic.Int32
 	var wg sync.WaitGroup
 
@@ -182,12 +169,8 @@ func TestUpdateSchedule_ConcurrentCallsSerializeCleanly(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			s, err := Open(path) // separate instance per goroutine, like separate processes
-			if err != nil {
-				t.Errorf("goroutine %d: open: %v", i, err)
-				return
-			}
-			err = s.UpdateSchedule("sess-A", "slug", func(cur Schedule, ok bool) (Schedule, UpdateAction, error) {
+			s := storeAt(t, path) // separate instance per goroutine, like separate processes
+			err := s.UpdateSchedule("sess-A", "slug", func(cur Schedule, ok bool) (Schedule, UpdateAction, error) {
 				n := inside.Add(1)
 				defer inside.Add(-1)
 				if n > 1 {
@@ -208,9 +191,9 @@ func TestUpdateSchedule_ConcurrentCallsSerializeCleanly(t *testing.T) {
 // deterministically — no corruption, no partial state, whichever the lock
 // serializes second simply wins.
 func TestDelete_RacingSetResolvesDeterministically(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sched.json")
-	a, _ := Open(path)
-	b, _ := Open(path)
+	path := fileBackedPath(t)
+	a := storeAt(t, path)
+	b := storeAt(t, path)
 
 	if err := a.Set("slug", "@daily", "hi", "sess-A"); err != nil {
 		t.Fatal(err)

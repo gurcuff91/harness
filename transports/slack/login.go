@@ -52,7 +52,8 @@ func DeriveXoxC(ctx context.Context, workspaceURL, xoxd string) (string, error) 
 }
 
 // VerifyAndSave verifies the xoxc+xoxd pair against auth.test, populates
-// user_id and team, and saves the credentials to ~/.harness/slack.json.
+// user_id and team, and saves the login (secrets to the credentials store,
+// workspace identity to the settings store).
 func VerifyAndSave(ctx context.Context, workspaceURL, xoxc, xoxd string) (*Credentials, error) {
 	bot := NewBot(workspaceURL, xoxc, xoxd)
 	me, err := bot.AuthTest(ctx)

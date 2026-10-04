@@ -190,7 +190,7 @@ func AgentWithMemory() AgentOption {
 // disk — see agent.fireScheduledPrompt). Only one agent WITHIN A GIVEN
 // PROCESS should enable this, so prompts don't fire twice from the same
 // process — but several SEPARATE harness processes, each with its own
-// agent enabling this over the same shared schedules.json, is a safe,
+// agent enabling this over the same shared settings store, is a safe,
 // intended deployment shape: each engine only ever fires into the
 // sessions it itself has active (see agent/schedule.Engine's doc
 // comment). Off by default.
@@ -201,7 +201,7 @@ func AgentWithScheduler() AgentOption {
 // AgentWithColleagues enables the ColleagueList/ColleagueAsk tools: the agent
 // can discover OTHER running harness server instances on this machine (any
 // process that called Serve — see the client package) via the shared
-// ~/.harness/instances.json registry, and delegate a prompt to one of them by
+// colleague registry (kept in the settings store), and delegate a prompt to one of them by
 // name over HTTP. Each colleague answers using its OWN model, MCPs, and
 // project context, not the caller's — real delegation, not talking to itself.
 // Meant for long-running processes (a served agent, a transport); one-shot

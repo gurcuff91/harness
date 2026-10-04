@@ -66,7 +66,7 @@ func newOneShotAgent() *agent.Agent {
 // telegram.Directive for Telegram.
 //
 // EnableColleagues is always on here: these are exactly the long-running
-// processes that register themselves in ~/.harness/instances.json (see
+// processes that register themselves in the colleague registry (see
 // server.Serve) and so are the ones worth discovering/delegating to.
 // One-shot commands (newOneShotAgent) and config-only commands
 // (newConfigAgent) never enable it — a process that exits in milliseconds has

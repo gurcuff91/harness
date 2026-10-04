@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -15,46 +14,26 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
-// ── Instance registry reader (minimal, self-contained) ──────────────────────
+// ── Colleague directory (injected) ─────────────────────────────────────────
 //
-// ~/.harness/instances.json is written by server (RegisterInstance/
-// UnregisterInstance, guarded by a cross-process file lock) every time a
-// `harness serve`-style process starts/stops. That file — its path and JSON
-// shape — is the interop contract, not a shared Go type: these tools read it
-// directly with their own tiny parser instead of importing server
-// (which agent/tools must never do) or promoting the whole registry
-// implementation (name generator, file-locking, liveness probing) to a public
-// package just to hand over a struct. If the on-disk shape ever changes,
-// update this struct to match — it intentionally only declares the fields
-// these tools actually use.
+// The registry of running harness instances is persisted in harness's
+// settings store and written by the server package. agent/tools is public SDK
+// and never imports internal/ or server, so — same pattern as the Schedule*
+// tools' ScheduleStore — the tools receive the directory as an injected
+// function (wired in agent.go over the settings manager).
 
-// instanceEntry mirrors the subset of server's InstanceInfo this
-// package needs. Extra fields on disk (if any) are ignored by json.Unmarshal.
-type instanceEntry struct {
-	Version   string `json:"version"`
-	Transport string `json:"transport"`
-	URL       string `json:"url"`
-	CWD       string `json:"cwd"`
-	PID       int    `json:"pid"`
+// Colleague is one registered instance, as the colleague tools see it.
+type Colleague struct {
+	Version   string
+	Transport string
+	URL       string
+	CWD       string
+	PID       int
 }
 
-// readInstances loads ~/.harness/instances.json as-is (no liveness checks —
-// that's RegisterInstance's job when a name collides). Missing file or bad
-// JSON both yield an empty map, never an error: colleague discovery degrading
-// to "no colleagues" is the right failure mode for a tool call, not a hard error.
-func readInstances() map[string]instanceEntry {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
-	data, err := os.ReadFile(filepath.Join(home, ".harness", "instances.json"))
-	if err != nil {
-		return nil
-	}
-	var instances map[string]instanceEntry
-	_ = json.Unmarshal(data, &instances)
-	return instances
-}
+// ColleagueDirectory returns every registered instance, keyed by name. It
+// must never fail: an unreadable registry is just "no colleagues".
+type ColleagueDirectory func() map[string]Colleague
 
 // ── ColleagueList ──────────────────────────────────────────────────────────
 
@@ -98,7 +77,7 @@ type colleagueListEntry struct {
 // instances, excluding the caller itself (matched by PID — the one field
 // every registry entry carries that reliably identifies "not me" without any
 // extra plumbing).
-func ColleagueList() Tool {
+func ColleagueList(directory ColleagueDirectory) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolColleagueList,
@@ -108,7 +87,7 @@ func ColleagueList() Tool {
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
 			self := os.Getpid()
 			var out []colleagueListEntry
-			for name, info := range readInstances() {
+			for name, info := range directory() {
 				if info.PID == self {
 					continue
 				}
@@ -179,7 +158,7 @@ const colleagueAskTimeout = 120 * time.Second
 // ends, which defeats the entire purpose of "outlive this turn, check the
 // result file later." The ctx parameter below is read for the
 // SYNCHRONOUS (foreground) path only.
-func ColleagueAsk() Tool {
+func ColleagueAsk(directory ColleagueDirectory) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolColleagueAsk,
@@ -214,7 +193,7 @@ func ColleagueAsk() Tool {
 				return err.Error(), err
 			}
 
-			url, ok := resolveColleagueURL(args.Colleague)
+			url, ok := resolveColleagueURL(directory, args.Colleague)
 			if !ok {
 				err := fmt.Errorf("colleague %q not found", args.Colleague)
 				return fmt.Sprintf("Colleague %q not found or not running. Use ColleagueList to see who's online.", args.Colleague), err
@@ -248,8 +227,8 @@ func ColleagueAsk() Tool {
 
 // resolveColleagueURL looks up a colleague by name in the instance registry,
 // excluding the caller's own entry (same self-PID rule as ColleagueList).
-func resolveColleagueURL(name string) (string, bool) {
-	info, ok := readInstances()[name]
+func resolveColleagueURL(directory ColleagueDirectory, name string) (string, bool) {
+	info, ok := directory()[name]
 	if !ok || info.PID == os.Getpid() || info.URL == "" {
 		return "", false
 	}
@@ -304,7 +283,7 @@ func askColleague(ctx context.Context, url, prompt, session string, images []typ
 	// that can't even answer GET /api/server (a couple of static fields,
 	// no session/agent work at all) is not going to complete anything
 	// heavier either. Bounded by BOTH its own short timeout AND the turn's
-	// ctx (whichever fires first) — this does NOT touch instances.json;
+	// ctx (whichever fires first) — this does NOT touch the colleague registry;
 	// that cleanup only happens in RegisterInstance (see server/instances.go).
 	pingCtx, cancel := context.WithTimeout(ctx, colleagueLivenessTimeout)
 	defer cancel()

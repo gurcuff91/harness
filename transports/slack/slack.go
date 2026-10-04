@@ -53,7 +53,7 @@ type Option func(*Options)
 
 // WithWorkspace sets the Slack workspace URL (e.g. "https://myco.slack.com").
 // Required unless already saved via `harness slack login` (Run falls back to
-// ~/.harness/slack.json for any of Workspace/XoxC/XoxD left empty).
+// the saved login for any of Workspace/XoxC/XoxD left empty).
 func WithWorkspace(url string) Option {
 	return func(o *Options) { o.Workspace = url }
 }
@@ -127,7 +127,7 @@ type Transport struct {
 }
 
 // Run starts the Slack transport and blocks until ctx is cancelled.
-// Credentials are resolved with precedence: flags > env > ~/.harness/slack.json.
+// Credentials are resolved with precedence: flags > env > saved login.
 // Three Slack-specific tools (SlackPost, SlackListChannels, SlackListUsers) are
 // injected into the agent so it can proactively post messages and resolve names.
 func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
@@ -142,7 +142,7 @@ func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
 // split out so the WithX-option-application step above stays a thin,
 // separately testable layer over the real logic.
 func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
-	// Fill missing credentials from saved login (~/.harness/slack.json).
+	// Fill missing credentials from the saved login (config stores).
 	if opts.Workspace == "" || opts.XoxC == "" || opts.XoxD == "" {
 		if saved, err := LoadCredentials(); err == nil && saved != nil {
 			if opts.Workspace == "" {
@@ -160,7 +160,7 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 		return fmt.Errorf("slack: credentials required — run 'harness slack login' or pass --workspace, --xoxc and --xoxd")
 	}
 
-	st, err := openStore("")
+	st, err := openStore()
 	if err != nil {
 		return fmt.Errorf("slack: open store: %w", err)
 	}

@@ -280,7 +280,7 @@ harness telegram unpair <id>  — Revoke a chat
 harness telegram list         — List paired chats
 harness telegram token [tok]  — Save the bot token (or check it with --status)
 harness slack                 — Run as a Slack user bot (one session per channel/DM)
-harness slack login           — Authenticate interactively (saves to ~/.harness/slack.json)
+harness slack login           — Authenticate interactively (saves to ~/.harness/credentials.json)
 harness slack admin add <id>  — Add an admin (can run /reset /stop /compact /thinking /model)
 harness slack admin list      — List current admins
 harness slack admin remove    — Remove an admin
@@ -337,12 +337,13 @@ All data stored in `~/.harness/`:
 
 ```
 ~/.harness/
-├── credentials.json        — API keys + OAuth tokens (0600): {"providers": {"<name>": {...}}}
-├── settings.json           — {"core": {active_model, thinking_level}, "mcp": {...}, "provider": {...}}
-├── instances.json          — Registry of running server instances (for colleagues)
-├── schedules.json          — Cron-scheduled prompts
-├── telegram.json           — Telegram bot token + paired chats
-├── slack.json              — Slack credentials + admin list
+├── credentials.json        — Secrets (0600): {"providers": {"<name>": {...}},
+│                              "telegram": {"bot_token": ...}, "slack": {"session": {xoxc, xoxd}}}
+├── settings.json           — Everything non-sensitive, one namespace per domain:
+│                              core (active_model, thinking_level), mcp, provider,
+│                              schedules (cron prompts), instances (running servers,
+│                              for colleagues), telegram_allowlist, telegram_sessions,
+│                              slack (workspace/user/team), slack_admins, slack_sessions
 └── agent/
     ├── sessions/<cwd>/     — Session history (JSONL, partitioned by project)
     ├── skills/             — Discovered skills

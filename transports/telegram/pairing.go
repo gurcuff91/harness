@@ -2,10 +2,10 @@ package telegram
 
 import "fmt"
 
-// Pair adds a chat id to the allowlist in ~/.harness/telegram.json. It's a pure
+// Pair adds a chat id to the allowlist (settings store). It's a pure
 // config operation — no bot token or server needed. Idempotent.
 func Pair(chatID int64) error {
-	st, err := openStore("")
+	st, err := openStore()
 	if err != nil {
 		return err
 	}
@@ -24,7 +24,7 @@ func Pair(chatID int64) error {
 // Unpair removes a chat id from the allowlist and drops its session mapping.
 // Pure config operation.
 func Unpair(chatID int64) error {
-	st, err := openStore("")
+	st, err := openStore()
 	if err != nil {
 		return err
 	}
@@ -42,7 +42,7 @@ func Unpair(chatID int64) error {
 
 // ListPaired prints the currently paired chat ids.
 func ListPaired() error {
-	st, err := openStore("")
+	st, err := openStore()
 	if err != nil {
 		return err
 	}

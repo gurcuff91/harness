@@ -56,7 +56,7 @@ func (c *telegramTokenCmd) Run() error {
 
 	// Verify the token against the real Bot API BEFORE saving it — never
 	// persist a token that doesn't actually work. Without this, a typo'd or
-	// already-revoked token would sit in telegram.json until the next
+	// already-revoked token would sit in the credentials store until the next
 	// `harness telegram` launch fails, or until someone happens to run
 	// `harness telegram token --status` to notice.
 	ctx, cancel := signalContext()

@@ -7,7 +7,17 @@ import (
 
 	"github.com/gurcuff91/harness/agent"
 	agentstore "github.com/gurcuff91/harness/agent/store"
+	"github.com/gurcuff91/harness/configstore"
+	"github.com/gurcuff91/harness/internal/config"
 )
+
+// isolateConfig points harness's process-global settings and credentials
+// stores at fresh in-memory ones for this test — the bot's token, allowlist
+// and session bindings must never touch the real ~/.harness.
+func isolateConfig(t *testing.T) {
+	t.Helper()
+	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
+}
 
 func newTestAgent(t *testing.T) *agent.Agent {
 	t.Helper()
@@ -17,13 +27,13 @@ func newTestAgent(t *testing.T) *agent.Agent {
 }
 
 // TestSaveTokenAndLoadTokenRoundTrip verifies the persistence this feature
-// adds: SaveToken writes the bot token to ~/.harness/telegram.json, and
+// adds: SaveToken writes the bot token to the credentials store, and
 // LoadToken reads it back — the same fallback mechanism Run uses so
 // `harness telegram` doesn't require --token/TELEGRAM_BOT_TOKEN on every
 // invocation once a token has been saved via `harness telegram token
 // <token>`.
 func TestSaveTokenAndLoadTokenRoundTrip(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // isolate from the real ~/.harness
+	isolateConfig(t)
 
 	if err := SaveToken("test-token-123"); err != nil {
 		t.Fatalf("SaveToken: %v", err)
@@ -40,7 +50,7 @@ func TestSaveTokenAndLoadTokenRoundTrip(t *testing.T) {
 // TestLoadTokenEmptyWhenNeverSaved verifies LoadToken returns "" (no error)
 // when telegram.json doesn't exist yet — the common first-run case.
 func TestLoadTokenEmptyWhenNeverSaved(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateConfig(t)
 
 	got, err := LoadToken()
 	if err != nil {
@@ -51,13 +61,12 @@ func TestLoadTokenEmptyWhenNeverSaved(t *testing.T) {
 	}
 }
 
-// TestSaveTokenPreservesAllowlistAndSessions verifies SaveToken does a
-// read-modify-write (like slack.SaveCredentials) — it must not clobber an
-// existing allowlist/session mappings already on disk.
+// TestSaveTokenPreservesAllowlistAndSessions verifies saving the token (a
+// credential) never disturbs the allowlist or session bindings (settings).
 func TestSaveTokenPreservesAllowlistAndSessions(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateConfig(t)
 
-	st, err := openStore("")
+	st, err := openStore()
 	if err != nil {
 		t.Fatalf("openStore: %v", err)
 	}
@@ -72,12 +81,12 @@ func TestSaveTokenPreservesAllowlistAndSessions(t *testing.T) {
 		t.Fatalf("SaveToken: %v", err)
 	}
 
-	reopened, err := openStore("")
+	reopened, err := openStore()
 	if err != nil {
 		t.Fatalf("re-openStore: %v", err)
 	}
-	if reopened.data.Token != "new-token" {
-		t.Errorf("token = %q, want %q", reopened.data.Token, "new-token")
+	if token, _ := LoadToken(); token != "new-token" {
+		t.Errorf("token = %q, want %q", token, "new-token")
 	}
 	if !reopened.allowed(12345) {
 		t.Error("SaveToken clobbered the existing allowlist entry")
@@ -90,7 +99,7 @@ func TestSaveTokenPreservesAllowlistAndSessions(t *testing.T) {
 // TestSaveTokenOverwritesPreviousToken verifies a second SaveToken call
 // replaces the first, rather than erroring or appending.
 func TestSaveTokenOverwritesPreviousToken(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateConfig(t)
 
 	if err := SaveToken("first-token"); err != nil {
 		t.Fatalf("SaveToken (first): %v", err)
@@ -118,7 +127,7 @@ func TestSaveTokenOverwritesPreviousToken(t *testing.T) {
 // unreachable-as-a-real-bot) saved token and fails with "invalid token or
 // unreachable API" instead — proving opts.Token was populated from disk.
 func TestRunFallsBackToSavedToken(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateConfig(t)
 
 	if err := SaveToken("saved-fallback-token"); err != nil {
 		t.Fatalf("SaveToken: %v", err)
@@ -143,7 +152,7 @@ func TestRunFallsBackToSavedToken(t *testing.T) {
 // nothing saved and no WithToken/env var, Run fails fast with the
 // no-token error, never reaching the network at all.
 func TestRunFailsWithoutTokenOrSavedFallback(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // empty — nothing saved
+	isolateConfig(t) // empty — nothing saved
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

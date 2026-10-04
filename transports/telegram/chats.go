@@ -1,218 +1,74 @@
 package telegram
 
 import (
-	"encoding/json"
-	"fmt"
 	"os"
-	"path/filepath"
-	"strconv"
-	"sync"
 	"time"
+
+	"github.com/gurcuff91/harness/internal/config"
 )
 
-// store is the bot's on-disk config and state (~/.harness/telegram.json).
+// store is the bot's persisted config and state, a thin layer over harness's
+// settings and credentials managers: the bot token lives in the credentials
+// store, the allowlist and chat→session bindings in the settings store
+// (~/.harness/settings.json and credentials.json by default, or whatever
+// stores an SDK embedder registered).
 //
-// Session structure: sessions[cwd][chatID] = sessionID
-// This ensures each (project, chat) pair has its own independent session with
-// the correct AGENTS.md, skills, and working directory context — same approach
-// as the Slack transport.
+// Session bindings are scoped by working directory: each (project, chat) pair
+// has its own independent session with the correct AGENTS.md, skills and
+// working directory — same approach as the Slack transport.
 type store struct {
-	mu   sync.Mutex
-	path string
-	cwd  string // current working directory — scopes all session lookups
-	data storeData
+	settings *config.SettingsManager
+	cwd      string // current working directory — scopes all session lookups
 }
 
-type storeData struct {
-	// Token is the bot token, saved via `harness telegram token <token>` so
-	// Run doesn't require --token/TELEGRAM_BOT_TOKEN on every invocation —
-	// same fallback pattern as Slack's Workspace/XoxC/XoxD in
-	// ~/.harness/slack.json (see slack/creds.go).
-	Token     string                       `json:"token,omitempty"`
-	Allowlist []int64                      `json:"allowlist"`
-	Sessions  map[string]map[string]string `json:"sessions"` // cwd → chatID → sessionID
-}
-
-// openStore loads the config from path (default ~/.harness/telegram.json). A
-// missing file yields an empty store.
-func openStore(path string) (*store, error) {
-	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("telegram: home dir: %w", err)
-		}
-		path = filepath.Join(home, ".harness", "telegram.json")
-	}
+// openStore returns the bot's store over the process-global managers, scoped
+// to the current working directory. It never fails today; the error return
+// is kept so callers stay unchanged.
+func openStore() (*store, error) {
 	cwd, _ := os.Getwd()
-	s := &store{
-		path: path,
-		cwd:  cwd,
-		data: storeData{Sessions: map[string]map[string]string{}},
-	}
-	if b, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(b, &s.data)
-		if s.data.Sessions == nil {
-			s.data.Sessions = map[string]map[string]string{}
-		}
-	}
-	return s, nil
+	return &store{settings: config.GetSettingsManager(), cwd: cwd}, nil
 }
 
 // ── Token ─────────────────────────────────────────────────────────────────
 
-// SaveToken persists the bot token to ~/.harness/telegram.json, preserving
-// any existing allowlist/session mappings — the same read-modify-write
-// pattern slack.SaveCredentials uses for its own auth fields.
+// SaveToken persists the bot token in the credentials store.
 func SaveToken(token string) error {
-	st, err := openStore("")
-	if err != nil {
-		return err
-	}
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.data.Token = token
-	return st.save()
+	return config.GetCredentialsManager().SetTelegramToken(token)
 }
 
-// LoadToken reads the saved bot token from ~/.harness/telegram.json.
-// Returns "" (no error) if none was ever saved.
+// LoadToken reads the saved bot token. Returns "" (no error) if none was ever
+// saved.
 func LoadToken() (string, error) {
-	st, err := openStore("")
-	if err != nil {
-		return "", err
-	}
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.data.Token, nil
+	return config.GetCredentialsManager().TelegramToken(), nil
 }
 
 // ── Allowlist ─────────────────────────────────────────────────────────────
 
-func (s *store) allowed(chatID int64) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, id := range s.data.Allowlist {
-		if id == chatID {
-			return true
-		}
-	}
-	return false
-}
+func (s *store) allowed(chatID int64) bool { return s.settings.TelegramAllowed(chatID) }
 
-func (s *store) allowlist() []int64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]int64, len(s.data.Allowlist))
-	copy(out, s.data.Allowlist)
-	return out
-}
+func (s *store) allowlist() []int64 { return s.settings.TelegramAllowlist() }
 
-func (s *store) pair(chatID int64) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, id := range s.data.Allowlist {
-		if id == chatID {
-			return false, nil
-		}
-	}
-	s.data.Allowlist = append(s.data.Allowlist, chatID)
-	return true, s.save()
-}
+func (s *store) pair(chatID int64) (bool, error) { return s.settings.PairTelegram(chatID) }
 
-func (s *store) unpair(chatID int64) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	found := false
-	kept := s.data.Allowlist[:0]
-	for _, id := range s.data.Allowlist {
-		if id == chatID {
-			found = true
-			continue
-		}
-		kept = append(kept, id)
-	}
-	s.data.Allowlist = kept
-	// Remove from all CWD buckets.
-	k := key(chatID)
-	for cwd, m := range s.data.Sessions {
-		delete(m, k)
-		if len(m) == 0 {
-			delete(s.data.Sessions, cwd)
-		}
-	}
-	if !found {
-		return false, nil
-	}
-	return true, s.save()
-}
+// unpair revokes chatID and drops its session bindings in every project.
+func (s *store) unpair(chatID int64) (bool, error) { return s.settings.UnpairTelegram(chatID) }
 
 // ── Sessions ──────────────────────────────────────────────────────────────
 
 func (s *store) sessionFor(chatID int64) (string, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	cwdMap, ok := s.data.Sessions[s.cwd]
-	if !ok {
-		return "", false
-	}
-	id, ok := cwdMap[key(chatID)]
-	return id, ok && id != ""
+	return s.settings.TelegramSession(s.cwd, chatID)
 }
 
 // allSessions returns all (chatID → sessionID) mappings for the current
 // working directory. Used at transport startup to pre-warm pumps so scheduled
 // prompts never fire into a session with no active SSE consumer.
-func (s *store) allSessions() map[int64]string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	cwdMap, ok := s.data.Sessions[s.cwd]
-	if !ok {
-		return nil
-	}
-	out := make(map[int64]string, len(cwdMap))
-	for k, v := range cwdMap {
-		if id, err := strconv.ParseInt(k, 10, 64); err == nil {
-			out[id] = v
-		}
-	}
-	return out
-}
+func (s *store) allSessions() map[int64]string { return s.settings.TelegramSessions(s.cwd) }
 
 func (s *store) bind(chatID int64, sessionID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.data.Sessions[s.cwd] == nil {
-		s.data.Sessions[s.cwd] = map[string]string{}
-	}
-	s.data.Sessions[s.cwd][key(chatID)] = sessionID
-	return s.save()
+	return s.settings.BindTelegram(s.cwd, chatID, sessionID)
 }
 
-func (s *store) unbind(chatID int64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if cwdMap, ok := s.data.Sessions[s.cwd]; ok {
-		delete(cwdMap, key(chatID))
-		if len(cwdMap) == 0 {
-			delete(s.data.Sessions, s.cwd)
-		}
-	}
-	return s.save()
-}
-
-// save writes the config to disk (caller holds s.mu).
-func (s *store) save() error {
-	b, err := json.MarshalIndent(s.data, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
-		return err
-	}
-	return os.WriteFile(s.path, b, 0600)
-}
-
-func key(chatID int64) string { return strconv.FormatInt(chatID, 10) }
+func (s *store) unbind(chatID int64) error { return s.settings.UnbindTelegram(s.cwd, chatID) }
 
 // telegramSessionName returns the default name for new sessions created by the
 // Telegram transport, e.g. "Telegram 2026-07-27 16:30".

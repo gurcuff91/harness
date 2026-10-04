@@ -149,7 +149,7 @@ type telegramTokenCmd struct {
 // file).
 type slackCmd struct {
 	Run   slackRunCmd   `cmd:"" default:"withargs" hidden:"" help:"Run as a Slack user bot (default)"`
-	Login slackLoginCmd `cmd:"" help:"Authenticate interactively (saves to ~/.harness/slack.json)"`
+	Login slackLoginCmd `cmd:"" help:"Authenticate interactively (saves the login to harness's config stores)"`
 	Admin slackAdminCmd `cmd:"" help:"Manage Slack admins"`
 }
 

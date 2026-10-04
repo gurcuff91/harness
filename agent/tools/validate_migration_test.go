@@ -115,7 +115,7 @@ func TestSubagentAndColleagueAskStillCatchWhitespaceOnly(t *testing.T) {
 		}
 	})
 	t.Run("ColleagueAsk whitespace-only colleague and prompt", func(t *testing.T) {
-		tool := ColleagueAsk()
+		tool := ColleagueAsk(func() map[string]Colleague { return nil })
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{"colleague":"   ","prompt":"x"}`))
 		if err == nil {
 			t.Fatalf("expected whitespace-only colleague to be rejected, got out=%q", out)

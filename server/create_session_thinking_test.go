@@ -23,16 +23,11 @@ import (
 // this test asserts a session created via POST /api/sessions keeps the
 // AGENT's level even when the global ~/.harness/settings.json disagrees.
 //
-// config.GetSettingsManager() is a process-wide sync.Once singleton, so its
-// backing settings.json path is fixed at first use; this test must be the
-// first thing in this test binary to touch it (via t.Setenv("HOME", ...)
-// before that first call) to safely control the global value without ever
-// touching the real developer/CI environment's settings.json. If some other
-// test in this package's binary already initialized it against the real
-// HOME, this one degrades to a skip rather than risk mutating real state.
+// The global settings store is an in-memory one for this whole test binary
+// (see TestMain in configisolation_test.go), so writing the global level here
+// never touches the real developer/CI settings.json. The skip below is a
+// last-resort guard in case that isolation is ever removed.
 func TestCreateSessionHonorsAgentThinkingLevelOverGlobalSetting(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
 	sm := config.GetSettingsManager()
 	if err := sm.SetThinkingLevel("high"); err != nil {
 		t.Fatalf("seed global thinking level: %v", err)

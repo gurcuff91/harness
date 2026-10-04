@@ -7,19 +7,30 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/gurcuff91/harness/configstore"
+	"github.com/gurcuff91/harness/internal/config"
 )
+
+// isolateConfig points harness's process-global settings and credentials
+// stores at fresh in-memory ones for this test — a saved Slack login must
+// never touch the real ~/.harness.
+func isolateConfig(t *testing.T) {
+	t.Helper()
+	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
+}
 
 // TestVerifyAndSaveDoesNotSaveOnAuthTestFailure is the regression test for
 // the guarantee `harness slack login` relies on: VerifyAndSave must call
 // Slack's real auth.test (exercising workspace + xoxc + xoxd together, since
 // NewBot builds its client from all three and apiCall sends them all on
-// every request) and refuse to persist anything to ~/.harness/slack.json if
+// every request) and refuse to persist anything to the config stores if
 // that call fails — never save a workspace/xoxc/xoxd combination that
 // doesn't actually work. Uses a fake Slack server that always rejects
 // auth.test to simulate an invalid credential combination without touching
 // the real Slack API.
 func TestVerifyAndSaveDoesNotSaveOnAuthTestFailure(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // isolate from the real ~/.harness
+	isolateConfig(t)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -49,7 +60,7 @@ func TestVerifyAndSaveDoesNotSaveOnAuthTestFailure(t *testing.T) {
 // verified identity AND persists the credentials — proving the save path
 // is genuinely gated by the verification, not skipped/independent of it.
 func TestVerifyAndSaveSavesOnAuthTestSuccess(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateConfig(t)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
