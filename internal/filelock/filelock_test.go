@@ -1,4 +1,4 @@
-package config
+package filelock
 
 import (
 	"os"
@@ -17,7 +17,7 @@ func lockTarget(t *testing.T) string {
 // A normal acquire/release cycle removes the caller's own lock.
 func TestFileLock_NormalReleaseRemovesOwnLock(t *testing.T) {
 	path := lockTarget(t)
-	release, err := AcquireFileLock(path)
+	release, err := Acquire(path)
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
@@ -40,13 +40,13 @@ func TestFileLock_ReleaseDoesNotStompReclaimedLock(t *testing.T) {
 	lockPath := path + ".lock"
 
 	// Process A acquires.
-	releaseA, err := AcquireFileLock(path)
+	releaseA, err := Acquire(path)
 	if err != nil {
 		t.Fatalf("A acquire: %v", err)
 	}
 
 	// Simulate B reclaiming A's lock: overwrite the lockfile with B's own token.
-	// (This is exactly what acquireFileLock's stale-reclaim branch does — take
+	// (This is exactly what Acquire's stale-reclaim branch does — take
 	// over the file — but we force it directly so the test is deterministic and
 	// doesn't wait 45s.)
 	bToken := "B-owns-this-now"
@@ -66,7 +66,7 @@ func TestFileLock_ReleaseDoesNotStompReclaimedLock(t *testing.T) {
 	}
 }
 
-// A stale lock (older than staleFileLockAge) is reclaimed; a fresh one is not.
+// A stale lock (older than staleAge) is reclaimed; a fresh one is not.
 func TestFileLock_ReclaimsOnlyStaleLocks(t *testing.T) {
 	path := lockTarget(t)
 	lockPath := path + ".lock"
@@ -78,7 +78,7 @@ func TestFileLock_ReclaimsOnlyStaleLocks(t *testing.T) {
 	// Shorten the wait: with fileLockMaxAttempts*retryDelay ≈ 2s and a fresh
 	// lock, acquire should fail. We just assert it does not succeed quickly.
 	done := make(chan error, 1)
-	go func() { r, e := AcquireFileLock(path); _ = r; done <- e }()
+	go func() { r, e := Acquire(path); _ = r; done <- e }()
 	select {
 	case err := <-done:
 		if err == nil {
@@ -89,11 +89,11 @@ func TestFileLock_ReclaimsOnlyStaleLocks(t *testing.T) {
 	}
 
 	// Now age the lock past the threshold — it should be reclaimed.
-	old := time.Now().Add(-2 * staleFileLockAge)
+	old := time.Now().Add(-2 * staleAge)
 	if err := os.Chtimes(lockPath, old, old); err != nil {
 		t.Fatal(err)
 	}
-	release, err := AcquireFileLock(path)
+	release, err := Acquire(path)
 	if err != nil {
 		t.Fatalf("acquire should reclaim a stale lock: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestFileLock_MutualExclusionUnderContention(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range 15 {
-				release, err := AcquireFileLock(path)
+				release, err := Acquire(path)
 				if err != nil {
 					continue
 				}

@@ -15,8 +15,7 @@ import (
 
 // A missing credential is reported via ok=false, and fn can choose not to write.
 func TestUpdateCredential_MissingIsReportedNotWritten(t *testing.T) {
-	dir := t.TempDir()
-	m := &CredentialsManager{path: filepath.Join(dir, "credentials.json")}
+	m, _ := newTestCreds(t, "")
 
 	var sawOK bool
 	err := m.UpdateCredential("claude-oauth", func(cur ProviderCredential, ok bool) (ProviderCredential, bool, error) {
@@ -37,8 +36,7 @@ func TestUpdateCredential_MissingIsReportedNotWritten(t *testing.T) {
 // write=true persists fn's returned value; write=false does not, even if fn
 // computed something.
 func TestUpdateCredential_WriteFlagControlsPersistence(t *testing.T) {
-	dir := t.TempDir()
-	m := &CredentialsManager{path: filepath.Join(dir, "credentials.json")}
+	m, _ := newTestCreds(t, "")
 
 	cred := ProviderCredential{Type: "oauth", AccessToken: "at", RefreshToken: "rt", ExpiresAt: time.Now().Add(time.Hour).UnixMilli()}
 
@@ -66,8 +64,7 @@ func TestUpdateCredential_WriteFlagControlsPersistence(t *testing.T) {
 
 // fn's own error propagates and aborts the write, even if fn also returned write=true.
 func TestUpdateCredential_FnErrorPropagatesAndSkipsWrite(t *testing.T) {
-	dir := t.TempDir()
-	m := &CredentialsManager{path: filepath.Join(dir, "credentials.json")}
+	m, _ := newTestCreds(t, "")
 	sentinel := errors.New("refresh failed")
 
 	err := m.UpdateCredential("claude-oauth", func(ProviderCredential, bool) (ProviderCredential, bool, error) {
@@ -84,8 +81,7 @@ func TestUpdateCredential_FnErrorPropagatesAndSkipsWrite(t *testing.T) {
 // An invalid credential returned with write=true is rejected (validated like
 // SetCredential) and not persisted.
 func TestUpdateCredential_ValidatesBeforeWriting(t *testing.T) {
-	dir := t.TempDir()
-	m := &CredentialsManager{path: filepath.Join(dir, "credentials.json")}
+	m, _ := newTestCreds(t, "")
 
 	err := m.UpdateCredential("claude-oauth", func(ProviderCredential, bool) (ProviderCredential, bool, error) {
 		return ProviderCredential{Type: "oauth"}, true, nil // missing access/refresh/expires
@@ -104,10 +100,9 @@ func TestUpdateCredential_ValidatesBeforeWriting(t *testing.T) {
 // again" — this is what prevents a double redemption of a single-use OAuth
 // refresh token.
 func TestUpdateCredential_SeesFreshestDiskStateAcrossCalls(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "credentials.json")
-	writer := &CredentialsManager{path: path}
-	reader := &CredentialsManager{path: path} // simulates a second process
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	writer := credsAt(t, path)
+	reader := credsAt(t, path) // simulates a second process
 
 	// "Process A" persists a fresh token.
 	if err := writer.SetCredential("claude-oauth", ProviderCredential{
@@ -118,7 +113,8 @@ func TestUpdateCredential_SeesFreshestDiskStateAcrossCalls(t *testing.T) {
 	}
 
 	// "Process B" (a separate manager instance, own in-memory cache) must see
-	// A's write via UpdateCredential's mandatory reload, not a stale copy.
+	// A's write: UpdateCredential runs inside FileStore.SwapValue, which always
+	// re-reads disk under the lock — never a stale in-memory copy.
 	var seenToken string
 	err := reader.UpdateCredential("claude-oauth", func(cur ProviderCredential, ok bool) (ProviderCredential, bool, error) {
 		seenToken = cur.AccessToken
@@ -137,8 +133,7 @@ func TestUpdateCredential_SeesFreshestDiskStateAcrossCalls(t *testing.T) {
 // This also stresses that concurrent UpdateCredential calls serialize instead
 // of corrupting each other (mutual exclusion via the file lock).
 func TestUpdateCredential_ConcurrentCallsSerializeCleanly(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "credentials.json")
+	path := filepath.Join(t.TempDir(), "credentials.json")
 	var inside atomic.Int32
 	var wg sync.WaitGroup
 
@@ -146,7 +141,7 @@ func TestUpdateCredential_ConcurrentCallsSerializeCleanly(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			m := &CredentialsManager{path: path} // separate instance per goroutine, like separate processes
+			m := credsAt(t, path) // separate instance per goroutine, like separate processes
 			err := m.UpdateCredential("claude-oauth", func(cur ProviderCredential, ok bool) (ProviderCredential, bool, error) {
 				n := inside.Add(1)
 				defer inside.Add(-1)

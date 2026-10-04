@@ -18,7 +18,7 @@
 3. **`provider/model` format everywhere.** Settings, env vars, CLI display, Resolve — all use `provider/model` (e.g., `anthropic/claude-sonnet-4-20250514`).
 4. **Backend/frontend separation.** `agent/` and `internal/providers/` never import `server` or `transports/`. The agent emits events over an HTTP/SSE API (`server`); the clients (`internal/cli`, `internal/tui`, `transports/{telegram,slack,acp}`) consume it.
 5. **Persistent state is explicit.** No model caching. On-disk state is limited to `~/.harness/{credentials.json, settings.json}` and `~/.harness/agent/{sessions/, memory.db}`.
-6. **SDK boundary.** Public packages (`agent`, `agent/{tools,store,resources,memory}`, `mcp`, `types`) form the SDK. Keep implementation detail (`providers`, `config`, `transport`, `version`) under `internal/`, and never expose an `internal/…` type in a public signature.
+6. **SDK boundary.** Public packages (`agent`, `agent/{tools,store,resources,memory}`, `configstore`, `mcp`, `types`) form the SDK. Keep implementation detail (`providers`, `config`, `transport`, `version`) under `internal/`, and never expose an `internal/…` type in a public signature.
 
 ## Architecture
 
@@ -44,6 +44,8 @@ cmd/harness/main.go             ← executable entry point (package main) — ju
 │   └── tools/                  ← built-in tools — custom tools here (package tools)
 │       ├── registry.go / bash.go / file.go / edit.go / fetch.go
 │       ├── skill.go / memory.go / session.go / websearch.go / truncate.go / names.go
+├── configstore/                ← persistence ports for process-global config: SettingsStore (non-sensitive) + CredentialsStore (secrets) — two deliberately distinct types with the same dumb namespace/key/JSON-value API (Get/Set/Delete/List/SwapValue/Close). Same split as agent/store: the store is a dumb CRUD, internal/config's managers own every typed method and domain rule. Implementations own their atomicity (SwapValue = atomic read-modify-write per key, also across processes). FileStore (default, ~/.harness/{settings,credentials}.json, layout {"<ns>":{"<key>":<json>}}) and InMemoryStore; register custom ones process-globally via harness.SetSettingsStore/SetCredentialsStore before building any Agent. A new kind of setting extends a manager, never these interfaces.
+│   ├── store.go / file.go / memory.go
 ├── mcp/                        ← Model Context Protocol client (stdlib) — MCPStatuses() exposes it
 │   ├── jsonrpc.go / stdio.go / http.go / client.go / manager.go
 ├── client/                     ← the ONE typed HTTP/SSE SDK over server's API — every transport uses *client.Client directly (no per-transport wrappers)
@@ -65,8 +67,9 @@ cmd/harness/main.go             ← executable entry point (package main) — ju
     │   └── llm/                ← core LLM types, metadata cascade, model registry
     ├── oauthflow/              ← native OAuth PKCE login flows — a SERVER-SIDE implementation detail: the only caller is server/oauth.go's handler behind POST /api/oauth/{provider}. OauthFlow interface (Start returns authURL+verifierCode, stateless; Exchange takes code+verifierCode back) + shared PKCE/token-POST + For(provider) dispatch in oauthflow.go; one file per provider (claude.go, codex.go), each implementing OauthFlow. Add a provider = one new file + one For() case, no call-site changes. Neither the CLI nor the TUI import this package — both drive OAuth through client.Client's StartOAuth/ExchangeOAuth instead (see server/oauth.go and internal/browseropen below).
     ├── browseropen/            ← the one function (Open) that opens a URL in the user's default browser — used by the CLI and TUI after StartOAuth returns an auth_url. The server NEVER opens a browser itself; that's exclusively a client-side concern.
-    ├── config/                 ← typed settings + credentials managers
-    │   ├── settings.go / credentials.go / manager.go
+    ├── config/                 ← typed settings + credentials managers over the configstore ports (validation, typed accessors, UpdateCredential → store.SwapValue); manager.go holds the process-global store registry + GetSettingsManager/GetCredentialsManager
+    │   ├── settings.go / credentials.go / manager.go / codec.go
+    ├── filelock/               ← the cross-process advisory file lock (token-owned, stale-reclaim) every file-backed store uses: configstore.FileStore, agent/schedule.Store
     ├── version/                ← build version (ldflags target)
     ├── logx/                   ← NewHarnessLogger() — harness's own logx.Logger implementation (the historical `LEVEL [component] event k=v` line format). Only internal/cli constructs it, passing it explicitly to every server.Run/transports/{telegram,slack}.Run call the real binary makes; every other caller (an SDK consumer, or a transport's own in-process server) gets logx.NewNilLogger() instead.
     ├── tui/                    ← pure-Go terminal UI (zero external TUI libs) — the one interactive frontend that stays INTERNAL: unlike the other transports, it's a terminal frontend tied to this binary, not something an SDK consumer embeds programmatically

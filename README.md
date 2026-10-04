@@ -181,6 +181,25 @@ means "on" — simply omit it to leave the flag off, which is the default
 for any other backend); the real OpenAI API rejects an unrecognized
 `reasoning_split` argument outright, so this must stay opt-in.
 
+**Where configuration lives is pluggable too.** Settings and credentials are
+read and written through two persistence ports in `configstore` —
+`SettingsStore` (active model, thinking level, MCP servers, custom
+providers) and `CredentialsStore` (API keys, OAuth tokens). Both are a
+small namespace/key/JSON-value store; harness keeps all the typed logic on
+top. Register your own implementations once, before building any `Agent`,
+to keep everything out of the filesystem — e.g. a database for settings
+and a cloud secret manager for credentials:
+
+```go
+harness.SetSettingsStore(mySettingsDB)       // implements configstore.SettingsStore
+harness.SetCredentialsStore(mySecretManager) // implements configstore.CredentialsStore
+```
+
+Without them, harness uses `configstore.FileStore` over
+`~/.harness/settings.json` and `~/.harness/credentials.json`.
+`configstore.NewInMemoryStore()` keeps everything in memory for the life of
+the process.
+
 The agent is configured with functional options: `AgentWithThinking`,
 `AgentWithMCPs`, `AgentWithMemory`, `AgentWithScheduler`, `AgentWithColleagues`,
 `AgentWithWebSearch`, `AgentWithMaxIterations`,
@@ -318,8 +337,8 @@ All data stored in `~/.harness/`:
 
 ```
 ~/.harness/
-├── credentials.json        — API keys + OAuth tokens (0600)
-├── settings.json           — Active model, thinking level, MCP servers, custom providers
+├── credentials.json        — API keys + OAuth tokens (0600): {"providers": {"<name>": {...}}}
+├── settings.json           — {"core": {active_model, thinking_level}, "mcp": {...}, "provider": {...}}
 ├── instances.json          — Registry of running server instances (for colleagues)
 ├── schedules.json          — Cron-scheduled prompts
 ├── telegram.json           — Telegram bot token + paired chats

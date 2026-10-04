@@ -4,31 +4,32 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sync"
-	"time"
+
+	"github.com/gurcuff91/harness/configstore"
 )
 
 // ErrInvalidCredential is returned by SetCredential when the credential fails
 // validation. Detectable with errors.Is.
 var ErrInvalidCredential = errors.New("invalid credential")
 
-// CredentialsManager is a thread-safe, typed store for provider credentials,
-// backed by ~/.harness/credentials.json (0600). Each provider has ONE typed
-// credential entry (not a scatter of prefixed keys). Credentials are INTERNAL:
-// they are never exposed over the HTTP API or a CLI command — only connect /
-// disconnect read and write them.
+// CredentialsManager is harness's typed, validated view of provider
+// credentials. It owns the domain rules (one typed credential per provider,
+// per-type required fields) and delegates ALL persistence to a
+// configstore.CredentialsStore underneath — files, locking, cross-process
+// freshness, and the atomicity UpdateCredential relies on are the store's
+// job, never this manager's. Credentials are INTERNAL: they are never
+// exposed over the HTTP API or a CLI command — only connect / disconnect
+// read and write them.
+//
+// Store layout: namespace "providers", key = provider name, value = a
+// ProviderCredential JSON document.
 type CredentialsManager struct {
-	mu       sync.RWMutex
-	path     string
-	data     credentialsData
-	loadedAt time.Time // mtime of the file as of the last load() — see reloadIfStale
+	store configstore.CredentialsStore
 }
 
-type credentialsData struct {
-	Providers map[string]ProviderCredential `json:"providers,omitempty"`
-}
+// nsProviders is the credentials-store namespace holding one
+// ProviderCredential per provider name.
+const nsProviders = "providers"
 
 // ProviderCredential is the complete authentication data for one provider. Only
 // the fields relevant to Type are populated.
@@ -42,61 +43,14 @@ type ProviderCredential struct {
 	AccountID        string `json:"account_id,omitempty"`        // optional (codex-oauth) — per-request header account id
 }
 
-func newCredentialsManager() *CredentialsManager {
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, ".harness")
-	_ = os.MkdirAll(dir, 0700)
-	m := &CredentialsManager{
-		path: filepath.Join(dir, "credentials.json"),
-	}
-	m.load()
-	return m
+// NewCredentialsManager returns a manager backed by store.
+func NewCredentialsManager(store configstore.CredentialsStore) *CredentialsManager {
+	return &CredentialsManager{store: store}
 }
 
-// ── Cross-process freshness ───────────────────────────────────────────────
-//
-// m.mu (sync.RWMutex) only protects goroutines WITHIN this process. Multiple
-// harness processes (TUI + Telegram + Slack + serve, or several TUI windows,
-// all common to run at once) each have their own, unrelated in-memory copy of
-// credentials.json — none of them see a write another process makes, because
-// m.data was populated once at startup and every read method used to serve
-// straight from that stale in-memory snapshot forever. In practice: process A
-// refreshes an expired OAuth token (or a user runs /connect there) and
-// persists the new one; every OTHER running instance kept using its own
-// stale copy — including the now-redeemed refresh token — and got a
-// permanent invalid_grant on its own next refresh attempt, forcing a manual
-// /connect in EVERY instance instead of just the one.
-//
-// reloadIfStale (called at the top of every public read method) closes that
-// gap cheaply: os.Stat is far lighter than the os.ReadFile+json.Unmarshal a
-// full load() does, so comparing mtimes on every read barely costs anything,
-// and only triggers a real reload when the file has actually changed
-// underneath this process.
-func (m *CredentialsManager) reloadIfStale() {
-	info, err := os.Stat(m.path)
-	if err != nil {
-		return // no file yet (never connected) — nothing to reload
-	}
-	m.mu.RLock()
-	stale := info.ModTime().After(m.loadedAt)
-	m.mu.RUnlock()
-	if !stale {
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	// Re-check under the write lock: another goroutine may have already
-	// reloaded while we were waiting for it.
-	if info.ModTime().After(m.loadedAt) {
-		m.load()
-	}
-}
-
-// UpdateCredential performs an atomic cross-process read-modify-write for one
-// provider's credential: it takes the file lock EXACTLY ONCE, re-reads the
-// latest on-disk state, hands it to fn to decide the outcome, and persists —
-// all inside that single acquisition. fn receives the freshest stored
-// credential (and whether one exists) and returns:
+// UpdateCredential performs an atomic read-modify-write of one provider's
+// credential: fn receives the freshest stored credential (and whether one
+// exists) and returns:
 //   - next:  the value to persist (ignored if write is false)
 //   - write: whether to persist next at all — return false to make this a
 //     pure read-then-decide with no write (e.g. "another process already
@@ -104,23 +58,16 @@ func (m *CredentialsManager) reloadIfStale() {
 //   - err:   fn's own error (e.g. a refresh call failed); propagated to the
 //     caller, no write happens
 //
-// This is the ONLY way to do a multi-step credential update under the
-// cross-process lock. There is deliberately no lower-level "give me the lock"
-// primitive (no WithLock): exposing the raw lock invited exactly the bug this
-// replaced — a caller's fn calling BACK into SetCredential/DeleteCredential
-// (which each take the SAME lock themselves) reacquired a lock this process
-// already held. The file lock is not re-entrant, so that reacquisition simply
-// blocked until it timed out (~2s) and the write was silently dropped —
-// which is how a freshly-rotated OAuth refresh token failed to reach disk
-// while the OLD (already server-side-consumed) token stayed on disk, poisoning
-// the next refresh with a permanent invalid_grant. Collapsing the lock to
-// live ONLY here, with no way for fn to ask for it again, makes that class of
-// bug unrepresentable: fn never has a lock handle to misuse.
+// The whole read → fn → write cycle runs inside ONE
+// CredentialsStore.SwapValue call, so its atomicity — including across
+// several harness processes — is the store's guarantee. fn must not call
+// back into this manager (it runs while the store holds whatever guarantees
+// that atomicity; for the file store, a non-re-entrant cross-process lock).
 //
 // Use case (see claude_oauth.go's getValidToken): re-check whether the token
 // is still valid — another process may have refreshed while THIS one was
-// waiting for the lock or sleeping through a retry backoff — and only refresh
-// (and persist) if it's genuinely still expired. OAuth refresh tokens are
+// waiting or sleeping through a retry backoff — and only refresh (and
+// persist) if it's genuinely still expired. OAuth refresh tokens are
 // SINGLE-USE: without this atomicity, two processes could both read the same
 // refresh_token and both redeem it — only one succeeds, the other gets a
 // permanent invalid_grant.
@@ -128,32 +75,22 @@ func (m *CredentialsManager) UpdateCredential(
 	provider string,
 	fn func(current ProviderCredential, ok bool) (next ProviderCredential, write bool, err error),
 ) error {
-	release, err := AcquireFileLock(m.path)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.load() // the freshest state — another process may have written since we last synced
-
-	current, ok := m.data.Providers[provider]
-	next, write, fnErr := fn(current, ok)
-	if fnErr != nil {
-		return fnErr
-	}
-	if !write {
-		return nil
-	}
-	if err := validateCredential(next); err != nil {
-		return err
-	}
-	if m.data.Providers == nil {
-		m.data.Providers = make(map[string]ProviderCredential)
-	}
-	m.data.Providers[provider] = next
-	return m.save()
+	return m.store.SwapValue(nsProviders, provider, func(raw []byte, found bool) ([]byte, bool, error) {
+		var current ProviderCredential
+		ok := found && json.Unmarshal(raw, &current) == nil
+		next, write, err := fn(current, ok)
+		if err != nil || !write {
+			return nil, false, err
+		}
+		if err := validateCredential(next); err != nil {
+			return nil, false, err
+		}
+		encoded, err := json.Marshal(next)
+		if err != nil {
+			return nil, false, fmt.Errorf("config: encode credential %q: %w", provider, err)
+		}
+		return encoded, true, nil
+	})
 }
 
 // validateCredential enforces the required fields per credential type: an
@@ -183,20 +120,14 @@ func validateCredential(c ProviderCredential) error {
 
 // Credential returns the stored credential for a provider by name (any type).
 func (m *CredentialsManager) Credential(provider string) (ProviderCredential, bool) {
-	m.reloadIfStale()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	c, ok := m.data.Providers[provider]
-	return c, ok
+	var c ProviderCredential
+	return c, getJSON(m.store, nsProviders, provider, &c)
 }
 
 // APIKey returns the stored API key for a provider, or ("", false) if there is
 // no credential or it is not an api_key credential.
 func (m *CredentialsManager) APIKey(provider string) (string, bool) {
-	m.reloadIfStale()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	c, ok := m.data.Providers[provider]
+	c, ok := m.Credential(provider)
 	if !ok || c.Type != "api_key" || c.APIKey == "" {
 		return "", false
 	}
@@ -206,10 +137,7 @@ func (m *CredentialsManager) APIKey(provider string) (string, bool) {
 // OAuth returns the stored OAuth credential for a provider, or (zero, false) if
 // there is no credential or it is not an oauth credential.
 func (m *CredentialsManager) OAuth(provider string) (ProviderCredential, bool) {
-	m.reloadIfStale()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	c, ok := m.data.Providers[provider]
+	c, ok := m.Credential(provider)
 	if !ok || c.Type != "oauth" || c.AccessToken == "" {
 		return ProviderCredential{}, false
 	}
@@ -217,74 +145,18 @@ func (m *CredentialsManager) OAuth(provider string) (ProviderCredential, bool) {
 }
 
 // SetCredential validates and stores (or replaces) a provider's credential.
-// Holds the cross-process file lock for the full read-modify-write cycle: it
-// re-reads the latest data from disk first (another process may have changed
-// an unrelated provider's credential, or refreshed this same one, since this
-// manager's in-memory copy was last synced), applies this change on top, then
-// persists — so a concurrent writer's update is never silently discarded.
 func (m *CredentialsManager) SetCredential(provider string, cred ProviderCredential) error {
 	if err := validateCredential(cred); err != nil {
 		return err
 	}
-	release, err := AcquireFileLock(m.path)
+	raw, err := json.Marshal(cred)
 	if err != nil {
-		return err
+		return fmt.Errorf("config: encode credential %q: %w", provider, err)
 	}
-	defer release()
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.load() // pick up whatever the latest writer persisted before we overwrite
-	if m.data.Providers == nil {
-		m.data.Providers = make(map[string]ProviderCredential)
-	}
-	m.data.Providers[provider] = cred
-	return m.save()
+	return m.store.Set(nsProviders, provider, raw)
 }
 
-// DeleteCredential removes a provider's credential. Same lock-then-reload
-// pattern as SetCredential — see its comment.
+// DeleteCredential removes a provider's credential.
 func (m *CredentialsManager) DeleteCredential(provider string) error {
-	release, err := AcquireFileLock(m.path)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.load()
-	delete(m.data.Providers, provider)
-	return m.save()
-}
-
-// load reads credentials.json from disk into m.data and records the file's
-// mtime (at the moment of the read) in m.loadedAt — the baseline
-// reloadIfStale compares future os.Stat calls against. Caller holds m.mu (at
-// least for writing loadedAt/data) — see reloadIfStale, SetCredential,
-// DeleteCredential, and newCredentialsManager for its call sites.
-func (m *CredentialsManager) load() {
-	info, statErr := os.Stat(m.path)
-	data, err := os.ReadFile(m.path)
-	if err != nil {
-		return
-	}
-	json.Unmarshal(data, &m.data)
-	if statErr == nil {
-		m.loadedAt = info.ModTime()
-	}
-}
-
-func (m *CredentialsManager) save() error {
-	data, err := json.MarshalIndent(m.data, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(m.path, data, 0600); err != nil {
-		return err
-	}
-	if info, err := os.Stat(m.path); err == nil {
-		m.loadedAt = info.ModTime()
-	}
-	return nil
+	return m.store.Delete(nsProviders, provider)
 }

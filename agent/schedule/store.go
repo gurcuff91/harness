@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gurcuff91/harness/internal/config"
+	"github.com/gurcuff91/harness/internal/filelock"
 	"github.com/robfig/cron/v3"
 )
 
@@ -80,7 +80,7 @@ type Store struct {
 
 // Open loads the schedule store from path (default ~/.harness/schedules.json
 // when empty). A missing file yields an empty store. Not a singleton — unlike
-// config.CredentialsManager/SettingsManager, there is no existing global
+// the process-global settings/credentials managers, there is no global
 // accessor to preserve, and each Agent deliberately opens its own *Store (one
 // per agent instance, potentially several per process for subagents/tests).
 // The cross-process lock and reload below work correctly regardless of how
@@ -100,7 +100,7 @@ func Open(path string) (*Store, error) {
 
 // ── Cross-process freshness ───────────────────────────────────────────────
 //
-// Same problem, same fix as config.CredentialsManager.reloadIfStale (see its
+// Same problem, same fix as configstore.FileStore.reloadIfStale (see its
 // comment for the full story): s.mu only guards goroutines within THIS
 // process. reloadIfStale is called at the top of List() so every reader (the
 // Engine's every-30s tick, the ScheduleList tool via ToolAdapter, the server's
@@ -139,9 +139,9 @@ const (
 // (Schedule{}, ActionNoop, nil) to do nothing, or an error to abort with no
 // write. Both callers (Set, RecordRun) share this single path; there is no
 // lower-level "give me the lock" primitive exposed, so a caller's fn can never
-// re-acquire the lock and deadlock — the same design this replaced in
-// config.CredentialsManager (see UpdateCredential's doc comment for that
-// history).
+// re-acquire the lock and deadlock — the same design
+// configstore.FileStore.SwapValue uses for credentials.json (see its doc
+// comment for that history).
 //
 // Delete is deliberately NOT expressed through this callback — see Delete's
 // own doc comment for why.
@@ -149,7 +149,7 @@ func (s *Store) UpdateSchedule(
 	owner, slug string,
 	fn func(cur Schedule, ok bool) (next Schedule, action UpdateAction, err error),
 ) error {
-	release, err := config.AcquireFileLock(s.path)
+	release, err := filelock.Acquire(s.path)
 	if err != nil {
 		return err
 	}
@@ -213,7 +213,7 @@ func (s *Store) Set(slug, spec, prompt, owner string) error {
 // bool return whose "write=true AND delete=true" combination would be
 // representable-but-invalid.
 func (s *Store) Delete(slug, owner string) (bool, error) {
-	release, err := config.AcquireFileLock(s.path)
+	release, err := filelock.Acquire(s.path)
 	if err != nil {
 		return false, err
 	}

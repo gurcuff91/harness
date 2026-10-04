@@ -7,27 +7,40 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/gurcuff91/harness/configstore"
 )
 
-// newTestSettings builds a SettingsManager backed by a temp file with the given
-// initial JSON contents (empty string = no file).
-func newTestSettings(t *testing.T, initial string) *SettingsManager {
+// newTestSettings builds a SettingsManager over a FileStore on a temp file
+// seeded with initial (empty string = no file). Returns the file path too,
+// so a test can inspect the raw file or open a second, independent manager
+// on it — standing in for another harness process.
+func newTestSettings(t *testing.T, initial string) (*SettingsManager, string) {
 	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "settings.json")
+	path := filepath.Join(t.TempDir(), "settings.json")
 	if initial != "" {
 		if err := os.WriteFile(path, []byte(initial), 0600); err != nil {
 			t.Fatalf("seed settings: %v", err)
 		}
 	}
-	m := &SettingsManager{path: path}
-	m.load()
-	return m
+	return settingsAt(t, path), path
 }
 
-// TestRoundTrip verifies settings load and persist with the unified names.
+// settingsAt opens an independent SettingsManager (own FileStore, own
+// in-memory snapshot) on path.
+func settingsAt(t *testing.T, path string) *SettingsManager {
+	t.Helper()
+	fs, err := configstore.NewFileStore(path, 0600)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	return NewSettingsManager(fs)
+}
+
+// TestRoundTrip verifies the core settings load from and persist to the
+// namespaced layout: active_model and thinking_level under "core".
 func TestRoundTrip(t *testing.T) {
-	m := newTestSettings(t, `{"active_model":"anthropic/claude","thinking_level":"high"}`)
+	m, path := newTestSettings(t, `{"core":{"active_model":"anthropic/claude","thinking_level":"high"}}`)
 	if got := m.ActiveModel(); got != "anthropic/claude" {
 		t.Errorf("ActiveModel = %q", got)
 	}
@@ -35,20 +48,34 @@ func TestRoundTrip(t *testing.T) {
 		t.Errorf("ThinkingLevel = %q", got)
 	}
 
-	// Save and confirm only the unified names are written.
 	if err := m.SetActiveModel("minimax/MiniMax-M3"); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	raw, _ := os.ReadFile(m.path)
-	var out map[string]any
+	raw, _ := os.ReadFile(path)
+	var out map[string]map[string]any
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatalf("reparse: %v", err)
 	}
-	if out["active_model"] != "minimax/MiniMax-M3" {
-		t.Errorf("active_model missing/wrong after save: %s", raw)
+	if out["core"]["active_model"] != "minimax/MiniMax-M3" {
+		t.Errorf("core.active_model missing/wrong after save: %s", raw)
 	}
-	if out["thinking_level"] != "high" {
-		t.Errorf("thinking_level missing/wrong after save: %s", raw)
+	if out["core"]["thinking_level"] != "high" {
+		t.Errorf("core.thinking_level missing/wrong after save: %s", raw)
+	}
+}
+
+// TestLegacyRootKeysAreNotRead confirms the pre-namespace layout (core
+// settings as bare root keys) is NOT read — there is deliberately no
+// automatic migration; an old file must be migrated once by hand. The
+// legacy layout isn't a valid store document, so it reads as empty (no
+// error, no stderr output) and the manager falls back to defaults.
+func TestLegacyRootKeysAreNotRead(t *testing.T) {
+	m, _ := newTestSettings(t, `{"active_model":"anthropic/claude","thinking_level":"high"}`)
+	if got := m.ActiveModel(); got != "" {
+		t.Errorf("ActiveModel = %q, want \"\" (legacy root keys must not be read)", got)
+	}
+	if got := m.ThinkingLevel(); got != "" {
+		t.Errorf("ThinkingLevel = %q, want \"\"", got)
 	}
 }
 
@@ -59,13 +86,10 @@ func TestRoundTrip(t *testing.T) {
 // manager's write (e.g. /model in one TUI instance) on its very next read,
 // without needing to be recreated.
 func TestSettingsCrossProcessReload(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "settings.json")
+	path := filepath.Join(t.TempDir(), "settings.json")
 
-	writer := &SettingsManager{path: path}
-	writer.load()
-	reader := &SettingsManager{path: path}
-	reader.load()
+	writer := settingsAt(t, path)
+	reader := settingsAt(t, path)
 
 	if got := reader.ActiveModel(); got != "" {
 		t.Fatalf("reader should see no active model yet, got %q", got)
@@ -110,7 +134,7 @@ func bumpSettingsMtime(t *testing.T, path string, delta time.Duration) {
 // TestThinkingLevelValidation verifies SetThinkingLevel accepts only canonical
 // levels and rejects anything else without persisting.
 func TestThinkingLevelValidation(t *testing.T) {
-	m := newTestSettings(t, `{"thinking_level":"medium"}`)
+	m, _ := newTestSettings(t, `{"core":{"thinking_level":"medium"}}`)
 	for _, lvl := range []string{"off", "low", "medium", "high", "xhigh", "max"} {
 		if err := m.SetThinkingLevel(lvl); err != nil {
 			t.Errorf("level %q: expected accepted, got %v", lvl, err)
@@ -132,7 +156,7 @@ func TestThinkingLevelValidation(t *testing.T) {
 // TestMCPTransportInference verifies the transport is inferred from which of
 // command/url is set, and that a disabled server round-trips.
 func TestMCPTransportInference(t *testing.T) {
-	m := newTestSettings(t, "")
+	m, _ := newTestSettings(t, "")
 	// A command → local (IsRemote false).
 	if err := m.SetMCPServer("fs", MCPServer{Command: "npx", Args: []string{"-y", "srv"}}); err != nil {
 		t.Fatalf("local rejected: %v", err)
@@ -148,7 +172,7 @@ func TestMCPTransportInference(t *testing.T) {
 		t.Errorf("url server should be remote, got local")
 	}
 	// Hand-edited file with the canonical shape + disabled loads correctly.
-	m2 := newTestSettings(t, `{"mcp":{"k":{"command":"npx","args":["-y","srv"],"disabled":true}}}`)
+	m2, _ := newTestSettings(t, `{"mcp":{"k":{"command":"npx","args":["-y","srv"],"disabled":true}}}`)
 	srv, ok := m2.MCPServer("k")
 	if !ok {
 		t.Fatal("server did not load")
@@ -165,7 +189,7 @@ func TestMCPTransportInference(t *testing.T) {
 }
 
 func TestMCPValidation(t *testing.T) {
-	m := newTestSettings(t, "")
+	m, _ := newTestSettings(t, "")
 	bad := map[string]MCPServer{
 		"empty": {},                                 // neither command nor url
 		"both":  {Command: "npx", URL: "https://x"}, // ambiguous
@@ -194,7 +218,7 @@ func TestMCPValidation(t *testing.T) {
 // TestMCPCollection verifies MCP servers round-trip, including local (Env) and
 // remote (Headers) shapes, and delete.
 func TestMCPCollection(t *testing.T) {
-	m := newTestSettings(t, "")
+	m, path := newTestSettings(t, "")
 	local := MCPServer{Command: "npx", Args: []string{"-y", "@mcp/fs"}, Env: map[string]string{"K": "V"}}
 	remote := MCPServer{URL: "https://mcp.example", Headers: map[string]string{"Authorization": "Bearer t"}}
 	if err := m.SetMCPServer("fs", local); err != nil {
@@ -204,9 +228,7 @@ func TestMCPCollection(t *testing.T) {
 		t.Fatalf("set remote: %v", err)
 	}
 	// Reload from disk.
-	m2 := newTestSettings(t, "")
-	m2.path = m.path
-	m2.load()
+	m2 := settingsAt(t, path)
 	gotLocal, ok := m2.MCPServer("fs")
 	if !ok || gotLocal.IsRemote() || gotLocal.Command != "npx" || len(gotLocal.Args) != 2 || gotLocal.Env["K"] != "V" {
 		t.Errorf("local mcp not persisted: %+v ok=%v", gotLocal, ok)
@@ -290,7 +312,7 @@ func TestValidThinkingLevel(t *testing.T) {
 // ── Custom providers ─────────────────────────────────────────────────────
 
 func TestCustomProviderValidation(t *testing.T) {
-	m := newTestSettings(t, "")
+	m, _ := newTestSettings(t, "")
 
 	bad := map[string]CustomProvider{
 		"unsupported-type": {Type: "anthropic", URL: "https://x"},
@@ -317,7 +339,7 @@ func TestCustomProviderValidation(t *testing.T) {
 // rejected — this set must never drift silently from the real registry
 // (internal/providers/*.go's Name() values).
 func TestCustomProviderReservedNames(t *testing.T) {
-	m := newTestSettings(t, "")
+	m, _ := newTestSettings(t, "")
 	reserved := []string{"anthropic", "claude-oauth", "codex-oauth", "minimax", "ollama-cloud", "ollama", "openai", "opencode-go"}
 	for _, name := range reserved {
 		err := m.SetCustomProvider(name, CustomProvider{Type: "openai", URL: "https://x"})
@@ -336,7 +358,7 @@ func TestCustomProviderReservedNames(t *testing.T) {
 // TestCustomProviderCollection verifies custom providers round-trip through
 // disk, including all optional fields, and delete.
 func TestCustomProviderCollection(t *testing.T) {
-	m := newTestSettings(t, "")
+	m, path := newTestSettings(t, "")
 	p := CustomProvider{
 		Type:      "openai",
 		URL:       "https://my-proxy.internal/v1",
@@ -350,9 +372,7 @@ func TestCustomProviderCollection(t *testing.T) {
 	}
 
 	// Reload from disk.
-	m2 := newTestSettings(t, "")
-	m2.path = m.path
-	m2.load()
+	m2 := settingsAt(t, path)
 	got, ok := m2.CustomProvider("my-proxy")
 	if !ok {
 		t.Fatal("provider not persisted")
@@ -379,7 +399,7 @@ func TestCustomProviderCollection(t *testing.T) {
 // defaults to false (enabled) when omitted — same omitempty contract as
 // MCPServer.Disabled.
 func TestCustomProviderDisabledField(t *testing.T) {
-	m := newTestSettings(t, "")
+	m, path := newTestSettings(t, "")
 	if err := m.SetCustomProvider("p1", CustomProvider{Type: "openai", URL: "https://x", Disabled: true}); err != nil {
 		t.Fatalf("set: %v", err)
 	}
@@ -388,7 +408,7 @@ func TestCustomProviderDisabledField(t *testing.T) {
 		t.Errorf("Disabled did not round-trip: %+v ok=%v", got, ok)
 	}
 
-	raw, _ := os.ReadFile(m.path)
+	raw, _ := os.ReadFile(path)
 	var out map[string]map[string]map[string]any
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatalf("reparse: %v", err)

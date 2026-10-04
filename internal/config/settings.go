@@ -4,11 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sync"
-	"time"
 
+	"github.com/gurcuff91/harness/configstore"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -81,109 +78,69 @@ func ValidThinkingLevel(level string) bool {
 	return thinkingLevels[level]
 }
 
-// SettingsManager is a thread-safe store for harness settings.
-// Backed by ~/.harness/settings.json.
+// SettingsManager is harness's typed, validated view of its non-sensitive,
+// process-global settings. It owns every domain rule — accepted thinking
+// levels, MCP server shape, custom-provider naming — and delegates ALL
+// persistence to a configstore.SettingsStore underneath (the same split as
+// agent/store's *Session over SessionStore). Storage concerns — files,
+// locking, cross-process freshness — belong entirely to the store.
 //
-// Design: the manager is an AGNOSTIC typed store. It exposes methods only for
-// GENERAL, known settings — core singletons (ActiveModel, ThinkingLevel) and
-// keyed collections (Providers, MCP servers). It never contains logic specific
-// to a concrete provider. The manager just stores and returns typed values by
-// name.
+// Store layout (namespace → key → JSON value):
+//
+//	core     → active_model, thinking_level   (JSON strings)
+//	mcp      → <server name>                  (types.MCPServer)
+//	provider → <provider name>                (types.CustomProvider)
+//
+// Every value is its own key, so writes to different settings never
+// contend: changing the active model can't clobber an MCP server another
+// process just added.
+//
+// Read methods return the zero value when the store fails, preserving their
+// existing signatures (a missing or unreadable setting falls back to the
+// default, exactly as an absent settings.json always did); write methods
+// return the store's error.
 type SettingsManager struct {
-	mu       sync.RWMutex
-	path     string
-	data     settingsData
-	loadedAt time.Time // mtime of the file as of the last load() — see reloadIfStale
+	store configstore.SettingsStore
 }
 
-// settingsData is the on-disk representation. Field names, struct tags, and the
-// REST API (see server SettingsDTO) all share ONE vocabulary.
-type settingsData struct {
-	// Core singletons.
-	ActiveModel   string `json:"active_model,omitempty"`
-	ThinkingLevel string `json:"thinking_level,omitempty"`
+// Namespaces and keys of the settings layout — the single source of truth
+// for where each setting lives in the store.
+const (
+	nsCore           = "core"
+	nsMCP            = "mcp"
+	nsProvider       = "provider"
+	keyActiveModel   = "active_model"
+	keyThinkingLevel = "thinking_level"
+)
 
-	// Keyed collections (dynamic entries by name).
-	MCP      map[string]MCPServer      `json:"mcp,omitempty"`      // key = server name
-	Provider map[string]CustomProvider `json:"provider,omitempty"` // key = provider name — same singular style as "mcp"
+// NewSettingsManager returns a manager backed by store.
+func NewSettingsManager(store configstore.SettingsStore) *SettingsManager {
+	return &SettingsManager{store: store}
 }
 
-func newSettingsManager() *SettingsManager {
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, ".harness")
-	_ = os.MkdirAll(dir, 0700)
-	m := &SettingsManager{
-		path: filepath.Join(dir, "settings.json"),
-	}
-	m.load()
-	return m
-}
+// ── Core settings ────────────────────────────────────────────────────────
 
-// ── Cross-process freshness ───────────────────────────────────────────────
-//
-// Same problem, same fix as CredentialsManager.reloadIfStale (see its comment
-// for the full story): m.mu only guards goroutines within THIS process, so
-// multiple harness processes (TUI + Telegram + Slack + serve, or several TUI
-// windows) each held their own in-memory settings.json snapshot, populated
-// once at startup, and every read method served straight from it forever —
-// a /model or /mcp add in one instance was invisible to every other running
-// instance until it restarted. reloadIfStale is called at the top of every
-// public read method; os.Stat is far cheaper than the full os.ReadFile+
-// json.Unmarshal a load() does, so this barely costs anything on the common
-// case (file unchanged) and only reloads when it actually has to.
-func (m *SettingsManager) reloadIfStale() {
-	info, err := os.Stat(m.path)
-	if err != nil {
-		return // no file yet — nothing to reload
-	}
-	m.mu.RLock()
-	stale := info.ModTime().After(m.loadedAt)
-	m.mu.RUnlock()
-	if !stale {
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if info.ModTime().After(m.loadedAt) {
-		m.load()
-	}
-}
-
-// ── Domain methods ───────────────────────────────────────────────────────
-
-// ActiveModel returns the persisted active model ("provider/model").
+// ActiveModel returns the persisted active model ("provider/model"), or ""
+// when unset.
 func (m *SettingsManager) ActiveModel() string {
-	m.reloadIfStale()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.data.ActiveModel
+	var model string
+	m.getJSON(nsCore, keyActiveModel, &model)
+	return model
 }
 
-// SetActiveModel persists the active model. Locked cross-process — re-reads
-// the latest disk state first so a concurrent write to an unrelated field is
-// never discarded (see SetMCPServer's comment for the full rationale).
+// SetActiveModel persists the active model.
 func (m *SettingsManager) SetActiveModel(model string) error {
-	release, err := AcquireFileLock(m.path)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.load()
-	m.data.ActiveModel = model
-	return m.save()
+	return m.setJSON(nsCore, keyActiveModel, model)
 }
 
-// ThinkingLevel returns the persisted thinking level. The settings file is the
-// single source of truth; per-invocation overrides use the CLI/TUI --thinking
-// flag (which also validates), not an environment variable.
+// ThinkingLevel returns the persisted thinking level, or "" when unset. The
+// store is the single source of truth; per-invocation overrides use the
+// CLI/TUI --thinking flag (which also validates), not an environment
+// variable.
 func (m *SettingsManager) ThinkingLevel() string {
-	m.reloadIfStale()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.data.ThinkingLevel
+	var level string
+	m.getJSON(nsCore, keyThinkingLevel, &level)
+	return level
 }
 
 // SetThinkingLevel validates and persists the thinking level. Accepted values:
@@ -193,17 +150,7 @@ func (m *SettingsManager) SetThinkingLevel(level string) error {
 	if !thinkingLevels[level] {
 		return fmt.Errorf("%w: %q (want off|low|medium|high|xhigh|max)", ErrInvalidThinkingLevel, level)
 	}
-	release, err := AcquireFileLock(m.path)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.load()
-	m.data.ThinkingLevel = level
-	return m.save()
+	return m.setJSON(nsCore, keyThinkingLevel, level)
 }
 
 // ── MCP servers collection ───────────────────────────────────────────────
@@ -211,23 +158,13 @@ func (m *SettingsManager) SetThinkingLevel(level string) error {
 
 // MCPServer returns the stored config for an MCP server by name.
 func (m *SettingsManager) MCPServer(name string) (MCPServer, bool) {
-	m.reloadIfStale()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	srv, ok := m.data.MCP[name]
-	return srv, ok
+	var srv MCPServer
+	return srv, m.getJSON(nsMCP, name, &srv)
 }
 
-// MCPServers returns a defensive copy of the whole MCP collection.
+// MCPServers returns the whole MCP collection (a fresh map the caller owns).
 func (m *SettingsManager) MCPServers() map[string]MCPServer {
-	m.reloadIfStale()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make(map[string]MCPServer, len(m.data.MCP))
-	for k, v := range m.data.MCP {
-		out[k] = v
-	}
-	return out
+	return listJSON[MCPServer](m.store, nsMCP)
 }
 
 // validateMCPServer enforces the inferred-transport rule: EXACTLY one of
@@ -247,45 +184,17 @@ func validateMCPServer(srv MCPServer) error {
 }
 
 // SetMCPServer validates and stores (or replaces) an MCP server's config. The
-// transport is inferred from which of command/url is set. Locked
-// cross-process: re-reads the latest disk state first (another process may
-// have changed an unrelated setting since this manager's in-memory copy was
-// last synced), applies this change on top, then persists — so a concurrent
-// writer's update is never silently discarded.
+// transport is inferred from which of command/url is set.
 func (m *SettingsManager) SetMCPServer(name string, srv MCPServer) error {
 	if err := validateMCPServer(srv); err != nil {
 		return err
 	}
-	release, err := AcquireFileLock(m.path)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.load()
-	if m.data.MCP == nil {
-		m.data.MCP = make(map[string]MCPServer)
-	}
-	m.data.MCP[name] = srv
-	return m.save()
+	return m.setJSON(nsMCP, name, srv)
 }
 
-// DeleteMCPServer removes an MCP server's config. Same lock-then-reload
-// pattern as SetMCPServer.
+// DeleteMCPServer removes an MCP server's config.
 func (m *SettingsManager) DeleteMCPServer(name string) error {
-	release, err := AcquireFileLock(m.path)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.load()
-	delete(m.data.MCP, name)
-	return m.save()
+	return m.store.Delete(nsMCP, name)
 }
 
 // ── Custom providers collection ─────────────────────────────────────────
@@ -296,24 +205,14 @@ func (m *SettingsManager) DeleteMCPServer(name string) error {
 
 // CustomProvider returns the stored config for a custom provider by name.
 func (m *SettingsManager) CustomProvider(name string) (CustomProvider, bool) {
-	m.reloadIfStale()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	p, ok := m.data.Provider[name]
-	return p, ok
+	var p CustomProvider
+	return p, m.getJSON(nsProvider, name, &p)
 }
 
-// CustomProviders returns a defensive copy of the whole custom-provider
-// collection.
+// CustomProviders returns the whole custom-provider collection (a fresh map
+// the caller owns).
 func (m *SettingsManager) CustomProviders() map[string]CustomProvider {
-	m.reloadIfStale()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make(map[string]CustomProvider, len(m.data.Provider))
-	for k, v := range m.data.Provider {
-		out[k] = v
-	}
-	return out
+	return listJSON[CustomProvider](m.store, nsProvider)
 }
 
 // validateCustomProvider enforces: Type must be the one currently supported
@@ -336,70 +235,34 @@ func validateCustomProvider(name string, p CustomProvider) error {
 }
 
 // SetCustomProvider validates and stores (or replaces) a custom provider's
-// config. Same lock-reload-mutate-save sequence as SetMCPServer.
+// config.
 func (m *SettingsManager) SetCustomProvider(name string, p CustomProvider) error {
 	if err := validateCustomProvider(name, p); err != nil {
 		return err
 	}
-	release, err := AcquireFileLock(m.path)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.load()
-	if m.data.Provider == nil {
-		m.data.Provider = make(map[string]CustomProvider)
-	}
-	m.data.Provider[name] = p
-	return m.save()
+	return m.setJSON(nsProvider, name, p)
 }
 
-// DeleteCustomProvider removes a custom provider's config. Same
-// lock-then-reload pattern as DeleteMCPServer.
+// DeleteCustomProvider removes a custom provider's config.
 func (m *SettingsManager) DeleteCustomProvider(name string) error {
-	release, err := AcquireFileLock(m.path)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.load()
-	delete(m.data.Provider, name)
-	return m.save()
+	return m.store.Delete(nsProvider, name)
 }
 
 // ── Internal ─────────────────────────────────────────────────────────────
 
-// load reads settings.json from disk into m.data and records the file's
-// mtime (at the moment of the read) in m.loadedAt — the baseline
-// reloadIfStale compares future os.Stat calls against. Caller holds m.mu.
-func (m *SettingsManager) load() {
-	info, statErr := os.Stat(m.path)
-	data, err := os.ReadFile(m.path)
-	if err != nil {
-		return
-	}
-	json.Unmarshal(data, &m.data)
-	if statErr == nil {
-		m.loadedAt = info.ModTime()
-	}
+// getJSON decodes (namespace, key) into out, reporting whether a value was
+// found and decoded. A store error or an undecodable value counts as "not
+// found" — see the SettingsManager doc comment for why reads don't surface
+// errors.
+func (m *SettingsManager) getJSON(namespace, key string, out any) bool {
+	return getJSON(m.store, namespace, key, out)
 }
 
-func (m *SettingsManager) save() error {
-	data, err := json.MarshalIndent(m.data, "", "  ")
+// setJSON encodes v and stores it under (namespace, key).
+func (m *SettingsManager) setJSON(namespace, key string, v any) error {
+	raw, err := json.Marshal(v)
 	if err != nil {
-		return err
+		return fmt.Errorf("config: encode %s/%s: %w", namespace, key, err)
 	}
-	if err := os.WriteFile(m.path, data, 0600); err != nil {
-		return err
-	}
-	if info, err := os.Stat(m.path); err == nil {
-		m.loadedAt = info.ModTime()
-	}
-	return nil
+	return m.store.Set(namespace, key, raw)
 }

@@ -34,6 +34,8 @@
 //   - agent            — Agent, Session, and the contracts you implement
 //     (agent.ResourceLoader) or extend (agent.PromptOption)
 //   - agent/store      — SessionStore + SessionMeta, the persistence port
+//   - configstore      — SettingsStore + CredentialsStore, the persistence
+//     ports for process-global configuration (see SetSettingsStore)
 //   - agent/resources  — ResourceLoader internals (the default filesystem one)
 //   - agent/tools      — Tool, the registry, and built-in tools
 //   - agent/memory     — the persistent memory store internals
@@ -252,6 +254,21 @@ var ProviderWithFetchModels = agent.ProviderWithFetchModels
 // request — needed for a custom provider fronting a MiniMax-compatible
 // backend. See [agent.ProviderWithReasoningSplit].
 var ProviderWithReasoningSplit = agent.ProviderWithReasoningSplit
+
+// ── Configuration stores ─────────────────────────────────────────────────
+//
+// Where harness persists its process-global configuration. Same
+// register-early contract as NewOpenAIProvider: call once in main(), before
+// constructing any Agent. Without them, harness uses configstore.FileStore
+// over ~/.harness/settings.json and ~/.harness/credentials.json.
+
+// SetSettingsStore registers the store for non-sensitive settings. See
+// [agent.SetSettingsStore].
+var SetSettingsStore = agent.SetSettingsStore
+
+// SetCredentialsStore registers the store for secrets (API keys, OAuth
+// tokens). See [agent.SetCredentialsStore].
+var SetCredentialsStore = agent.SetCredentialsStore
 
 // ── Runners ──────────────────────────────────────────────────────────────
 //

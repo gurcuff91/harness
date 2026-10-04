@@ -6,25 +6,39 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/gurcuff91/harness/configstore"
 )
 
-func newTestCreds(t *testing.T, initial string) *CredentialsManager {
+// newTestCreds builds a CredentialsManager over a FileStore on a temp file
+// seeded with initial (empty string = no file). Returns the file path too,
+// so a test can open a second, independent manager on the same file —
+// standing in for another harness process.
+func newTestCreds(t *testing.T, initial string) (*CredentialsManager, string) {
 	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "credentials.json")
+	path := filepath.Join(t.TempDir(), "credentials.json")
 	if initial != "" {
 		if err := os.WriteFile(path, []byte(initial), 0600); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
-	m := &CredentialsManager{path: path}
-	m.load()
-	return m
+	return credsAt(t, path), path
+}
+
+// credsAt opens an independent CredentialsManager (own FileStore, own
+// in-memory snapshot) on path.
+func credsAt(t *testing.T, path string) *CredentialsManager {
+	t.Helper()
+	fs, err := configstore.NewFileStore(path, 0600)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	return NewCredentialsManager(fs)
 }
 
 // TestCredentialValidation checks per-type required fields.
 func TestCredentialValidation(t *testing.T) {
-	m := newTestCreds(t, "")
+	m, _ := newTestCreds(t, "")
 	bad := map[string]ProviderCredential{
 		"unknown-type":     {Type: "bogus"},
 		"empty-type":       {Type: ""},
@@ -57,14 +71,13 @@ func TestCredentialValidation(t *testing.T) {
 
 // TestCredentialRoundTrip verifies typed store/load/delete across a reload.
 func TestCredentialRoundTrip(t *testing.T) {
-	m := newTestCreds(t, "")
+	m, path := newTestCreds(t, "")
 	m.SetCredential("minimax", ProviderCredential{Type: "api_key", APIKey: "kb_x"})
 	m.SetCredential("claude-oauth", ProviderCredential{
 		Type: "oauth", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 123, SubscriptionType: "team",
 	})
 
-	m2 := &CredentialsManager{path: m.path}
-	m2.load()
+	m2 := credsAt(t, path)
 	if c, ok := m2.Credential("minimax"); !ok || c.APIKey != "kb_x" {
 		t.Errorf("minimax not persisted: %+v", c)
 	}
@@ -88,13 +101,10 @@ func TestCredentialRoundTrip(t *testing.T) {
 // running instance kept using stale — for OAuth, already-redeemed and thus
 // invalid — credentials until the process restarted).
 func TestCredentialCrossProcessReload(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "credentials.json")
+	path := filepath.Join(t.TempDir(), "credentials.json")
 
-	writer := &CredentialsManager{path: path}
-	writer.load()
-	reader := &CredentialsManager{path: path}
-	reader.load()
+	writer := credsAt(t, path)
+	reader := credsAt(t, path)
 
 	// Reader sees nothing yet — matches the writer's empty initial state.
 	if _, ok := reader.Credential("claude-oauth"); ok {
@@ -149,7 +159,7 @@ func bumpMtime(t *testing.T, path string, delta time.Duration) {
 
 // TestCredentialTypedGetters verifies APIKey/OAuth return only matching types.
 func TestCredentialTypedGetters(t *testing.T) {
-	m := newTestCreds(t, `{"providers":{
+	m, _ := newTestCreds(t, `{"providers":{
 		"minimax":{"type":"api_key","api_key":"k"},
 		"claude-oauth":{"type":"oauth","access_token":"a","refresh_token":"r","expires_at":1}
 	}}`)

@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.80.0] - 2026-10-01
+
+### Breaking — settings.json moves to a namespaced format (manual migration required)
+`active_model` and `thinking_level` now live under a `"core"` namespace instead of at the root of `~/.harness/settings.json`. **Migrate by hand before running this version** — there is deliberately no automatic migration, and the old layout is not read:
+
+```diff
+ {
+-  "active_model": "provider/model",
+-  "thinking_level": "high",
++  "core": {
++    "active_model": "provider/model",
++    "thinking_level": "high"
++  },
+   "mcp": { ... },        // unchanged
+   "provider": { ... }    // unchanged
+ }
+```
+
+`credentials.json` is unchanged — its `{"providers": {...}}` shape already matches the new layout. A malformed file (broken JSON, or the old layout) is treated as empty — silently, nothing printed, harness still starts — and the next write replaces it, the same way a broken config file was always handled. So an unmigrated settings.json just falls back to defaults until you migrate it. Close every running harness process before migrating: an older binary still running would rewrite the file in the old layout.
+
+### Added — pluggable configuration storage (`configstore`)
+Settings and credentials no longer have to live on the filesystem. They're now read and written through two persistence ports, following the same "dumb store + smart manager" split `agent/store` already uses for sessions (`SessionStore` underneath, `*Session` on top):
+
+- **New public package `configstore`**: `SettingsStore` (non-sensitive configuration) and `CredentialsStore` (secrets) — two deliberately distinct types with the same small namespace/key/JSON-value API: `Get`, `Set` (upsert), `Delete`, `List`, `SwapValue`, `Close`. Kept as separate types so the compiler stops a settings backend from being wired where a secrets backend was expected (e.g. files for settings, a cloud secret manager for credentials).
+- **`SwapValue`** is the atomic read-modify-write primitive (callback receives the current value, decides whether to write) — the same guarantee that keeps a single-use OAuth refresh token from being redeemed twice by two harness processes. It's in both ports, so later consumers (schedules, instance registry) can migrate without changing the interface.
+- **Atomicity belongs to each implementation**, never to the caller: the managers no longer know about locks.
+- **Implementations**: `FileStore` (the default — `~/.harness/settings.json` and `~/.harness/credentials.json`, cross-process file lock, mtime-based reload, atomic temp-file + rename writes, a malformed file reads as empty and is replaced on the next write, never anything printed to stderr) and `InMemoryStore` (tests, or embedders that want no files at all).
+- **Registration (SDK)**: `harness.SetSettingsStore(s)` / `harness.SetCredentialsStore(s)` (aliases of `agent.SetSettingsStore` / `agent.SetCredentialsStore`) — process-global, called once in `main()` before building any `Agent`, same contract as `NewOpenAIProvider`. Registering after the store is already in use returns `configstore.ErrAlreadyInitialized`. Without them, harness uses `FileStore` exactly as before.
+- **`internal/config`**: `SettingsManager` and `CredentialsManager` keep their exact typed API and validation; they now delegate persistence to the ports (`UpdateCredential` → `CredentialsStore.SwapValue`). No consumer changed — `providers`, `mcp`, `server` and `agent` still call `GetSettingsManager()` / `GetCredentialsManager()`.
+- The cross-process lock moved from `internal/config` to its own `internal/filelock` package, shared by `configstore.FileStore` and `agent/schedule.Store`.
+- New tests: a reusable contract suite run against every implementation (including concurrent `SwapValue` atomicity), `FileStore` cross-instance visibility / concurrent writers / on-disk layout and permissions / malformed files read as empty and get overwritten, and the store registry (registered stores are used, late registration rejected, `FileStore` default). Full suite + `go vet` + `-race` (configstore, internal/config, internal/filelock, agent/schedule) green; `gofmt -l` clean.
+
 ## [0.79.0] - 2026-09-30
 
 ### Added — `max` thinking level (`off|low|medium|high|xhigh|max`), and a real fix for how `xhigh` reaches Anthropic
