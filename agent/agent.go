@@ -282,6 +282,28 @@ func New(opts AgentOptions) *Agent {
 	return a
 }
 
+// subagentDisallowedTools is the blocklist every Subagent sub-agent gets.
+// Base restrictions, regardless of readonly: no recursion (Subagent), READ-ONLY
+// memory (MemoWrite/MemoDelete blocked, MemoSearch kept — only the parent
+// curates what persists, avoiding noisy/conflicting writes from ephemeral
+// sub-agents sharing its store), and no schedule management (Schedule*). When
+// readonly is requested, Write and Edit are appended on top — an extra
+// STRUCTURAL layer beyond whatever the caller's own prompt already tells the
+// sub-agent not to do (see subagentInput.Readonly's doc comment in
+// tools/subagent.go for the exact guarantee: this blocks the two structured
+// file-editing tools, not Bash, which can still modify files if the sub-agent
+// disobeys its instructions anyway).
+func subagentDisallowedTools(readonly bool) []string {
+	disallowed := []string{
+		tools.ToolSubagent, tools.ToolMemoWrite, tools.ToolMemoDelete,
+		tools.ToolSchedule, tools.ToolScheduleList, tools.ToolScheduleDelete,
+	}
+	if readonly {
+		disallowed = append(disallowed, tools.ToolWrite, tools.ToolEdit)
+	}
+	return disallowed
+}
+
 // isNilStore reports whether s is nil OR a typed nil pointer wrapped in the
 // interface — e.g. the *memory.SQLiteStore a failed memory.OpenSQLite returns,
 // passed along without checking its error. A typed nil compares != nil, so
@@ -1139,21 +1161,7 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 			if requestedMaxIterations > 0 {
 				maxIter = requestedMaxIterations
 			}
-			// Base recursion/memory/schedule restrictions every sub-agent
-			// gets, regardless of readonly. When readonly is requested, Write
-			// and Edit are appended on top — an extra STRUCTURAL layer beyond
-			// whatever the caller's own prompt already tells the sub-agent
-			// not to do (see subagentInput.Readonly's doc comment in
-			// tools/subagent.go for the exact guarantee: this blocks the two
-			// structured file-editing tools, not Bash, which can still modify
-			// files if the sub-agent disobeys its instructions anyway).
-			disallowed := []string{
-				tools.ToolSubagent, tools.ToolMemoWrite, tools.ToolMemoDelete,
-				tools.ToolSchedule, tools.ToolScheduleList, tools.ToolScheduleDelete,
-			}
-			if readonly {
-				disallowed = append(disallowed, tools.ToolWrite, tools.ToolEdit)
-			}
+			disallowed := subagentDisallowedTools(readonly)
 			// Create ephemeral sub-agent inheriting parent settings. It reuses the
 			// parent's MCP tools (via Tools) WITHOUT spawning its own MCP processes
 			// (EnableMCPs stays false). It is forbidden from launching further

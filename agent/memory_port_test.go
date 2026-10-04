@@ -154,3 +154,28 @@ func TestSQLiteMemoryStoreWiresIntoAgent(t *testing.T) {
 		t.Error("store must be closed by Agent.Close")
 	}
 }
+
+// A Subagent sub-agent gets READ-ONLY memory: it shares the parent's store
+// and keeps MemoSearch, but MemoWrite/MemoDelete are never registered —
+// readonly or not. Built exactly like the Subagent executor builds it
+// (sharedMemory + subagentDisallowedTools), minus the live provider call.
+func TestSubagentMemoryIsReadOnly(t *testing.T) {
+	for _, readonly := range []bool{false, true} {
+		mem := &fakeMemory{}
+		sub := New(AgentOptions{
+			Store:           store.NewInMemoryStore(),
+			DisallowedTools: subagentDisallowedTools(readonly),
+			sharedMemory:    mem,
+		})
+		got := memoToolNames(sub, t)
+		if !got[tools.ToolMemoSearch] {
+			t.Errorf("readonly=%v: MemoSearch must stay available to sub-agents", readonly)
+		}
+		for _, n := range []string{tools.ToolMemoWrite, tools.ToolMemoDelete} {
+			if got[n] {
+				t.Errorf("readonly=%v: %s must NOT be registered for a sub-agent", readonly, n)
+			}
+		}
+		sub.Close()
+	}
+}
