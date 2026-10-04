@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -40,10 +41,10 @@ type Agent struct {
 	maxTokens       int          // 0 = resolved from ModelMeta in NewSession
 	mcpManager      *mcp.Manager // non-nil only when EnableMCPs; owns MCP subprocesses
 
-	// Memory (non-nil only when enabled). ownsMemory is true when this agent
-	// opened the store itself (root agent) and must Close it; false when it shares
-	// a parent's store (subagent), which must not be closed here.
-	memStore   *memory.Store
+	// Memory (nil = no memory). ownsMemory is true when the store was injected
+	// via AgentOptions.Memory (this agent must Close it); false when it shares a
+	// parent's store (subagent), which must not be closed here.
+	memStore   memory.Store
 	ownsMemory bool
 
 	// Scheduling. schedStore opens unconditionally (needed for the
@@ -86,14 +87,16 @@ type AgentOptions struct {
 	ResourceLoader resources.ResourceLoader // default: FileResourceLoader(cwd) per session
 	//                                         // pass NilLoader{} to disable discovery
 
-	// EnableMemory turns on project-scoped persistent memory: the agent opens the
-	// shared memory store (~/.harness/agent/memory.db) and registers the Memo*
-	// tools. Off by default.
-	EnableMemory bool
-	// sharedMemory lets a subagent reuse its parent's already-open store instead
-	// of opening its own. Unexported: only agent.go sets it (subagent path); SDK
-	// callers use EnableMemory.
-	sharedMemory *memory.Store
+	// Memory is the project-scoped persistent memory backend. Its presence is
+	// the on/off switch: nil (the default) = no memory at all — no Memo* tools,
+	// no "## Memory" prompt block. The agent owns the store: Agent.Close closes
+	// it. Use memory.OpenSQLite for the default SQLite backend
+	// (~/.harness/agent/memory.db), or any custom memory.Store.
+	Memory memory.Store
+	// sharedMemory lets a subagent reuse its parent's store without owning it
+	// (never closed by the subagent). Unexported: only agent.go sets it
+	// (subagent path); SDK callers use Memory.
+	sharedMemory memory.Store
 	// EnableScheduler turns on cron-scheduled prompts: the Schedule* management
 	// tools AND the engine that fires due prompts. The agent owns both. A
 	// transport marks one session as the scheduler target (SetScheduledSession);
@@ -266,19 +269,30 @@ func New(opts AgentOptions) *Agent {
 		}
 	}
 
-	// Memory: a subagent shares its parent's already-open store (sharedMemory);
-	// a root agent with EnableMemory opens its own (and owns closing it). Failure
-	// to open degrades silently — memory tools simply stay unregistered.
+	// Memory: a subagent shares its parent's store (sharedMemory, not owned);
+	// otherwise the injected store, if any, is owned and closed by this agent.
+	// The agent never opens a backend itself — no store, no memory.
 	if opts.sharedMemory != nil {
 		a.memStore = opts.sharedMemory
-	} else if opts.EnableMemory {
-		if m, err := memory.Open(""); err == nil {
-			a.memStore = m
-			a.ownsMemory = true
-		}
+	} else if !isNilStore(opts.Memory) {
+		a.memStore = opts.Memory
+		a.ownsMemory = true
 	}
 
 	return a
+}
+
+// isNilStore reports whether s is nil OR a typed nil pointer wrapped in the
+// interface — e.g. the *memory.SQLiteStore a failed memory.OpenSQLite returns,
+// passed along without checking its error. A typed nil compares != nil, so
+// without this the agent would believe it has memory and fail on first use;
+// treating it as "no memory" keeps the documented degrade-to-off behavior.
+func isNilStore(s memory.Store) bool {
+	if s == nil {
+		return true
+	}
+	v := reflect.ValueOf(s)
+	return v.Kind() == reflect.Pointer && v.IsNil()
 }
 
 // fireScheduledPrompt is the engine callback: it routes the due prompt to the
@@ -460,11 +474,11 @@ func (a *Agent) MCPTools() []tools.Tool {
 	return a.mcpManager.Tools()
 }
 
-// Memory exposes the agent's persistent memory store (nil if memory is
-// disabled). This is the rich, cwd-aware store — used by the HTTP transport to
+// Memory exposes the agent's persistent memory store (nil if the agent was
+// built without one). This is the rich, cwd-aware store — used by the HTTP transport to
 // serve read-only memory queries, and available to SDK consumers. The agent's
 // own tools use a scoped adapter over the same store.
-func (a *Agent) Memory() *memory.Store { return a.memStore }
+func (a *Agent) Memory() memory.Store { return a.memStore }
 
 // Models returns every available model across all ACTIVE providers, each tagged
 // with its provider and a fully-qualified "provider/model" id ready to pass to
@@ -507,7 +521,7 @@ func (a *Agent) MCPStatuses() []mcp.Status {
 }
 
 // Close releases agent-owned resources: it terminates MCP subprocesses and
-// closes the memory database. Only the root agent should be closed — subagents
+// closes the memory store it was given (AgentOptions.Memory). Only the root agent should be closed — subagents
 // are ephemeral, have no MCP manager, and merely share the parent's memory
 // store (which they must not close). Idempotent (sync.Once) and nil-safe; both
 // resources are released even if one fails.
@@ -883,7 +897,7 @@ func (a *Agent) buildFetchSummarizer(cwd string, loader resources.ResourceLoader
 			// (no sharedMemory below, so a.memStore stays nil and Memo* never
 			// registers regardless of this list). Every built-in name is
 			// listed explicitly rather than relying on the absence of
-			// EnableMCPs/EnableColleagues/EnableMemory/opts.Tools alone —
+			// EnableMCPs/EnableColleagues/Memory/opts.Tools alone —
 			// defense in depth so a future default change elsewhere can't
 			// silently hand this single-purpose summarizer a tool it was
 			// never meant to have.

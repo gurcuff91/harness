@@ -1,25 +1,16 @@
-// Package memory implements persistent, project-scoped memory for the agent,
-// backed by a single SQLite database (~/.harness/memory.db) with FTS5 full-text
-// search. Memories are partitioned by working directory (cwd) so one project's
+// Package memory implements persistent, project-scoped memory for the agent.
+// Memories are partitioned by working directory (cwd) so one project's
 // memories never mix with another's — mirroring how sessions are scoped.
 //
-// The design follows the current SOTA for individual/team-scale agent memory:
-// SQLite + FTS5/BM25 gives sub-millisecond keyword search with zero external
-// services and a single-file backup, without the cost and complexity of a
-// vector database (whose break-even is ~10M entries — far beyond agent scale).
+// Store is the persistence port: the agent only ever talks to it, and an SDK
+// consumer can plug in any backend via harness.AgentWithMemory. SQLiteStore
+// (OpenSQLite) is the default implementation — a single SQLite database
+// (~/.harness/agent/memory.db) with FTS5 full-text search. That follows the
+// current SOTA for individual/team-scale agent memory: SQLite + FTS5/BM25 gives
+// sub-millisecond keyword search with zero external services and a single-file
+// backup, without the cost and complexity of a vector database (whose
+// break-even is ~10M entries — far beyond agent scale).
 package memory
-
-import (
-	"database/sql"
-	"fmt"
-	"math"
-	"os"
-	"path/filepath"
-	"strings"
-	"time"
-
-	_ "modernc.org/sqlite" // pure-Go SQLite driver (no cgo)
-)
 
 // GlobalCWD is the sentinel cwd for memories that are not tied to any project.
 // Real cwds are absolute paths (they start with "/"), and the angle brackets
@@ -47,276 +38,37 @@ type SearchResult struct {
 	Results  []Memory `json:"results"`  // ordered by score (desc)
 }
 
-// Store is the SQLite-backed memory store. Safe for concurrent use (SQLite
-// serializes writes; the driver handles connection pooling).
-type Store struct {
-	db *sql.DB
-}
-
-// Open opens (creating if needed) the memory database at the given path. An
-// empty path defaults to ~/.harness/agent/memory.db.
-func Open(path string) (*Store, error) {
-	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("memory: resolve home: %w", err)
-		}
-		dir := filepath.Join(home, ".harness", "agent")
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			return nil, fmt.Errorf("memory: create dir: %w", err)
-		}
-		path = filepath.Join(dir, "memory.db")
-	}
-
-	// Concurrency pragmas, applied to every connection via the DSN:
-	//   - busy_timeout(5000): on a locked DB, block and retry for up to 5s
-	//     instead of failing instantly with SQLITE_BUSY. This is what fixes
-	//     the "database is locked" errors when the model fires several Memo*
-	//     writes in PARALLEL (the ReAct loop runs tool calls concurrently) —
-	//     SQLite allows one writer at a time, and the losers now WAIT for the
-	//     lock rather than erroring. Also works across multiple harness
-	//     PROCESSES sharing this file, which an in-process mutex could not.
-	//   - journal_mode(WAL): Write-Ahead Logging lets readers run concurrently
-	//     with a writer, so a MemoSearch never blocks (or is blocked by) a
-	//     concurrent MemoWrite/MemoDelete. Creates sidecar files (memory.db-wal,
-	//     memory.db-shm) next to the DB.
-	// Order matters: busy_timeout must be set before switching to WAL (the
-	// connection needs to block-on-busy before the WAL switch, in case another
-	// connection is mid-switch). The pure-Go modernc.org/sqlite driver reads
-	// pragmas from the DSN via the _pragma= syntax (the CGO-style
-	// _busy_timeout= params are silently ignored by this driver).
-	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("memory: open db: %w", err)
-	}
-	s := &Store{db: db}
-	if err := s.migrate(); err != nil {
-		db.Close()
-		return nil, err
-	}
-	return s, nil
-}
-
-// migrate creates the schema: a base table plus an external-content FTS5 index
-// kept in sync by triggers.
-func (s *Store) migrate() error {
-	const schema = `
-CREATE TABLE IF NOT EXISTS memories (
-    id          INTEGER PRIMARY KEY,
-    cwd         TEXT NOT NULL,
-    slug        TEXT NOT NULL,
-    content     TEXT NOT NULL,
-    created_at  INTEGER NOT NULL,
-    updated_at  INTEGER NOT NULL,
-    UNIQUE(cwd, slug)
-);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-    slug, content,
-    content='memories', content_rowid='id',
-    tokenize='unicode61'
-);
-
--- Keep the FTS index in sync with the base table.
-CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-    INSERT INTO memories_fts(rowid, slug, content) VALUES (new.id, new.slug, new.content);
-END;
-CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, slug, content) VALUES ('delete', old.id, old.slug, old.content);
-END;
-CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, slug, content) VALUES ('delete', old.id, old.slug, old.content);
-    INSERT INTO memories_fts(rowid, slug, content) VALUES (new.id, new.slug, new.content);
-END;`
-	if _, err := s.db.Exec(schema); err != nil {
-		return fmt.Errorf("memory: migrate: %w", err)
-	}
-	return nil
-}
-
-// Write creates or updates a memory (upsert keyed by cwd+slug). Returns whether
-// it created a new memory (true) or updated an existing one (false). When global
-// is true, the memory is stored under the GlobalCWD sentinel instead of cwd, so
-// it surfaces in every project's searches.
-func (s *Store) Write(cwd, slug, content string, global bool) (created bool, err error) {
-	if global {
-		cwd = GlobalCWD
-	}
-	now := time.Now().UnixMilli()
-	// Detect create vs update up front (RowsAffected is unreliable for upserts).
-	var exists int
-	s.db.QueryRow(`SELECT 1 FROM memories WHERE cwd = ? AND slug = ?`, cwd, slug).Scan(&exists)
-	_, err = s.db.Exec(`
-INSERT INTO memories (cwd, slug, content, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?)
-ON CONFLICT(cwd, slug) DO UPDATE SET
-    content    = excluded.content,
-    updated_at = excluded.updated_at`,
-		cwd, slug, content, now, now)
-	if err != nil {
-		return false, fmt.Errorf("memory: write: %w", err)
-	}
-	return exists == 0, nil
-}
-
-// Get returns a single memory by slug within a cwd, or (nil, nil) if absent.
-func (s *Store) Get(cwd, slug string) (*Memory, error) {
-	row := s.db.QueryRow(`
-SELECT slug, content, created_at, updated_at
-FROM memories WHERE cwd = ? AND slug = ?`, cwd, slug)
-	var m Memory
-	err := row.Scan(&m.Slug, &m.Content, &m.CreatedAt, &m.UpdatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("memory: get: %w", err)
-	}
-	return &m, nil
-}
-
-// toFTSQuery turns a user's raw search string into a safe FTS5 MATCH expression.
-// It splits on whitespace and wraps each term as a quoted prefix token
-// ("term"*), which (1) escapes FTS5 operators so arbitrary input can't break the
-// query or inject syntax, and (2) enables substring-friendly prefix matching so
-// "kube" finds "kubernetes" and "EE" finds "EEoo". Multiple terms are ANDed
-// (all must be present, each as a prefix). Returns "" for an all-whitespace
-// query, which the caller treats as list mode.
-func toFTSQuery(raw string) string {
-	fields := strings.Fields(raw)
-	if len(fields) == 0 {
-		return ""
-	}
-	terms := make([]string, len(fields))
-	for i, f := range fields {
-		// Double any embedded quote to escape it inside the FTS5 string, then
-		// wrap in quotes and append * for prefix matching.
-		terms[i] = `"` + strings.ReplaceAll(f, `"`, `""`) + `"*`
-	}
-	return strings.Join(terms, " ")
-}
-
-// Search looks up memories, paginated by skip/limit (limit <= 0 defaults to 10;
-// skip < 0 becomes 0). Orthogonal filters:
-//   - cwd != "": restrict to that project; cwd == "": across ALL projects.
-//   - query != "": FTS5 full-text search over slug/content, ranked by BM25
-//     relevance (score set, higher = more relevant); query == "": list mode,
-//     most-recently-updated first (no score).
+// Store is the memory persistence port, configured per agent
+// (agent.AgentOptions.Memory / harness.AgentWithMemory). An agent with no
+// Store has no memory at all: no Memo* tools, no "## Memory" prompt block.
+// The agent that receives a Store owns it — Agent.Close closes it.
 //
-// includeContent controls whether each result carries its full content or just
-// slug + cwd + dates (a lightweight listing). Every result carries its cwd.
-func (s *Store) Search(cwd, query string, includeContent bool, skip, limit int) (SearchResult, error) {
-	if limit <= 0 {
-		limit = 10
-	}
-	if skip < 0 {
-		skip = 0
-	}
-
-	// Build the cwd filter clause + args shared by count and select. A project
-	// search always includes global memories (cwd = GlobalCWD) alongside the
-	// project's own. For a global-only view the caller passes cwd = GlobalCWD,
-	// which makes both sides of the OR identical — no special case needed.
-	cwdClause := ""
-	var cwdArgs []any
-	if cwd != "" {
-		cwdClause = " AND (m.cwd = ? OR m.cwd = ?)"
-		cwdArgs = []any{cwd, GlobalCWD}
-	}
-
-	var total int
-	var rows *sql.Rows
-	var err error
-	searching := query != ""
-	ftsQuery := toFTSQuery(query)
-
-	if searching {
-		countArgs := append([]any{ftsQuery}, cwdArgs...)
-		if err = s.db.QueryRow(`
-SELECT COUNT(*) FROM memories_fts f JOIN memories m ON m.id = f.rowid
-WHERE memories_fts MATCH ?`+cwdClause, countArgs...).Scan(&total); err != nil {
-			return SearchResult{}, fmt.Errorf("memory: search count: %w", err)
-		}
-		// bm25() is lower-is-better; negate so higher = more relevant.
-		queryArgs := append(append([]any{ftsQuery}, cwdArgs...), limit, skip)
-		rows, err = s.db.Query(`
-SELECT m.slug, m.cwd, m.content, -bm25(memories_fts) AS score, m.created_at, m.updated_at
-FROM memories_fts f
-JOIN memories m ON m.id = f.rowid
-WHERE memories_fts MATCH ?`+cwdClause+`
-ORDER BY bm25(memories_fts)
-LIMIT ? OFFSET ?`, queryArgs...)
-	} else {
-		// List mode. The cwd clause here uses the base table alias `m` too, and
-		// likewise folds in global memories.
-		listCwd := ""
-		if cwd != "" {
-			listCwd = " WHERE (m.cwd = ? OR m.cwd = ?)"
-		}
-		if err = s.db.QueryRow(`SELECT COUNT(*) FROM memories m`+listCwd, cwdArgs...).Scan(&total); err != nil {
-			return SearchResult{}, fmt.Errorf("memory: list count: %w", err)
-		}
-		listArgs := append(append([]any{}, cwdArgs...), limit, skip)
-		rows, err = s.db.Query(`
-SELECT m.slug, m.cwd, m.content, 0 AS score, m.created_at, m.updated_at
-FROM memories m`+listCwd+`
-ORDER BY m.updated_at DESC
-LIMIT ? OFFSET ?`, listArgs...)
-	}
-	if err != nil {
-		return SearchResult{}, fmt.Errorf("memory: search: %w", err)
-	}
-	defer rows.Close()
-
-	var out []Memory
-	for rows.Next() {
-		var m Memory
-		if err := rows.Scan(&m.Slug, &m.CWD, &m.Content, &m.Score, &m.CreatedAt, &m.UpdatedAt); err != nil {
-			return SearchResult{}, fmt.Errorf("memory: scan: %w", err)
-		}
-		if searching {
-			// m.Score already holds -bm25(memories_fts) from the SELECT above
-			// (SQLite's bm25() is negative, more-negative-is-better; negating
-			// it gives a positive, higher-is-more-relevant value that's
-			// already sane to show as-is — typically a small number, roughly
-			// 0-15 for short documents like these, and it's what ORDER BY
-			// bm25(memories_fts) already sorted by). No arbitrary scaling
-			// needed; just round for a tidy 2-decimal display. A previous
-			// version multiplied this by 1e6, producing meaningless
-			// multi-million-magnitude scores — that scaling was pure noise,
-			// not a normalization to any real range (BM25 has no fixed
-			// upper bound to normalize against in the first place).
-			m.Score = math.Round(m.Score*100) / 100
-		}
-		if !includeContent {
-			m.Content = ""
-		}
-		out = append(out, m)
-	}
-	return SearchResult{
-		Total:    total,
-		Returned: len(out),
-		Skip:     skip,
-		Limit:    limit,
-		Results:  out,
-	}, rows.Err()
+// Scoping contract every implementation must honor:
+//   - Write/Delete with global=true operate under GlobalCWD instead of cwd,
+//     so the memory surfaces in every project.
+//   - Search's cwd is a filter: "" = across ALL projects; GlobalCWD = global
+//     memories only; any other value = that project's memories PLUS the
+//     global ones.
+//   - Search's query: non-empty = full-text search ranked by relevance (Score
+//     set, higher = more relevant); empty = list mode, most-recently-updated
+//     first (no Score). limit <= 0 defaults to 10; skip < 0 becomes 0.
+//     includeContent=false omits Content (a lightweight listing). Every result
+//     carries its CWD; Total counts all matches across pages.
+//
+// Implementations must be safe for concurrent use: the agent runs tool calls
+// in parallel, and several harness processes may share one backend.
+type Store interface {
+	// Write creates or updates (upsert by cwd+slug) a memory, reporting
+	// whether it was newly created.
+	Write(cwd, slug, content string, global bool) (created bool, err error)
+	// Search lists or full-text searches memories, paginated (see the
+	// scoping contract above).
+	Search(cwd, query string, includeContent bool, skip, limit int) (SearchResult, error)
+	// Delete removes a memory by cwd+slug, reporting whether one existed.
+	Delete(cwd, slug string, global bool) (deleted bool, err error)
+	// Close releases backend resources (DB handles, connections, …).
+	Close() error
 }
 
-// Delete removes a memory by slug within a cwd. Returns whether a row was
-// deleted. When global is true, it targets the GlobalCWD sentinel so global
-// memories can be removed (symmetric with Write).
-func (s *Store) Delete(cwd, slug string, global bool) (bool, error) {
-	if global {
-		cwd = GlobalCWD
-	}
-	res, err := s.db.Exec(`DELETE FROM memories WHERE cwd = ? AND slug = ?`, cwd, slug)
-	if err != nil {
-		return false, fmt.Errorf("memory: delete: %w", err)
-	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
-}
-
-// Close closes the database.
-func (s *Store) Close() error { return s.db.Close() }
+// SQLiteStore must satisfy the port.
+var _ Store = (*SQLiteStore)(nil)

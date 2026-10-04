@@ -113,13 +113,20 @@ import (
 	"fmt"
 
 	"github.com/gurcuff91/harness"
+	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/types"
 )
+
+// Memory is opt-in: pass any memory.Store (here the default SQLite one).
+mem, err := memory.OpenSQLite("") // "" = ~/.harness/agent/memory.db
+if err != nil {
+	// your call: fail, or run without memory
+}
 
 a := harness.NewAgent(
 	harness.AgentWithThinking("medium"),
 	harness.AgentWithMCPs(),
-	harness.AgentWithMemory(),
+	harness.AgentWithMemory(mem), // the agent owns it: a.Close() closes it
 )
 defer a.Close()
 
@@ -372,8 +379,9 @@ All data stored in `~/.harness/`:
 
 `SessionInfo` is always registered, like Bash/Read/Write/Edit/Fetch — no
 dedicated option, just `AgentWithDisallowedTools("SessionInfo")` to turn it
-off. The memory tools require `AgentWithMemory` (or the CLI's
-memory-enabled path); `WebSearch` requires `AgentWithWebSearch` and a
+off. The memory tools require a store via `AgentWithMemory(store)` —
+`memory.OpenSQLite(path)` for the default SQLite backend, or any custom
+`memory.Store` (the CLI always passes the SQLite one); `WebSearch` requires `AgentWithWebSearch` and a
 connected search backend (minimax or ollama-cloud); `Schedule*` management
 tools AND the engine that fires them both require `--scheduler` /
 `AgentWithScheduler` — they travel together, so an instance without it

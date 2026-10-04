@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/client"
@@ -69,7 +71,6 @@ func TestAgentWithBoolOptionsSetTheirFlag(t *testing.T) {
 		get  func(agent.AgentOptions) bool
 	}{
 		{"AgentWithMCPs", AgentWithMCPs(), func(o agent.AgentOptions) bool { return o.EnableMCPs }},
-		{"AgentWithMemory", AgentWithMemory(), func(o agent.AgentOptions) bool { return o.EnableMemory }},
 		{"AgentWithScheduler", AgentWithScheduler(), func(o agent.AgentOptions) bool { return o.EnableScheduler }},
 		{"AgentWithColleagues", AgentWithColleagues(), func(o agent.AgentOptions) bool { return o.EnableColleagues }},
 		{"AgentWithWebSearch", AgentWithWebSearch(), func(o agent.AgentOptions) bool { return o.EnableWebSearch }},
@@ -501,4 +502,19 @@ func TestRunAcpAliasIsWiredEndToEnd(t *testing.T) {
 	stdinW.Close()
 	cancel()
 	<-done
+}
+
+// TestAgentWithMemorySetsTheStore confirms the facade option injects the given
+// store (memory is on iff a store is set — there's no separate bool flag).
+func TestAgentWithMemorySetsTheStore(t *testing.T) {
+	mem, err := memory.OpenSQLite(filepath.Join(t.TempDir(), "mem.db"))
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	defer mem.Close()
+	var o agent.AgentOptions
+	AgentWithMemory(mem)(&o)
+	if o.Memory != memory.Store(mem) {
+		t.Fatalf("AgentWithMemory did not set AgentOptions.Memory")
+	}
 }

@@ -52,6 +52,7 @@ package harness
 
 import (
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/agent/tools"
@@ -174,11 +175,17 @@ func AgentWithResourceLoader(l resources.ResourceLoader) AgentOption {
 	return func(o *agent.AgentOptions) { o.ResourceLoader = l }
 }
 
-// AgentWithMemory enables project-scoped persistent memory. The agent opens
-// and owns the store (~/.harness/agent/memory.db) and registers the Memo*
-// tools. Off by default.
-func AgentWithMemory() AgentOption {
-	return func(o *agent.AgentOptions) { o.EnableMemory = true }
+// AgentWithMemory gives the agent project-scoped persistent memory backed by
+// s and registers the Memo* tools. Without it the agent has no memory. The
+// agent owns s: Agent.Close closes it. Implement [agent/memory.Store] for a
+// custom backend, or open the default SQLite one explicitly — the caller
+// decides what an open failure means:
+//
+//	mem, err := memory.OpenSQLite("") // "" = ~/.harness/agent/memory.db
+//	if err != nil { ... }
+//	a := harness.NewAgent(harness.AgentWithMemory(mem))
+func AgentWithMemory(s memory.Store) AgentOption {
+	return func(o *agent.AgentOptions) { o.Memory = s }
 }
 
 // AgentWithScheduler enables cron-scheduled prompts: the agent registers

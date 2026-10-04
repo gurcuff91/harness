@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-func newTestStore(t *testing.T) *Store {
+func newTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
-	s, err := Open(filepath.Join(t.TempDir(), "mem.db"))
+	s, err := OpenSQLite(filepath.Join(t.TempDir(), "mem.db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -378,7 +378,7 @@ func TestSearchSanitizesFTSSyntax(t *testing.T) {
 // in PARALLEL, so a model firing several Memo* writes at once had them hit the
 // single-writer SQLite lock simultaneously — and, without a busy_timeout, the
 // losers failed INSTANTLY instead of waiting. With busy_timeout(5000) + WAL
-// (set on the DSN in Open), the concurrent writers now serialize by waiting
+// (set on the DSN in OpenSQLite), the concurrent writers now serialize by waiting
 // for the lock, so every write succeeds.
 func TestConcurrentWritesNoBusyError(t *testing.T) {
 	s := newTestStore(t)

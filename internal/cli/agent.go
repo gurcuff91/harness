@@ -2,6 +2,7 @@ package cli
 
 import (
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/agent/store"
 )
 
@@ -12,6 +13,20 @@ import (
 // verification, iterate on failures), unlike the one-shot commands newAgent()
 // serves (mcp/memo), which keep the SDK default.
 const interactiveMaxIterations = 120
+
+// defaultMemory opens harness's default persistent memory — the SQLite store
+// at ~/.harness/agent/memory.db — for the CLI's agents. On failure it returns
+// an UNTYPED nil interface (never the typed-nil *memory.SQLiteStore that
+// OpenSQLite returns alongside its error), so the agent runs without memory
+// instead of believing it has one: memory is a convenience, never a reason
+// for a command to fail.
+func defaultMemory() memory.Store {
+	m, err := memory.OpenSQLite("")
+	if err != nil {
+		return nil
+	}
+	return m
+}
 
 // newAgent builds the process's root agent with MCP servers and project-scoped
 // memory, but without the scheduler engine — for one-shot commands that
@@ -31,8 +46,8 @@ const interactiveMaxIterations = 120
 // for why persisting a throwaway session is the wrong default there.
 func newAgent() *agent.Agent {
 	return agent.New(agent.AgentOptions{
-		EnableMCPs:   true,
-		EnableMemory: true,
+		EnableMCPs: true,
+		Memory:     defaultMemory(),
 	})
 }
 
@@ -52,9 +67,9 @@ func newAgent() *agent.Agent {
 // there is nothing lost by not persisting it.
 func newOneShotAgent() *agent.Agent {
 	return agent.New(agent.AgentOptions{
-		EnableMCPs:   true,
-		EnableMemory: true,
-		Store:        store.NewInMemoryStore(),
+		EnableMCPs: true,
+		Memory:     defaultMemory(),
+		Store:      store.NewInMemoryStore(),
 	})
 }
 
@@ -84,7 +99,7 @@ func newOneShotAgent() *agent.Agent {
 func newInteractiveAgent(scheduler bool, directives ...string) *agent.Agent {
 	return agent.New(agent.AgentOptions{
 		EnableMCPs:       true,
-		EnableMemory:     true,
+		Memory:           defaultMemory(),
 		EnableScheduler:  scheduler,
 		EnableColleagues: true,
 		EnableWebSearch:  true,

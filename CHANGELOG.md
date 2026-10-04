@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.82.0] - 2026-10-04
+
+### Breaking — persistent memory is a per-agent port (`memory.Store`)
+Memory was the last piece of state without a port. It's now pluggable per agent, exactly like `AgentWithStore` (sessions) and `AgentWithResourceLoader` (skills): two agents in one process can use different memories.
+
+- **`memory.Store` is now an interface** (`Write`, `Search`, `Delete`, `Close`). Its doc comment pins the scoping contract every backend must honor: `global=true` → `memory.GlobalCWD`; `Search` cwd `""` = all projects, `GlobalCWD` = globals only, a path = that project plus globals.
+- **The SQLite implementation is `memory.SQLiteStore`**, opened with `memory.OpenSQLite(path)` (was `memory.Open`; `""` still means `~/.harness/agent/memory.db`).
+- **`AgentOptions.EnableMemory` is removed**, replaced by `AgentOptions.Memory memory.Store`. The store's presence is the switch: nil (default) = no memory, no Memo* tools, no `## Memory` prompt block. `agent.New` never opens a database itself anymore.
+- **`harness.AgentWithMemory()` → `harness.AgentWithMemory(store)`.** Opening is explicit, so the caller owns the error:
+
+  ```go
+  mem, err := memory.OpenSQLite("")
+  if err != nil { /* fail, or run without memory */ }
+  a := harness.NewAgent(harness.AgentWithMemory(mem))
+  ```
+- **The agent owns the store**: `Agent.Close()` closes it (same as the session store). Subagents share their parent's store and never close it. A typed-nil store (a failed `OpenSQLite` passed along unchecked) is treated as "no memory" rather than a store that breaks on first use.
+- `Agent.Memory()` returns the `memory.Store` interface.
+- No on-disk change: the CLI keeps using `~/.harness/agent/memory.db`, and still degrades silently to no memory if it can't be opened.
+
 ## [0.81.0] - 2026-10-01
 
 ### Breaking — schedules, instances and Telegram/Slack state move into settings.json / credentials.json (manual migration required)

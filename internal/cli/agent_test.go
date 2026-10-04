@@ -62,3 +62,18 @@ func resolveAnyModelOrSkip(t *testing.T, a *agent.Agent) string {
 	}
 	return models[0].Model
 }
+
+// TestDefaultMemoryFailureIsUntypedNil guards the typed-nil trap: when the
+// SQLite store can't be opened, defaultMemory must return a true nil
+// interface so the agent runs without memory instead of with a broken one.
+func TestDefaultMemoryFailureIsUntypedNil(t *testing.T) {
+	// HOME pointing at a regular file makes ~/.harness/agent uncreatable.
+	f := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(f, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", f)
+	if m := defaultMemory(); m != nil {
+		t.Fatalf("defaultMemory() = %#v on open failure, want untyped nil", m)
+	}
+}

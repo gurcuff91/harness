@@ -59,8 +59,8 @@ Respond with ONLY the summary text.`
 const compactRequestPrompt = "Summarize the conversation so far following the instructions above."
 
 // memoryCompactionReminder is appended to the persisted compaction checkpoint
-// (NOT to the summary shown to the user) when persistent memory (EnableMemory)
-// is enabled for this session. Right after compaction, the model's nearest
+// (NOT to the summary shown to the user) when persistent memory (AgentOptions.Memory)
+// is configured for this session. Right after compaction, the model's nearest
 // context is this dense summary, not the system prompt further up — exactly
 // the kind of "lack context about earlier work" moment where a reminder
 // pays off. Used to also cover SessionSearch (full-text search over the

@@ -2,13 +2,13 @@ package memory
 
 import "github.com/gurcuff91/harness/agent/tools"
 
-// ToolAdapter wraps a *Store to satisfy tools.MemoryStore, translating between
+// ToolAdapter wraps any Store to satisfy tools.MemoryStore, translating between
 // the storage types and the tools types. This keeps the agent/tools package
 // free of any dependency on this package.
-type ToolAdapter struct{ s *Store }
+type ToolAdapter struct{ s Store }
 
 // NewToolAdapter returns an adapter exposing the store as a tools.MemoryStore.
-func NewToolAdapter(s *Store) *ToolAdapter { return &ToolAdapter{s: s} }
+func NewToolAdapter(s Store) *ToolAdapter { return &ToolAdapter{s: s} }
 
 func (a *ToolAdapter) Write(cwd, slug, content string, global bool) (bool, error) {
 	return a.s.Write(cwd, slug, content, global)
