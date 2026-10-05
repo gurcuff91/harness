@@ -7,7 +7,7 @@
 //
 //	a := harness.NewAgent(
 //	    harness.AgentWithThinking("medium"),
-//	    harness.AgentWithMCPs(),
+//	    harness.AgentWithMCPs(mcp.ServersFromSettings()),
 //	)
 //	defer a.Close()
 //
@@ -62,6 +62,7 @@ import (
 	"github.com/gurcuff91/harness/transports/acp"
 	"github.com/gurcuff91/harness/transports/slack"
 	"github.com/gurcuff91/harness/transports/telegram"
+	"github.com/gurcuff91/harness/types"
 )
 
 // Logger is the structured logging contract RunServer/RunTelegram/RunSlack
@@ -95,7 +96,7 @@ type AgentOption func(*agent.AgentOptions)
 //
 //	a := harness.NewAgent(
 //		harness.AgentWithThinking("medium"),
-//		harness.AgentWithMCPs(),
+//		harness.AgentWithMCPs(mcp.ServersFromSettings()),
 //	)
 //	defer a.Close()
 func NewAgent(opts ...AgentOption) *agent.Agent {
@@ -155,10 +156,20 @@ func AgentWithDisallowedTools(names ...string) AgentOption {
 	return func(o *agent.AgentOptions) { o.DisallowedTools = append(o.DisallowedTools, names...) }
 }
 
-// AgentWithMCPs enables spawning and connecting the configured MCP servers
-// (root agent only). Its presence turns MCP on.
-func AgentWithMCPs() AgentOption {
-	return func(o *agent.AgentOptions) { o.EnableMCPs = true }
+// AgentWithMCPs gives the agent these MCP servers, keyed by name: it spawns/
+// connects them at construction (root agent only), registers their tools as
+// mcp__<name>__<tool>, and terminates them on Agent.Close. Without it the
+// agent has no MCP. Servers can come from anywhere — harness's own settings
+// (what `harness mcp add` writes), code, or both merged:
+//
+//	servers := mcp.ServersFromSettings()
+//	servers["docs"] = types.MCPServer{URL: "https://example.com/mcp"}
+//	a := harness.NewAgent(harness.AgentWithMCPs(servers))
+//
+// An invalid or unreachable server never fails the agent: it's skipped and
+// reported via Agent.MCPStatuses().
+func AgentWithMCPs(servers map[string]types.MCPServer) AgentOption {
+	return func(o *agent.AgentOptions) { o.MCPServers = servers }
 }
 
 // AgentWithStore sets a custom session store (default: file-backed, falling

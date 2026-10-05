@@ -42,12 +42,26 @@ func NewManager() *Manager {
 	return &Manager{}
 }
 
-// Start connects every enabled MCP server from settings, initializes each,
-// fetches its tools, and returns the aggregated tool list (namespaced
-// mcp__<server>__<tool>). Errors degrade: the offending server is skipped and
-// its failure is recorded in Statuses(). Safe to call once at agent creation.
-func (m *Manager) Start(ctx context.Context) []tools.Tool {
-	servers := config.GetSettingsManager().MCPServers()
+// ServersFromSettings returns the MCP servers configured in harness's
+// settings (what `harness mcp add` writes — the "mcp" namespace of the
+// SettingsStore), disabled ones included (Start skips them). This is the
+// explicit default source: the harness CLI passes it to every agent it
+// builds, and an SDK consumer can do the same — optionally merging in its
+// own servers first — via harness.AgentWithMCPs(mcp.ServersFromSettings()).
+// Returns a fresh map the caller owns; empty (never an error) when nothing is
+// configured or the store can't be read.
+func ServersFromSettings() map[string]types.MCPServer {
+	return config.GetSettingsManager().MCPServers()
+}
+
+// Start connects every enabled server in servers, initializes each, fetches
+// its tools, and returns the aggregated tool list (namespaced
+// mcp__<server>__<tool>). The manager never reads configuration itself — the
+// caller decides where servers come from (see ServersFromSettings). Errors
+// degrade: an invalid config (types.MCPServer.Validate) or a failed connect
+// skips that server and records the failure in Statuses(). Safe to call once
+// at agent creation.
+func (m *Manager) Start(ctx context.Context, servers map[string]types.MCPServer) []tools.Tool {
 
 	// Deterministic order for stable tool listing.
 	names := make([]string, 0, len(servers))
@@ -65,6 +79,10 @@ func (m *Manager) Start(ctx context.Context) []tools.Tool {
 			continue
 		}
 
+		if err := cfg.Validate(); err != nil {
+			m.statuses = append(m.statuses, Status{Name: name, Connected: false, Error: err.Error()})
+			continue
+		}
 		client, toolDefs, err := connectServer(ctx, cfg)
 		if err != nil {
 			m.statuses = append(m.statuses, Status{Name: name, Connected: false, Error: err.Error()})
@@ -82,7 +100,7 @@ func (m *Manager) Start(ctx context.Context) []tools.Tool {
 // connectServer builds the right transport for the server's type (local=stdio,
 // remote=HTTP), initializes it, and lists its tools — bounded by the server's
 // timeout (or the default).
-func connectServer(ctx context.Context, cfg config.MCPServer) (*Client, []Tool, error) {
+func connectServer(ctx context.Context, cfg types.MCPServer) (*Client, []Tool, error) {
 	timeout := defaultConnectTimeout
 	if cfg.Timeout > 0 {
 		timeout = time.Duration(cfg.Timeout) * time.Millisecond

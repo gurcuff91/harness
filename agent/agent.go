@@ -39,7 +39,7 @@ type Agent struct {
 	systemPrompt    string
 	maxIterations   int
 	maxTokens       int          // 0 = resolved from ModelMeta in NewSession
-	mcpManager      *mcp.Manager // non-nil only when EnableMCPs; owns MCP subprocesses
+	mcpManager      *mcp.Manager // non-nil only when MCPServers is non-empty; owns MCP subprocesses
 
 	// Memory (nil = no memory). ownsMemory is true when the store was injected
 	// via AgentOptions.Memory (this agent must Close it); false when it shares a
@@ -80,7 +80,13 @@ type AgentOptions struct {
 	// ── Tools ────────────────────────────────────────────────────────────
 	Tools           []tools.Tool // additional tools (defaults always included)
 	DisallowedTools []string     // tool names to exclude — empty = all allowed
-	EnableMCPs      bool         // spawn & connect configured MCP servers (root agent only)
+	// MCPServers are the MCP servers this agent spawns/connects (root agent
+	// only), keyed by server name — their tools register as
+	// mcp__<name>__<tool>. Presence is the switch: empty (the default) = no
+	// MCP at all. The agent owns the resulting processes/connections:
+	// Agent.Close terminates them. Use mcp.ServersFromSettings() for the ones
+	// configured via `harness mcp add`, your own map, or both merged.
+	MCPServers map[string]types.MCPServer
 
 	// ── Infrastructure (optional) ────────────────────────────────────────
 	Store          store.SessionStore       // default: in-memory
@@ -115,7 +121,7 @@ type AgentOptions struct {
 	// own HTTP client and uses the active minimax provider's API key — if the
 	// provider isn't connected, the tool returns a single actionable error at
 	// call time, so it's safe to enable unconditionally without a pre-flight
-	// provider check. Mirrors EnableMCPs' opt-in style for "extra" tools.
+	// provider check. Mirrors the opt-in style of MCPServers/Memory for "extra" tools.
 	EnableWebSearch bool
 }
 
@@ -225,9 +231,9 @@ func New(opts AgentOptions) *Agent {
 	// degrade silently — recorded in the manager's Statuses(), never logged to
 	// stdout (which would corrupt the TUI).
 	var mcpMgr *mcp.Manager
-	if opts.EnableMCPs {
+	if len(opts.MCPServers) > 0 {
 		mcpMgr = mcp.NewManager()
-		for _, t := range mcpMgr.Start(context.Background()) {
+		for _, t := range mcpMgr.Start(context.Background(), opts.MCPServers) {
 			reg.Register(t)
 		}
 	}
@@ -487,7 +493,7 @@ func (a *Agent) RegisterTool(t tools.Tool) {
 }
 
 // MCPTools returns the agent's MCP tools, for sharing with subagents (which set
-// EnableMCPs=false and receive these via AgentOptions.Tools, reusing the
+// no MCPServers and receive these via AgentOptions.Tools, reusing the
 // parent's live MCP processes). Nil when MCP is disabled.
 func (a *Agent) MCPTools() []tools.Tool {
 	if a.mcpManager == nil {
@@ -919,7 +925,7 @@ func (a *Agent) buildFetchSummarizer(cwd string, loader resources.ResourceLoader
 			// (no sharedMemory below, so a.memStore stays nil and Memo* never
 			// registers regardless of this list). Every built-in name is
 			// listed explicitly rather than relying on the absence of
-			// EnableMCPs/EnableColleagues/Memory/opts.Tools alone —
+			// MCPServers/EnableColleagues/Memory/opts.Tools alone —
 			// defense in depth so a future default change elsewhere can't
 			// silently hand this single-purpose summarizer a tool it was
 			// never meant to have.
@@ -1164,7 +1170,7 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 			disallowed := subagentDisallowedTools(readonly)
 			// Create ephemeral sub-agent inheriting parent settings. It reuses the
 			// parent's MCP tools (via Tools) WITHOUT spawning its own MCP processes
-			// (EnableMCPs stays false). It is forbidden from launching further
+			// (MCPServers stays empty). It is forbidden from launching further
 			// subagents (DisallowedTools) to prevent recursion.
 			subAgent := New(AgentOptions{
 				ThinkingLevel: parentA.thinkingLevel,

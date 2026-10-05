@@ -114,8 +114,13 @@ import (
 
 	"github.com/gurcuff91/harness"
 	"github.com/gurcuff91/harness/agent/memory"
+	"github.com/gurcuff91/harness/mcp"
 	"github.com/gurcuff91/harness/types"
 )
+
+// MCP is opt-in too: the servers `harness mcp add` configured, plus your own.
+servers := mcp.ServersFromSettings()
+servers["docs"] = types.MCPServer{URL: "https://example.com/mcp"}
 
 // Memory is opt-in: pass any memory.Store (here the default SQLite one).
 mem, err := memory.OpenSQLite("") // "" = ~/.harness/agent/memory.db
@@ -125,7 +130,7 @@ if err != nil {
 
 a := harness.NewAgent(
 	harness.AgentWithThinking("medium"),
-	harness.AgentWithMCPs(),
+	harness.AgentWithMCPs(servers), // spawned now, terminated by a.Close()
 	harness.AgentWithMemory(mem), // the agent owns it: a.Close() closes it
 )
 defer a.Close()
@@ -387,7 +392,12 @@ tools AND the engine that fires them both require `--scheduler` /
 `AgentWithScheduler` — they travel together, so an instance without it
 neither manages nor executes schedules;
 `Colleague*` requires `AgentWithColleagues`. External tools can be added via
-**MCP** servers (`harness mcp add`), namespaced as `mcp__<server>__<tool>`.
+**MCP** servers, namespaced as `mcp__<server>__<tool>` — configured with
+`harness mcp add` (the CLI always loads those), or passed programmatically
+per agent via `AgentWithMCPs(servers)` (`mcp.ServersFromSettings()` returns the
+configured ones, to use as-is or merge with your own). An invalid or
+unreachable server is skipped and reported in `Agent.MCPStatuses()`, never
+fatal.
 
 ## License
 

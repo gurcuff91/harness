@@ -4,6 +4,7 @@ import (
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/agent/store"
+	"github.com/gurcuff91/harness/mcp"
 )
 
 // interactiveMaxIterations is the ReAct iteration cap for interactive
@@ -46,7 +47,7 @@ func defaultMemory() memory.Store {
 // for why persisting a throwaway session is the wrong default there.
 func newAgent() *agent.Agent {
 	return agent.New(agent.AgentOptions{
-		EnableMCPs: true,
+		MCPServers: mcp.ServersFromSettings(),
 		Memory:     defaultMemory(),
 	})
 }
@@ -67,7 +68,7 @@ func newAgent() *agent.Agent {
 // there is nothing lost by not persisting it.
 func newOneShotAgent() *agent.Agent {
 	return agent.New(agent.AgentOptions{
-		EnableMCPs: true,
+		MCPServers: mcp.ServersFromSettings(),
 		Memory:     defaultMemory(),
 		Store:      store.NewInMemoryStore(),
 	})
@@ -98,7 +99,7 @@ func newOneShotAgent() *agent.Agent {
 // unlike the options below.
 func newInteractiveAgent(scheduler bool, directives ...string) *agent.Agent {
 	return agent.New(agent.AgentOptions{
-		EnableMCPs:       true,
+		MCPServers:       mcp.ServersFromSettings(),
 		Memory:           defaultMemory(),
 		EnableScheduler:  scheduler,
 		EnableColleagues: true,

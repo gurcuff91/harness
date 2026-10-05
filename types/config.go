@@ -1,5 +1,10 @@
 package types
 
+import (
+	"errors"
+	"fmt"
+)
+
 // MCPServer is the configuration of one MCP (Model Context Protocol) server.
 // The transport is INFERRED, not declared: a server with a Command is local
 // (spawns a process); a server with a URL is remote (dials HTTP). Declaring
@@ -29,6 +34,28 @@ type MCPServer struct {
 // remote when it has a URL; otherwise it is local (stdio). Validation
 // guarantees exactly one of Command/URL is set before this is consulted.
 func (s MCPServer) IsRemote() bool { return s.URL != "" }
+
+// ErrInvalidMCPServer is returned by MCPServer.Validate (and so by every
+// caller that stores or connects a server) when the config is unusable.
+// Detect it with errors.Is — e.g. the HTTP API maps it to 422.
+var ErrInvalidMCPServer = errors.New("invalid mcp server")
+
+// Validate enforces the inferred-transport rule: EXACTLY one of Command
+// (local) or URL (remote) must be set. Declaring both is ambiguous; declaring
+// neither is empty. Living on the type means every path — `harness mcp add`,
+// the HTTP API, and servers passed programmatically to an agent — gets the
+// same guarantee.
+func (s MCPServer) Validate() error {
+	hasCmd := s.Command != ""
+	hasURL := s.URL != ""
+	switch {
+	case hasCmd && hasURL:
+		return fmt.Errorf("%w: set either \"command\" (local) or \"url\" (remote), not both", ErrInvalidMCPServer)
+	case !hasCmd && !hasURL:
+		return fmt.Errorf("%w: requires \"command\" (local) or \"url\" (remote)", ErrInvalidMCPServer)
+	}
+	return nil
+}
 
 // Argv returns the full local command line (executable + args) for the stdio
 // transport. Empty when Command is unset.

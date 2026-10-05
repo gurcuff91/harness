@@ -21,8 +21,9 @@ type CustomProvider = types.CustomProvider
 
 // ErrInvalidMCPServer is returned by SetMCPServer when the server config fails
 // validation. Callers (e.g. the HTTP API) can detect it with errors.Is to map
-// it to a 422 Unprocessable Entity.
-var ErrInvalidMCPServer = errors.New("invalid mcp server")
+// it to a 422 Unprocessable Entity. Alias of types.ErrInvalidMCPServer, where
+// the rule itself (MCPServer.Validate) lives.
+var ErrInvalidMCPServer = types.ErrInvalidMCPServer
 
 // ErrInvalidCustomProvider is returned by SetCustomProvider when the
 // provider config fails validation. Same errors.Is → 422 mapping as
@@ -167,26 +168,10 @@ func (m *SettingsManager) MCPServers() map[string]MCPServer {
 	return listJSON[MCPServer](m.store, nsMCP)
 }
 
-// validateMCPServer enforces the inferred-transport rule: EXACTLY one of
-// Command (local) or URL (remote) must be set. Declaring both is ambiguous;
-// declaring neither is empty. Living here (not in the API) means EVERY caller
-// gets the same guarantee.
-func validateMCPServer(srv MCPServer) error {
-	hasCmd := srv.Command != ""
-	hasURL := srv.URL != ""
-	switch {
-	case hasCmd && hasURL:
-		return fmt.Errorf("%w: set either \"command\" (local) or \"url\" (remote), not both", ErrInvalidMCPServer)
-	case !hasCmd && !hasURL:
-		return fmt.Errorf("%w: requires \"command\" (local) or \"url\" (remote)", ErrInvalidMCPServer)
-	}
-	return nil
-}
-
 // SetMCPServer validates and stores (or replaces) an MCP server's config. The
 // transport is inferred from which of command/url is set.
 func (m *SettingsManager) SetMCPServer(name string, srv MCPServer) error {
-	if err := validateMCPServer(srv); err != nil {
+	if err := srv.Validate(); err != nil {
 		return err
 	}
 	return m.setJSON(nsMCP, name, srv)

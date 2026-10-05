@@ -70,7 +70,6 @@ func TestAgentWithBoolOptionsSetTheirFlag(t *testing.T) {
 		opt  AgentOption
 		get  func(agent.AgentOptions) bool
 	}{
-		{"AgentWithMCPs", AgentWithMCPs(), func(o agent.AgentOptions) bool { return o.EnableMCPs }},
 		{"AgentWithScheduler", AgentWithScheduler(), func(o agent.AgentOptions) bool { return o.EnableScheduler }},
 		{"AgentWithColleagues", AgentWithColleagues(), func(o agent.AgentOptions) bool { return o.EnableColleagues }},
 		{"AgentWithWebSearch", AgentWithWebSearch(), func(o agent.AgentOptions) bool { return o.EnableWebSearch }},
@@ -516,5 +515,16 @@ func TestAgentWithMemorySetsTheStore(t *testing.T) {
 	AgentWithMemory(mem)(&o)
 	if o.Memory != memory.Store(mem) {
 		t.Fatalf("AgentWithMemory did not set AgentOptions.Memory")
+	}
+}
+
+// TestAgentWithMCPsSetsTheServers confirms the facade option injects the given
+// servers (MCP is on iff servers are set — there's no separate bool flag).
+func TestAgentWithMCPsSetsTheServers(t *testing.T) {
+	servers := map[string]types.MCPServer{"docs": {URL: "https://example.com/mcp"}}
+	var o agent.AgentOptions
+	AgentWithMCPs(servers)(&o)
+	if len(o.MCPServers) != 1 || o.MCPServers["docs"].URL != "https://example.com/mcp" {
+		t.Fatalf("AgentWithMCPs did not set AgentOptions.MCPServers: %v", o.MCPServers)
 	}
 }

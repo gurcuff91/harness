@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.83.0] - 2026-10-04
+
+### Breaking — MCP servers are passed per agent (`AgentWithMCPs(servers)`)
+MCP servers could only come from `settings.json`: the `mcp` package read the global settings itself and `EnableMCPs` merely switched that on. They're now plain per-agent configuration — the same model as `AgentWithMemory(store)` — so an SDK consumer can define MCP servers in code.
+
+- **`AgentOptions.EnableMCPs` is removed**, replaced by `AgentOptions.MCPServers map[string]types.MCPServer`. Presence is the switch: empty (default) = no MCP. The agent spawns/connects them, registers their tools as `mcp__<name>__<tool>`, and terminates them on `Close()` (unchanged).
+- **`harness.AgentWithMCPs()` → `harness.AgentWithMCPs(servers)`.**
+- **New `mcp.ServersFromSettings()`** — the servers configured via `harness mcp add`, the explicit default source. Use as-is or merge with your own:
+
+  ```go
+  servers := mcp.ServersFromSettings()
+  servers["docs"] = types.MCPServer{URL: "https://example.com/mcp"}
+  a := harness.NewAgent(harness.AgentWithMCPs(servers))
+  ```
+- **`mcp.Manager.Start(ctx)` → `Start(ctx, servers)`**: the manager no longer reads configuration itself.
+- **Validation moved to the type**: `types.MCPServer.Validate()` + `types.ErrInvalidMCPServer` (`config.ErrInvalidMCPServer` is now an alias). Programmatic servers get the same rule as `harness mcp add` (exactly one of `command`/`url`); an invalid one is skipped and reported in `Agent.MCPStatuses()`, never fatal.
+- No user-facing change in the CLI: every harness command passes `mcp.ServersFromSettings()`, so the same servers start as before.
+
 ## [0.82.0] - 2026-10-04
 
 ### Breaking — persistent memory is a per-agent port (`memory.Store`)
