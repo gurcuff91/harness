@@ -44,7 +44,7 @@ type SearchResult struct {
 // The agent that receives a Store owns it — Agent.Close closes it.
 //
 // Scoping contract every implementation must honor:
-//   - Write/Delete with global=true operate under GlobalCWD instead of cwd,
+//   - Write/Get/Delete with global=true operate under GlobalCWD instead of cwd,
 //     so the memory surfaces in every project.
 //   - Search's cwd is a filter: "" = across ALL projects; GlobalCWD = global
 //     memories only; any other value = that project's memories PLUS the
@@ -61,6 +61,9 @@ type Store interface {
 	// Write creates or updates (upsert by cwd+slug) a memory, reporting
 	// whether it was newly created.
 	Write(cwd, slug, content string, global bool) (created bool, err error)
+	// Get returns one memory by cwd+slug (global=true → GlobalCWD), with its
+	// CWD and Content set; found is false (no error) when it doesn't exist.
+	Get(cwd, slug string, global bool) (m Memory, found bool, err error)
 	// Search lists or full-text searches memories, paginated (see the
 	// scoping contract above).
 	Search(cwd, query string, includeContent bool, skip, limit int) (SearchResult, error)

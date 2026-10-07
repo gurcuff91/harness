@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/internal/config"
 	"github.com/gurcuff91/harness/internal/providers"
@@ -111,6 +113,9 @@ func (s *Server) handler() http.Handler {
 	r.Put("/api/settings/provider/{name}", s.handlePutCustomProvider)
 	r.Delete("/api/settings/provider/{name}", s.handleDeleteCustomProvider)
 	r.Get("/api/memories", s.handleListMemories)
+	r.Get("/api/memories/{slug}", s.handleGetMemory)
+	r.Put("/api/memories/{slug}", s.handlePutMemory)
+	r.Delete("/api/memories/{slug}", s.handleDeleteMemory)
 	r.Get("/api/schedules", s.handleListSchedules)
 	r.Get("/api/providers", s.handleProviders)
 	r.Post("/api/providers/{name}/connect", s.handleConnectProvider)
@@ -426,10 +431,10 @@ func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleListMemories serves read-only memory queries. Memories are partitioned
-// by working directory; the cwd query param is an OPTIONAL filter (omit it for a
-// global view across all projects). Writes/deletes are intentionally NOT exposed
-// — only the agent mutates memory, via its tools. All params are optional:
+// handleListMemories lists/searches memories. Memories are partitioned by
+// working directory; the cwd query param is an OPTIONAL filter (omit it for a
+// view across all projects, "<global>" for global memories only, a path for
+// that project plus globals). All params are optional:
 //
 //	cwd, query, include_content (default true), skip (default 0), limit (default 10)
 func (s *Server) handleListMemories(w http.ResponseWriter, r *http.Request) {
@@ -451,6 +456,112 @@ func (s *Server) handleListMemories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// memoryScope resolves the {slug} + scope of a single-memory request. The
+// scope is the REQUIRED cwd query param: a project path, or "<global>"
+// (memory.GlobalCWD) for a global memory — the same sentinel GET
+// /api/memories accepts. Writes 503 when the agent has no memory and 400 when
+// cwd is missing; ok=false means a response was already written.
+func (s *Server) memoryScope(w http.ResponseWriter, r *http.Request) (mem memory.Store, cwd, slug string, global, ok bool) {
+	mem = s.agent.Memory()
+	if mem == nil {
+		writeError(w, http.StatusServiceUnavailable, "memory is not enabled on this agent", nil)
+		return nil, "", "", false, false
+	}
+	// chi matches on the RAW (still-escaped) path when one exists, so a slug
+	// the client had to escape ("a/b", spaces, …) arrives as "a%2Fb" —
+	// unescape it so the stored slug is the real one.
+	slug, err := url.PathUnescape(chi.URLParam(r, "slug"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid slug: "+err.Error(), nil)
+		return nil, "", "", false, false
+	}
+	cwd = r.URL.Query().Get("cwd")
+	if strings.TrimSpace(slug) == "" {
+		writeError(w, http.StatusBadRequest, "slug is required", nil)
+		return nil, "", "", false, false
+	}
+	if cwd == "" {
+		writeError(w, http.StatusBadRequest, `cwd query param is required (a project path, or "`+memory.GlobalCWD+`" for a global memory)`, nil)
+		return nil, "", "", false, false
+	}
+	return mem, cwd, slug, cwd == memory.GlobalCWD, true
+}
+
+// handleGetMemory returns one memory (GET /api/memories/{slug}?cwd=…), 404 if
+// absent.
+func (s *Server) handleGetMemory(w http.ResponseWriter, r *http.Request) {
+	mem, cwd, slug, global, ok := s.memoryScope(w, r)
+	if !ok {
+		return
+	}
+	m, found, err := mem.Get(cwd, slug, global)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "memory not found: "+slug, nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, m)
+}
+
+// handlePutMemory creates or replaces one memory (PUT
+// /api/memories/{slug}?cwd=…, body {"content": "..."}) — an upsert by
+// cwd+slug, same as the agent's MemoWrite. 201 when created, 200 when updated;
+// either way the body is the stored memory.
+func (s *Server) handlePutMemory(w http.ResponseWriter, r *http.Request) {
+	mem, cwd, slug, global, ok := s.memoryScope(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
+		return
+	}
+	if strings.TrimSpace(body.Content) == "" {
+		writeError(w, http.StatusUnprocessableEntity, "content is required", nil)
+		return
+	}
+	created, err := mem.Write(cwd, slug, body.Content, global)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	m, _, err := mem.Get(cwd, slug, global)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, m)
+}
+
+// handleDeleteMemory removes one memory (DELETE /api/memories/{slug}?cwd=…),
+// 404 if absent.
+func (s *Server) handleDeleteMemory(w http.ResponseWriter, r *http.Request) {
+	mem, cwd, slug, global, ok := s.memoryScope(w, r)
+	if !ok {
+		return
+	}
+	deleted, err := mem.Delete(cwd, slug, global)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !deleted {
+		writeError(w, http.StatusNotFound, "memory not found: "+slug, nil)
+		return
+	}
+	writeStatus(w, http.StatusOK, "deleted", "")
 }
 
 // atoiDefault parses s as an int, returning def when empty or invalid.

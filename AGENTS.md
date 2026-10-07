@@ -40,7 +40,7 @@ cmd/harness/main.go             ← executable entry point (package main) — ju
 │   ├── prompts.go              ← system prompt assembly
 │   ├── store/                  ← session persistence (JSONL per cwd) — custom stores here. SessionStore also owns full-text SearchMessages(sessionID, query, limit) ([]SearchResult, error) — FileStore backs it with a per-session SQLite FTS5 index (file.go), InMemoryStore returns ErrSearchNotSupported; a custom port is free to implement it however it wants (or not at all)
 │   ├── resources/              ← skill/resource discovery — custom loaders here
-│   ├── memory/                 ← persistent memory port (Store: Write/Search/Delete/Close, cwd + global scoping contract) + default SQLiteStore (OpenSQLite, SQLite + FTS5). Per-agent like store/resources: AgentOptions.Memory / harness.AgentWithMemory(store); nil = no memory; the agent owns and closes it
+│   ├── memory/                 ← persistent memory port (Store: Write/Get/Search/Delete/Close, cwd + global scoping contract) + default SQLiteStore (OpenSQLite, SQLite + FTS5). Per-agent like store/resources: AgentOptions.Memory / harness.AgentWithMemory(store); nil = no memory; the agent owns and closes it
 │   └── tools/                  ← built-in tools — custom tools here (package tools)
 │       ├── registry.go / bash.go / file.go / edit.go / fetch.go
 │       ├── skill.go / memory.go / session.go / websearch.go / truncate.go / names.go
@@ -51,7 +51,7 @@ cmd/harness/main.go             ← executable entry point (package main) — ju
 │   ├── jsonrpc.go / stdio.go / http.go / client.go / manager.go
 ├── client/                     ← the ONE typed HTTP/SSE SDK over server's API — every transport uses *client.Client directly (no per-transport wrappers)
 │   ├── client.go / types.go / event.go / error.go / stream.go
-├── server/                     ← HTTP/SSE backend — the API all clients talk to. Run(ctx, *agent.Agent, ...Option) is the blocking convenience wrapper (listen → serve → wait for ctx → graceful shutdown); Server/NewServer/Serve/Close stay exported for fine-grained control. WithLogger(logx.Logger) sets what receives request/lifecycle log lines — default logx.NewNilLogger() (silent).
+├── server/                     ← HTTP/SSE backend — the API all clients talk to. Run(ctx, *agent.Agent, ...Option) is the blocking convenience wrapper (listen → serve → wait for ctx → graceful shutdown); Server/NewServer/Serve/Close stay exported for fine-grained control. WithLogger(logx.Logger) sets what receives request/lifecycle log lines — default logx.NewNilLogger() (silent). Memory CRUD: GET /api/memories (list/search) + GET/PUT/DELETE /api/memories/{slug}?cwd=<path|<global>> over Agent.Memory() (503 when the agent has none; slug is URL-unescaped).
 │   ├── server.go / sse.go / proxy.go / instances.go / middleware.go / server_docs.go / run.go
 ├── transports/                 ← interactive session frontends (each opens a session over server via client.Client); PUBLIC because an SDK consumer can run any of these programmatically on an already-built *agent.Agent
 │   ├── telegram/               ← Telegram bot (stdlib Bot API; one session per chat). Run(ctx, a, ...Option) — WithToken (required), WithSessionModel, WithSessionThinking, WithAllowUnpair, WithLogger. No Scheduler option: that's an agent.AgentOptions.EnableScheduler concern, decided before Run is ever called.

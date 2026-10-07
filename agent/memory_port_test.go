@@ -41,6 +41,10 @@ func (f *fakeMemory) Search(cwd, query string, includeContent bool, skip, limit 
 
 func (f *fakeMemory) Delete(cwd, slug string, global bool) (bool, error) { return false, nil }
 
+func (f *fakeMemory) Get(cwd, slug string, global bool) (memory.Memory, bool, error) {
+	return memory.Memory{}, false, nil
+}
+
 func (f *fakeMemory) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -321,6 +321,13 @@ harness memo --global         — Only global (cross-project) memories
 harness schedules             — List cron-scheduled prompts (read-only)
 ```
 
+Memories are also fully manageable over the HTTP API (`harness serve`, docs at
+`/api/docs`) and the Go SDK client: `GET /api/memories` lists/searches
+(`client.SearchMemories`), and `GET`/`PUT`/`DELETE /api/memories/{slug}?cwd=…`
+read, upsert and delete one memory (`client.GetMemory`/`PutMemory`/
+`DeleteMemory`). `cwd` is the project path, or `<global>`
+(`client.MemoryGlobalCWD`) for a global memory.
+
 Inside the TUI, a command palette exposes session actions (model, thinking,
 connect, resume, compact, skills, quit).
 

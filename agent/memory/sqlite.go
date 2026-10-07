@@ -127,20 +127,23 @@ ON CONFLICT(cwd, slug) DO UPDATE SET
 	return exists == 0, nil
 }
 
-// Get returns a single memory by slug within a cwd, or (nil, nil) if absent.
-func (s *SQLiteStore) Get(cwd, slug string) (*Memory, error) {
+// Get returns one memory by cwd+slug (global=true → GlobalCWD); found is
+// false (no error) when it doesn't exist.
+func (s *SQLiteStore) Get(cwd, slug string, global bool) (m Memory, found bool, err error) {
+	if global {
+		cwd = GlobalCWD
+	}
 	row := s.db.QueryRow(`
-SELECT slug, content, created_at, updated_at
+SELECT slug, cwd, content, created_at, updated_at
 FROM memories WHERE cwd = ? AND slug = ?`, cwd, slug)
-	var m Memory
-	err := row.Scan(&m.Slug, &m.Content, &m.CreatedAt, &m.UpdatedAt)
+	err = row.Scan(&m.Slug, &m.CWD, &m.Content, &m.CreatedAt, &m.UpdatedAt)
 	if err == sql.ErrNoRows {
-		return nil, nil
+		return Memory{}, false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("memory: get: %w", err)
+		return Memory{}, false, fmt.Errorf("memory: get: %w", err)
 	}
-	return &m, nil
+	return m, true, nil
 }
 
 // toFTSQuery turns a user's raw search string into a safe FTS5 MATCH expression.

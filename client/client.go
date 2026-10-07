@@ -311,17 +311,66 @@ func (c *Client) DeleteCustomProvider(name string) (*Status, error) {
 	return c.decodeStatus("DELETE", "/api/settings/provider/"+name, nil)
 }
 
-// ── Memories (read-only) ─────────────────────────────────────────────────
+// ── Memories ─────────────────────────────────────────────────────────────
 
-// GetMemories queries the read-only memories endpoint. rawQuery is the URL
-// query string (cwd, query, include_content, skip, limit), already encoded —
-// pass "" for no filter.
+// GetMemories queries GET /api/memories with a raw, already-encoded query
+// string (cwd, query, include_content, skip, limit) — pass "" for no filter.
+// SearchMemories is the typed equivalent.
 func (c *Client) GetMemories(rawQuery string) (*MemorySearchResult, error) {
 	path := "/api/memories"
 	if rawQuery != "" {
 		path += "?" + rawQuery
 	}
 	return ptr(decode[MemorySearchResult](c, "GET", path, nil))
+}
+
+// SearchMemories lists or full-text searches memories (GET /api/memories)
+// with typed parameters — see MemoryQuery for each filter.
+func (c *Client) SearchMemories(q MemoryQuery) (*MemorySearchResult, error) {
+	v := url.Values{}
+	if q.CWD != "" {
+		v.Set("cwd", q.CWD)
+	}
+	if q.Query != "" {
+		v.Set("query", q.Query)
+	}
+	if q.WithoutContent {
+		v.Set("include_content", "false")
+	}
+	if q.Skip > 0 {
+		v.Set("skip", fmt.Sprint(q.Skip))
+	}
+	if q.Limit > 0 {
+		v.Set("limit", fmt.Sprint(q.Limit))
+	}
+	return c.GetMemories(v.Encode())
+}
+
+// memoryPath builds /api/memories/{slug}?cwd=… — slug path-escaped, cwd a
+// project path or MemoryGlobalCWD.
+func memoryPath(cwd, slug string) string {
+	return "/api/memories/" + url.PathEscape(slug) + "?" + url.Values{"cwd": {cwd}}.Encode()
+}
+
+// GetMemory returns one memory by scope + slug (GET /api/memories/{slug}).
+// cwd is the project path, or MemoryGlobalCWD for a global memory. A missing
+// memory is a 404 *Error.
+func (c *Client) GetMemory(cwd, slug string) (*Memory, error) {
+	return ptr(decode[Memory](c, "GET", memoryPath(cwd, slug), nil))
+}
+
+// PutMemory creates or replaces one memory (PUT /api/memories/{slug}) — an
+// upsert by scope + slug, like the agent's MemoWrite. cwd is the project
+// path, or MemoryGlobalCWD for a global memory. Returns the stored memory.
+func (c *Client) PutMemory(cwd, slug, content string) (*Memory, error) {
+	return ptr(decode[Memory](c, "PUT", memoryPath(cwd, slug), map[string]string{"content": content}))
+}
+
+// DeleteMemory removes one memory (DELETE /api/memories/{slug}). cwd is the
+// project path, or MemoryGlobalCWD for a global memory. A missing memory is a
+// 404 *Error.
+func (c *Client) DeleteMemory(cwd, slug string) (*Status, error) {
+	return c.decodeStatus("DELETE", memoryPath(cwd, slug), nil)
 }
 
 // ── Schedules (read-only) ────────────────────────────────────────────────

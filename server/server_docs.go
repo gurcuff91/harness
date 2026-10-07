@@ -48,7 +48,7 @@ const openAPISpecTemplate = `{
     { "name": "providers", "description": "LLM provider connect/disconnect" },
     { "name": "models",    "description": "Available models" },
     { "name": "mcp",       "description": "MCP server status" },
-    { "name": "memory",    "description": "Persistent memory store" },
+    { "name": "memory",    "description": "Persistent memory: list, search, read, create/update and delete (project-scoped or global)" },
     { "name": "schedules", "description": "Cron-scheduled prompts" },
     { "name": "sessions",  "description": "Agent session lifecycle" }
   ],
@@ -166,16 +166,71 @@ const openAPISpecTemplate = `{
     "/api/memories": {
       "get": {
         "tags": ["memory"],
-        "summary": "List memories",
+        "summary": "List or search memories",
+        "description": "Paginated listing (most recently updated first) or full-text search (ranked by relevance). Returns an empty result when the agent has no memory.",
         "operationId": "listMemories",
         "parameters": [
-          { "name": "q", "in": "query", "schema": { "type": "string" }, "description": "FTS search query; omit to list all" },
-          { "name": "global", "in": "query", "schema": { "type": "boolean" }, "description": "Include global memories" },
-          { "name": "skip", "in": "query", "schema": { "type": "integer" } },
-          { "name": "limit", "in": "query", "schema": { "type": "integer" } }
+          { "name": "cwd", "in": "query", "schema": { "type": "string" }, "description": "Scope filter: omit for all projects; \"<global>\" for global memories only; a project path for that project's memories plus the global ones" },
+          { "name": "query", "in": "query", "schema": { "type": "string" }, "description": "Full-text search (prefix-matched terms, ANDed); omit to list" },
+          { "name": "include_content", "in": "query", "schema": { "type": "boolean", "default": true }, "description": "false = lightweight listing without content" },
+          { "name": "skip", "in": "query", "schema": { "type": "integer", "default": 0 } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 10 } }
         ],
         "responses": {
           "200": { "description": "Memory search result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MemorySearchResult" } } } }
+        }
+      }
+    },
+    "/api/memories/{slug}": {
+      "get": {
+        "tags": ["memory"],
+        "summary": "Get one memory",
+        "operationId": "getMemory",
+        "parameters": [
+          { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Memory id within its scope (kebab-case by convention; URL-escape anything else)" },
+          { "name": "cwd", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Scope: the project path, or \"<global>\" for a global (cross-project) memory" }
+        ],
+        "responses": {
+          "200": { "description": "The memory", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MemoryEntry" } } } },
+          "400": { "description": "Missing cwd or slug", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Memory not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "503": { "description": "Memory is not enabled on this agent", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      },
+      "put": {
+        "tags": ["memory"],
+        "summary": "Create or update a memory",
+        "description": "Upsert by scope + slug (same semantics as the agent's MemoWrite tool). Returns the stored memory.",
+        "operationId": "putMemory",
+        "parameters": [
+          { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Memory id within its scope (kebab-case by convention; URL-escape anything else)" },
+          { "name": "cwd", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Scope: the project path, or \"<global>\" for a global (cross-project) memory" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["content"], "properties": { "content": { "type": "string", "description": "The memory text (must not be blank)" } } } } }
+        },
+        "responses": {
+          "200": { "description": "Updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MemoryEntry" } } } },
+          "201": { "description": "Created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MemoryEntry" } } } },
+          "400": { "description": "Missing cwd/slug or malformed JSON", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "422": { "description": "Blank content", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "503": { "description": "Memory is not enabled on this agent", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      },
+      "delete": {
+        "tags": ["memory"],
+        "summary": "Delete a memory",
+        "operationId": "deleteMemory",
+        "parameters": [
+          { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Memory id within its scope (kebab-case by convention; URL-escape anything else)" },
+          { "name": "cwd", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Scope: the project path, or \"<global>\" for a global (cross-project) memory" }
+        ],
+        "responses": {
+          "200": { "description": "Deleted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "400": { "description": "Missing cwd or slug", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Memory not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "503": { "description": "Memory is not enabled on this agent", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
       }
     },
@@ -579,10 +634,11 @@ const openAPISpecTemplate = `{
         "type": "object",
         "properties": {
           "slug":       { "type": "string" },
-          "content":    { "type": "string" },
-          "global":     { "type": "boolean" },
-          "created_at": { "type": "string", "format": "date-time" },
-          "updated_at": { "type": "string", "format": "date-time" }
+          "cwd":        { "type": "string", "description": "Project path, or \"<global>\" for a global memory" },
+          "content":    { "type": "string", "description": "Omitted when include_content=false" },
+          "score":      { "type": "number", "description": "Relevance (search mode only; higher = more relevant)" },
+          "created_at": { "type": "integer", "format": "int64", "description": "Unix milliseconds" },
+          "updated_at": { "type": "integer", "format": "int64", "description": "Unix milliseconds" }
         }
       },
       "SessionMeta": {

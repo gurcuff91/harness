@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.84.0] - 2026-10-05
+
+### Added — memory CRUD over the HTTP API and the SDK client
+Memories were read-only over the API (`GET /api/memories`); only the agent could write them, via its tools. They're now fully manageable:
+
+- **`GET /api/memories/{slug}?cwd=…`** — read one memory (404 if absent).
+- **`PUT /api/memories/{slug}?cwd=…`**, body `{"content": "..."}` — create or update (upsert by scope + slug, same as `MemoWrite`): **201** when created, **200** when updated, the stored memory in the body; blank content → 422.
+- **`DELETE /api/memories/{slug}?cwd=…`** — delete (404 if absent).
+- `cwd` is required on these and is the scope: a project path, or the existing `<global>` sentinel for a global memory — the same convention `GET /api/memories` already used, so nothing changes for existing callers. Missing `cwd` → 400; an agent without memory → 503. Slugs are URL-escaped by the client and unescaped by the server, so any slug round-trips.
+- **SDK client**: `GetMemory`, `PutMemory`, `DeleteMemory`, a typed `SearchMemories(MemoryQuery{CWD, Query, WithoutContent, Skip, Limit})`, and the `client.MemoryGlobalCWD` constant. `GetMemories(rawQuery)` is kept as-is.
+- **`memory.Store` gains `Get(cwd, slug, global) (Memory, found, error)`** — custom memory backends must implement it. `SQLiteStore.Get` changed accordingly (it was `Get(cwd, slug) (*Memory, error)` and is now scope-aware and returns the memory's cwd).
+
+### Fixed — OpenAPI docs for memories
+`/api/docs` documented `GET /api/memories` with parameters the server never read (`q`, `global` — the real ones are `query`, `cwd`, `include_content`, `skip`, `limit`) and a `MemoryEntry` with a `global` boolean and date-time strings (the real shape has `cwd`, `score`, and Unix-millisecond integers). Both are corrected, the three new operations are documented, and a test now validates the spec's JSON and `$ref`s.
+
 ## [0.83.0] - 2026-10-04
 
 ### Breaking — MCP servers are passed per agent (`AgentWithMCPs(servers)`)

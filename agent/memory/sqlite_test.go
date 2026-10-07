@@ -23,9 +23,12 @@ func TestWriteGetRoundTrip(t *testing.T) {
 	if _, err := s.Write("/proj", "api-auth", "The refresh token flow works like this...", false); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	m, err := s.Get("/proj", "api-auth")
-	if err != nil || m == nil {
-		t.Fatalf("get: %v m=%v", err, m)
+	m, found, err := s.Get("/proj", "api-auth", false)
+	if err != nil || !found {
+		t.Fatalf("get: %v found=%v", err, found)
+	}
+	if m.CWD != "/proj" || m.Slug != "api-auth" {
+		t.Errorf("get must carry slug+cwd, got %+v", m)
 	}
 	if m.Content != "The refresh token flow works like this..." {
 		t.Errorf("wrong body: %q", m.Content)
@@ -42,7 +45,7 @@ func TestWriteUpsert(t *testing.T) {
 	if created {
 		t.Errorf("second write should update, not create")
 	}
-	m, _ := s.Get("/proj", "slug")
+	m, _, _ := s.Get("/proj", "slug", false)
 	if m.Content != "body2" {
 		t.Errorf("upsert did not update: %q", m.Content)
 	}
@@ -50,12 +53,12 @@ func TestWriteUpsert(t *testing.T) {
 
 func TestGetMissing(t *testing.T) {
 	s := newTestStore(t)
-	m, err := s.Get("/proj", "nope")
+	_, found, err := s.Get("/proj", "nope", false)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	if m != nil {
-		t.Errorf("expected nil for missing memory")
+	if found {
+		t.Errorf("expected found=false for missing memory")
 	}
 }
 
@@ -140,7 +143,7 @@ func TestDelete(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("delete: %v ok=%v", err, ok)
 	}
-	if m, _ := s.Get("/proj", "temp"); m != nil {
+	if _, found, _ := s.Get("/proj", "temp", false); found {
 		t.Errorf("memory still present after delete")
 	}
 	if ok, _ := s.Delete("/proj", "temp", false); ok {
@@ -475,5 +478,19 @@ func TestConcurrentReadsWithWritesNoBusyError(t *testing.T) {
 	close(errCh)
 	for err := range errCh {
 		t.Errorf("concurrent read/write errored: %v", err)
+	}
+}
+
+func TestGetGlobal(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.Write("/proj", "lang", "spanish", true); err != nil {
+		t.Fatal(err)
+	}
+	m, found, err := s.Get("/anything", "lang", true)
+	if err != nil || !found || m.CWD != GlobalCWD || m.Content != "spanish" {
+		t.Fatalf("Get global = %+v found=%v err=%v", m, found, err)
+	}
+	if _, found, _ := s.Get("/proj", "lang", false); found {
+		t.Error("a global memory must not be found under a project cwd")
 	}
 }

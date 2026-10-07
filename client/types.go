@@ -162,7 +162,9 @@ type MCPStatus struct {
 	Error     string `json:"error,omitempty"`
 }
 
-// Memory is one stored memory entry in a MemorySearchResult. Mirrors
+// Memory is one stored memory entry (GET/PUT /api/memories/{slug}, and each
+// item of a MemorySearchResult). CWD is the project path, or MemoryGlobalCWD
+// for a global memory; CreatedAt/UpdatedAt are Unix milliseconds. Mirrors
 // memory.Memory locally (the memory package pulls in the SQLite driver, which
 // this client has no need for).
 type Memory struct {
@@ -172,6 +174,22 @@ type Memory struct {
 	Score     float64 `json:"score,omitempty"`
 	CreatedAt int64   `json:"created_at"`
 	UpdatedAt int64   `json:"updated_at"`
+}
+
+// MemoryGlobalCWD is the cwd value that addresses GLOBAL (cross-project)
+// memories in the memory API — mirrors memory.GlobalCWD. Pass it as the cwd of
+// GetMemory/PutMemory/DeleteMemory, or as MemoryQuery.CWD for a global-only
+// listing; a returned Memory with this CWD is a global one.
+const MemoryGlobalCWD = "<global>"
+
+// MemoryQuery are the typed filters of SearchMemories (GET /api/memories).
+// The zero value lists everything, newest first, 10 per page, with content.
+type MemoryQuery struct {
+	CWD            string // "" = all projects; MemoryGlobalCWD = globals only; a path = that project + globals
+	Query          string // full-text search (ranked by Score); "" = list mode, most recently updated first
+	WithoutContent bool   // omit Content (lightweight listing of slug/cwd/dates)
+	Skip           int    // pagination offset
+	Limit          int    // page size (server default 10)
 }
 
 // MemorySearchResult is GET /api/memories — a paginated memory query response.
