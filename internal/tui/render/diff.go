@@ -29,7 +29,7 @@ func (t *TUI) doRender() {
 	height := t.terminal.Rows()
 
 	newLines := t.Render(width)
-	newLines = sanitizeLines(newLines, width)
+	newLines = t.sanitizer.sanitize(newLines, width)
 
 	widthChanged := t.previousWidth != 0 && t.previousWidth != width
 	heightChanged := t.previousHeight != 0 && t.previousHeight != height
@@ -334,6 +334,8 @@ func diffRange(old, new []string) (first, last int) {
 }
 
 // sanitizeLines clips any line wider than width to protect the diff state.
+// Stateless: measures every line. doRender uses lineSanitizer instead, which
+// only measures what changed since the previous frame.
 func sanitizeLines(lines []string, width int) []string {
 	for i, line := range lines {
 		if ansi.VisibleWidth(line) > width {
@@ -342,6 +344,64 @@ func sanitizeLines(lines []string, width int) []string {
 	}
 	return lines
 }
+
+// lineSanitizer is sanitizeLines with memory of the previous frame. Measuring
+// a line's visible width (grapheme segmentation) is expensive, and doRender
+// runs up to ~60 times a second while streaming — re-measuring an entire
+// long-lived transcript every frame made it the dominant CPU cost (one full
+// core, profiled live on a multi-day session with ~100k messages). A line
+// identical to the one at the same index last frame, at the same width, needs
+// no re-measuring: its sanitized form is reused as-is. String comparison is
+// cheap, and component render caches return the very same strings, so the
+// common case short-circuits on pointer+length. Cost per frame is now
+// proportional to what changed, not to the transcript's size.
+type lineSanitizer struct {
+	width int      // width the cache was built for (0 = empty)
+	raw   []string // previous frame's lines as rendered (pre-sanitize)
+	out   []string // their sanitized forms
+	valid int      // how many leading entries of raw/out are from the previous frame
+}
+
+// sanitize clips over-wide lines in place (same contract as sanitizeLines)
+// and returns lines.
+func (s *lineSanitizer) sanitize(lines []string, width int) []string {
+	if width != s.width {
+		s.valid = 0
+		s.width = width
+	}
+	// Update the cache in place (reusing its backing arrays across frames —
+	// at tens of thousands of lines, fresh slices every frame would be most
+	// of the remaining cost). s.raw[i]/s.out[i] are read before being
+	// overwritten for the same i, so in-place is safe.
+	s.raw = resize(s.raw, len(lines))
+	s.out = resize(s.out, len(lines))
+	for i, line := range lines {
+		if i < s.valid && s.raw[i] == line {
+			lines[i] = s.out[i]
+			continue
+		}
+		s.raw[i] = line
+		if ansi.VisibleWidth(line) > width {
+			lines[i] = ansi.TruncateToWidth(line, width, "", false)
+		}
+		s.out[i] = lines[i]
+	}
+	s.valid = len(lines)
+	return lines
+}
+
+// resize returns buf with length n, reusing its backing array when it fits.
+func resize(buf []string, n int) []string {
+	if cap(buf) >= n {
+		return buf[:n]
+	}
+	grown := make([]string, n, n+n/4)
+	copy(grown, buf)
+	return grown
+}
+
+// reset drops the cache (forced full redraw).
+func (s *lineSanitizer) reset() { s.width, s.raw, s.out, s.valid = 0, nil, nil, 0 }
 
 func clamp(v, lo, hi int) int {
 	if v < lo {

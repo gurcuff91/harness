@@ -27,6 +27,7 @@ type TUI struct {
 	hardwareCursorRow   int // actual terminal cursor row
 	maxLinesRendered    int
 	previousViewportTop int
+	sanitizer           lineSanitizer // per-frame width clipping, cached across frames
 
 	// clearOnShrink controls whether the renderer issues a full (cursor-moving)
 	// repaint when the content shrinks below the working-area high-water mark.
@@ -165,6 +166,7 @@ func (t *TUI) RequestRender(force bool) {
 		return
 	}
 	if force {
+		t.sanitizer.reset()
 		t.previousLines = nil
 		t.previousWidth = -1
 		t.previousHeight = -1

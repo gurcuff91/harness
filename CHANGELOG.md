@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.84.2] - 2026-10-07
+
+### Fixed — long-lived TUIs burned a full CPU core while the agent worked
+Profiled live on a TUI open for 2.5 days on a ~120k-message session: 82% of its CPU went to `sanitizeLines`, which re-measured the visible width (grapheme segmentation) of EVERY rendered line on EVERY frame — up to ~60 frames/s while streaming — even though the rest of the renderer already only rewrites changed lines. The cost grew with the transcript, so the older the TUI, the hotter it ran.
+
+- The renderer now caches each line's sanitized form across frames and only re-measures lines that actually changed (identical string at the same index + same terminal width → reused as-is). A width change or forced redraw invalidates the cache. Output is byte-identical to before.
+- On a 50,000-line transcript, one streaming frame's sanitize step went from ~70 ms to ~0.17 ms (~420×), allocations from 50,004 to 3 per frame. Verified live: a fresh TUI resuming that same session used ~1% CPU across ~100 redraws.
+
 ## [0.84.1] - 2026-10-07
 
 ### Fixed — dead instances left `null` entries in settings.json forever
