@@ -116,7 +116,9 @@ func purgeDeadInstances(settings *config.SettingsManager) (removed int) {
 			removed++
 		}
 	}
-	return removed
+	// Also sweep the vacant markers older versions left behind (they wrote a
+	// null instead of deleting), so an existing registry self-heals.
+	return removed + settings.DeleteVacantInstances()
 }
 
 // randomInstanceName picks a random MK11 character + adjective combination.

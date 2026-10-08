@@ -225,3 +225,42 @@ func incr(b []byte) []byte {
 	}
 	return out
 }
+
+// A nil next with write=true is the atomic delete form: it removes the entry
+// (dropping an emptied namespace from List), and is a no-op when missing.
+func TestContract_SwapValueNilNextDeletes(t *testing.T) {
+	forEach(t, func(t *testing.T, s store) {
+		_ = s.Set("ns", "gone", []byte(`1`))
+		_ = s.Set("ns", "kept", []byte(`2`))
+
+		var sawFound bool
+		if err := s.SwapValue("ns", "gone", func(cur []byte, found bool) ([]byte, bool, error) {
+			sawFound = found && string(cur) == `1`
+			return nil, true, nil
+		}); err != nil {
+			t.Fatalf("delete form: %v", err)
+		}
+		if !sawFound {
+			t.Error("fn must see the current value before deleting")
+		}
+		if _, found, _ := s.Get("ns", "gone"); found {
+			t.Error("entry must be gone after the delete form")
+		}
+		if v, found, _ := s.Get("ns", "kept"); !found || string(v) != `2` {
+			t.Errorf("sibling entry = %s found=%v, want untouched", v, found)
+		}
+
+		// Missing key: no-op, no error.
+		if err := s.SwapValue("ns", "never", func([]byte, bool) ([]byte, bool, error) {
+			return nil, true, nil
+		}); err != nil {
+			t.Fatalf("delete form on a missing key: %v", err)
+		}
+
+		// Last entry: the namespace disappears.
+		_ = s.SwapValue("ns", "kept", func([]byte, bool) ([]byte, bool, error) { return nil, true, nil })
+		if m, err := s.List("ns"); err != nil || len(m) != 0 {
+			t.Errorf("List after deleting everything = %v, %v; want empty", m, err)
+		}
+	})
+}

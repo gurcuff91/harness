@@ -124,14 +124,7 @@ func (fs *FileStore) Set(namespace, key string, value []byte) error {
 
 func (fs *FileStore) Delete(namespace, key string) error {
 	return fs.mutate(func() (bool, error) {
-		if _, ok := fs.data[namespace][key]; !ok {
-			return false, nil
-		}
-		delete(fs.data[namespace], key)
-		if len(fs.data[namespace]) == 0 {
-			delete(fs.data, namespace)
-		}
-		return true, nil
+		return fs.remove(namespace, key), nil
 	})
 }
 
@@ -150,6 +143,9 @@ func (fs *FileStore) SwapValue(namespace, key string, fn func(current []byte, fo
 		next, write, err := fn(cloneBytes(cur), found)
 		if err != nil || !write {
 			return false, err
+		}
+		if next == nil { // delete form
+			return fs.remove(namespace, key), nil
 		}
 		if !json.Valid(next) {
 			return false, ErrInvalidValue
@@ -192,6 +188,19 @@ func (fs *FileStore) mutate(apply func() (changed bool, err error)) error {
 		return err
 	}
 	return nil
+}
+
+// remove deletes (namespace, key), dropping the namespace once empty, and
+// reports whether anything was removed. Caller holds fs.mu.
+func (fs *FileStore) remove(namespace, key string) bool {
+	if _, ok := fs.data[namespace][key]; !ok {
+		return false
+	}
+	delete(fs.data[namespace], key)
+	if len(fs.data[namespace]) == 0 {
+		delete(fs.data, namespace)
+	}
+	return true
 }
 
 // put stores value (already validated) under (namespace, key). Caller holds fs.mu.

@@ -303,3 +303,37 @@ func TestTransportSecretsLiveInCredentials(t *testing.T) {
 		t.Errorf("slack session = %+v, %v", s, ok)
 	}
 }
+
+// DeleteInstanceIf deletes for real — no vacant marker is left behind.
+func TestDeleteInstanceIfLeavesNoMarker(t *testing.T) {
+	m := memSettings()
+	m.ReserveInstance("n", InstanceEntry{PID: 1})
+	if err := m.DeleteInstanceIf("n", 1); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := m.store.List(nsInstances)
+	if _, ok := raw["n"]; ok {
+		t.Fatalf("raw registry still holds %q = %s; want the key removed", "n", raw["n"])
+	}
+}
+
+// Legacy null markers (written by 0.81–0.84) are swept; live entries stay.
+func TestDeleteVacantInstancesSweepsLegacyMarkers(t *testing.T) {
+	m := memSettings()
+	m.ReserveInstance("live", InstanceEntry{PID: 1})
+	for _, n := range []string{"old-a", "old-b"} {
+		if err := m.store.Set(nsInstances, n, []byte(vacantInstance)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := m.DeleteVacantInstances(); got != 2 {
+		t.Errorf("removed = %d, want 2", got)
+	}
+	raw, _ := m.store.List(nsInstances)
+	if len(raw) != 1 || raw["live"] == nil {
+		t.Fatalf("registry after sweep = %v, want only the live entry", raw)
+	}
+	if got := m.DeleteVacantInstances(); got != 0 {
+		t.Errorf("second sweep removed %d, want 0", got)
+	}
+}

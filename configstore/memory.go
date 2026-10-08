@@ -49,11 +49,17 @@ func (s *InMemoryStore) Set(namespace, key string, value []byte) error {
 func (s *InMemoryStore) Delete(namespace, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.remove(namespace, key)
+	return nil
+}
+
+// remove deletes (namespace, key), dropping the namespace once empty. Caller
+// holds s.mu.
+func (s *InMemoryStore) remove(namespace, key string) {
 	delete(s.data[namespace], key)
 	if len(s.data[namespace]) == 0 {
 		delete(s.data, namespace)
 	}
-	return nil
 }
 
 func (s *InMemoryStore) List(namespace string) (map[string][]byte, error) {
@@ -73,6 +79,10 @@ func (s *InMemoryStore) SwapValue(namespace, key string, fn func(current []byte,
 	next, write, err := fn(cloneBytes(cur), found)
 	if err != nil || !write {
 		return err
+	}
+	if next == nil { // delete form
+		s.remove(namespace, key)
+		return nil
 	}
 	if !json.Valid(next) {
 		return ErrInvalidValue

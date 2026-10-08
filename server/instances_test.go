@@ -15,9 +15,17 @@ import (
 // in-memory one for the duration of the test — the registry must never touch
 // the real ~/.harness while tests run.
 func isolateRegistry(t *testing.T) *config.SettingsManager {
+	settings, _ := isolateRegistryRaw(t)
+	return settings
+}
+
+// isolateRegistryRaw is isolateRegistry that also returns the raw store, to
+// seed or inspect what's actually persisted.
+func isolateRegistryRaw(t *testing.T) (*config.SettingsManager, configstore.SettingsStore) {
 	t.Helper()
-	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), nil))
-	return config.GetSettingsManager()
+	raw := configstore.NewInMemoryStore()
+	t.Cleanup(config.SwapStoresForTest(raw, nil))
+	return config.GetSettingsManager(), raw
 }
 
 func aliveServer(t *testing.T) *httptest.Server {
@@ -142,5 +150,24 @@ func TestUnregisterInstanceIsIdempotent(t *testing.T) {
 	UnregisterInstance("me")
 	if _, ok := settings.Instances()["me"]; ok {
 		t.Error("instance still registered after UnregisterInstance")
+	}
+}
+
+// The purge leaves NOTHING behind for dead instances (no null markers), and
+// sweeps the null markers older versions (0.81–0.84) wrote, so an existing
+// registry self-heals on the next harness start.
+func TestPurgeLeavesNoNullMarkersAndSweepsLegacyOnes(t *testing.T) {
+	settings, raw := isolateRegistryRaw(t)
+	alive := aliveServer(t)
+	settings.ReserveInstance("alive-one", config.InstanceEntry{URL: alive.URL, PID: 1})
+	settings.ReserveInstance("dead-one", config.InstanceEntry{URL: deadURL, PID: 2})
+	raw.Set("instances", "legacy-null", []byte(`null`))
+
+	if removed := purgeDeadInstances(settings); removed != 2 {
+		t.Errorf("removed = %d, want 2 (dead-one + legacy-null)", removed)
+	}
+	entries, _ := raw.List("instances")
+	if len(entries) != 1 || entries["alive-one"] == nil {
+		t.Fatalf("raw registry after purge = %v, want only alive-one", entries)
 	}
 }

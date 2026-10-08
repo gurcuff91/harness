@@ -25,10 +25,10 @@ type InstanceEntry struct {
 	StartedAt string `json:"started_at"`
 }
 
-// vacantInstance is the value stored for a name whose registration was
-// removed by a conditional delete (see DeleteInstanceIf). It is not an
-// instance: every reader treats it as absent and ReserveInstance treats it
-// as free.
+// vacantInstance is the legacy marker older harness versions (0.81–0.84)
+// wrote for a vacated name, before SwapValue could delete atomically. Readers
+// still treat it as absent, ReserveInstance as free, and purges remove it
+// (see DeleteVacantInstances) — it is never written anymore.
 const vacantInstance = `null`
 
 // Instances returns every registered instance, keyed by name (vacated names
@@ -82,21 +82,45 @@ func (m *SettingsManager) ReserveInstance(name string, info InstanceEntry) (rese
 // DeleteInstanceIf removes the instance registered under name, but only if it
 // still belongs to pid — i.e. it's still the exact registration a liveness
 // probe found dead. A process that re-registered the same name in the
-// meantime (with its own pid) is left alone.
-//
-// The check and the removal must be ONE atomic step (otherwise a process
-// could re-register the name between them and lose its fresh registration),
-// and the store has no compare-and-delete — so the removal is done inside
-// SwapValue by overwriting the entry with the vacantInstance marker, which
-// every reader treats as absent and ReserveInstance treats as free.
+// meantime (with its own pid) is left alone. The check and the removal are
+// ONE atomic step (SwapValue's delete form), so a re-registration can never
+// slip in between them.
 func (m *SettingsManager) DeleteInstanceIf(name string, pid int) error {
 	return m.store.SwapValue(nsInstances, name, func(raw []byte, found bool) ([]byte, bool, error) {
 		cur, live := decodeInstance(raw)
 		if !found || !live || cur.PID != pid {
 			return nil, false, nil
 		}
-		return []byte(vacantInstance), true, nil
+		return nil, true, nil // delete
 	})
+}
+
+// DeleteVacantInstances removes every legacy vacant marker (see
+// vacantInstance) left by older harness versions, each one atomically and
+// only if it's still vacant — a name re-registered meanwhile is kept.
+// Returns how many were removed.
+func (m *SettingsManager) DeleteVacantInstances() (removed int) {
+	entries, err := m.store.List(nsInstances)
+	if err != nil {
+		return 0
+	}
+	for name, raw := range entries {
+		if _, live := decodeInstance(raw); live {
+			continue
+		}
+		deleted := false
+		err := m.store.SwapValue(nsInstances, name, func(raw []byte, found bool) ([]byte, bool, error) {
+			if _, live := decodeInstance(raw); !found || live {
+				return nil, false, nil
+			}
+			deleted = true
+			return nil, true, nil // delete
+		})
+		if err == nil && deleted {
+			removed++
+		}
+	}
+	return removed
 }
 
 // DeleteInstance removes the instance registered under name unconditionally

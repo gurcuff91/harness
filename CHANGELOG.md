@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.84.1] - 2026-10-07
+
+### Fixed — dead instances left `null` entries in settings.json forever
+Since 0.81.0, removing a dead instance from the colleague registry wrote a `null` "vacant" marker instead of deleting the key — the store had no atomic compare-and-delete, and a plain delete could race with a process re-registering the same name. Nothing ever removed those markers, so `settings.json`'s `instances` namespace grew without bound (71 nulls vs 9 live instances on one machine).
+
+- **`SwapValue` gained a delete form** (both `SettingsStore` and `CredentialsStore`): returning a `nil` next with `write=true` removes the entry atomically (a no-op if it's missing). Purely additive — that combination used to fail with `ErrInvalidValue`. Custom store implementations should support it.
+- **Dead instances are now actually deleted** (`DeleteInstanceIf` uses the delete form), still only if the entry belongs to the probed PID.
+- **Existing `null` markers are swept automatically** on the next start of any harness process (the same purge that removes dead instances), so no manual cleanup is needed.
+
 ## [0.84.0] - 2026-10-05
 
 ### Added — memory CRUD over the HTTP API and the SDK client

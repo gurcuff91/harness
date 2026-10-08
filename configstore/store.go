@@ -75,9 +75,11 @@ type SettingsStore interface {
 	//
 	// fn receives the current value (nil, found=false if absent) and
 	// returns:
-	//   - next:  the value to store (ignored unless write is true)
-	//   - write: whether to store next at all; false makes the call a pure
-	//     read-then-decide with no write
+	//   - next:  the value to store (ignored unless write is true); a nil
+	//     next with write=true DELETES the entry instead — the atomic
+	//     compare-and-delete (deleting a missing entry is a no-op)
+	//   - write: whether to store (or delete) at all; false makes the call a
+	//     pure read-then-decide with no write
 	//   - err:   fn's own failure — returned by SwapValue unchanged, with
 	//     nothing written
 	//
@@ -110,8 +112,9 @@ type CredentialsStore interface {
 	// no entries yields an empty (non-nil) map.
 	List(namespace string) (map[string][]byte, error)
 
-	// SwapValue performs an atomic read-modify-write of (namespace, key).
-	// See SettingsStore.SwapValue for the full contract — this is the
+	// SwapValue performs an atomic read-modify-write of (namespace, key),
+	// including the delete form (nil next with write=true). See
+	// SettingsStore.SwapValue for the full contract — this is the
 	// primitive that keeps a single-use OAuth refresh token from being
 	// redeemed twice by two processes at once.
 	SwapValue(namespace, key string, fn func(current []byte, found bool) (next []byte, write bool, err error)) error
