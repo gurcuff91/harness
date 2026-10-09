@@ -94,15 +94,23 @@ func SaveCredentials(c *Credentials) error {
 // a thin layer over the settings manager.
 type store struct {
 	settings *config.SettingsManager
-	cwd      string // current working directory — scopes all lookups
+	cwd      string // working directory that scopes all lookups (WithCWD, default os.Getwd())
 }
 
 // openStore returns the session store over the process-global settings
-// manager, scoped to the current working directory. It never fails today; the
-// error return is kept so callers stay unchanged.
-func openStore() (*store, error) {
-	cwd, _ := os.Getwd()
+// manager, scoped to cwd ("" = the process's current working directory). It
+// never fails today; the error return is kept so callers stay unchanged.
+func openStore(cwd string) (*store, error) {
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
 	return &store{settings: config.GetSettingsManager(), cwd: cwd}, nil
+}
+
+// ChannelSessions returns the channel → session id bindings of the given
+// working directory (the cwd a transport was run with — see WithCWD).
+func ChannelSessions(cwd string) (map[string]string, error) {
+	return config.GetSettingsManager().SlackSessions(cwd), nil
 }
 
 func (s *store) sessionFor(channelID string) (string, bool) {

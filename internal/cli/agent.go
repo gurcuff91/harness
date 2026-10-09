@@ -77,9 +77,9 @@ func newOneShotAgent() *agent.Agent {
 // newInteractiveAgent builds the root agent for interactive transports (TUI,
 // standalone `harness serve`, Telegram) — always at interactiveMaxIterations,
 // and optionally running the cron scheduler engine so a fired schedule has a
-// session to run in. directives are extra system-prompt blocks a transport
-// needs (e.g. Telegram's file-upload instructions); omit for TUI/serve, pass
-// telegram.Directive for Telegram.
+// session to run in. directives are extra AGENT-WIDE system-prompt blocks
+// (every session sees them). Transport-specific ones (telegram.Directive,
+// slack.Directive) don't go here: those transports add them per session.
 //
 // EnableColleagues is always on here: these are exactly the long-running
 // processes that register themselves in the colleague registry (see

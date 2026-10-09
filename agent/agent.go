@@ -596,10 +596,45 @@ func (a *Agent) newLoader(cwd string) resources.ResourceLoader {
 	return a.resourceLoader.Copy()
 }
 
+// SessionOption configures one session as it's created (NewSession) or
+// reopened (ResumeSession) — scoped to that session object only, never to
+// the Agent's other sessions, and never persisted.
+type SessionOption func(*sessionConfig)
+
+type sessionConfig struct {
+	directives []string
+}
+
+// WithSessionDirectives appends instruction blocks to THIS session's system
+// prompt, after the Agent-wide AgentOptions.Directives. Unlike those, they
+// apply only to the session being created/resumed — e.g. a transport adding
+// its own capabilities (telegram.Directive, slack.Directive) to the sessions
+// it drives, while the same Agent's other sessions don't see them.
+//
+// Not persisted: they live on the in-memory session object, so whoever drives
+// a session passes them again on every NewSession/ResumeSession. Ignored when
+// ResumeSession returns an already-active session (its prompt was built by
+// whoever opened it; see ResumeSession).
+func WithSessionDirectives(directives ...string) SessionOption {
+	return func(c *sessionConfig) { c.directives = append(c.directives, directives...) }
+}
+
+func applySessionOptions(opts []SessionOption) sessionConfig {
+	var c sessionConfig
+	for _, o := range opts {
+		if o != nil {
+			o(&c)
+		}
+	}
+	return c
+}
+
 // NewSession creates a fresh session for the given working directory and model.
 // model is required in "provider/model" format (e.g. "anthropic/claude-sonnet-4").
 // Returns error if the provider is not active or the model doesn't exist.
-func (a *Agent) NewSession(cwd, model string) (*Session, error) {
+// opts configure this session only (see WithSessionDirectives).
+func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, error) {
+	cfg := applySessionOptions(opts)
 	// Resolve provider — validates active + model exists
 	provider, modelID, err := providers.Resolve(model)
 	if err != nil {
@@ -635,7 +670,7 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 	// instead of the plain "model" string.
 	var sess *Session
 	sessionTools, tl := a.buildSessionTools(sessionID, cwd, &sess, res, loader)
-	systemPrompt, pl := a.buildSystemPrompt(cwd, res)
+	systemPrompt, pl := a.buildSystemPrompt(cwd, res, cfg.directives...)
 
 	meta := store.SessionMeta{
 		ID:           sessionID,
@@ -666,7 +701,13 @@ func (a *Agent) NewSession(cwd, model string) (*Session, error) {
 // session is already active (live in the agent's registry), it returns the
 // existing handle without reloading from disk — making this idempotent and safe
 // to call from multiple paths (transport reconnect, scheduler auto-resume, …).
-func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
+//
+// opts configure the reopened session (see WithSessionDirectives). They are
+// IGNORED on that already-active fast path: the live session keeps the
+// system prompt it was opened with, so two frontends sharing a session never
+// overwrite each other's prompt.
+func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session, error) {
+	cfg := applySessionOptions(opts)
 	// Fast path: already active — return the live handle.
 	a.sessMu.Lock()
 	if sess, ok := a.activeSessions[sessionID]; ok {
@@ -726,7 +767,7 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 
 	var sess *Session
 	resumeTools, tl := a.buildSessionTools(meta.ID, cwd, &sess, res, loader)
-	resumePrompt, pl := a.buildSystemPrompt(cwd, res)
+	resumePrompt, pl := a.buildSystemPrompt(cwd, res, cfg.directives...)
 	sess = newSession(storeInst,
 		provider, modelID, thinkingLvl,
 		resumeTools, tl, resumePrompt, pl,
@@ -744,6 +785,8 @@ func (a *Agent) ResumeSession(sessionID string) (*Session, error) {
 // moment: same CWD, model, thinking, compaction state, stats, and full message
 // history. The fork gets a new ID and fresh timestamps. The parent is unchanged.
 // Returns ErrBusy (via the store layer) if the parent turn is in flight.
+// Session-scoped directives (WithSessionDirectives) are not persisted, so the
+// fork does not inherit the parent's — only the Agent-wide ones.
 func (a *Agent) ForkSession(sessionID string) (*Session, error) {
 	// Look up parent — prefer the live in-memory session (holds the mutex);
 	// fall back to opening from disk for inactive sessions.
@@ -1283,7 +1326,9 @@ type promptLens struct {
 	total int // full system prompt byte length
 }
 
-func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) (string, promptLens) {
+// buildSystemPrompt assembles a session's system prompt. sessionDirectives
+// (WithSessionDirectives) go last, after the Agent-wide directives.
+func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources, sessionDirectives ...string) (string, promptLens) {
 	var b strings.Builder
 
 	if res.SystemMD != "" {
@@ -1355,8 +1400,13 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources) (string,
 
 	// Caller-supplied directives (e.g. a transport's capabilities). Appended last
 	// so they can reference everything above.
-	for _, d := range a.opts.Directives {
-		if d = strings.TrimSpace(d); d != "" {
+	// Session-scoped directives (WithSessionDirectives) after them. A block
+	// identical to one already appended is skipped, so a caller that still
+	// passes the same directive at both levels doesn't get it twice.
+	seen := map[string]bool{}
+	for _, d := range append(append([]string(nil), a.opts.Directives...), sessionDirectives...) {
+		if d = strings.TrimSpace(d); d != "" && !seen[d] {
+			seen[d] = true
 			b.WriteString("\n\n")
 			b.WriteString(d)
 		}

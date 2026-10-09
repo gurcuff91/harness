@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.85.0] - 2026-10-08
+
+### Added — embeddable Telegram/Slack transports: per-session directives, configurable cwd, silent allowlist API
+An SDK consumer running `transports/telegram` (or `slack`) on its own already-built agent could not choose where chat sessions live, could not manage the Telegram allowlist from code without stdout output, and could only get `telegram.Directive`/`slack.Directive` into the prompt agent-wide — leaking it into every other session of a shared agent.
+
+- **Per-session directives.** `agent.WithSessionDirectives(...)` is a new `SessionOption` for `Agent.NewSession(cwd, model, opts...)` and `Agent.ResumeSession(id, opts...)` (both now variadic — existing calls compile unchanged). The blocks are appended to THAT session's system prompt only, after the agent-wide `AgentOptions.Directives` (an identical block at both levels appears once). They are **not persisted**: whoever drives a session passes them again on every create/resume; resuming an already-active session ignores them (it keeps the prompt it was opened with). `ForkSession` doesn't inherit them.
+- **HTTP/SDK:** `POST /api/sessions` accepts an optional `"directives"` array; `POST /api/sessions/{id}/resume` accepts an optional body `{"directives": [...]}`. Client: `CreateSession(model, cwd, name, opts...)` / `ResumeSession(id, opts...)` with `client.WithDirectives(...)`. New `Session.SystemPrompt()` accessor (lock-free).
+- **Transports add their own directive per session.** `telegram.Run`/`slack.Run` pass `Directive` on every session they create AND resume, so existing chat sessions get it on their next message, and the harness CLI no longer injects it agent-wide (no duplicate). A Telegram/Slack session resumed elsewhere (e.g. the TUI) no longer sees it.
+- **`telegram.WithCWD(dir)` / `slack.WithCWD(dir)`** (+ `harness.TelegramWithCWD`/`SlackWithCWD`): the working directory chat sessions are created in and bound under. Default unchanged: `os.Getwd()`.
+- **Silent Telegram allowlist API:** `PairedChats() ([]int64, error)`, `PairChat(id) (added bool, err)`, `UnpairChat(id) (removed bool, err)`, `ChatSessions(cwd) (map[int64]string, error)`; Slack gains `ChannelSessions(cwd)`. Nothing is printed.
+
+### Removed
+- **`telegram.Pair`, `telegram.Unpair`, `telegram.ListPaired`** — they printed to stdout for the CLI. Use `PairChat`/`UnpairChat`/`PairedChats`; `harness telegram pair/unpair/list` print exactly as before.
+
 ## [0.84.2] - 2026-10-07
 
 ### Fixed — long-lived TUIs burned a full CPU core while the agent worked

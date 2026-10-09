@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/pprof"
@@ -255,6 +256,17 @@ type createSessionRequest struct {
 	Model string `json:"model"`
 	CWD   string `json:"cwd"`
 	Name  string `json:"name,omitempty"` // optional initial name; default: "New Session <date>"
+	// Directives are optional instruction blocks for THIS session's system
+	// prompt only (agent.WithSessionDirectives) — not persisted.
+	Directives []string `json:"directives,omitempty"`
+}
+
+// resumeSessionRequest is the OPTIONAL body of POST /api/sessions/{id}/resume.
+type resumeSessionRequest struct {
+	// Directives for the reopened session's system prompt
+	// (agent.WithSessionDirectives). Ignored when the session is already
+	// active — it keeps the prompt it was opened with.
+	Directives []string `json:"directives,omitempty"`
 }
 
 // serverInfo is returned by GET /api/server.
@@ -792,7 +804,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, err := s.agent.NewSession(req.CWD, req.Model)
+	sess, err := s.agent.NewSession(req.CWD, req.Model, agent.WithSessionDirectives(req.Directives...))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -947,6 +959,14 @@ func (s *Server) handleForkSession(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
+	// The body is optional (historically this endpoint took none): an empty
+	// body means no session directives.
+	var req resumeSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
+		return
+	}
+
 	// Already active? Return the live session (idempotent — supports scheduler
 	// auto-resume and transport reconnect without 409 errors). Meta() is the
 	// lock-free public accessor — safe here since this session could be
@@ -964,7 +984,7 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.RUnlock()
 
-	sess, err := s.agent.ResumeSession(id)
+	sess, err := s.agent.ResumeSession(id, agent.WithSessionDirectives(req.Directives...))
 	if err != nil {
 		status := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "not found") {

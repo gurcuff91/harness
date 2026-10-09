@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +38,9 @@ type Options struct {
 	// creates or resumes (from the --thinking launch flag). Applied via
 	// applySessionOverrides, alongside SessionModel.
 	SessionThinking string
+	// CWD is the working directory channel sessions are created in and looked
+	// up/bound under — "" means the process's os.Getwd(). See WithCWD.
+	CWD string
 
 	// logger is set via WithLogger — unexported since Options is otherwise a
 	// plain data struct; only the functional Option constructors populate it.
@@ -73,6 +75,15 @@ func WithXoxD(cookie string) Option {
 // WithSessionModel overrides the model for sessions this transport creates.
 func WithSessionModel(model string) Option {
 	return func(o *Options) { o.SessionModel = model }
+}
+
+// WithCWD sets the working directory this transport's channel sessions live
+// in: new sessions are created with this cwd (so they get that project's
+// AGENTS.md, skills and file scope), and channel → session bindings are stored
+// and looked up under it (see ChannelSessions). Default: the process's current
+// working directory.
+func WithCWD(dir string) Option {
+	return func(o *Options) { o.CWD = dir }
 }
 
 // WithSessionThinking overrides the thinking level for sessions this
@@ -160,7 +171,7 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 		return fmt.Errorf("slack: credentials required — run 'harness slack login' or pass --workspace, --xoxc and --xoxd")
 	}
 
-	st, err := openStore()
+	st, err := openStore(opts.CWD)
 	if err != nil {
 		return fmt.Errorf("slack: open store: %w", err)
 	}
@@ -182,7 +193,6 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "slack"})
 	go srv.Serve(listener) //nolint:errcheck
 
-	cwd, _ := os.Getwd()
 	bot := NewBot(opts.Workspace, opts.XoxC, opts.XoxD)
 	t := &Transport{
 		opts:        opts,
@@ -192,7 +202,7 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 		store:       st,
 		srv:         srv,
 		logger:      logger,
-		cwd:         cwd,
+		cwd:         st.cwd,
 		pumps:       make(map[string]*channelPump),
 		pendingAsks: make(map[string]chan askReply),
 	}

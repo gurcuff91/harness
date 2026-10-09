@@ -66,7 +66,7 @@ func TestLoadTokenEmptyWhenNeverSaved(t *testing.T) {
 func TestSaveTokenPreservesAllowlistAndSessions(t *testing.T) {
 	isolateConfig(t)
 
-	st, err := openStore()
+	st, err := openStore("")
 	if err != nil {
 		t.Fatalf("openStore: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestSaveTokenPreservesAllowlistAndSessions(t *testing.T) {
 		t.Fatalf("SaveToken: %v", err)
 	}
 
-	reopened, err := openStore()
+	reopened, err := openStore("")
 	if err != nil {
 		t.Fatalf("re-openStore: %v", err)
 	}

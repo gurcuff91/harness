@@ -105,7 +105,7 @@ func TestSplitMessageLong(t *testing.T) {
 
 func TestStoreSessionRoundTrip(t *testing.T) {
 	isolateConfig(t)
-	c, _ := openStore()
+	c, _ := openStore("")
 	if _, ok := c.sessionFor(111); ok {
 		t.Error("unknown chat should not resolve")
 	}
@@ -114,7 +114,7 @@ func TestStoreSessionRoundTrip(t *testing.T) {
 		t.Errorf("bind failed: %q %v", id, ok)
 	}
 	// A fresh store handle sees the persisted mapping.
-	c2, _ := openStore()
+	c2, _ := openStore("")
 	if id, ok := c2.sessionFor(111); !ok || id != "sess-a" {
 		t.Errorf("mapping should persist across reload: %q %v", id, ok)
 	}
@@ -126,7 +126,7 @@ func TestStoreSessionRoundTrip(t *testing.T) {
 
 func TestStoreAllowlist(t *testing.T) {
 	isolateConfig(t)
-	c, _ := openStore()
+	c, _ := openStore("")
 	if c.allowed(111) {
 		t.Error("empty allowlist should allow nobody")
 	}
@@ -141,7 +141,7 @@ func TestStoreAllowlist(t *testing.T) {
 		t.Error("paired chat should be allowed")
 	}
 	// Persists across reload.
-	c2, _ := openStore()
+	c2, _ := openStore("")
 	if !c2.allowed(111) {
 		t.Error("allowlist should persist across reload")
 	}
@@ -161,11 +161,11 @@ func TestStoreAllowlist(t *testing.T) {
 // The two collections coexist in one file.
 func TestStoreAllowlistAndSessionsCoexist(t *testing.T) {
 	isolateConfig(t)
-	c, _ := openStore()
+	c, _ := openStore("")
 	c.pair(111)
 	c.bind(111, "sess-1")
 	c.pair(222)
-	c2, _ := openStore()
+	c2, _ := openStore("")
 	if !c2.allowed(111) || !c2.allowed(222) {
 		t.Error("both paired chats should persist")
 	}

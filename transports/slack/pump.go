@@ -74,7 +74,7 @@ func (t *Transport) pumpFor(ctx context.Context, channelID string) (*channelPump
 // still exists, otherwise create a fresh session and persist the mapping.
 func (t *Transport) acquireSession(channelID string) (string, error) {
 	if id, ok := t.store.sessionFor(channelID); ok {
-		if _, err := t.api.ResumeSession(id); err == nil {
+		if _, err := t.api.ResumeSession(id, client.WithDirectives(Directive)); err == nil {
 			// A resumed session keeps its own model/thinking unless the bot was
 			// launched with an explicit --model / --thinking override.
 			t.applySessionOverrides(channelID, id)
@@ -84,7 +84,7 @@ func (t *Transport) acquireSession(channelID string) (string, error) {
 		_ = t.store.unbind(channelID)
 	}
 
-	sess, err := t.api.CreateSession(t.model, t.cwd, slackSessionName())
+	sess, err := t.api.CreateSession(t.model, t.cwd, slackSessionName(), client.WithDirectives(Directive))
 	if err != nil {
 		return "", err
 	}

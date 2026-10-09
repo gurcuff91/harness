@@ -388,12 +388,41 @@ func (c *Client) GetSchedules(owner string) ([]Schedule, error) {
 
 // ── Sessions ─────────────────────────────────────────────────────────────
 
+// SessionOption configures a CreateSession/ResumeSession call.
+type SessionOption func(*sessionOptions)
+
+type sessionOptions struct {
+	directives []string
+}
+
+// WithDirectives adds instruction blocks to THIS session's system prompt only
+// (the server's agent.WithSessionDirectives) — the agent's other sessions
+// don't see them. Not persisted: pass them on every Create/ResumeSession. On
+// ResumeSession they're ignored if the session is already active.
+func WithDirectives(directives ...string) SessionOption {
+	return func(o *sessionOptions) { o.directives = append(o.directives, directives...) }
+}
+
+func applyClientSessionOptions(opts []SessionOption) sessionOptions {
+	var o sessionOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
+	return o
+}
+
 // CreateSession opens a new session and returns it.
 // name is optional — pass "" for the default "New Session <date>" naming.
-func (c *Client) CreateSession(model, cwd, name string) (*Session, error) {
-	body := map[string]string{"model": model, "cwd": cwd}
+func (c *Client) CreateSession(model, cwd, name string, opts ...SessionOption) (*Session, error) {
+	o := applyClientSessionOptions(opts)
+	body := map[string]any{"model": model, "cwd": cwd}
 	if name != "" {
 		body["name"] = name
+	}
+	if len(o.directives) > 0 {
+		body["directives"] = o.directives
 	}
 	return ptr(decode[Session](c, "POST", "/api/sessions", body))
 }
@@ -434,8 +463,13 @@ func (c *Client) ForkSession(id string) (*Session, error) {
 }
 
 // ResumeSession reopens an existing session by id.
-func (c *Client) ResumeSession(id string) (*Session, error) {
-	return ptr(decode[Session](c, "POST", "/api/sessions/"+id+"/resume", nil))
+func (c *Client) ResumeSession(id string, opts ...SessionOption) (*Session, error) {
+	o := applyClientSessionOptions(opts)
+	var body any
+	if len(o.directives) > 0 {
+		body = map[string]any{"directives": o.directives}
+	}
+	return ptr(decode[Session](c, "POST", "/api/sessions/"+id+"/resume", body))
 }
 
 // StopSession interrupts any in-flight work on a session.

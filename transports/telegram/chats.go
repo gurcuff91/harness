@@ -18,14 +18,16 @@ import (
 // working directory — same approach as the Slack transport.
 type store struct {
 	settings *config.SettingsManager
-	cwd      string // current working directory — scopes all session lookups
+	cwd      string // working directory that scopes all session lookups (WithCWD, default os.Getwd())
 }
 
 // openStore returns the bot's store over the process-global managers, scoped
-// to the current working directory. It never fails today; the error return
-// is kept so callers stay unchanged.
-func openStore() (*store, error) {
-	cwd, _ := os.Getwd()
+// to cwd ("" = the process's current working directory). It never fails
+// today; the error return is kept so callers stay unchanged.
+func openStore(cwd string) (*store, error) {
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
 	return &store{settings: config.GetSettingsManager(), cwd: cwd}, nil
 }
 
@@ -42,7 +44,36 @@ func LoadToken() (string, error) {
 	return config.GetCredentialsManager().TelegramToken(), nil
 }
 
-// ── Allowlist ─────────────────────────────────────────────────────────────
+// ── Allowlist (public API) ────────────────────────────────────────────────
+//
+// Pure config operations over the settings store — no bot token, server or
+// running transport needed, and nothing is printed: the harness CLI (`harness
+// telegram pair/unpair/list`) and SDK embedders both use these directly.
+
+// PairedChats returns the chat ids allowed to talk to the bot, sorted.
+func PairedChats() ([]int64, error) {
+	return config.GetSettingsManager().TelegramAllowlist(), nil
+}
+
+// PairChat adds chatID to the allowlist. added is false (no error) when it
+// was already paired.
+func PairChat(chatID int64) (added bool, err error) {
+	return config.GetSettingsManager().PairTelegram(chatID)
+}
+
+// UnpairChat revokes chatID and drops its session bindings in every project.
+// removed is false (no error) when it wasn't paired.
+func UnpairChat(chatID int64) (removed bool, err error) {
+	return config.GetSettingsManager().UnpairTelegram(chatID)
+}
+
+// ChatSessions returns the chat → session id bindings of the given working
+// directory (the cwd a transport was run with — see WithCWD).
+func ChatSessions(cwd string) (map[int64]string, error) {
+	return config.GetSettingsManager().TelegramSessions(cwd), nil
+}
+
+// ── Allowlist (transport internals) ───────────────────────────────────────
 
 func (s *store) allowed(chatID int64) bool { return s.settings.TelegramAllowed(chatID) }
 

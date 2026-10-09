@@ -356,9 +356,15 @@ const openAPISpecTemplate = `{
       "post": {
         "tags": ["sessions"],
         "summary": "Resume session",
-        "description": "Reactivates a persisted session, loading its history from disk.",
+        "description": "Reactivates a persisted session, loading its history from disk. The body is optional.",
         "operationId": "resumeSession",
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "requestBody": {
+          "required": false,
+          "content": { "application/json": { "schema": { "type": "object", "properties": {
+            "directives": { "type": "array", "items": { "type": "string" }, "description": "Instruction blocks for the reopened session's system prompt only. Ignored if the session is already active (it keeps the prompt it was opened with)." }
+          } } } }
+        },
         "responses": {
           "200": { "description": "Resumed (or already active — idempotent)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SessionDetail" } } } },
           "404": { "description": "Session not found" }
@@ -708,7 +714,8 @@ const openAPISpecTemplate = `{
         "properties": {
           "model": { "type": "string", "example": "claude-oauth/claude-opus-4-8" },
           "cwd":   { "type": "string" },
-          "name":  { "type": "string" }
+          "name":  { "type": "string" },
+          "directives": { "type": "array", "items": { "type": "string" }, "description": "Instruction blocks appended to THIS session's system prompt only (not the agent's other sessions). Not persisted — pass them again on resume." }
         }
       },
       "PromptRequest": {

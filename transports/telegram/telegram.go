@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +35,9 @@ type Options struct {
 	// applySessionOverrides, alongside SessionModel.
 	SessionThinking string
 	AllowUnpair     bool // auto-pair: accept any chat, adding it to the allowlist on first contact
+	// CWD is the working directory chat sessions are created in and looked
+	// up/bound under — "" means the process's os.Getwd(). See WithCWD.
+	CWD string
 
 	// logger is set via WithLogger — unexported since Options is otherwise a
 	// plain data struct built by kong_run_telegram.go's opts slice; only the
@@ -57,6 +59,15 @@ func WithToken(token string) Option {
 // WithSessionModel overrides the model for sessions this transport creates.
 func WithSessionModel(model string) Option {
 	return func(o *Options) { o.SessionModel = model }
+}
+
+// WithCWD sets the working directory this transport's chat sessions live in:
+// new sessions are created with this cwd (so they get that project's
+// AGENTS.md, skills and file scope), and chat → session bindings are stored
+// and looked up under it (see ChatSessions). Default: the process's current
+// working directory.
+func WithCWD(dir string) Option {
+	return func(o *Options) { o.CWD = dir }
 }
 
 // WithSessionThinking overrides the thinking level for sessions this
@@ -119,7 +130,7 @@ func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
 // split out so the WithX-option-application step above stays a thin,
 // separately testable layer over the real logic.
 func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
-	st, err := openStore()
+	st, err := openStore(opts.CWD)
 	if err != nil {
 		return err
 	}
@@ -153,7 +164,6 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "telegram"})
 	go srv.Serve(listener) //nolint:errcheck
 
-	cwd, _ := os.Getwd()
 	t := &Transport{
 		opts:          opts,
 		agent:         a,
@@ -162,7 +172,7 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 		store:         st,
 		srv:           srv,
 		logger:        logger,
-		cwd:           cwd,
+		cwd:           st.cwd,
 		pumps:         make(map[int64]*chatPump),
 		pendingAlbums: newAlbums(),
 	}

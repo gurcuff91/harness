@@ -18,7 +18,10 @@ func (c *slackRunCmd) Run() error {
 	// c.Scheduler decides the AGENT's own scheduler engine here — it's an
 	// agent.AgentOptions.EnableScheduler concern, not something
 	// slack.Options carries (see its doc comment for why).
-	a := newInteractiveAgent(c.Scheduler, slack.Directive)
+	// No slack.Directive here: the transport adds it to the sessions it
+	// creates/resumes (per-session directives), so it never leaks into other
+	// sessions of the same agent.
+	a := newInteractiveAgent(c.Scheduler)
 	ctx, cancel := signalContext()
 	defer cancel()
 

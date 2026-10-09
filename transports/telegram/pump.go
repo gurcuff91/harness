@@ -124,7 +124,7 @@ func (t *Transport) pumpFor(ctx context.Context, chatID int64) (*chatPump, error
 // still exists, otherwise create a fresh session and persist the mapping.
 func (t *Transport) acquireSession(chatID int64) (string, error) {
 	if id, ok := t.store.sessionFor(chatID); ok {
-		if _, err := t.api.ResumeSession(id); err == nil {
+		if _, err := t.api.ResumeSession(id, client.WithDirectives(Directive)); err == nil {
 			// A resumed session keeps its own model/thinking, exactly like the
 			// TUI — unless the bot was launched with an explicit --model /
 			// --thinking, which override them.
@@ -133,7 +133,7 @@ func (t *Transport) acquireSession(chatID int64) (string, error) {
 		}
 		// Stored session is gone or failed to resume — fall through to create.
 	}
-	sess, err := t.api.CreateSession(t.model, t.cwd, telegramSessionName())
+	sess, err := t.api.CreateSession(t.model, t.cwd, telegramSessionName(), client.WithDirectives(Directive))
 	if err != nil {
 		return "", err
 	}

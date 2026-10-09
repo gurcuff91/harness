@@ -339,6 +339,11 @@ var TelegramWithSessionThinking = telegram.WithSessionThinking
 // first. See [telegram.WithAllowUnpair].
 var TelegramWithAllowUnpair = telegram.WithAllowUnpair
 
+// TelegramWithCWD sets the working directory the bot's chat sessions are
+// created in and bound under (default: the process's cwd). See
+// [telegram.WithCWD].
+var TelegramWithCWD = telegram.WithCWD
+
 // TelegramWithLogger sets the Logger this transport uses for its own log
 // lines. Default: [NewNilLogger] (silent). See [telegram.WithLogger].
 var TelegramWithLogger = telegram.WithLogger
@@ -369,6 +374,11 @@ var SlackWithSessionModel = slack.WithSessionModel
 // SlackWithSessionThinking overrides the thinking level for sessions this
 // transport creates. See [slack.WithSessionThinking].
 var SlackWithSessionThinking = slack.WithSessionThinking
+
+// SlackWithCWD sets the working directory the bot's channel sessions are
+// created in and bound under (default: the process's cwd). See
+// [slack.WithCWD].
+var SlackWithCWD = slack.WithCWD
 
 // SlackWithLogger sets the Logger this transport uses for its own log
 // lines. Default: [NewNilLogger] (silent). See [slack.WithLogger].

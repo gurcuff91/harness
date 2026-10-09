@@ -14,7 +14,10 @@ func (c *telegramRunCmd) Run() error {
 	// c.Scheduler decides the AGENT's own scheduler engine here — it's an
 	// agent.AgentOptions.EnableScheduler concern, not something
 	// telegram.Options carries (see its doc comment for why).
-	a := newInteractiveAgent(c.Scheduler, telegram.Directive)
+	// No telegram.Directive here: the transport adds it to the sessions it
+	// creates/resumes (per-session directives), so it never leaks into other
+	// sessions of the same agent.
+	a := newInteractiveAgent(c.Scheduler)
 	ctx, cancel := signalContext()
 	defer cancel()
 
@@ -35,15 +38,45 @@ func (c *telegramRunCmd) Run() error {
 }
 
 func (c *telegramPairCmd) Run() error {
-	return telegram.Pair(c.ChatID)
+	added, err := telegram.PairChat(c.ChatID)
+	if err != nil {
+		return err
+	}
+	if added {
+		fmt.Printf("Paired chat %d.\n", c.ChatID)
+	} else {
+		fmt.Printf("Chat %d was already paired.\n", c.ChatID)
+	}
+	return nil
 }
 
 func (c *telegramUnpairCmd) Run() error {
-	return telegram.Unpair(c.ChatID)
+	removed, err := telegram.UnpairChat(c.ChatID)
+	if err != nil {
+		return err
+	}
+	if removed {
+		fmt.Printf("Unpaired chat %d.\n", c.ChatID)
+	} else {
+		fmt.Printf("Chat %d was not paired.\n", c.ChatID)
+	}
+	return nil
 }
 
 func (c *telegramListCmd) Run() error {
-	return telegram.ListPaired()
+	ids, err := telegram.PairedChats()
+	if err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		fmt.Println("No paired chats. Run 'harness telegram pair <chat_id>'.")
+		return nil
+	}
+	fmt.Println("Paired chats:")
+	for _, id := range ids {
+		fmt.Printf("  %d\n", id)
+	}
+	return nil
 }
 
 func (c *telegramTokenCmd) Run() error {
