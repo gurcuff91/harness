@@ -509,6 +509,19 @@ const openAPISpecTemplate = `{
         }
       }
     },
+    "/api/sessions/{id}/sysprompt": {
+      "get": {
+        "tags": ["sessions"],
+        "summary": "System prompt",
+        "description": "Returns the full system prompt the session sends to the provider — base prompt, skills, project context, memory block and every directive (agent-wide plus the session's own) — as raw markdown. Only valid for active sessions; safe while the session is busy.",
+        "operationId": "getSessionSystemPrompt",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": {
+          "200": { "description": "The system prompt", "content": { "text/markdown": { "schema": { "type": "string" } } } },
+          "400": { "description": "Session is not active", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
     "/api/sessions/{id}/tools": {
       "get": {
         "tags": ["sessions"],

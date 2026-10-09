@@ -139,6 +139,7 @@ func (s *Server) handler() http.Handler {
 	r.Post("/api/sessions/{id}/stop", s.handleStopSession)
 	r.Get("/api/sessions/{id}/info", s.handleSessionInfo)
 	r.Get("/api/sessions/{id}/context", s.handleSessionContext)
+	r.Get("/api/sessions/{id}/sysprompt", s.handleSessionSystemPrompt)
 	r.Get("/api/sessions/{id}/tools", s.handleListTools)
 
 	// TEMPORARY diagnostic endpoint (not net/http/pprof's DefaultServeMux
@@ -1285,6 +1286,27 @@ func (s *Server) handleSessionContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, proxy.session.ContextBreakdown())
+}
+
+// handleSessionSystemPrompt handles GET /api/sessions/{id}/sysprompt: the
+// full system prompt the session sends to the provider — base prompt, skills,
+// project context, memory block and every directive (agent-wide plus the
+// session's own, see agent.WithSessionDirectives) — as raw markdown
+// (text/markdown), not JSON. Built when the session was created/resumed and
+// immutable afterwards, so Session.SystemPrompt() is lock-free: safe against
+// a busy session, like /info and /context. Only valid for active sessions.
+func (s *Server) handleSessionSystemPrompt(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	s.mu.RLock()
+	proxy, ok := s.sessions[id]
+	s.mu.RUnlock()
+	if !ok {
+		writeError(w, http.StatusBadRequest, "session is not active", nil)
+		return
+	}
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	io.WriteString(w, proxy.session.SystemPrompt()) //nolint:errcheck
 }
 
 // handleListTools handles GET /api/sessions/{id}/tools. Returns the full

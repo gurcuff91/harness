@@ -541,6 +541,18 @@ func (c *Client) GetSessionContext(sessionID string) (*ContextBreakdown, error) 
 	return ptr(decode[ContextBreakdown](c, "GET", "/api/sessions/"+sessionID+"/context", nil))
 }
 
+// GetSystemPrompt returns the full system prompt an active session sends to
+// the provider (GET /api/sessions/{id}/sysprompt) — base prompt, skills,
+// project context and every directive, including the session's own
+// (WithDirectives) — as the raw markdown text.
+func (c *Client) GetSystemPrompt(sessionID string) (string, error) {
+	data, err := c.do("GET", "/api/sessions/"+sessionID+"/sysprompt", nil)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
 // GetSessionInfo returns the consolidated session-info snapshot for an active
 // session: server version, full session metadata, runtime state (busy, queue
 // depth), and environment counts (MCP connected, schedule count). Single
