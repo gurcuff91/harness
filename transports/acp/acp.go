@@ -59,7 +59,9 @@ func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
 	if err != nil {
 		return fmt.Errorf("acp: bind server: %w", err)
 	}
-	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "acp"})
+	// KeepAgentOpen: the agent belongs to the caller, so stopping the bridge
+	// closes only its own sessions and listener.
+	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "acp", KeepAgentOpen: true})
 	go srv.Serve(listener) //nolint:errcheck
 	defer srv.Close()      //nolint:errcheck
 

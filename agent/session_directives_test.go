@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,6 +9,8 @@ import (
 
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
+	"github.com/gurcuff91/harness/agent/tools"
+	"github.com/gurcuff91/harness/types"
 )
 
 // directivesTestAgent returns an agent backed by a fake OpenAI-compatible
@@ -118,5 +121,46 @@ func TestResumeActiveSessionIgnoresDirectives(t *testing.T) {
 	}
 	if strings.Contains(same.systemPrompt, tgDirective) {
 		t.Error("an active session's prompt must not change on resume")
+	}
+}
+
+// WithSessionTools: scoped to the session, filtered by DisallowedTools,
+// replaces an agent-wide tool of the same name in that session only, and is
+// not persisted.
+func TestSessionToolsScopedFilteredAndNotPersisted(t *testing.T) {
+	st := store.NewInMemoryStore()
+	mk := func(name, desc string) tools.Tool {
+		return tools.Tool{Def: types.ToolDef{Name: name, Description: desc, InputSchema: json.RawMessage(`{"type":"object"}`)}}
+	}
+	a, model := directivesTestAgent(t, st, AgentOptions{
+		DisallowedTools: []string{"Blocked"},
+		Tools:           []tools.Tool{mk("Shared", "agent-wide")},
+	})
+	defs := func(s *Session) map[string]string {
+		out := map[string]string{}
+		for _, d := range s.Tools() {
+			out[d.Name] = d.Description
+		}
+		return out
+	}
+
+	s, err := a.NewSession("/p", model, WithSessionTools(mk("Mine", "x"), mk("Blocked", "x"), mk("Shared", "session")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := defs(s)
+	if got["Mine"] == "" || got["Blocked"] != "" || got["Shared"] != "session" {
+		t.Errorf("session tools = %v; want Mine, no Blocked, Shared overridden", got)
+	}
+	other, _ := a.NewSession("/q", model)
+	if og := defs(other); og["Mine"] != "" || og["Shared"] != "agent-wide" {
+		t.Errorf("another session = %v; want no Mine and the agent-wide Shared", og)
+	}
+
+	id := s.ID()
+	s.Close()
+	plain, _ := a.ResumeSession(id)
+	if defs(plain)["Mine"] != "" {
+		t.Error("session tools must not be persisted across resume")
 	}
 }

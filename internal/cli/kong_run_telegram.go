@@ -18,6 +18,9 @@ func (c *telegramRunCmd) Run() error {
 	// creates/resumes (per-session directives), so it never leaks into other
 	// sessions of the same agent.
 	a := newInteractiveAgent(c.Scheduler)
+	// The transport never closes the agent it's given (it may be shared), so
+	// the CLI — which built it — closes it on exit, like `harness acp`.
+	defer a.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
 

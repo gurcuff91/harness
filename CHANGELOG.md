@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.86.0] - 2026-10-09
+
+### Fixed — Slack's tools leaked into every session of a shared agent
+`slack.Run` registered its five tools (`SlackListChannels`, `SlackListUsers`, `SlackPost`, `SlackMessages`, `SlackAsk`) with `Agent.RegisterTool` — the agent-WIDE registry — so every session created on that agent after Slack connected got them (any session could post to Slack as the account), sessions created before didn't, and nothing removed them when Slack stopped. They're now scoped to the sessions Slack drives.
+
+- **`agent.WithSessionTools(...)`** — a `SessionOption` (alongside `WithSessionDirectives`) adding tools to THAT session only, after the agent-wide ones; still filtered by `DisallowedTools`; a same-name session tool replaces the agent-wide one in that session. Not persisted, ignored when resuming an already-active session, not inherited by `ForkSession`.
+- **`server.ServerOptions.SessionTools func() []tools.Tool`** — tools added to every session that server creates or resumes. Each transport runs its own in-process server, so this scopes a transport's tools to its own sessions; Slack uses it instead of `RegisterTool`. A second `slack.Run` on the same agent binds its sessions to the new bot.
+
+### Changed — transports no longer close the agent they're given
+`telegram.Run`, `slack.Run` and `acp.Run` used to close the caller's agent (MCP, memory, scheduler, store) on return, through their in-process server's `Close` — so stopping Slack on an agent shared with other workloads killed all of them. The agent belongs to the caller: these runners now only close their own sessions and listener.
+
+- **`server.ServerOptions.KeepAgentOpen`** — `Close` leaves the agent open. Used by every transport's in-process server; `server.Run` (which owns its agent) still closes it.
+- **If you embed a transport, close the agent yourself** (`defer a.Close()`) — the harness CLI now does exactly that for `harness telegram` / `harness slack` (as `harness acp` already did), so its behavior is unchanged.
+
 ## [0.85.0] - 2026-10-08
 
 ### Added — embeddable Telegram/Slack transports: per-session directives, configurable cwd, silent allowlist API

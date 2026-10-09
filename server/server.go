@@ -20,6 +20,7 @@ import (
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/agent/store"
+	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/internal/config"
 	"github.com/gurcuff91/harness/internal/providers"
 	"github.com/gurcuff91/harness/internal/version"
@@ -47,8 +48,10 @@ type Server struct {
 	agent        *agent.Agent
 	logger       logx.Logger // never nil — defaults to logx.NewNilLogger()
 	transport    string      // name of the calling transport
-	addr         string      // resolved listen address (set in Serve)
-	instanceName string      // unique instance name (MK11-themed, set in Serve)
+	sessionTools func() []tools.Tool
+	keepAgent    bool   // Close leaves the agent open (it belongs to the caller)
+	addr         string // resolved listen address (set in Serve)
+	instanceName string // unique instance name (MK11-themed, set in Serve)
 	mu           sync.RWMutex
 	sessions     map[string]*SessionProxy
 
@@ -68,6 +71,24 @@ type ServerOptions struct {
 	// already logging and this server must stay silent.
 	Logger    logx.Logger
 	Transport string // name of the calling transport (e.g. "tui", "telegram", "slack"); empty defaults to "server"
+
+	// SessionTools, when set, supplies tools added to every session THIS
+	// server creates or resumes (agent.WithSessionTools) — and to no other
+	// session of the agent. Since each transport runs its own in-process
+	// server, this scopes a transport's tools to the sessions it drives
+	// (e.g. Slack's tools only in Slack sessions). Called once per
+	// create/resume. Not applied when the session is already active in the
+	// agent (it keeps the tools it was opened with).
+	SessionTools func() []tools.Tool
+
+	// KeepAgentOpen makes Close leave the agent running: it closes this
+	// server's own sessions and HTTP listener, but not the agent's MCP,
+	// memory, scheduler or store. For servers that front an agent they don't
+	// own — every transport's in-process server, since the agent passed to
+	// telegram.Run/slack.Run/acp.Run belongs to the caller, who may be
+	// serving other sessions on it. Default false: server.Run (which takes
+	// ownership of its agent) closes it.
+	KeepAgentOpen bool
 }
 
 // NewServer creates an HTTP server wrapping the agent.
@@ -81,10 +102,12 @@ func NewServer(a *agent.Agent, opts ServerOptions) *Server {
 		logger = logx.NewNilLogger()
 	}
 	return &Server{
-		agent:     a,
-		logger:    logger,
-		transport: transport,
-		sessions:  make(map[string]*SessionProxy),
+		agent:        a,
+		logger:       logger,
+		transport:    transport,
+		sessionTools: opts.SessionTools,
+		keepAgent:    opts.KeepAgentOpen,
+		sessions:     make(map[string]*SessionProxy),
 	}
 }
 
@@ -220,8 +243,11 @@ func (s *Server) Close() error {
 			_ = p.session.Close()
 		}
 
-		// 2. Close the agent — MCP, memory, scheduler, store.
-		s.closeErr = s.agent.Close()
+		// 2. Close the agent — MCP, memory, scheduler, store — unless it
+		// belongs to someone else (KeepAgentOpen).
+		if !s.keepAgent {
+			s.closeErr = s.agent.Close()
+		}
 
 		// 3. Graceful HTTP shutdown with a short deadline so in-flight
 		// requests (e.g. SSE streams) are given a chance to close. httpSrv is
@@ -260,6 +286,16 @@ type createSessionRequest struct {
 	// Directives are optional instruction blocks for THIS session's system
 	// prompt only (agent.WithSessionDirectives) — not persisted.
 	Directives []string `json:"directives,omitempty"`
+}
+
+// sessionOptions builds the per-session options for a create/resume: the
+// request's directives plus this server's SessionTools.
+func (s *Server) sessionOptions(directives []string) []agent.SessionOption {
+	opts := []agent.SessionOption{agent.WithSessionDirectives(directives...)}
+	if s.sessionTools != nil {
+		opts = append(opts, agent.WithSessionTools(s.sessionTools()...))
+	}
+	return opts
 }
 
 // resumeSessionRequest is the OPTIONAL body of POST /api/sessions/{id}/resume.
@@ -805,7 +841,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, err := s.agent.NewSession(req.CWD, req.Model, agent.WithSessionDirectives(req.Directives...))
+	sess, err := s.agent.NewSession(req.CWD, req.Model, s.sessionOptions(req.Directives)...)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -985,7 +1021,7 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.RUnlock()
 
-	sess, err := s.agent.ResumeSession(id, agent.WithSessionDirectives(req.Directives...))
+	sess, err := s.agent.ResumeSession(id, s.sessionOptions(req.Directives)...)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "not found") {

@@ -161,8 +161,12 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("telegram: bind server: %w", err)
 	}
-	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "telegram"})
+	// KeepAgentOpen: the agent belongs to the caller (who may be serving
+	// other sessions on it), so stopping the bot closes only its own sessions
+	// and listener — on every exit path (deferred below).
+	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "telegram", KeepAgentOpen: true})
 	go srv.Serve(listener) //nolint:errcheck
+	defer srv.Close()
 
 	t := &Transport{
 		opts:          opts,
@@ -210,9 +214,7 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 
 	t.prewarmPumps(ctx)
 
-	err = t.pollLoop(ctx)
-	t.srv.Close()
-	return err
+	return t.pollLoop(ctx)
 }
 
 // prewarmPumps opens a pump (SSE consumer) for every stored chat mapping at

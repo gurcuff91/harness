@@ -116,3 +116,59 @@ func TestSessionSystemPromptEndpoint(t *testing.T) {
 		t.Fatal("unknown session must error")
 	}
 }
+
+// KeepAgentOpen: closing a transport's in-process server closes its own
+// sessions but leaves the caller's agent usable; without it, Close closes
+// the agent (server.Run's ownership semantics, unchanged).
+func TestKeepAgentOpen(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	models := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":[{"id":"m"}]}`))
+	}))
+	defer models.Close()
+	if err := agent.NewOpenAIProvider("srv-keepopen-fake", models.URL); err != nil {
+		t.Fatal(err)
+	}
+	mem := &closeCounter{SessionStore: store.NewInMemoryStore()}
+	a := agent.New(agent.AgentOptions{Store: mem, ResourceLoader: resources.NilLoader{}})
+	defer a.Close()
+
+	srv := NewServer(a, ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
+	ts := httptest.NewServer(srv.handler())
+	c := client.New(ts.URL)
+	sess, err := c.CreateSession("srv-keepopen-fake/m", "/p", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts.Close()
+	srv.Close()
+
+	if mem.closed != 0 {
+		t.Fatal("KeepAgentOpen server closed the agent (its store)")
+	}
+	// The server's own sessions were closed: resuming yields a fresh object,
+	// not the live one (a still-active session would be returned as-is).
+	again, err := a.ResumeSession(sess.ID)
+	if err != nil {
+		t.Fatalf("resume after server close: %v", err)
+	}
+	again.Close()
+	if _, err := a.NewSession("/q", "srv-keepopen-fake/m"); err != nil {
+		t.Fatalf("agent must remain usable: %v", err)
+	}
+
+	owned := NewServer(a, ServerOptions{Logger: logx.NewNilLogger()})
+	owned.Close()
+	if mem.closed != 1 {
+		t.Fatalf("default server must close the agent (store closed %d times)", mem.closed)
+	}
+}
+
+// closeCounter is an in-memory session store that counts Close calls — the
+// agent closes its store in Agent.Close, so this observes agent shutdown.
+type closeCounter struct {
+	store.SessionStore
+	closed int
+}
+
+func (c *closeCounter) Close() error { c.closed++; return nil }

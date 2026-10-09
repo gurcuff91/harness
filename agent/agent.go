@@ -603,6 +603,7 @@ type SessionOption func(*sessionConfig)
 
 type sessionConfig struct {
 	directives []string
+	tools      []tools.Tool
 }
 
 // WithSessionDirectives appends instruction blocks to THIS session's system
@@ -617,6 +618,20 @@ type sessionConfig struct {
 // whoever opened it; see ResumeSession).
 func WithSessionDirectives(directives ...string) SessionOption {
 	return func(c *sessionConfig) { c.directives = append(c.directives, directives...) }
+}
+
+// WithSessionTools adds tools to THIS session's registry only, after the
+// Agent-wide ones (AgentOptions.Tools) — e.g. a transport's own tools
+// (Slack's SlackPost, …) for the sessions it drives, which the same Agent's
+// other sessions must never get. Still filtered by AgentOptions.DisallowedTools;
+// a session tool with the same name as an Agent-wide one replaces it in this
+// session.
+//
+// Not persisted, exactly like WithSessionDirectives: pass them again on every
+// NewSession/ResumeSession; ignored when ResumeSession returns an
+// already-active session; ForkSession doesn't inherit them.
+func WithSessionTools(ts ...tools.Tool) SessionOption {
+	return func(c *sessionConfig) { c.tools = append(c.tools, ts...) }
 }
 
 func applySessionOptions(opts []SessionOption) sessionConfig {
@@ -669,7 +684,7 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 	// sessRef doc comment for why the Subagent tool needs this indirection
 	// instead of the plain "model" string.
 	var sess *Session
-	sessionTools, tl := a.buildSessionTools(sessionID, cwd, &sess, res, loader)
+	sessionTools, tl := a.buildSessionTools(sessionID, cwd, &sess, res, loader, cfg.tools...)
 	systemPrompt, pl := a.buildSystemPrompt(cwd, res, cfg.directives...)
 
 	meta := store.SessionMeta{
@@ -766,7 +781,7 @@ func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session
 	}
 
 	var sess *Session
-	resumeTools, tl := a.buildSessionTools(meta.ID, cwd, &sess, res, loader)
+	resumeTools, tl := a.buildSessionTools(meta.ID, cwd, &sess, res, loader, cfg.tools...)
 	resumePrompt, pl := a.buildSystemPrompt(cwd, res, cfg.directives...)
 	sess = newSession(storeInst,
 		provider, modelID, thinkingLvl,
@@ -785,8 +800,9 @@ func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session
 // moment: same CWD, model, thinking, compaction state, stats, and full message
 // history. The fork gets a new ID and fresh timestamps. The parent is unchanged.
 // Returns ErrBusy (via the store layer) if the parent turn is in flight.
-// Session-scoped directives (WithSessionDirectives) are not persisted, so the
-// fork does not inherit the parent's — only the Agent-wide ones.
+// Session-scoped directives and tools (WithSessionDirectives/WithSessionTools)
+// are not persisted, so the fork does not inherit the parent's — only the
+// Agent-wide ones.
 func (a *Agent) ForkSession(sessionID string) (*Session, error) {
 	// Look up parent — prefer the live in-memory session (holds the mutex);
 	// fall back to opening from disk for inactive sessions.
@@ -1027,7 +1043,10 @@ func (a *Agent) buildFetchSummarizer(cwd string, loader resources.ResourceLoader
 	}
 }
 
-func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res *resources.Resources, loader resources.ResourceLoader) (*tools.Registry, toolLens) {
+// buildSessionTools assembles one session's tool registry. sessionTools
+// (WithSessionTools) are registered right after the Agent-wide registry, under
+// the same DisallowedTools filter.
+func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res *resources.Resources, loader resources.ResourceLoader, sessionTools ...tools.Tool) (*tools.Registry, toolLens) {
 	reg := tools.NewRegistry()
 	// Built one instance per session, bound to THIS session's cwd — they can't
 	// live in the shared agent-level registry (a.toolReg, seeded once in New()
@@ -1053,6 +1072,11 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 	for _, def := range a.toolReg.Definitions() {
 		if a.isToolAllowed(def.Name) {
 			reg.Register(a.toolReg.Get(def.Name))
+		}
+	}
+	for _, t := range sessionTools {
+		if a.isToolAllowed(t.Def.Name) {
+			reg.Register(t)
 		}
 	}
 	if len(res.Skills) > 0 {

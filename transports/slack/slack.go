@@ -10,6 +10,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/gurcuff91/harness/agent"
+	atools "github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/client"
 	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/server"
@@ -190,9 +191,6 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("slack: bind server: %w", err)
 	}
-	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "slack"})
-	go srv.Serve(listener) //nolint:errcheck
-
 	bot := NewBot(opts.Workspace, opts.XoxC, opts.XoxD)
 	t := &Transport{
 		opts:        opts,
@@ -200,7 +198,6 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 		api:         client.New(listener.Addr().String()),
 		bot:         bot,
 		store:       st,
-		srv:         srv,
 		logger:      logger,
 		cwd:         st.cwd,
 		pumps:       make(map[string]*channelPump),
@@ -213,9 +210,28 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 	// providers" from resolveModel below.
 	me, err := t.bot.AuthTest(ctx)
 	if err != nil {
+		listener.Close()
 		return fmt.Errorf("slack: invalid tokens: %w", err)
 	}
 	t.myID = me.UserID
+
+	// The in-process server — created only now, once our user id is known,
+	// because it carries this transport's tools: SessionTools adds Slack's
+	// tools to every session THIS server creates/resumes (the Slack
+	// sessions) and to no other session of the agent. KeepAgentOpen: the
+	// agent belongs to the caller (who may be serving other sessions on it),
+	// so stopping Slack closes only Slack's own sessions.
+	slackTools := SlackTools(bot, me.UserID, t)
+	t.srv = server.NewServer(a, server.ServerOptions{
+		Logger:        logx.NewNilLogger(),
+		Transport:     "slack",
+		SessionTools:  func() []atools.Tool { return slackTools },
+		KeepAgentOpen: true,
+	})
+	go t.srv.Serve(listener) //nolint:errcheck
+	// Every exit from here on closes Slack's own sessions and listener —
+	// never the agent (KeepAgentOpen).
+	defer t.srv.Close()
 
 	// Resolve model.
 	if err := t.resolveModel(); err != nil {
@@ -230,17 +246,9 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 		"user", me.UserID, "team", me.Team,
 		"default_model", t.model, "scheduler", a.Options().EnableScheduler)
 
-	// Inject Slack-specific tools into the agent so the model can proactively
-	// post messages, resolve channels and users by name, etc.
-	for _, tool := range SlackTools(bot, me.UserID, t) {
-		a.RegisterTool(tool)
-	}
-
 	t.prewarmPumps(ctx)
 
-	err = t.rtmLoop(ctx)
-	t.srv.Close()
-	return err
+	return t.rtmLoop(ctx)
 }
 
 // prewarmPumps opens a pump (SSE consumer) for every stored channel mapping at
