@@ -44,6 +44,12 @@ func (m *CredentialsManager) SetTelegramToken(token string) error {
 	return m.setJSON(nsTelegramCreds, keyTelegramBot, token)
 }
 
+// DeleteTelegramToken removes the saved Telegram bot token. Deleting when none
+// is saved is not an error.
+func (m *CredentialsManager) DeleteTelegramToken() error {
+	return m.store.Delete(nsTelegramCreds, keyTelegramBot)
+}
+
 // SlackSession returns the saved Slack session pair.
 func (m *CredentialsManager) SlackSession() (SlackSession, bool) {
 	var s SlackSession
@@ -57,6 +63,12 @@ func (m *CredentialsManager) SetSlackSession(s SlackSession) error {
 		return fmt.Errorf("%w: slack session requires xoxc and xoxd", ErrInvalidCredential)
 	}
 	return m.setJSON(nsSlackCreds, keySlackSession, s)
+}
+
+// DeleteSlackSession removes the saved Slack session pair (xoxc/xoxd).
+// Deleting when none is saved is not an error.
+func (m *CredentialsManager) DeleteSlackSession() error {
+	return m.store.Delete(nsSlackCreds, keySlackSession)
 }
 
 // setJSON encodes v and stores it under (namespace, key).

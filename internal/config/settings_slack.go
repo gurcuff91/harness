@@ -40,6 +40,13 @@ func (m *SettingsManager) SetSlackConfig(c SlackConfig) error {
 	return m.setJSON(nsSlack, keySlackConfig, c)
 }
 
+// DeleteSlackConfig removes the saved Slack workspace identity
+// (workspace/user/team). Admins and channel bindings are untouched; deleting
+// when none is saved is not an error.
+func (m *SettingsManager) DeleteSlackConfig() error {
+	return m.store.Delete(nsSlack, keySlackConfig)
+}
+
 // SlackIsAdmin reports whether userID is a Slack admin. With no admins
 // configured, nobody is (fail-closed).
 func (m *SettingsManager) SlackIsAdmin(userID string) bool {
@@ -84,6 +91,6 @@ func (m *SettingsManager) BindSlack(cwd, channelID, sessionID string) error {
 }
 
 // UnbindSlack drops channelID's binding in project cwd.
-func (m *SettingsManager) UnbindSlack(cwd, channelID string) error {
-	return m.store.Delete(nsSlackSessions, entryKey(cwd, channelID))
+func (m *SettingsManager) UnbindSlack(cwd, channelID string) (removed bool, err error) {
+	return m.deleteEntry(nsSlackSessions, entryKey(cwd, channelID))
 }

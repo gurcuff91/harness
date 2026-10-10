@@ -213,8 +213,11 @@ func TestTelegramSessionsScopedByCWDAndUnpairDropsAll(t *testing.T) {
 		t.Errorf("sessions in /proj/a = %v", got)
 	}
 
-	if err := m.UnbindTelegram("/proj/a", 42); err != nil {
-		t.Fatal(err)
+	if removed, err := m.UnbindTelegram("/proj/a", 42); err != nil || !removed {
+		t.Fatalf("UnbindTelegram = %v, %v; want true, nil", removed, err)
+	}
+	if removed, err := m.UnbindTelegram("/proj/a", 42); err != nil || removed {
+		t.Fatalf("second UnbindTelegram = %v, %v; want false, nil (idempotent)", removed, err)
 	}
 	if _, ok := m.TelegramSession("/proj/a", 42); ok {
 		t.Error("unbind left the binding in place")
@@ -271,9 +274,14 @@ func TestSlackConfigAdminsAndSessions(t *testing.T) {
 	if got := m.SlackSessions("/proj/b"); len(got) != 1 || got["C1"] != "sess-2" {
 		t.Errorf("slack sessions in /proj/b = %v", got)
 	}
-	m.UnbindSlack("/proj/a", "C1")
+	if removed, err := m.UnbindSlack("/proj/a", "C1"); err != nil || !removed {
+		t.Fatalf("UnbindSlack = %v, %v; want true, nil", removed, err)
+	}
 	if _, ok := m.SlackSessionFor("/proj/a", "C1"); ok {
 		t.Error("UnbindSlack left the binding")
+	}
+	if removed, _ := m.UnbindSlack("/proj/a", "C1"); removed {
+		t.Error("second UnbindSlack must report false (idempotent)")
 	}
 }
 
@@ -335,5 +343,43 @@ func TestDeleteVacantInstancesSweepsLegacyMarkers(t *testing.T) {
 	}
 	if got := m.DeleteVacantInstances(); got != 0 {
 		t.Errorf("second sweep removed %d, want 0", got)
+	}
+}
+
+// Deleting transport secrets/identity: removes exactly the targeted entry,
+// leaves admins and bindings alone, and is idempotent.
+func TestDeleteTransportSecretsAndSlackConfig(t *testing.T) {
+	m, c := memSettings(), memCreds()
+	c.SetTelegramToken("tok")
+	c.SetSlackSession(SlackSession{XoxC: "xoxc", XoxD: "xoxd"})
+	m.SetSlackConfig(SlackConfig{Workspace: "https://w.slack.com", UserID: "U1", Team: "T"})
+	m.AddSlackAdmin("UADMIN")
+	m.BindSlack("/p", "C1", "sess")
+
+	for range 2 { // idempotent
+		if err := c.DeleteTelegramToken(); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.DeleteSlackSession(); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.DeleteSlackConfig(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if c.TelegramToken() != "" {
+		t.Error("telegram token still present")
+	}
+	if _, ok := c.SlackSession(); ok {
+		t.Error("slack session still present")
+	}
+	if _, ok := m.SlackConfig(); ok {
+		t.Error("slack config still present")
+	}
+	if !m.SlackIsAdmin("UADMIN") {
+		t.Error("admins must be untouched")
+	}
+	if _, ok := m.SlackSessionFor("/p", "C1"); !ok {
+		t.Error("bindings must be untouched")
 	}
 }

@@ -88,6 +88,25 @@ func SaveCredentials(c *Credentials) error {
 	})
 }
 
+// DeleteCredentials signs out: removes the saved session pair (credentials
+// store) and the workspace/user/team identity (settings store), so
+// LoadCredentials returns nil. Admins and channel bindings are untouched. Not
+// an error if nothing is saved. Silent: prints nothing.
+func DeleteCredentials() error {
+	if err := config.GetCredentialsManager().DeleteSlackSession(); err != nil {
+		return err
+	}
+	return config.GetSettingsManager().DeleteSlackConfig()
+}
+
+// UnbindChannel removes channelID's channel → session binding in working
+// directory cwd (the cwd a transport was run with — see WithCWD), so its next
+// message starts a fresh session. The session itself is not deleted.
+// removed is false (no error) when there was no binding.
+func UnbindChannel(cwd, channelID string) (removed bool, err error) {
+	return config.GetSettingsManager().UnbindSlack(cwd, channelID)
+}
+
 // ── Store (session mapping) ───────────────────────────────────────────────
 
 // store persists channel→session bindings for the current working directory,
@@ -126,4 +145,7 @@ func (s *store) bind(channelID, sessionID string) error {
 	return s.settings.BindSlack(s.cwd, channelID, sessionID)
 }
 
-func (s *store) unbind(channelID string) error { return s.settings.UnbindSlack(s.cwd, channelID) }
+func (s *store) unbind(channelID string) error {
+	_, err := s.settings.UnbindSlack(s.cwd, channelID)
+	return err
+}

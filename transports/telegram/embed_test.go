@@ -12,6 +12,7 @@ import (
 	"github.com/gurcuff91/harness/agent"
 	agentstore "github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/client"
+	"github.com/gurcuff91/harness/internal/config"
 	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/server"
 )
@@ -158,5 +159,42 @@ func TestEmbeddedTransportResumeKeepsDirective(t *testing.T) {
 	s, _ := a.ResumeSession(id)
 	if !strings.Contains(s.SystemPrompt(), Directive) {
 		t.Error("a resumed Telegram session must include telegram.Directive")
+	}
+}
+
+// DeleteToken / UnbindChat: silent, idempotent, and LoadToken / ChatSessions
+// reflect the removal.
+func TestDeleteTokenAndUnbindChatSilently(t *testing.T) {
+	isolateConfig(t)
+	SaveToken("tok")
+	PairChat(42)
+	config.GetSettingsManager().BindTelegram("/x", 42, "sess-42")
+	config.GetSettingsManager().BindTelegram("/x", 7, "sess-7")
+
+	out := captureStdout(t, func() {
+		for range 2 {
+			if err := DeleteToken(); err != nil {
+				t.Errorf("DeleteToken: %v", err)
+			}
+		}
+		if removed, err := UnbindChat("/x", 42); err != nil || !removed {
+			t.Errorf("UnbindChat = %v, %v; want true, nil", removed, err)
+		}
+		if removed, err := UnbindChat("/x", 42); err != nil || removed {
+			t.Errorf("UnbindChat again = %v, %v; want false, nil", removed, err)
+		}
+	})
+	if out != "" {
+		t.Errorf("wrote to stdout: %q", out)
+	}
+	if tok, _ := LoadToken(); tok != "" {
+		t.Errorf("LoadToken after DeleteToken = %q, want empty", tok)
+	}
+	got, _ := ChatSessions("/x")
+	if _, ok := got[42]; ok || got[7] != "sess-7" {
+		t.Errorf("ChatSessions(/x) = %v; want chat 42 gone, chat 7 kept", got)
+	}
+	if ids, _ := PairedChats(); len(ids) != 1 || ids[0] != 42 {
+		t.Errorf("unbinding must not unpair: %v", ids)
 	}
 }

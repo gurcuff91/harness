@@ -38,6 +38,12 @@ func SaveToken(token string) error {
 	return config.GetCredentialsManager().SetTelegramToken(token)
 }
 
+// DeleteToken removes the saved bot token (credentials store). Not an error
+// if none is saved. Silent: prints nothing.
+func DeleteToken() error {
+	return config.GetCredentialsManager().DeleteTelegramToken()
+}
+
 // LoadToken reads the saved bot token. Returns "" (no error) if none was ever
 // saved.
 func LoadToken() (string, error) {
@@ -73,6 +79,14 @@ func ChatSessions(cwd string) (map[int64]string, error) {
 	return config.GetSettingsManager().TelegramSessions(cwd), nil
 }
 
+// UnbindChat removes chatID's chat → session binding in working directory cwd
+// (the cwd a transport was run with — see WithCWD), so its next message starts
+// a fresh session. The session itself is not deleted, and the chat stays
+// paired. removed is false (no error) when there was no binding.
+func UnbindChat(cwd string, chatID int64) (removed bool, err error) {
+	return config.GetSettingsManager().UnbindTelegram(cwd, chatID)
+}
+
 // ── Allowlist (transport internals) ───────────────────────────────────────
 
 func (s *store) allowed(chatID int64) bool { return s.settings.TelegramAllowed(chatID) }
@@ -99,7 +113,10 @@ func (s *store) bind(chatID int64, sessionID string) error {
 	return s.settings.BindTelegram(s.cwd, chatID, sessionID)
 }
 
-func (s *store) unbind(chatID int64) error { return s.settings.UnbindTelegram(s.cwd, chatID) }
+func (s *store) unbind(chatID int64) error {
+	_, err := s.settings.UnbindTelegram(s.cwd, chatID)
+	return err
+}
 
 // telegramSessionName returns the default name for new sessions created by the
 // Telegram transport, e.g. "Telegram 2026-07-27 16:30".

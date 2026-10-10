@@ -2,8 +2,10 @@ package slack
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +15,7 @@ import (
 	agentstore "github.com/gurcuff91/harness/agent/store"
 	atools "github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/client"
+	"github.com/gurcuff91/harness/internal/config"
 	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/server"
 )
@@ -325,5 +328,47 @@ func TestRunRequiresServingServer(t *testing.T) {
 	err := Run(context.Background(), server.NewServer(a, server.ServerOptions{}), WithWorkspace("x"), WithXoxC("x"), WithXoxD("x"))
 	if err == nil || !strings.Contains(err.Error(), "not serving") {
 		t.Fatalf("Run on an unstarted server = %v, want a clear not-serving error", err)
+	}
+}
+
+// DeleteCredentials signs out (LoadCredentials → nil) without touching admins
+// or bindings; UnbindChannel removes one binding. Silent and idempotent.
+func TestDeleteCredentialsAndUnbindChannelSilently(t *testing.T) {
+	isolateConfig(t)
+	if err := SaveCredentials(&Credentials{Workspace: "https://w.slack.com", XoxC: "xoxc", XoxD: "xoxd", UserID: "U1", Team: "T"}); err != nil {
+		t.Fatal(err)
+	}
+	AddAdmin("UADMIN")
+	config.GetSettingsManager().BindSlack("/x", "C1", "sess-1")
+	config.GetSettingsManager().BindSlack("/x", "C2", "sess-2")
+
+	r, w, _ := os.Pipe()
+	orig := os.Stdout
+	os.Stdout = w
+	for range 2 {
+		if err := DeleteCredentials(); err != nil {
+			t.Errorf("DeleteCredentials: %v", err)
+		}
+	}
+	removed1, err1 := UnbindChannel("/x", "C1")
+	removed2, err2 := UnbindChannel("/x", "C1")
+	w.Close()
+	os.Stdout = orig
+	if b, _ := io.ReadAll(r); len(b) != 0 {
+		t.Errorf("wrote to stdout: %q", b)
+	}
+
+	if c, err := LoadCredentials(); c != nil || err != nil {
+		t.Errorf("LoadCredentials after DeleteCredentials = %+v, %v; want nil, nil", c, err)
+	}
+	if ok, _ := IsAdmin("UADMIN"); !ok {
+		t.Error("admins must be untouched")
+	}
+	if err1 != nil || !removed1 || err2 != nil || removed2 {
+		t.Errorf("UnbindChannel = (%v,%v) then (%v,%v); want (true,nil) then (false,nil)", removed1, err1, removed2, err2)
+	}
+	got, _ := ChannelSessions("/x")
+	if _, ok := got["C1"]; ok || got["C2"] != "sess-2" {
+		t.Errorf("ChannelSessions(/x) = %v; want C1 gone, C2 kept", got)
 	}
 }

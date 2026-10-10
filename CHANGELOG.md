@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.87.1] - 2026-10-10
+
+### Added — remove transport credentials and chat bindings from code (silent API)
+SDK consumers could save a transport's credentials and bindings but not remove them: `SetTelegramToken("")` / an empty Slack session are rejected as invalid, there was no delete, and the unbind functions weren't exported. All new functions are silent (no stdout), idempotent, and report removal where it's meaningful:
+
+- **`telegram.DeleteToken() error`** — removes the saved bot token; `LoadToken` then returns `""`.
+- **`telegram.UnbindChat(cwd, chatID) (removed bool, err error)`** — removes a chat → session binding in that cwd (the chat stays paired; the session itself isn't deleted); `ChatSessions(cwd)` no longer lists it.
+- **`slack.DeleteCredentials() error`** — signs out: removes the session pair (credentials store) and the workspace/user/team identity (settings store); `LoadCredentials` then returns `nil`. Admins and bindings are untouched.
+- **`slack.UnbindChannel(cwd, channelID) (removed bool, err error)`**.
+- Managers: `CredentialsManager.DeleteTelegramToken`, `DeleteSlackSession`; `SettingsManager.DeleteSlackConfig`. `SettingsManager.UnbindTelegram`/`UnbindSlack` now return `(removed bool, err error)`, determined atomically (`SwapValue`'s delete form).
+
 ## [0.87.0] - 2026-10-10
 
 ### Breaking — layered architecture: transports run on a server you give them

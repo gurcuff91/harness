@@ -104,8 +104,19 @@ func (m *SettingsManager) BindTelegram(cwd string, chatID int64, sessionID strin
 }
 
 // UnbindTelegram drops chatID's binding in project cwd.
-func (m *SettingsManager) UnbindTelegram(cwd string, chatID int64) error {
-	return m.store.Delete(nsTelegramSessions, entryKey(cwd, chatKey(chatID)))
+func (m *SettingsManager) UnbindTelegram(cwd string, chatID int64) (removed bool, err error) {
+	return m.deleteEntry(nsTelegramSessions, entryKey(cwd, chatKey(chatID)))
+}
+
+// deleteEntry removes (namespace, key) atomically and reports whether it
+// existed (SwapValue's delete form — one step, so "removed" is exact even
+// with concurrent writers). Missing is not an error.
+func (m *SettingsManager) deleteEntry(namespace, key string) (removed bool, err error) {
+	err = m.store.SwapValue(namespace, key, func(_ []byte, found bool) ([]byte, bool, error) {
+		removed = found
+		return nil, found, nil
+	})
+	return removed, err
 }
 
 // ── Chat-binding helpers (shared with Slack) ─────────────────────────────
