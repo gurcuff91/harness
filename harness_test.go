@@ -18,6 +18,7 @@ import (
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/client"
 	"github.com/gurcuff91/harness/internal/providers"
+	"github.com/gurcuff91/harness/server"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -473,8 +474,14 @@ func TestRunAcpAliasIsWiredEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	srv, err := server.Start(a, "", server.ServerOptions{Transport: "acp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+
 	done := make(chan error, 1)
-	go func() { done <- RunAcp(ctx, a, AcpWithStdin(stdinR), AcpWithStdout(stdoutW)) }()
+	go func() { done <- RunAcp(ctx, srv, AcpWithStdin(stdinR), AcpWithStdout(stdoutW)) }()
 
 	req := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}` + "\n"
 	if _, err := stdinW.Write([]byte(req)); err != nil {

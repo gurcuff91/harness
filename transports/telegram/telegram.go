@@ -3,12 +3,10 @@ package telegram
 import (
 	"context"
 	"fmt"
-	"net"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/client"
 	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/server"
@@ -38,6 +36,9 @@ type Options struct {
 	// CWD is the working directory chat sessions are created in and looked
 	// up/bound under — "" means the process's os.Getwd(). See WithCWD.
 	CWD string
+	// KeepSessionsOnStop leaves this transport's sessions open when Run
+	// returns (default: they're closed). See WithKeepSessionsOnStop.
+	KeepSessionsOnStop bool
 
 	// logger is set via WithLogger — unexported since Options is otherwise a
 	// plain data struct built by kong_run_telegram.go's opts slice; only the
@@ -70,6 +71,14 @@ func WithCWD(dir string) Option {
 	return func(o *Options) { o.CWD = dir }
 }
 
+// WithKeepSessionsOnStop leaves the sessions this transport drives OPEN when
+// Run returns. By default they're closed on stop (on the shared server, so
+// for every frontend — one that still wants a session just resumes it), so
+// their schedules don't keep firing into a session nobody delivers.
+func WithKeepSessionsOnStop() Option {
+	return func(o *Options) { o.KeepSessionsOnStop = true }
+}
+
 // WithSessionThinking overrides the thinking level for sessions this
 // transport creates or resumes (applied alongside WithSessionModel).
 func WithSessionThinking(level string) Option {
@@ -100,7 +109,6 @@ func WithLogger(l logx.Logger) Option {
 // server, the bot API client, and one live SSE pump per active chat.
 type Transport struct {
 	opts   Options
-	agent  *agent.Agent
 	api    *client.Client
 	bot    *Bot
 	store  *store
@@ -115,21 +123,34 @@ type Transport struct {
 	pendingAlbums *albums // in-flight photo albums, keyed by media_group_id
 }
 
-// Run starts the bot and blocks until ctx is cancelled. It builds the agent,
-// launches the internal server, verifies the token, then long-polls for
-// messages — each becoming a prompt for that chat's session.
-func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
+// ProfileName is the server profile the Telegram transport registers on the
+// server it runs on, and binds its chat sessions to (Directive). See
+// server.Profile.
+const ProfileName = "telegram"
+
+// Run starts the bot on srv — a running server (server.Start) the caller owns
+// and may share with other frontends — and blocks until ctx is cancelled. A
+// pure translation layer: it talks to srv over HTTP/SSE (client.New(srv.Addr()))
+// like any other client and never closes srv or its agent. It verifies the
+// token, registers the "telegram" profile (Directive) for its lifetime, binds
+// its chat sessions to it, then long-polls for messages — each becoming a
+// prompt for that chat's session. On stop it unregisters the profile and,
+// unless WithKeepSessionsOnStop, closes its sessions.
+func Run(ctx context.Context, srv *server.Server, opts ...Option) error {
 	o := Options{logger: logx.NewNilLogger()}
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return runWithOptions(ctx, a, o)
+	return runWithOptions(ctx, srv, o)
 }
 
 // runWithOptions is Run's actual body, taking the fully-assembled Options —
 // split out so the WithX-option-application step above stays a thin,
 // separately testable layer over the real logic.
-func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
+func runWithOptions(ctx context.Context, srv *server.Server, opts Options) error {
+	if srv == nil || srv.Addr() == "" {
+		return fmt.Errorf("telegram: the server is not serving — start it first (server.Start)")
+	}
 	st, err := openStore(opts.CWD)
 	if err != nil {
 		return err
@@ -151,27 +172,9 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 		logger = logx.NewNilLogger() // defensive — Run's default already sets this
 	}
 
-	// In-process server — the transport talks to it over HTTP/SSE, exactly
-	// like the TUI, keeping the frontend/backend split clean. Always
-	// logx.NewNilLogger() here, never this transport's own `logger`: THIS
-	// transport is the one logging (via t.logger below), so its inner server
-	// must stay silent rather than duplicating every request as a second log
-	// line.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return fmt.Errorf("telegram: bind server: %w", err)
-	}
-	// KeepAgentOpen: the agent belongs to the caller (who may be serving
-	// other sessions on it), so stopping the bot closes only its own sessions
-	// and listener — on every exit path (deferred below).
-	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "telegram", KeepAgentOpen: true})
-	go srv.Serve(listener) //nolint:errcheck
-	defer srv.Close()
-
 	t := &Transport{
 		opts:          opts,
-		agent:         a,
-		api:           client.New(listener.Addr().String()),
+		api:           client.New(srv.Addr()),
 		bot:           NewBot(opts.Token),
 		store:         st,
 		srv:           srv,
@@ -189,6 +192,11 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 		return fmt.Errorf("telegram: invalid token or unreachable API: %w", err)
 	}
 
+	// Register the "telegram" profile (Directive) for exactly this run's
+	// lifetime; our chat sessions are bound to it (WithProfiles).
+	srv.RegisterProfile(ProfileName, server.Profile{Directives: []string{Directive}})
+	defer t.shutdown()
+
 	// Resolve the model once (shared by all chats).
 	if err := t.resolveModel(); err != nil {
 		return err
@@ -202,7 +210,7 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 	// itself configures.
 	t.logger.Info("telegram", "connected",
 		"bot", "@"+me.Username, "default_model", t.model,
-		"scheduler", a.Options().EnableScheduler, "paired", len(st.allowlist()), "allow_unpair", opts.AllowUnpair)
+		"paired", len(st.allowlist()), "allow_unpair", opts.AllowUnpair)
 	if len(st.allowlist()) == 0 && !opts.AllowUnpair {
 		t.logger.Warn("telegram", "no_paired_chats", "hint", "run 'harness telegram pair <chat_id>' or use --allow-unpair")
 	}
@@ -215,6 +223,25 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 	t.prewarmPumps(ctx)
 
 	return t.pollLoop(ctx)
+}
+
+// shutdown tears this run down without touching the shared server or its
+// agent: unregisters the "telegram" profile and, unless KeepSessionsOnStop,
+// closes the sessions this transport drives.
+func (t *Transport) shutdown() {
+	t.srv.UnregisterProfile(ProfileName)
+	if t.opts.KeepSessionsOnStop {
+		return
+	}
+	t.mu.Lock()
+	ids := make([]string, 0, len(t.pumps))
+	for _, p := range t.pumps {
+		ids = append(ids, p.sessionID)
+	}
+	t.mu.Unlock()
+	for _, id := range ids {
+		_, _ = t.api.CloseSession(id)
+	}
 }
 
 // prewarmPumps opens a pump (SSE consumer) for every stored chat mapping at
@@ -339,7 +366,7 @@ func (t *Transport) handleMessage(ctx context.Context, msg *Message) {
 	t.logger.Info("telegram", "prompt", "chat", chatID, "text", oneLine(text, 200))
 	// The typing indicator is driven by the SSE drain (turn_start→turn_end) so it
 	// stays alive for the whole turn, not just Telegram's ~5s window.
-	if _, err := t.api.SendPrompt(pump.sessionID, text); err != nil {
+	if _, err := t.api.SendPrompt(pump.sessionID, text, client.WithOrigin(ProfileName)); err != nil {
 		t.replyError(ctx, chatID, err)
 	}
 }

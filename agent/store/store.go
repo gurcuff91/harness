@@ -39,6 +39,13 @@ type SessionMeta struct {
 	// explicitly configured, mirroring how Thinking already survives resume.
 	MaxIterations int `json:"max_iterations,omitempty"`
 
+	// Profiles are the NAMES of the server profiles bound to this session
+	// (server.Profile — e.g. "slack", "telegram"): every time the session is
+	// opened, by any client, the server re-applies the directives and tools of
+	// whichever of these profiles are registered at that moment. Only names are
+	// stored, never the directive text or the tools themselves.
+	Profiles []string `json:"profiles,omitempty"`
+
 	// Compaction — CompactOffset is the ABSOLUTE index, in the message log, of
 	// the current checkpoint (working set starts here). CompactCount is audit.
 	CompactOffset int `json:"compact_offset,omitempty"`
@@ -266,7 +273,8 @@ func (s *Session) Fork(name string) (*Session, error) {
 		Name:          name,
 		Model:         parentMeta.Model,
 		Thinking:      parentMeta.Thinking,
-		MaxIterations: parentMeta.MaxIterations, // carry over any per-session SetMaxIterations override, same as Thinking
+		MaxIterations: parentMeta.MaxIterations,                      // carry over any per-session SetMaxIterations override, same as Thinking
+		Profiles:      append([]string(nil), parentMeta.Profiles...), // a fork stays bound to the same profiles
 		CompactOffset: parentMeta.CompactOffset,
 		CompactCount:  parentMeta.CompactCount,
 		Stats:         parentMeta.Stats,

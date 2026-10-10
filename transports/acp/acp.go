@@ -5,12 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"os"
 
-	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/client"
-	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/server"
 )
 
@@ -35,45 +32,45 @@ func WithStdout(w io.Writer) Option {
 	return func(c *runConfig) { c.stdout = w }
 }
 
-// Run starts the ACP transport: an in-process HTTP/SSE server (exactly like
-// every other interactive transport — see transports/telegram), then a
-// JSON-RPC dispatch loop reading newline-delimited messages from stdin (or
+// Run starts the ACP transport on srv — a running server (server.Start) the
+// caller owns and may share with other frontends; it talks to srv over
+// HTTP/SSE (client.New(srv.Addr())) and never closes srv or its agent — then
+// runs a JSON-RPC dispatch loop reading newline-delimited messages from stdin (or
 // WithStdin's override) and writing responses/notifications to stdout (or
 // WithStdout's override). Blocks until ctx is cancelled (Ctrl+C/SIGTERM, via
 // the caller's signalContext()) or stdin is closed (the ACP client
 // terminated the connection) — both are treated as a clean shutdown (nil
 // error, matching `harness serve`'s Ctrl+C handling), not a process failure
 // worth a non-zero exit code.
-func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
+func Run(ctx context.Context, srv *server.Server, opts ...Option) error {
 	cfg := runConfig{stdin: os.Stdin, stdout: os.Stdout}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-
-	// This transport has no WithLogger of its own — it never logs anything
-	// itself (its whole job is pure JSON-RPC protocol translation over
-	// stdin/stdout), so its in-process server always gets logx.NewNilLogger()
-	// unconditionally. There's no "this transport's own logger" to keep
-	// distinct from the server's, unlike telegram/slack.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return fmt.Errorf("acp: bind server: %w", err)
+	if srv == nil || srv.Addr() == "" {
+		return fmt.Errorf("acp: the server is not serving — start it first (server.Start)")
 	}
-	// KeepAgentOpen: the agent belongs to the caller, so stopping the bridge
-	// closes only its own sessions and listener.
-	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "acp", KeepAgentOpen: true})
-	go srv.Serve(listener) //nolint:errcheck
-	defer srv.Close()      //nolint:errcheck
 
 	cwd, _ := os.Getwd()
 	h := &handler{
-		api:      client.New(listener.Addr().String()),
+		api:      client.New(srv.Addr()),
 		cwd:      cwd,
 		sessions: make(map[string]*acpSession),
 	}
 	c := newConn(cfg.stdin, cfg.stdout)
 
-	err = dispatchLoop(ctx, c, h)
+	err := dispatchLoop(ctx, c, h)
+	// Close the sessions this bridge opened (on the shared server, so for
+	// every frontend) — never srv or its agent, which belong to the caller.
+	h.mu.Lock()
+	ids := make([]string, 0, len(h.sessions))
+	for id := range h.sessions {
+		ids = append(ids, id)
+	}
+	h.mu.Unlock()
+	for _, id := range ids {
+		_, _ = h.api.CloseSession(id)
+	}
 	if err == context.Canceled || err == context.DeadlineExceeded {
 		return nil // Ctrl+C/SIGTERM — expected shutdown, not a failure
 	}

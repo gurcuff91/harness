@@ -49,6 +49,16 @@ type Session struct {
 	thinkingLvl  string
 	tools        *tools.Registry
 	systemPrompt string
+
+	// Pending reconfiguration (Agent.ReconfigureSession): a new prompt/tool
+	// set, swapped in by promptSync at the start of the NEXT turn — never
+	// mid-turn, since promptSync holds s.mu for the whole turn. Guarded by
+	// reconfMu (not s.mu) so it can be queued from anywhere, including while
+	// a turn is running. systemPromptVal mirrors systemPrompt lock-free.
+	reconfMu        sync.Mutex
+	pendingReconfig *sessionReconfig
+	systemPromptVal atomic.Value // string
+	toolsVal        atomic.Value // *tools.Registry — lock-free mirror of tools
 	// hasMemory mirrors Agent.memStore != nil — the same condition that gates
 	// the "## Memory" block in buildSystemPrompt. Feeds the compaction
 	// checkpoint's reminder (see buildCompactionCheckpoint/
@@ -87,8 +97,8 @@ type Session struct {
 	// Context breakdown lens — set once at construction, never mutated.
 	// Byte lengths; ContextBreakdown() divides by the active provider's
 	// chars-per-token at query time (Anthropic=6, OpenAI=4).
-	sysPromptLen int // full system prompt byte length
-	toolsLen     int // total JSON byte length of all tool schemas
+	sysPromptLen atomic.Int64 // full system prompt byte length
+	toolsLen     atomic.Int64 // total JSON byte length of all tool schemas
 
 	handler Handler
 
@@ -247,6 +257,20 @@ func PromptWithOriginScheduled() PromptOption {
 	return func(c *promptConfig) { c.origin = OriginScheduled }
 }
 
+// PromptWithOrigin tags the prompt with any short origin string — a
+// transport's name ("telegram", "slack", "acp"), an SDK consumer's own
+// ("kaiban"), or the built-in OriginUser/OriginScheduled. It is echoed on
+// EventReceivedPrompt/EventFollowUpStart (Event.Origin) so frontends can
+// render where a prompt came from; live only, never stored in history. An
+// empty origin keeps the default (OriginUser).
+func PromptWithOrigin(origin string) PromptOption {
+	return func(c *promptConfig) {
+		if origin != "" {
+			c.origin = origin
+		}
+	}
+}
+
 func buildPromptConfig(opts []PromptOption) promptConfig {
 	c := promptConfig{origin: OriginUser}
 	for _, opt := range opts {
@@ -295,11 +319,12 @@ func newSession(storeInst *store.Session,
 		skills:        skills,
 		readSkill:     readSkill,
 		hasMemory:     hasMemory,
-		// Context breakdown lens — write-once, from builder functions.
-		sysPromptLen: pl.total,
-		toolsLen:     tl.totalBytes,
 	}
 	s.followCond = sync.NewCond(&s.followMu)
+	s.systemPromptVal.Store(systemPrompt)
+	s.toolsVal.Store(toolReg)
+	s.sysPromptLen.Store(int64(pl.total)) // context breakdown lens
+	s.toolsLen.Store(int64(tl.totalBytes))
 	s.loadModelMeta(modelID)
 	s.modelStr.Store(provider.Name() + "/" + modelID)
 	s.thinkingStr.Store(thinkingLvl)
@@ -528,11 +553,12 @@ func (s *Session) Skills() []resources.SkillInfo { return s.skills }
 // currently registered for this session — the exact set sent to the
 // provider on the next turn, including any MCP tools (namespaced
 // mcp__<server>__<tool>) and SDK-supplied AgentOptions.Tools alongside the
-// built-ins. Read-only introspection: s.tools is fixed for the lifetime of
-// the session (populated once by buildSessionTools at construction, never
-// mutated afterward), and Definitions() already returns a fresh copy, so
-// this is safe to call from anywhere with no locking.
-func (s *Session) Tools() []types.ToolDef { return s.tools.Definitions() }
+// built-ins. Read-only and lock-free: the registry only changes at a turn
+// boundary (a profile reconfiguration, see Agent.ReconfigureSession), and is
+// read here through its atomic mirror; Definitions() returns a fresh copy.
+func (s *Session) Tools() []types.ToolDef {
+	return s.toolsVal.Load().(*tools.Registry).Definitions()
+}
 
 // ReadSkill returns the content of a skill by name plus the absolute directory
 // it lives in (for resolving relative paths the skill references).
@@ -773,6 +799,7 @@ func (s *Session) drainFollowUps() {
 func (s *Session) promptSync(ctx context.Context, text string, images []types.ImageData) (retText string, retErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.applyPendingReconfigLocked() // turn boundary: never mid-turn
 
 	var userMsg types.Message
 	if len(images) > 0 {
@@ -1420,7 +1447,47 @@ func (s *Session) CWD() string { return s.cwd }
 // prompt, skills, project context, and every directive (agent-wide plus this
 // session's own, see WithSessionDirectives). Built once when the session is
 // created/resumed and immutable afterwards, so it's lock-free like CWD().
-func (s *Session) SystemPrompt() string { return s.systemPrompt }
+func (s *Session) SystemPrompt() string { return s.systemPromptVal.Load().(string) }
+
+// sessionReconfig is a rebuilt system prompt + tool registry waiting for the
+// next turn boundary (see Agent.ReconfigureSession).
+type sessionReconfig struct {
+	systemPrompt string
+	pl           promptLens
+	tools        *tools.Registry
+	tl           toolLens
+}
+
+// queueReconfig stores r to be applied at the next turn boundary, replacing
+// any reconfiguration still pending. If the session is idle it's applied
+// right away (there's no turn to wait for).
+func (s *Session) queueReconfig(r *sessionReconfig) {
+	s.reconfMu.Lock()
+	s.pendingReconfig = r
+	s.reconfMu.Unlock()
+	if s.mu.TryLock() { // idle (no turn holds s.mu): apply now
+		s.applyPendingReconfigLocked()
+		s.mu.Unlock()
+	}
+}
+
+// applyPendingReconfigLocked swaps in a pending reconfiguration. Caller holds
+// s.mu (promptSync at the start of a turn, or queueReconfig when idle).
+func (s *Session) applyPendingReconfigLocked() {
+	s.reconfMu.Lock()
+	r := s.pendingReconfig
+	s.pendingReconfig = nil
+	s.reconfMu.Unlock()
+	if r == nil {
+		return
+	}
+	s.systemPrompt = r.systemPrompt
+	s.systemPromptVal.Store(r.systemPrompt)
+	s.sysPromptLen.Store(int64(r.pl.total))
+	s.tools = r.tools
+	s.toolsVal.Store(r.tools)
+	s.toolsLen.Store(int64(r.tl.totalBytes))
+}
 
 // CreatedAt returns when the session was created — immutable for the
 // session's lifetime, so safe to call lock-free from anywhere, including
@@ -1536,10 +1603,10 @@ func (s *Session) ContextBreakdown() ContextBreakdown {
 	cpt := family.CharsPerToken()
 
 	// S — system prompt: stored as total bytes, divide by family divisor.
-	system := s.sysPromptLen / cpt
+	system := int(s.sysPromptLen.Load()) / cpt
 
 	// T — tools: all tool schemas (built-in + MCP) stored as total JSON bytes.
-	tools := s.toolsLen / cpt
+	tools := int(s.toolsLen.Load()) / cpt
 
 	// C — conversation: derived from the actual provider-reported total rather
 	// than estimated locally. This is intentional: the model's actual token

@@ -362,7 +362,8 @@ const openAPISpecTemplate = `{
         "requestBody": {
           "required": false,
           "content": { "application/json": { "schema": { "type": "object", "properties": {
-            "directives": { "type": "array", "items": { "type": "string" }, "description": "Instruction blocks for the reopened session's system prompt only. Ignored if the session is already active (it keeps the prompt it was opened with)." }
+            "directives": { "type": "array", "items": { "type": "string" }, "description": "Instruction blocks for the reopened session's system prompt only, not persisted. Ignored if the session is already active." },
+            "profiles": { "type": "array", "items": { "type": "string" }, "description": "Profile names to ADD to the session's persisted binding (additive). If the session is already active, a changed binding applies at its next turn boundary, never mid-turn. Unknown name → 400." }
           } } } }
         },
         "responses": {
@@ -728,7 +729,8 @@ const openAPISpecTemplate = `{
           "model": { "type": "string", "example": "claude-oauth/claude-opus-4-8" },
           "cwd":   { "type": "string" },
           "name":  { "type": "string" },
-          "directives": { "type": "array", "items": { "type": "string" }, "description": "Instruction blocks appended to THIS session's system prompt only (not the agent's other sessions). Not persisted — pass them again on resume." }
+          "directives": { "type": "array", "items": { "type": "string" }, "description": "Instruction blocks appended to THIS session's system prompt only (not the agent's other sessions). Not persisted — pass them again on resume." },
+          "profiles": { "type": "array", "items": { "type": "string" }, "description": "Bind the session to registered server profiles by name (e.g. \"slack\") — their directives and tools apply to it. The names are persisted: every later open of the session, by any client, re-applies whichever are registered then. Unknown name → 400." }
         }
       },
       "PromptRequest": {
@@ -736,7 +738,8 @@ const openAPISpecTemplate = `{
         "required": ["text"],
         "properties": {
           "text":   { "type": "string" },
-          "images": { "type": "array", "items": { "$ref": "#/components/schemas/ImageData" } }
+          "images": { "type": "array", "items": { "$ref": "#/components/schemas/ImageData" } },
+          "origin": { "type": "string", "description": "Where the prompt came from — any short string: \"user\" (default), \"scheduled\", a transport (\"telegram\", \"slack\", \"acp\") or your own. Echoed on received_prompt/follow_up_start." }
         }
       },
       "AskResponse": {

@@ -2,9 +2,9 @@ package slack
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,10 +17,9 @@ import (
 	"github.com/gurcuff91/harness/server"
 )
 
-// embedTransport builds a Transport the way runWithOptions does — real
-// in-process server + real SDK client over an agent with a fake model — but
-// without a bot (acquireSession never touches it).
-func embedTransport(t *testing.T, opts Options) (*Transport, *agent.Agent) {
+// newSharedServer is ONE running server over a fresh agent with a fake
+// model — the SDK consumer's single server every frontend shares.
+func newSharedServer(t *testing.T, opts agent.AgentOptions) (*server.Server, *agent.Agent, string) {
 	t.Helper()
 	isolateConfig(t)
 	t.Setenv("HOME", t.TempDir())
@@ -28,34 +27,42 @@ func embedTransport(t *testing.T, opts Options) (*Transport, *agent.Agent) {
 		w.Write([]byte(`{"data":[{"id":"m"}]}`))
 	}))
 	t.Cleanup(models.Close)
-	provName := "slack-embed-" + strings.ToLower(t.Name())
+	provName := "slack-embed-" + strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-"))
 	if err := agent.NewOpenAIProvider(provName, models.URL); err != nil {
 		t.Fatal(err)
 	}
-	a := agent.New(agent.AgentOptions{Store: agentstore.NewInMemoryStore()})
+	opts.Store = agentstore.NewInMemoryStore()
+	a := agent.New(opts)
 	t.Cleanup(func() { a.Close() })
-	return startEmbedded(t, a, opts, provName+"/m"), a
+	srv, err := server.Start(a, "", server.ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { srv.Close() })
+	return srv, a, provName + "/m"
 }
 
-// startEmbedded wires one Slack Transport onto a (possibly shared) agent
-// exactly like runWithOptions does after AuthTest: its own in-process server
-// carrying the Slack tools (SessionTools) and never closing the agent
-// (KeepAgentOpen). The bot points at a fake Slack API.
-func startEmbedded(t *testing.T, a *agent.Agent, opts Options, model string) *Transport {
+func embedTransport(t *testing.T, opts Options) (*Transport, *agent.Agent) {
+	t.Helper()
+	srv, a, model := newSharedServer(t, agent.AgentOptions{})
+	return startEmbedded(t, srv, opts, model), a
+}
+
+// startEmbedded wires one Slack Transport onto the shared srv exactly like
+// runWithOptions does after AuthTest — registering the "slack" profile
+// (Directive + tools bound to THIS transport's bot) — with the bot pointed
+// at a fake Slack API.
+func startEmbedded(t *testing.T, srv *server.Server, opts Options, model string) *Transport {
 	t.Helper()
 	fake := newFakeSlackServer(t)
 	t.Cleanup(fake.Close)
 	st, _ := openStore(opts.CWD)
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
 	tr := &Transport{
 		opts:        opts,
-		agent:       a,
-		api:         client.New(ln.Addr().String()),
+		api:         client.New(srv.Addr()),
 		bot:         NewBot(fake.URL, "xoxc", "xoxd"),
 		store:       st,
+		srv:         srv,
 		logger:      logx.NewNilLogger(),
 		model:       model,
 		cwd:         st.cwd,
@@ -64,14 +71,10 @@ func startEmbedded(t *testing.T, a *agent.Agent, opts Options, model string) *Tr
 		pendingAsks: map[string]chan askReply{},
 	}
 	slackTools := SlackTools(tr.bot, tr.myID, tr)
-	tr.srv = server.NewServer(a, server.ServerOptions{
-		Logger:        logx.NewNilLogger(),
-		Transport:     "slack",
-		SessionTools:  func() []atools.Tool { return slackTools },
-		KeepAgentOpen: true,
+	srv.RegisterProfile(ProfileName, server.Profile{
+		Directives: []string{Directive},
+		Tools:      func() []atools.Tool { return slackTools },
 	})
-	go tr.srv.Serve(ln) //nolint:errcheck
-	t.Cleanup(func() { tr.srv.Close() })
 	return tr
 }
 
@@ -171,21 +174,25 @@ func TestSlackToolsAreScopedToSlackSessions(t *testing.T) {
 	}
 }
 
-// Criteria 3+4: stopping Slack leaves the (caller-owned) agent alive with no
-// Slack tools anywhere; a second Slack run on the same agent binds its
-// sessions to the NEW transport's tools.
-func TestSlackStopKeepsAgentAndRestartRebinds(t *testing.T) {
-	tr1, a := embedTransport(t, Options{CWD: "/x"})
+// Stopping Slack (its shutdown) unregisters the profile and closes its
+// sessions; the shared server and agent stay up and clean. A second run binds
+// its sessions to the NEW transport's tools.
+func TestSlackStopKeepsServerAndRestartRebinds(t *testing.T) {
+	srv, a, model := newSharedServer(t, agent.AgentOptions{})
+	tr1 := startEmbedded(t, srv, Options{CWD: "/x"}, model)
 	id1, err := tr1.acquireSession("C1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	s1, _ := a.ResumeSession(id1) // live handle, holding tr1's tool closures
+	tr1.pumps["C1"] = &channelPump{sessionID: id1} // what pumpFor records
+	s1, _ := a.ResumeSession(id1)
 
-	tr1.srv.Close() // what Run's deferred Close does on ctx cancel
+	tr1.shutdown() // what Run's deferred teardown does on ctx cancel
 
-	// The agent must still be fully usable, and clean.
-	after, err := a.NewSession("/cards", tr1.model)
+	if slices.Contains(srv.ProfileNames(), ProfileName) {
+		t.Error("the slack profile must be unregistered on stop")
+	}
+	after, err := a.NewSession("/cards", model)
 	if err != nil {
 		t.Fatalf("agent unusable after Slack stopped: %v", err)
 	}
@@ -193,41 +200,24 @@ func TestSlackStopKeepsAgentAndRestartRebinds(t *testing.T) {
 		t.Error("a session created after Slack stopped has Slack tools")
 	}
 
-	// Second run on the same agent: its sessions get ITS tools.
-	tr2 := startEmbedded(t, a, Options{CWD: "/x"}, tr1.model)
+	tr2 := startEmbedded(t, srv, Options{CWD: "/x"}, model)
 	id, err := tr2.acquireSession("C1")
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || id != id1 {
+		t.Fatalf("re-run acquire = %q, %v; want stored %q", id, err, id1)
 	}
 	s2, _ := a.ResumeSession(id)
+	if s2 == s1 {
+		t.Fatal("re-run got the stale live session closed on stop")
+	}
 	if !toolNames(t, s2)["SlackPost"] {
 		t.Fatal("re-run Slack session lacks SlackPost")
 	}
-	// The binding guarantee: stopping tr1 closed its sessions, so tr2's resume
-	// REBUILT the session (with tr2's tool closures) instead of returning the
-	// stale live object still bound to tr1's bot/transport.
-	if id != id1 {
-		t.Fatalf("re-run resumed %s, want the stored session %s", id, id1)
-	}
-	if s2 == s1 {
-		t.Fatal("re-run got the stale live session bound to the stopped transport")
-	}
 }
 
-// Criterion 5: DisallowedTools still applies to session-scoped tools.
+// DisallowedTools still applies to profile tools.
 func TestSlackSessionToolsRespectDisallowedTools(t *testing.T) {
-	isolateConfig(t)
-	t.Setenv("HOME", t.TempDir())
-	models := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"data":[{"id":"m"}]}`))
-	}))
-	defer models.Close()
-	if err := agent.NewOpenAIProvider("slack-disallow-fake", models.URL); err != nil {
-		t.Fatal(err)
-	}
-	a := agent.New(agent.AgentOptions{Store: agentstore.NewInMemoryStore(), DisallowedTools: []string{"SlackPost"}})
-	defer a.Close()
-	tr := startEmbedded(t, a, Options{CWD: "/x"}, "slack-disallow-fake/m")
+	srv, a, model := newSharedServer(t, agent.AgentOptions{DisallowedTools: []string{"SlackPost"}})
+	tr := startEmbedded(t, srv, Options{CWD: "/x"}, model)
 	id, err := tr.acquireSession("C1")
 	if err != nil {
 		t.Fatal(err)
@@ -235,19 +225,46 @@ func TestSlackSessionToolsRespectDisallowedTools(t *testing.T) {
 	s, _ := a.ResumeSession(id)
 	names := toolNames(t, s)
 	if names["SlackPost"] {
-		t.Error("DisallowedTools must filter session-scoped SlackPost")
+		t.Error("DisallowedTools must filter profile SlackPost")
 	}
 	if !names["SlackListChannels"] {
 		t.Error("the other Slack tools must remain")
 	}
 }
 
-// End to end through the REAL slack.Run against a fake Slack API: while it
-// runs, the agent-wide registry never gains Slack tools; after ctx is
-// cancelled, Run returns and the caller-owned agent is still open and clean.
-func TestRunNeverTouchesAgentWideToolsAndKeepsAgentOpen(t *testing.T) {
-	isolateConfig(t)
-	t.Setenv("HOME", t.TempDir())
+// The race the story is about: a plain client (the consumer's UI) opens a
+// Slack session FIRST, with no options — it still gets the Slack directive
+// and tools, from the persisted binding.
+func TestSlackSessionOpenedFirstByPlainClientGetsProfile(t *testing.T) {
+	srv, a, model := newSharedServer(t, agent.AgentOptions{})
+	tr := startEmbedded(t, srv, Options{CWD: "/x"}, model)
+	id, err := tr.acquireSession("C1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Restart: everything closed, profile re-registered by a new run.
+	tr.pumps["C1"] = &channelPump{sessionID: id}
+	tr.shutdown()
+	startEmbedded(t, srv, Options{CWD: "/x"}, model)
+
+	ui := client.New(srv.Addr())
+	if _, err := ui.ResumeSession(id); err != nil { // no options at all
+		t.Fatal(err)
+	}
+	s, _ := a.ResumeSession(id)
+	if !strings.Contains(s.SystemPrompt(), Directive) || !toolNames(t, s)["SlackPost"] {
+		t.Fatal("a Slack session opened first by a plain client must get the slack profile")
+	}
+	if got := a.SessionProfiles(id); !slices.Equal(got, []string{ProfileName}) {
+		t.Errorf("persisted binding = %v, want [slack]", got)
+	}
+}
+
+// End to end through the REAL slack.Run on a SHARED server: while it runs,
+// non-Slack sessions never get Slack tools; after ctx is cancelled Run returns
+// without closing the server or the agent, and leaves no Slack tools behind.
+func TestRunOnSharedServer(t *testing.T) {
+	srv, a, model := newSharedServer(t, agent.AgentOptions{})
 	slackAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -258,25 +275,22 @@ func TestRunNeverTouchesAgentWideToolsAndKeepsAgentOpen(t *testing.T) {
 		}
 	}))
 	defer slackAPI.Close()
-	models := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"data":[{"id":"m"}]}`))
-	}))
-	defer models.Close()
-	if err := agent.NewOpenAIProvider("slack-run-e2e", models.URL); err != nil {
-		t.Fatal(err)
-	}
-	a := agent.New(agent.AgentOptions{Store: agentstore.NewInMemoryStore()})
-	defer a.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, a, WithWorkspace(slackAPI.URL), WithXoxC("xoxc"), WithXoxD("xoxd"),
-			WithSessionModel("slack-run-e2e/m"), WithCWD("/x"))
+		done <- Run(ctx, srv, WithWorkspace(slackAPI.URL), WithXoxC("xoxc"), WithXoxD("xoxd"),
+			WithSessionModel(model), WithCWD("/x"))
 	}()
-	time.Sleep(500 * time.Millisecond) // past AuthTest + server start
+	deadline := time.Now().Add(5 * time.Second)
+	for !slices.Contains(srv.ProfileNames(), ProfileName) {
+		if time.Now().After(deadline) {
+			t.Fatal("slack profile never registered")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
-	mid, err := a.NewSession("/cards", "slack-run-e2e/m")
+	mid, err := a.NewSession("/cards", model)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,11 +308,22 @@ func TestRunNeverTouchesAgentWideToolsAndKeepsAgentOpen(t *testing.T) {
 		t.Fatal("Run did not return after cancel")
 	}
 
-	after, err := a.NewSession("/cards", "slack-run-e2e/m")
-	if err != nil {
-		t.Fatalf("agent closed by slack.Run: %v", err)
+	if slices.Contains(srv.ProfileNames(), ProfileName) {
+		t.Error("slack profile left registered after Run returned")
 	}
-	if hasAnySlackTool(toolNames(t, after)) {
-		t.Error("Slack tools left behind after Run returned")
+	// Server still serving, agent still open.
+	if _, err := client.New(srv.Addr()).CreateSession(model, "/cards", ""); err != nil {
+		t.Fatalf("shared server/agent unusable after slack.Run: %v", err)
+	}
+}
+
+// Run on a server that isn't serving fails clearly.
+func TestRunRequiresServingServer(t *testing.T) {
+	isolateConfig(t)
+	a := agent.New(agent.AgentOptions{Store: agentstore.NewInMemoryStore()})
+	defer a.Close()
+	err := Run(context.Background(), server.NewServer(a, server.ServerOptions{}), WithWorkspace("x"), WithXoxC("x"), WithXoxD("x"))
+	if err == nil || !strings.Contains(err.Error(), "not serving") {
+		t.Fatalf("Run on an unstarted server = %v, want a clear not-serving error", err)
 	}
 }

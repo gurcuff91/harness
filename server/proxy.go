@@ -2,6 +2,7 @@ package server
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gurcuff91/harness/agent"
@@ -17,6 +18,10 @@ import (
 // the agent loop for real — s.emit (and therefore the whole ReAct iteration)
 // calls broadcast synchronously.
 const controlBroadcastTimeout = 500 * time.Millisecond
+
+// proxiesCreated counts proxies ever built — a session must get exactly one
+// per server (a second one steals its event stream); tests assert on it.
+var proxiesCreated atomic.Int64
 
 // SessionProxy wraps an agent session and broadcasts events to SSE clients.
 // It subscribes to the session once and fans out to all connected clients.
@@ -34,6 +39,7 @@ type SessionProxy struct {
 // UI, so ANY unconditional log line here would corrupt the render. See
 // broadcast's dropped-control-event warning, the one log call on this path.
 func newSessionProxy(sess *agent.Session, logger logx.Logger) *SessionProxy {
+	proxiesCreated.Add(1)
 	p := &SessionProxy{
 		session: sess,
 		logger:  logger,

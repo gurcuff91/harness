@@ -12,6 +12,8 @@ import (
 
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/store"
+	"github.com/gurcuff91/harness/logx"
+	"github.com/gurcuff91/harness/server"
 )
 
 // newTestAgent builds a minimal *agent.Agent for the dispatch loop tests: no
@@ -33,6 +35,17 @@ func newTestAgent(t *testing.T) *agent.Agent {
 	return a
 }
 
+// newTestServer is a running server over a fresh test agent — what Run takes.
+func newTestServer(t *testing.T) *server.Server {
+	t.Helper()
+	srv, err := server.Start(newTestAgent(t), "", server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "acp", KeepAgentOpen: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { srv.Close() })
+	return srv
+}
+
 // runLoop starts Run in a goroutine wired to an in-memory pipe, returning a
 // requester the test drives by writing JSON-RPC lines and reading responses
 // back line by line — a faithful stand-in for what an ACP client does over
@@ -52,8 +65,14 @@ func startHarness(t *testing.T, a *agent.Agent) *harness {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
+	srv, err := server.Start(a, "", server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "acp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { srv.Close() })
+
 	done := make(chan error, 1)
-	go func() { done <- Run(ctx, a, WithStdin(stdinR), WithStdout(stdoutW)) }()
+	go func() { done <- Run(ctx, srv, WithStdin(stdinR), WithStdout(stdoutW)) }()
 
 	return &harness{t: t, toAgent: stdinW, fromAgent: bufio.NewReader(stdoutR), done: done}
 }
@@ -777,7 +796,7 @@ func TestRunReturnsOnStdinClose(t *testing.T) {
 	ctx := context.Background()
 
 	done := make(chan error, 1)
-	go func() { done <- Run(ctx, newTestAgent(t), WithStdin(stdinR), WithStdout(&stdout)) }()
+	go func() { done <- Run(ctx, newTestServer(t), WithStdin(stdinR), WithStdout(&stdout)) }()
 
 	stdinW.Close() // simulates the ACP client closing the connection
 
@@ -805,7 +824,7 @@ func TestRunReturnsOnContextCancelWhileBlockedOnStdin(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan error, 1)
-	go func() { done <- Run(ctx, newTestAgent(t), WithStdin(stdinR), WithStdout(&stdout)) }()
+	go func() { done <- Run(ctx, newTestServer(t), WithStdin(stdinR), WithStdout(&stdout)) }()
 
 	time.Sleep(100 * time.Millisecond) // let Run reach the blocking stdin read
 	cancel()

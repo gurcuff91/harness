@@ -14,9 +14,11 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -286,7 +288,7 @@ func (b *Bot) DownloadPhoto(ctx context.Context, sizes []PhotoSize) ([]byte, err
 	}
 	resp, err := b.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, b.redact(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -316,7 +318,7 @@ func (b *Bot) DownloadDocument(ctx context.Context, fileID string) ([]byte, erro
 	}
 	resp, err := b.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, b.redact(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -378,7 +380,7 @@ func (b *Bot) uploadFile(ctx context.Context, method, field string, chatID int64
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	resp, err := b.http.Do(req)
 	if err != nil {
-		return err
+		return b.redact(err)
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(resp.Body)
@@ -401,6 +403,27 @@ type apiError struct {
 
 func (e *apiError) Error() string { return fmt.Sprintf("telegram %d: %s", e.Code, e.Desc) }
 
+// redact strips the bot token from a transport error before it can reach a
+// log line or a caller. Every Bot API URL embeds the token
+// (https://api.telegram.org/bot<token>/<method>, and /file/bot<token>/…), and
+// net/http's *url.Error prints the full URL ("Post \"https://…\": context
+// canceled") — so any network failure used to log the secret. The *url.Error
+// is kept (only its URL is rewritten), so errors.Is/As on the cause still work.
+func (b *Bot) redact(err error) error {
+	if err == nil || b.token == "" {
+		return err
+	}
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		ue.URL = strings.ReplaceAll(ue.URL, b.token, "<redacted>")
+		return err
+	}
+	if strings.Contains(err.Error(), b.token) {
+		return errors.New(strings.ReplaceAll(err.Error(), b.token, "<redacted>"))
+	}
+	return err
+}
+
 // call POSTs a JSON body to a Bot API method and returns the raw result.
 func (b *Bot) call(ctx context.Context, method string, body any) (json.RawMessage, error) {
 	var r io.Reader
@@ -419,7 +442,7 @@ func (b *Bot) call(ctx context.Context, method string, body any) (json.RawMessag
 
 	resp, err := b.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, b.redact(err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)

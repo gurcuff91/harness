@@ -1,6 +1,8 @@
 package telegram
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -124,5 +126,25 @@ func TestExtractUploadsMultiline(t *testing.T) {
 	// No orphaned triple-blank lines.
 	if strings.Contains(cleaned, "\n\n\n") {
 		t.Errorf("blank lines not collapsed: %q", cleaned)
+	}
+}
+
+// A network failure must never carry the bot token: every Bot API URL embeds
+// it and net/http's *url.Error prints the full URL.
+func TestBotErrorsNeverLeakTheToken(t *testing.T) {
+	const token = "123456:SECRET-token-value"
+	b := NewBot(token)
+	b.api = "http://127.0.0.1:1/bot" + token // unreachable → *url.Error with the URL
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := b.call(ctx, "getMe", nil)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if strings.Contains(err.Error(), token) || strings.Contains(err.Error(), "SECRET") {
+		t.Fatalf("error leaks the token: %v", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("redaction must keep the cause: %v", err)
 	}
 }

@@ -310,9 +310,9 @@ func (h *handler) handlePrompt(ctx context.Context, c *conn, p promptParams) (pr
 
 	var sendErr error
 	if len(images) > 0 {
-		_, sendErr = h.api.SendPromptWithImages(p.SessionID, text, images)
+		_, sendErr = h.api.SendPromptWithImages(p.SessionID, text, images, client.WithOrigin("acp"))
 	} else {
-		_, sendErr = h.api.SendPrompt(p.SessionID, text)
+		_, sendErr = h.api.SendPrompt(p.SessionID, text, client.WithOrigin("acp"))
 	}
 	if sendErr != nil {
 		return promptResult{}, internalErr("send prompt", sendErr)

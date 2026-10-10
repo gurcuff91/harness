@@ -393,6 +393,16 @@ type SessionOption func(*sessionOptions)
 
 type sessionOptions struct {
 	directives []string
+	profiles   []string
+}
+
+// WithProfiles binds the session to the server's registered profiles by name
+// (server.Profile — e.g. "slack"): their directives and tools apply to it,
+// and the binding is persisted, so every later open of the session — by any
+// client, with or without options — gets them again. On ResumeSession the
+// names are ADDED to the existing binding. An unknown name is a 400 error.
+func WithProfiles(names ...string) SessionOption {
+	return func(o *sessionOptions) { o.profiles = append(o.profiles, names...) }
 }
 
 // WithDirectives adds instruction blocks to THIS session's system prompt only
@@ -423,6 +433,9 @@ func (c *Client) CreateSession(model, cwd, name string, opts ...SessionOption) (
 	}
 	if len(o.directives) > 0 {
 		body["directives"] = o.directives
+	}
+	if len(o.profiles) > 0 {
+		body["profiles"] = o.profiles
 	}
 	return ptr(decode[Session](c, "POST", "/api/sessions", body))
 }
@@ -466,8 +479,15 @@ func (c *Client) ForkSession(id string) (*Session, error) {
 func (c *Client) ResumeSession(id string, opts ...SessionOption) (*Session, error) {
 	o := applyClientSessionOptions(opts)
 	var body any
-	if len(o.directives) > 0 {
-		body = map[string]any{"directives": o.directives}
+	if len(o.directives) > 0 || len(o.profiles) > 0 {
+		m := map[string]any{}
+		if len(o.directives) > 0 {
+			m["directives"] = o.directives
+		}
+		if len(o.profiles) > 0 {
+			m["profiles"] = o.profiles
+		}
+		body = m
 	}
 	return ptr(decode[Session](c, "POST", "/api/sessions/"+id+"/resume", body))
 }
@@ -477,10 +497,39 @@ func (c *Client) StopSession(id string) (*Status, error) {
 	return c.decodeStatus("POST", "/api/sessions/"+id+"/stop", nil)
 }
 
+// PromptOption configures a SendPrompt/SendPromptWithImages/Ask call.
+type PromptOption func(map[string]any)
+
+// WithOrigin tags the prompt with where it came from — any short string:
+// a transport's name ("telegram", "slack", "acp"), your own ("kaiban"), or
+// "user" (the default) / "scheduled". Echoed back on the session's
+// received_prompt / follow_up_start events (Event.Origin) so every frontend
+// watching the session can render it ("via Slack"). Live only, not stored.
+func WithOrigin(origin string) PromptOption {
+	return func(body map[string]any) {
+		if origin != "" {
+			body["origin"] = origin
+		}
+	}
+}
+
+func promptBody(text string, images []types.ImageData, opts []PromptOption) map[string]any {
+	body := map[string]any{"text": text}
+	if len(images) > 0 {
+		body["images"] = images
+	}
+	for _, o := range opts {
+		if o != nil {
+			o(body)
+		}
+	}
+	return body
+}
+
 // SendPrompt submits a user prompt to a session. The returned Status.Code is
 // "started" (processing now) or "queued" (session was busy).
-func (c *Client) SendPrompt(sessionID, text string) (*Status, error) {
-	return c.decodeStatus("POST", "/api/sessions/"+sessionID+"/prompt", map[string]string{"text": text})
+func (c *Client) SendPrompt(sessionID, text string, opts ...PromptOption) (*Status, error) {
+	return c.decodeStatus("POST", "/api/sessions/"+sessionID+"/prompt", promptBody(text, nil, opts))
 }
 
 // Ask sends a prompt and blocks until the agent's turn completes, returning
@@ -493,17 +542,14 @@ func (c *Client) SendPrompt(sessionID, text string) (*Status, error) {
 // (waits as long as the server does). This is scoped to the single request
 // via context, not the client's shared http.Client, so it never affects
 // unrelated calls (in particular the long-lived SSE stream).
-func (c *Client) Ask(sessionID, text string, timeout time.Duration) (string, error) {
-	return c.askCtx(timeout, sessionID, map[string]string{"text": text})
+func (c *Client) Ask(sessionID, text string, timeout time.Duration, opts ...PromptOption) (string, error) {
+	return c.askCtx(timeout, sessionID, promptBody(text, nil, opts))
 }
 
 // AskWithImages is Ask with one or more images attached (base64, decoded by
 // the server). The server validates that the session's model supports vision.
-func (c *Client) AskWithImages(sessionID, text string, images []types.ImageData, timeout time.Duration) (string, error) {
-	return c.askCtx(timeout, sessionID, map[string]any{
-		"text":   text,
-		"images": images,
-	})
+func (c *Client) AskWithImages(sessionID, text string, images []types.ImageData, timeout time.Duration, opts ...PromptOption) (string, error) {
+	return c.askCtx(timeout, sessionID, promptBody(text, images, opts))
 }
 
 // askCtx is the shared implementation behind Ask/AskWithImages. It owns the
@@ -528,11 +574,8 @@ func (c *Client) askCtx(timeout time.Duration, sessionID string, body any) (stri
 
 // SendPromptWithImages submits a prompt carrying one or more images (base64).
 // The server validates that the session's model supports vision.
-func (c *Client) SendPromptWithImages(sessionID, text string, images []types.ImageData) (*Status, error) {
-	return c.decodeStatus("POST", "/api/sessions/"+sessionID+"/prompt", map[string]any{
-		"text":   text,
-		"images": images,
-	})
+func (c *Client) SendPromptWithImages(sessionID, text string, images []types.ImageData, opts ...PromptOption) (*Status, error) {
+	return c.decodeStatus("POST", "/api/sessions/"+sessionID+"/prompt", promptBody(text, images, opts))
 }
 
 // GetSessionContext returns the token-usage breakdown for an active session's

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gurcuff91/harness/client"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -196,7 +197,7 @@ func (t *Transport) handleDocument(ctx context.Context, chatID int64, caption st
 	}
 	b.WriteString(fmt.Sprintf("<tel:attach>%s</tel:attach>", tmpPath))
 
-	if _, err := t.api.SendPrompt(pump.sessionID, b.String()); err != nil {
+	if _, err := t.api.SendPrompt(pump.sessionID, b.String(), client.WithOrigin(ProfileName)); err != nil {
 		t.replyError(ctx, chatID, err)
 	}
 }
@@ -228,7 +229,7 @@ func (t *Transport) dispatchImages(ctx context.Context, chatID int64, caption st
 	}
 	t.logger.Info("telegram", "images",
 		"chat", chatID, "count", len(images), "caption", oneLine(caption, 120))
-	if _, err := t.api.SendPromptWithImages(pump.sessionID, caption, images); err != nil {
+	if _, err := t.api.SendPromptWithImages(pump.sessionID, caption, images, client.WithOrigin(ProfileName)); err != nil {
 		t.replyError(ctx, chatID, err)
 	}
 }

@@ -3,7 +3,6 @@ package telegram
 import (
 	"bytes"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -59,10 +58,16 @@ func TestAllowlistAPIReturnsValuesSilently(t *testing.T) {
 	}
 }
 
-// embedTransport builds a Transport the way runWithOptions does — real
-// in-process server + real SDK client over an agent with a fake model — but
-// without a bot (acquireSession never touches it).
+// embedTransport wires a Transport onto ONE shared server exactly like
+// runWithOptions does after GetMe — registering the "telegram" profile — but
+// without a bot (acquireSession never touches it). Returns the shared server
+// too, for tests that act as a second frontend on it.
 func embedTransport(t *testing.T, opts Options) (*Transport, *agent.Agent) {
+	tr, a, _ := embedTransportSrv(t, opts)
+	return tr, a
+}
+
+func embedTransportSrv(t *testing.T, opts Options) (*Transport, *agent.Agent, *server.Server) {
 	t.Helper()
 	isolateConfig(t)
 	t.Setenv("HOME", t.TempDir())
@@ -77,26 +82,24 @@ func embedTransport(t *testing.T, opts Options) (*Transport, *agent.Agent) {
 	}
 	a := agent.New(agent.AgentOptions{Store: agentstore.NewInMemoryStore()})
 	t.Cleanup(func() { a.Close() })
-
-	st, _ := openStore(opts.CWD)
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	srv, err := server.Start(a, "", server.ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "telegram"})
-	go srv.Serve(ln) //nolint:errcheck
 	t.Cleanup(func() { srv.Close() })
+
+	st, _ := openStore(opts.CWD)
+	srv.RegisterProfile(ProfileName, server.Profile{Directives: []string{Directive}})
 	return &Transport{
 		opts:   opts,
-		agent:  a,
-		api:    client.New(ln.Addr().String()),
+		api:    client.New(srv.Addr()),
 		store:  st,
 		srv:    srv,
 		logger: logx.NewNilLogger(),
 		model:  provName + "/m",
 		cwd:    st.cwd,
 		pumps:  map[int64]*chatPump{},
-	}, a
+	}, a, srv
 }
 
 // Criteria 1 + 3: WithCWD decides where the chat's session lives (and where
@@ -133,8 +136,8 @@ func TestEmbeddedTransportCWDAndSessionDirective(t *testing.T) {
 	}
 }
 
-// Criterion 4: after a restart, the transport resumes the chat's stored
-// session WITH its directive (directives aren't persisted — it re-adds them).
+// After a restart, the chat's stored session is resumed WITH its directive
+// (re-applied from the persisted "telegram" profile binding).
 func TestEmbeddedTransportResumeKeepsDirective(t *testing.T) {
 	tr, a := embedTransport(t, Options{CWD: "/x"})
 	id, err := tr.acquireSession(7)

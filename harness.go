@@ -18,17 +18,22 @@
 //	sess.Subscribe(func(e types.Event) { /* render */ })
 //	sess.Prompt(ctx, "Hello!")
 //
-// An already-built agent can also be handed to a RUNNER — a blocking call
-// that serves it over a transport until ctx is cancelled: [RunServer] for
-// the HTTP/SSE API, [RunTelegram] / [RunSlack] for a chat bot, [RunAcp] for
-// the Agent Client Protocol (Zed and other ACP clients). Each is a thin
-// alias over its package's own Run — see [server], [transports/telegram],
-// [transports/slack], [transports/acp] for the real implementations and
-// their Option types.
+// harness is layered: agent (core) → server (the HTTP/SSE API: sessions,
+// events, commands) → transports (pure translation layers). Build ONE agent,
+// wrap it in ONE server with [StartServer], and hand that same server to any
+// number of transports — [RunTelegram], [RunSlack], [RunAcp] — and your own
+// clients. Every session lives in exactly one place, and every frontend can
+// watch and drive the same session at once. Transports never close the
+// server or the agent; you do:
 //
-//	ctx, cancel := context.WithCancel(context.Background())
-//	defer cancel()
-//	err := harness.RunServer(ctx, a, harness.ServerWithAddr(":8080"))
+//	srv, err := harness.StartServer(a, "127.0.0.1:0", server.ServerOptions{})
+//	if err != nil { log.Fatal(err) }
+//	defer srv.Close() // also closes the agent
+//	go harness.RunSlack(ctx, srv)              // registers the "slack" profile
+//	err = harness.RunTelegram(ctx, srv, harness.TelegramWithCWD(dir))
+//
+// [RunServer] is the standalone blocking variant (serve an agent until ctx is
+// cancelled, then close everything).
 //
 // Deeper building blocks live in their own public packages:
 //   - agent            — Agent, Session, and the contracts you implement
@@ -305,6 +310,10 @@ var SetCredentialsStore = agent.SetCredentialsStore
 // returning. See [server.Run].
 var RunServer = server.Run
 
+// StartServer binds and serves an agent in the background, returning the
+// running server — the one to share with every transport. See [server.Start].
+var StartServer = server.Start
+
 // ServerOption configures a [RunServer] call. See [server.Option].
 type ServerOption = server.Option
 
@@ -316,8 +325,8 @@ var ServerWithAddr = server.WithAddr
 // lines. Default: [NewNilLogger] (silent). See [server.WithLogger].
 var ServerWithLogger = server.WithLogger
 
-// RunTelegram starts the Telegram bot transport on top of an already-built
-// agent and blocks until ctx is cancelled. See [telegram.Run].
+// RunTelegram runs the Telegram bot on a running (possibly shared) server and
+// blocks until ctx is cancelled. See [telegram.Run].
 var RunTelegram = telegram.Run
 
 // TelegramOption configures a [RunTelegram] call. See [telegram.Option].
@@ -344,12 +353,16 @@ var TelegramWithAllowUnpair = telegram.WithAllowUnpair
 // [telegram.WithCWD].
 var TelegramWithCWD = telegram.WithCWD
 
+// TelegramWithKeepSessionsOnStop leaves the bot's sessions open when it
+// stops. See [telegram.WithKeepSessionsOnStop].
+var TelegramWithKeepSessionsOnStop = telegram.WithKeepSessionsOnStop
+
 // TelegramWithLogger sets the Logger this transport uses for its own log
 // lines. Default: [NewNilLogger] (silent). See [telegram.WithLogger].
 var TelegramWithLogger = telegram.WithLogger
 
-// RunSlack starts the Slack bot transport on top of an already-built agent
-// and blocks until ctx is cancelled. See [slack.Run].
+// RunSlack runs the Slack bot on a running (possibly shared) server and blocks
+// until ctx is cancelled. See [slack.Run].
 var RunSlack = slack.Run
 
 // SlackOption configures a [RunSlack] call. See [slack.Option].
@@ -380,17 +393,18 @@ var SlackWithSessionThinking = slack.WithSessionThinking
 // [slack.WithCWD].
 var SlackWithCWD = slack.WithCWD
 
+// SlackWithKeepSessionsOnStop leaves the bot's sessions open when it stops.
+// See [slack.WithKeepSessionsOnStop].
+var SlackWithKeepSessionsOnStop = slack.WithKeepSessionsOnStop
+
 // SlackWithLogger sets the Logger this transport uses for its own log
 // lines. Default: [NewNilLogger] (silent). See [slack.WithLogger].
 var SlackWithLogger = slack.WithLogger
 
-// RunAcp starts the Agent Client Protocol transport (for Zed and other ACP
-// clients) on top of an already-built agent and blocks until ctx is
-// cancelled or stdin closes. See [acp.Run]. Deliberately has no
-// AcpWithLogger: this transport never logs anything itself (its whole job
-// is pure JSON-RPC protocol translation over stdin/stdout), so there's
-// nothing for a caller to configure — its in-process server always runs
-// silently.
+// RunAcp runs the Agent Client Protocol bridge (Zed and other ACP clients) on
+// a running (possibly shared) server, over stdin/stdout, and blocks until ctx
+// is cancelled or stdin closes. See [acp.Run]. Deliberately has no
+// AcpWithLogger: this transport never logs anything itself.
 var RunAcp = acp.Run
 
 // AcpOption configures a [RunAcp] call. See [acp.Option].

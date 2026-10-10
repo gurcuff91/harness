@@ -2,6 +2,48 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.87.0] - 2026-10-10
+
+### Breaking — layered architecture: transports run on a server you give them
+harness is now layered: **agent** (core) → **server** (the HTTP/SSE API: sessions, events, commands) → **transports** (pure translation layers). Build ONE agent, wrap it in ONE server, and hand that same server to every transport and to your own clients — every session lives in exactly one place, and any number of frontends can watch and drive the same session at once.
+
+Before, each transport built its own in-process server over the agent you passed it, so an SDK consumer ended up with N servers over one agent, colliding on the same sessions: a second server resuming a session already active elsewhere built a second proxy that stole its event stream (Slack stopped receiving its replies), closing a session on one server closed it for all, and one server couldn't see another's runtime state (busy, queue).
+
+- **`telegram.Run`, `slack.Run`, `acp.Run(ctx, srv *server.Server, opts...)`** (were `*agent.Agent`; also `harness.RunTelegram/RunSlack/RunAcp`). They talk to `srv` over HTTP/SSE (`client.New(srv.Addr())`) like any client, and **never close the server or the agent** — their owner does. `Run` on a server that isn't serving fails with a clear error.
+- **`server.Start(a, addr, opts) (*Server, error)`** (+ `harness.StartServer`) binds and serves in the background and returns the running server; **`Server.Addr()`** is valid as soon as it returns.
+- **One proxy per session per server**: create/resume are now atomic in the server (concurrent resumes of one session used to be able to build several proxies — reproduced at up to 12 — each stealing the stream). Every SSE client on a session receives every event.
+- **Removed** `server.ServerOptions.SessionTools` (from 0.86.0) — superseded by profiles below. `KeepAgentOpen` remains for a server fronting an agent it doesn't own.
+
+### Added — server profiles (a transport's directive + tools, bound to sessions by name)
+- **`server.Profile{Directives, Tools}`**, registered with **`srv.RegisterProfile(name, p)`** / **`UnregisterProfile(name)`** (`ProfileNames()` lists them). Telegram registers `"telegram"` (its directive), Slack `"slack"` (its directive + the five `Slack*` tools bound to its live bot) — for exactly the duration of their `Run`.
+- **Bind sessions by name**: `"profiles": [...]` on `POST /api/sessions` and `/resume`; `client.WithProfiles(...)`. Unknown name → 400. The names are **persisted** in the session's meta (`SessionMeta.Profiles`, never the text or tools), so **every later open of the session — by any client, with or without options — re-applies** the directives and tools of whichever of its profiles are registered at that moment; an unregistered profile is skipped entirely. A Slack session opened first by your UI gets Slack's directive and tools. Binding on resume is additive.
+- **Rebinding a live session applies at its next turn boundary, never mid-turn** (`Agent.ReconfigureSession`); an idle session is reconfigured right away. `ForkSession` inherits the binding.
+- Agent-level building blocks: `agent.WithSessionProfiles`, `Agent.SetSessionProfiles/SessionProfiles`, `Agent.ReconfigureSession`.
+
+### Added — free-form prompt origin
+- `promptRequest.origin` accepts any short string, not just `"user"`/`"scheduled"`: transports send `"telegram"`, `"slack"`, `"acp"`; SDK consumers their own (e.g. `"kaiban"`). Default `"user"`. Echoed on `received_prompt`/`follow_up_start` (`Event.Origin`) — live only, not stored. `agent.PromptWithOrigin(...)`; client: `SendPrompt(id, text, client.WithOrigin(...))`, also on `SendPromptWithImages`, `Ask`, `AskWithImages`.
+- Transports still forward ALL of a session's output to their chat regardless of origin — a prompt typed into a Slack session from another frontend is answered in Slack too; origin is for rendering ("via Slack").
+
+### Changed — stopping a transport
+- On stop a transport unregisters its profile and closes the sessions it drives (so their schedules stop firing into a session nobody delivers) — on the shared server, so for everyone; a frontend still viewing one just resumes it. Opt out with `WithKeepSessionsOnStop()` (`harness.TelegramWithKeepSessionsOnStop` / `SlackWithKeepSessionsOnStop`). ACP closes the sessions it opened.
+
+### Fixed — Telegram bot token in error logs
+Every Bot API URL embeds the bot token, and Go's HTTP errors print the full URL — so any network failure (even a routine `context canceled` on shutdown) logged the token, e.g. in the `set_commands` warning. Transport errors are now redacted (`<redacted>`) before they reach a log or a caller; the error cause is preserved for `errors.Is`. Slack was not affected (its credentials travel in headers/body, never the URL).
+
+### Migration
+```go
+// before
+err := telegram.Run(ctx, a, telegram.WithToken(tok))
+
+// after
+srv, err := server.Start(a, "127.0.0.1:0", server.ServerOptions{})
+if err != nil { ... }
+defer srv.Close()        // closes the agent too
+go slack.Run(ctx, srv)   // same server, shared
+err = telegram.Run(ctx, srv, telegram.WithToken(tok))
+```
+The harness CLI builds agent → server → transport itself, so `harness telegram`, `harness slack` and `harness acp` behave exactly as before.
+
 ## [0.86.0] - 2026-10-09
 
 ### Fixed — Slack's tools leaked into every session of a shared agent

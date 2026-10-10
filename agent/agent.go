@@ -604,6 +604,21 @@ type SessionOption func(*sessionConfig)
 type sessionConfig struct {
 	directives []string
 	tools      []tools.Tool
+	profiles   []string
+	setProfile bool
+}
+
+// WithSessionProfiles sets the profile names stored in a NEW session's meta
+// (store.SessionMeta.Profiles) — the server's profile binding, written in
+// the same SaveMeta that creates the session. The agent only stores the
+// names; resolving them to directives/tools is the server's job (it passes
+// those via WithSessionDirectives/WithSessionTools). Ignored by
+// ResumeSession — rebind an existing session with SetSessionProfiles.
+func WithSessionProfiles(names ...string) SessionOption {
+	return func(c *sessionConfig) {
+		c.profiles = append(c.profiles, names...)
+		c.setProfile = true
+	}
 }
 
 // WithSessionDirectives appends instruction blocks to THIS session's system
@@ -693,6 +708,7 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 		Name:         defaultSessionName(now),
 		Model:        model,
 		Thinking:     a.thinkingLevel,
+		Profiles:     cfg.profiles,
 		CreatedAt:    now,
 		LastActiveAt: now,
 	}
@@ -792,6 +808,75 @@ func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session
 	sess.agent = a
 	a.registerSession(sess)
 	return sess, nil
+}
+
+// ReconfigureSession rebuilds a LIVE session's system prompt and tool
+// registry with new session options (WithSessionDirectives/WithSessionTools)
+// and applies them at the session's next turn boundary — never mid-turn; if
+// the session is idle they apply immediately. This is how a session that was
+// already active picks up a changed configuration (e.g. a server profile
+// bound to it after it was opened). Returns an error if the session isn't
+// active in this agent.
+func (a *Agent) ReconfigureSession(sessionID string, opts ...SessionOption) error {
+	a.sessMu.Lock()
+	sess, ok := a.activeSessions[sessionID]
+	a.sessMu.Unlock()
+	if !ok {
+		return fmt.Errorf("session %s is not active", sessionID)
+	}
+	cfg := applySessionOptions(opts)
+	cwd := sess.CWD()
+	loader := a.newLoader(cwd)
+	res, err := loader.Load()
+	if err != nil || res == nil {
+		res = &resources.Resources{}
+	}
+	sessRef := sess
+	reg, tl := a.buildSessionTools(sessionID, cwd, &sessRef, res, loader, cfg.tools...)
+	prompt, pl := a.buildSystemPrompt(cwd, res, cfg.directives...)
+	sess.queueReconfig(&sessionReconfig{systemPrompt: prompt, pl: pl, tools: reg, tl: tl})
+	return nil
+}
+
+// SetSessionProfiles persists the names of the server profiles bound to a
+// session (store.SessionMeta.Profiles) — see server.Profile. Works on active
+// and inactive sessions alike; the agent itself only stores the names, the
+// server resolves them to directives/tools.
+func (a *Agent) SetSessionProfiles(sessionID string, profiles []string) error {
+	a.sessMu.Lock()
+	sess, ok := a.activeSessions[sessionID]
+	a.sessMu.Unlock()
+	if ok {
+		meta := sess.store.Meta()
+		meta.Profiles = append([]string(nil), profiles...)
+		return sess.store.UpdateMeta(meta)
+	}
+	st, err := store.OpenSession(a.store, sessionID)
+	if err != nil {
+		return err
+	}
+	if st == nil {
+		return fmt.Errorf("session %s not found", sessionID)
+	}
+	meta := st.Meta()
+	meta.Profiles = append([]string(nil), profiles...)
+	return st.UpdateMeta(meta)
+}
+
+// SessionProfiles returns the profile names bound to a session (nil if none
+// or the session doesn't exist).
+func (a *Agent) SessionProfiles(sessionID string) []string {
+	a.sessMu.Lock()
+	sess, ok := a.activeSessions[sessionID]
+	a.sessMu.Unlock()
+	if ok {
+		return append([]string(nil), sess.store.Meta().Profiles...)
+	}
+	meta, found, err := a.store.LoadMeta(sessionID)
+	if err != nil || !found {
+		return nil
+	}
+	return meta.Profiles
 }
 
 // ── Session management ───────────────────────────────────────────────────

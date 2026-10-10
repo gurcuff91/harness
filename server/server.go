@@ -20,7 +20,6 @@ import (
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/agent/store"
-	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/internal/config"
 	"github.com/gurcuff91/harness/internal/providers"
 	"github.com/gurcuff91/harness/internal/version"
@@ -45,11 +44,18 @@ const sseClientBufferSize = 4096
 
 // Server is the HTTP transport for the agent harness.
 type Server struct {
-	agent        *agent.Agent
-	logger       logx.Logger // never nil — defaults to logx.NewNilLogger()
-	transport    string      // name of the calling transport
-	sessionTools func() []tools.Tool
-	keepAgent    bool   // Close leaves the agent open (it belongs to the caller)
+	agent     *agent.Agent
+	logger    logx.Logger // never nil — defaults to logx.NewNilLogger()
+	transport string      // name of the calling transport
+	keepAgent bool        // Close leaves the agent open (it belongs to the caller)
+
+	// openMu serializes session create/resume so a session can never get a
+	// second proxy (two concurrent resumes of the same id used to both miss
+	// s.sessions and each build one — the second stealing the event stream).
+	openMu sync.Mutex
+
+	profMu       sync.RWMutex
+	profiles     map[string]Profile
 	addr         string // resolved listen address (set in Serve)
 	instanceName string // unique instance name (MK11-themed, set in Serve)
 	mu           sync.RWMutex
@@ -72,22 +78,10 @@ type ServerOptions struct {
 	Logger    logx.Logger
 	Transport string // name of the calling transport (e.g. "tui", "telegram", "slack"); empty defaults to "server"
 
-	// SessionTools, when set, supplies tools added to every session THIS
-	// server creates or resumes (agent.WithSessionTools) — and to no other
-	// session of the agent. Since each transport runs its own in-process
-	// server, this scopes a transport's tools to the sessions it drives
-	// (e.g. Slack's tools only in Slack sessions). Called once per
-	// create/resume. Not applied when the session is already active in the
-	// agent (it keeps the tools it was opened with).
-	SessionTools func() []tools.Tool
-
 	// KeepAgentOpen makes Close leave the agent running: it closes this
-	// server's own sessions and HTTP listener, but not the agent's MCP,
-	// memory, scheduler or store. For servers that front an agent they don't
-	// own — every transport's in-process server, since the agent passed to
-	// telegram.Run/slack.Run/acp.Run belongs to the caller, who may be
-	// serving other sessions on it. Default false: server.Run (which takes
-	// ownership of its agent) closes it.
+	// server's sessions and HTTP listener, but not the agent's MCP, memory,
+	// scheduler or store — for a server fronting an agent it doesn't own.
+	// Default false: the server closes its agent (server.Run's semantics).
 	KeepAgentOpen bool
 }
 
@@ -102,12 +96,12 @@ func NewServer(a *agent.Agent, opts ServerOptions) *Server {
 		logger = logx.NewNilLogger()
 	}
 	return &Server{
-		agent:        a,
-		logger:       logger,
-		transport:    transport,
-		sessionTools: opts.SessionTools,
-		keepAgent:    opts.KeepAgentOpen,
-		sessions:     make(map[string]*SessionProxy),
+		agent:     a,
+		logger:    logger,
+		transport: transport,
+		keepAgent: opts.KeepAgentOpen,
+		sessions:  make(map[string]*SessionProxy),
+		profiles:  make(map[string]Profile),
 	}
 }
 
@@ -225,6 +219,38 @@ func (s *Server) Serve(l net.Listener) error {
 	return httpSrv.Serve(l)
 }
 
+// Addr returns the address the server is listening on ("host:port"), or ""
+// if it isn't serving yet. Set as soon as Serve has its listener.
+func (s *Server) Addr() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.addr
+}
+
+// Start binds addr ("127.0.0.1:0" for loopback + an OS-assigned port; "" means
+// the same) and serves the agent in the background, returning once the
+// server is bound and accepting — so srv.Addr() is valid immediately, ready
+// to hand to transports (telegram.Run(ctx, srv), …), which all share it.
+// The caller owns the server: Close it when done (by default that also
+// closes the agent — see ServerOptions.KeepAgentOpen).
+func Start(a *agent.Agent, addr string, opts ServerOptions) (*Server, error) {
+	if addr == "" {
+		addr = "127.0.0.1:0"
+	}
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	srv := NewServer(a, opts)
+	// Pre-set addr so Addr() is valid the moment Start returns, before the
+	// Serve goroutine has run.
+	srv.mu.Lock()
+	srv.addr = l.Addr().String()
+	srv.mu.Unlock()
+	go srv.Serve(l) //nolint:errcheck
+	return srv, nil
+}
+
 // Close performs a graceful shutdown: closes all active sessions (flushing
 // their stores), closes the agent (MCP subprocesses, memory DB, scheduler
 // engine, session store), and shuts down the HTTP server. Idempotent — safe
@@ -286,24 +312,21 @@ type createSessionRequest struct {
 	// Directives are optional instruction blocks for THIS session's system
 	// prompt only (agent.WithSessionDirectives) — not persisted.
 	Directives []string `json:"directives,omitempty"`
-}
-
-// sessionOptions builds the per-session options for a create/resume: the
-// request's directives plus this server's SessionTools.
-func (s *Server) sessionOptions(directives []string) []agent.SessionOption {
-	opts := []agent.SessionOption{agent.WithSessionDirectives(directives...)}
-	if s.sessionTools != nil {
-		opts = append(opts, agent.WithSessionTools(s.sessionTools()...))
-	}
-	return opts
+	// Profiles binds the new session to registered profiles by name
+	// (persisted in its meta — see Profile). Unknown names → 400.
+	Profiles []string `json:"profiles,omitempty"`
 }
 
 // resumeSessionRequest is the OPTIONAL body of POST /api/sessions/{id}/resume.
 type resumeSessionRequest struct {
 	// Directives for the reopened session's system prompt
-	// (agent.WithSessionDirectives). Ignored when the session is already
-	// active — it keeps the prompt it was opened with.
+	// (agent.WithSessionDirectives), not persisted. Ignored when the session
+	// is already active.
 	Directives []string `json:"directives,omitempty"`
+	// Profiles to ADD to the session's persisted binding (additive — never
+	// removes another frontend's). Unknown names → 400. If the session is
+	// already active, a changed binding is applied at its next turn boundary.
+	Profiles []string `json:"profiles,omitempty"`
 }
 
 // serverInfo is returned by GET /api/server.
@@ -841,7 +864,13 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, err := s.agent.NewSession(req.CWD, req.Model, s.sessionOptions(req.Directives)...)
+	if err := s.validateProfiles(req.Profiles); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	profiles, _ := mergeProfiles(nil, req.Profiles)
+	opts := append(s.profileOptions(profiles, req.Directives), agent.WithSessionProfiles(profiles...))
+	sess, err := s.agent.NewSession(req.CWD, req.Model, opts...)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -866,10 +895,8 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	// resolution, which already falls back to the global setting exactly
 	// when the Agent itself wasn't configured with one.
 
-	proxy := newSessionProxy(sess, s.logger)
-
 	s.mu.Lock()
-	s.sessions[sess.ID()] = proxy
+	s.sessions[sess.ID()] = newSessionProxy(sess, s.logger)
 	s.mu.Unlock()
 
 	writeJSON(w, http.StatusCreated, sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations()})
@@ -1004,24 +1031,11 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Already active? Return the live session (idempotent — supports scheduler
-	// auto-resume and transport reconnect without 409 errors). Meta() is the
-	// lock-free public accessor — safe here since this session could be
-	// mid-turn (same reasoning as handleSessionInfo/handleGetSession below;
-	// see Meta()'s own doc comment for the full rationale, including why the
-	// unexported syncMeta() would be wrong to use here).
-	s.mu.RLock()
-	if proxy, ok := s.sessions[id]; ok {
-		s.mu.RUnlock()
-		writeJSON(w, http.StatusOK, sessionDetailDTO{
-			SessionMeta:   proxy.session.Meta(),
-			MaxIterations: proxy.session.MaxIterations(),
-		})
+	if err := s.validateProfiles(req.Profiles); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	s.mu.RUnlock()
-
-	sess, err := s.agent.ResumeSession(id, s.sessionOptions(req.Directives)...)
+	sess, err := s.openSession(id, req.Profiles, req.Directives)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "not found") {
@@ -1030,13 +1044,56 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, status, err)
 		return
 	}
-
-	proxy := newSessionProxy(sess, s.logger)
-	s.mu.Lock()
-	s.sessions[sess.ID()] = proxy
-	s.mu.Unlock()
-
+	// Meta() is the lock-free public accessor — safe even if the session is
+	// mid-turn (see its doc comment).
 	writeJSON(w, http.StatusOK, sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations()})
+}
+
+// openSession resumes session id in this server — idempotent and atomic, so
+// a session has at most ONE proxy here no matter how many clients open it
+// concurrently (openMu). addProfiles are merged into its persisted binding
+// (additive). The session is (re)built from its stored binding: on a fresh
+// open, with the registered profiles' directives/tools (plus extra one-off
+// directives); if it's already active — in this server or in the agent (the
+// scheduler, a colleague, …) — and the binding changed, it's reconfigured at
+// its next turn boundary, never mid-turn.
+func (s *Server) openSession(id string, addProfiles, extraDirectives []string) (*agent.Session, error) {
+	s.openMu.Lock()
+	defer s.openMu.Unlock()
+
+	bound := s.agent.SessionProfiles(id)
+	merged, changed := mergeProfiles(bound, addProfiles)
+	if changed {
+		if err := s.agent.SetSessionProfiles(id, merged); err != nil {
+			return nil, err
+		}
+	}
+
+	s.mu.RLock()
+	proxy, inServer := s.sessions[id]
+	s.mu.RUnlock()
+	if inServer {
+		if changed {
+			_ = s.agent.ReconfigureSession(id, s.profileOptions(merged, nil)...)
+		}
+		return proxy.session, nil
+	}
+
+	// Not in this server: resume through the agent. If the agent already has
+	// it live (opened outside the server), this returns that same object and
+	// ignores the options — so reconfigure it explicitly when the binding
+	// changed.
+	sess, err := s.agent.ResumeSession(id, s.profileOptions(merged, extraDirectives)...)
+	if err != nil {
+		return nil, err
+	}
+	if changed {
+		_ = s.agent.ReconfigureSession(id, s.profileOptions(merged, extraDirectives)...)
+	}
+	s.mu.Lock()
+	s.sessions[id] = newSessionProxy(sess, s.logger)
+	s.mu.Unlock()
+	return sess, nil
 }
 
 // sessionDetailDTO wraps store.SessionMeta with fields that live on the runtime
@@ -1091,7 +1148,10 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 type promptRequest struct {
 	Text   string            `json:"text"`
 	Images []types.ImageData `json:"images,omitempty"`
-	Origin string            `json:"origin,omitempty"` // "user" (default) | "scheduled"
+	// Origin tags where the prompt came from — any short string: "user"
+	// (default), "scheduled", a transport's name ("telegram", "slack",
+	// "acp"), or a caller's own. Echoed on received_prompt/follow_up_start.
+	Origin string `json:"origin,omitempty"`
 }
 
 func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
@@ -1127,9 +1187,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	if len(req.Images) > 0 {
 		opts = append(opts, agent.PromptWithImages(req.Images...))
 	}
-	if req.Origin == agent.OriginScheduled {
-		opts = append(opts, agent.PromptWithOriginScheduled())
-	}
+	opts = append(opts, agent.PromptWithOrigin(req.Origin))
 	ps := proxy.session.Prompt(context.Background(), req.Text, opts...)
 
 	status := "started"
@@ -1172,7 +1230,7 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	opts := []agent.PromptOption{agent.PromptWithOriginUser()}
+	opts := []agent.PromptOption{agent.PromptWithOrigin(req.Origin)}
 	if len(req.Images) > 0 {
 		opts = append(opts, agent.PromptWithImages(req.Images...))
 	}

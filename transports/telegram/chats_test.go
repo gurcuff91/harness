@@ -9,6 +9,8 @@ import (
 	agentstore "github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/configstore"
 	"github.com/gurcuff91/harness/internal/config"
+	"github.com/gurcuff91/harness/logx"
+	"github.com/gurcuff91/harness/server"
 )
 
 // isolateConfig points harness's process-global settings and credentials
@@ -24,6 +26,17 @@ func newTestAgent(t *testing.T) *agent.Agent {
 	a := agent.New(agent.AgentOptions{Store: agentstore.NewInMemoryStore()})
 	t.Cleanup(func() { _ = a.Close() })
 	return a
+}
+
+// newTestServer is a running server over a fresh test agent — what Run takes.
+func newTestServer(t *testing.T) *server.Server {
+	t.Helper()
+	srv, err := server.Start(newTestAgent(t), "", server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "telegram", KeepAgentOpen: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { srv.Close() })
+	return srv
 }
 
 // TestSaveTokenAndLoadTokenRoundTrip verifies the persistence this feature
@@ -136,7 +149,7 @@ func TestRunFallsBackToSavedToken(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	err := Run(ctx, newTestAgent(t)) // no WithToken — must fall back to the saved one
+	err := Run(ctx, newTestServer(t)) // no WithToken — must fall back to the saved one
 	if err == nil {
 		t.Fatal("Run succeeded unexpectedly (no real bot token was ever valid in this test)")
 	}
@@ -157,7 +170,7 @@ func TestRunFailsWithoutTokenOrSavedFallback(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	err := Run(ctx, newTestAgent(t))
+	err := Run(ctx, newTestServer(t))
 	if err == nil {
 		t.Fatal("Run succeeded unexpectedly with no token anywhere")
 	}

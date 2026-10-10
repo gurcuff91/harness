@@ -3,13 +3,11 @@ package slack
 import (
 	"context"
 	"fmt"
-	"net"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/gurcuff91/harness/agent"
 	atools "github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/client"
 	"github.com/gurcuff91/harness/logx"
@@ -42,6 +40,10 @@ type Options struct {
 	// CWD is the working directory channel sessions are created in and looked
 	// up/bound under — "" means the process's os.Getwd(). See WithCWD.
 	CWD string
+	// KeepSessionsOnStop leaves this transport's sessions open when Run
+	// returns (default: they're closed, so their schedules stop firing into
+	// a session nobody delivers). See WithKeepSessionsOnStop.
+	KeepSessionsOnStop bool
 
 	// logger is set via WithLogger — unexported since Options is otherwise a
 	// plain data struct; only the functional Option constructors populate it.
@@ -87,6 +89,14 @@ func WithCWD(dir string) Option {
 	return func(o *Options) { o.CWD = dir }
 }
 
+// WithKeepSessionsOnStop leaves the sessions this transport drives OPEN when
+// Run returns. By default they're closed on stop (on the shared server, so
+// for every frontend — one that still wants a session just resumes it), so
+// their schedules don't keep firing into a session nobody delivers.
+func WithKeepSessionsOnStop() Option {
+	return func(o *Options) { o.KeepSessionsOnStop = true }
+}
+
 // WithSessionThinking overrides the thinking level for sessions this
 // transport creates or resumes (applied alongside WithSessionModel).
 func WithSessionThinking(level string) Option {
@@ -108,7 +118,6 @@ func WithLogger(l logx.Logger) Option {
 // server, the bot client, and one live SSE pump per active channel.
 type Transport struct {
 	opts   Options
-	agent  *agent.Agent
 	api    *client.Client
 	bot    *Bot
 	store  *store
@@ -138,22 +147,34 @@ type Transport struct {
 	typingSeq int64 // monotonic id for RTM messages
 }
 
-// Run starts the Slack transport and blocks until ctx is cancelled.
-// Credentials are resolved with precedence: flags > env > saved login.
-// Three Slack-specific tools (SlackPost, SlackListChannels, SlackListUsers) are
-// injected into the agent so it can proactively post messages and resolve names.
-func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
+// ProfileName is the server profile the Slack transport registers on the
+// server it runs on, and binds its channel sessions to: Directive + the
+// Slack* tools, bound to this run's live bot. See server.Profile.
+const ProfileName = "slack"
+
+// Run starts the Slack transport on srv — a running server (server.Start)
+// the caller owns and may share with other frontends — and blocks until ctx
+// is cancelled. It is a pure translation layer: it talks to srv over HTTP/SSE
+// (client.New(srv.Addr())) like any other client, and never closes srv or its
+// agent. It registers the "slack" profile (Directive + the Slack* tools) on
+// srv for its lifetime and binds its channel sessions to it; on stop it
+// unregisters the profile and, unless WithKeepSessionsOnStop, closes its
+// sessions. Credentials precedence: options > saved login.
+func Run(ctx context.Context, srv *server.Server, opts ...Option) error {
 	o := Options{logger: logx.NewNilLogger()}
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return runWithOptions(ctx, a, o)
+	return runWithOptions(ctx, srv, o)
 }
 
 // runWithOptions is Run's actual body, taking the fully-assembled Options —
 // split out so the WithX-option-application step above stays a thin,
 // separately testable layer over the real logic.
-func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
+func runWithOptions(ctx context.Context, srv *server.Server, opts Options) error {
+	if srv == nil || srv.Addr() == "" {
+		return fmt.Errorf("slack: the server is not serving — start it first (server.Start)")
+	}
 	// Fill missing credentials from the saved login (config stores).
 	if opts.Workspace == "" || opts.XoxC == "" || opts.XoxD == "" {
 		if saved, err := LoadCredentials(); err == nil && saved != nil {
@@ -182,22 +203,13 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 		logger = logx.NewNilLogger() // defensive — Run's default already sets this
 	}
 
-	// In-process server — same pattern as TUI and Telegram. Always
-	// logx.NewNilLogger() here, never this transport's own `logger`: THIS
-	// transport is the one logging (via t.logger below), so its inner server
-	// must stay silent rather than duplicating every request as a second log
-	// line.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return fmt.Errorf("slack: bind server: %w", err)
-	}
 	bot := NewBot(opts.Workspace, opts.XoxC, opts.XoxD)
 	t := &Transport{
 		opts:        opts,
-		agent:       a,
-		api:         client.New(listener.Addr().String()),
+		api:         client.New(srv.Addr()),
 		bot:         bot,
 		store:       st,
+		srv:         srv,
 		logger:      logger,
 		cwd:         st.cwd,
 		pumps:       make(map[string]*channelPump),
@@ -210,28 +222,20 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 	// providers" from resolveModel below.
 	me, err := t.bot.AuthTest(ctx)
 	if err != nil {
-		listener.Close()
 		return fmt.Errorf("slack: invalid tokens: %w", err)
 	}
 	t.myID = me.UserID
 
-	// The in-process server — created only now, once our user id is known,
-	// because it carries this transport's tools: SessionTools adds Slack's
-	// tools to every session THIS server creates/resumes (the Slack
-	// sessions) and to no other session of the agent. KeepAgentOpen: the
-	// agent belongs to the caller (who may be serving other sessions on it),
-	// so stopping Slack closes only Slack's own sessions.
+	// Register the "slack" profile — Directive + the Slack* tools bound to
+	// THIS run's live bot — for exactly this run's lifetime. Sessions bound
+	// to it (ours, via WithProfiles) get them whoever opens them; no other
+	// session of the shared server ever does.
 	slackTools := SlackTools(bot, me.UserID, t)
-	t.srv = server.NewServer(a, server.ServerOptions{
-		Logger:        logx.NewNilLogger(),
-		Transport:     "slack",
-		SessionTools:  func() []atools.Tool { return slackTools },
-		KeepAgentOpen: true,
+	srv.RegisterProfile(ProfileName, server.Profile{
+		Directives: []string{Directive},
+		Tools:      func() []atools.Tool { return slackTools },
 	})
-	go t.srv.Serve(listener) //nolint:errcheck
-	// Every exit from here on closes Slack's own sessions and listener —
-	// never the agent (KeepAgentOpen).
-	defer t.srv.Close()
+	defer t.shutdown()
 
 	// Resolve model.
 	if err := t.resolveModel(); err != nil {
@@ -244,11 +248,31 @@ func runWithOptions(ctx context.Context, a *agent.Agent, opts Options) error {
 	// itself configures.
 	t.logger.Info("slack", "connected",
 		"user", me.UserID, "team", me.Team,
-		"default_model", t.model, "scheduler", a.Options().EnableScheduler)
+		"default_model", t.model)
 
 	t.prewarmPumps(ctx)
 
 	return t.rtmLoop(ctx)
+}
+
+// shutdown tears this run down without touching the shared server or its
+// agent: unregisters the "slack" profile and, unless KeepSessionsOnStop,
+// closes the sessions this transport drives (so their schedules stop firing
+// into a session nobody delivers). The pumps' SSE streams end with ctx.
+func (t *Transport) shutdown() {
+	t.srv.UnregisterProfile(ProfileName)
+	if t.opts.KeepSessionsOnStop {
+		return
+	}
+	t.mu.Lock()
+	ids := make([]string, 0, len(t.pumps))
+	for _, p := range t.pumps {
+		ids = append(ids, p.sessionID)
+	}
+	t.mu.Unlock()
+	for _, id := range ids {
+		_, _ = t.api.CloseSession(id)
+	}
 }
 
 // prewarmPumps opens a pump (SSE consumer) for every stored channel mapping at
@@ -491,9 +515,9 @@ func (t *Transport) handleEvent(ctx context.Context, evt *RTMEvent) {
 	}
 	var sendErr error
 	if len(images) > 0 {
-		_, sendErr = t.api.SendPromptWithImages(pump.sessionID, prompt, images)
+		_, sendErr = t.api.SendPromptWithImages(pump.sessionID, prompt, images, client.WithOrigin(ProfileName))
 	} else if prompt != "" {
-		_, sendErr = t.api.SendPrompt(pump.sessionID, prompt)
+		_, sendErr = t.api.SendPrompt(pump.sessionID, prompt, client.WithOrigin(ProfileName))
 	}
 	if sendErr != nil {
 		t.replyError(ctx, evt.Channel, sendErr)

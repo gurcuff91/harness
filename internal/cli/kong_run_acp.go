@@ -8,8 +8,13 @@ import (
 
 func (c *acpCmd) Run() error {
 	a := newInteractiveAgent(false)
-	defer a.Close()
+	srv, err := startTransportServer(a, "acp")
+	if err != nil {
+		a.Close()
+		return err
+	}
+	defer srv.Close() // also closes the agent
 	ctx, cancel := signalContext()
 	defer cancel()
-	return acp.Run(ctx, a)
+	return acp.Run(ctx, srv)
 }

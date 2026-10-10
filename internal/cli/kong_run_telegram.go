@@ -18,9 +18,14 @@ func (c *telegramRunCmd) Run() error {
 	// creates/resumes (per-session directives), so it never leaks into other
 	// sessions of the same agent.
 	a := newInteractiveAgent(c.Scheduler)
-	// The transport never closes the agent it's given (it may be shared), so
-	// the CLI — which built it — closes it on exit, like `harness acp`.
-	defer a.Close()
+	// agent → server → transport. The transport never closes the server or
+	// the agent; the CLI owns both (closing srv also closes a).
+	srv, err := startTransportServer(a, "telegram")
+	if err != nil {
+		a.Close()
+		return err
+	}
+	defer srv.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
 
@@ -37,7 +42,7 @@ func (c *telegramRunCmd) Run() error {
 	if c.AllowUnpair {
 		opts = append(opts, telegram.WithAllowUnpair())
 	}
-	return telegram.Run(ctx, a, opts...)
+	return telegram.Run(ctx, srv, opts...)
 }
 
 func (c *telegramPairCmd) Run() error {
