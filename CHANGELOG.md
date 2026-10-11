@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.88.0] - 2026-10-11
+
+### Added — prompt images on live events (by reference) and a message-image endpoint
+A UI watching a session live showed a prompt's caption but not its images (`received_prompt`/`follow_up_start` only carried text + origin), and the echo was emitted BEFORE the user message was stored, so a client couldn't even fetch it on arrival.
+
+- **Store before echo**: the user message is now stored first, then echoed — so everything the event points at already exists when it arrives.
+- **`received_prompt` / `follow_up_start` gain `message_index`** (the stored user message's absolute history index) and, when the prompt has images, **`images: [{mime_type, bytes}]`** — metadata only, never the base64. The SSE stays small; transports receive nothing heavy. (`client.Event.MessageIndex`/`Images`, `types.ImageRef`, `types.Event.MessageIndex`/`Images`.)
+- **`GET /api/sessions/{id}/messages/{index}/images/{n}`** — raw bytes of the n-th image of that message, with its own `Content-Type`, `Cache-Control: private, max-age=31536000, immutable` and an `ETag` (304 on `If-None-Match`). Works for active and persisted sessions, so it also serves the history's thumbnails. Client: `GetMessageImage(sessionID, index, n) (data, mimeType, err)`.
+- Indices are stable for a session's lifetime; `/reset` empties the log and reuses them — `SessionMeta.ResetCount` (new) is part of the ETag, so a cached image never survives a reset.
+
+### Added — prompt origin persisted in the history
+- **`MessageMeta.Origin`** is stored on the user message for every non-default origin (`telegram`, `slack`, `scheduled`, your own) and returned by `GET /messages`; the default `"user"` is omitted. A reloaded history can now render "via Telegram" / "⏰ Scheduled". Messages from before this release simply have no origin.
+
+### Fixed — event streams could end silently
+The client's SSE reader capped a line at 4 MB; a bigger event (a large tool result, images) made it stop and close the channel with no error — the consumer just stopped receiving events. The cap is now 64 MB, and if a line still exceeds it (or the connection breaks) the stream emits a final **`error` event** explaining why before closing, never ending silently.
+
 ## [0.87.1] - 2026-10-10
 
 ### Added — remove transport credentials and chat bindings from code (silent API)

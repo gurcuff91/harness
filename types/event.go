@@ -101,10 +101,26 @@ type Event struct {
 	Details       map[string]any // structured error details, if any (EventError)
 	Summary       string         // compaction summary (EventCompactEnd)
 	Origin        string         // prompt source for EventReceivedPrompt/EventFollowUpStart ("user", "scheduled", …)
-	Delta         string
-	Tokens        TokenUsage
-	Duration      time.Duration
-	IsError       bool
+	// MessageIndex is the absolute index of the user message a
+	// EventReceivedPrompt/EventFollowUpStart echoes — already stored when the
+	// event fires, so clients can fetch it (or its images) immediately.
+	MessageIndex int
+	// Images describes the prompt's attached images for
+	// EventReceivedPrompt/EventFollowUpStart — metadata only, never the
+	// bytes (fetch them by MessageIndex + position).
+	Images   []ImageRef
+	Delta    string
+	Tokens   TokenUsage
+	Duration time.Duration
+	IsError  bool
+}
+
+// ImageRef describes one image of a prompt, without its payload: the n-th
+// image (0-based, in message order) of the message at Event.MessageIndex,
+// served by GET /api/sessions/{id}/messages/{index}/images/{n}.
+type ImageRef struct {
+	MimeType string `json:"mime_type"`
+	Bytes    int    `json:"bytes"` // decoded size
 }
 
 // Handler receives events from the agent loop for rendering.

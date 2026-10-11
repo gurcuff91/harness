@@ -16,6 +16,11 @@ const (
 type MessageMeta struct {
 	IsCompaction      bool `json:"is_compaction,omitempty"`
 	IsSystemGenerated bool `json:"is_system_generated,omitempty"`
+	// Origin is where a user prompt came from ("telegram", "slack",
+	// "scheduled", a caller's own, …) — the same value live events carry in
+	// Event.Origin, persisted so a reloaded history can render it. Omitted
+	// for the default ("user") and for every non-prompt message.
+	Origin string `json:"origin,omitempty"`
 }
 
 // Message is a single turn in a conversation.

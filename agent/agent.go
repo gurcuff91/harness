@@ -863,6 +863,37 @@ func (a *Agent) SetSessionProfiles(sessionID string, profiles []string) error {
 	return st.UpdateMeta(meta)
 }
 
+// LoadMessages returns a session's full message history whether or not it's
+// active (the live session's log if it is, the store's otherwise).
+func (a *Agent) LoadMessages(sessionID string) ([]types.Message, error) {
+	a.sessMu.Lock()
+	sess, ok := a.activeSessions[sessionID]
+	a.sessMu.Unlock()
+	if ok {
+		return sess.AllMessages(), nil
+	}
+	if _, found, err := a.store.LoadMeta(sessionID); err != nil || !found {
+		return nil, fmt.Errorf("session %s not found", sessionID)
+	}
+	return a.store.LoadMessages(sessionID, 0)
+}
+
+// SessionResetCount returns how many times a session's history was reset
+// (store.SessionMeta.ResetCount) — 0 for a never-reset or unknown session.
+func (a *Agent) SessionResetCount(sessionID string) int {
+	a.sessMu.Lock()
+	sess, ok := a.activeSessions[sessionID]
+	a.sessMu.Unlock()
+	if ok {
+		return sess.store.Meta().ResetCount
+	}
+	meta, found, err := a.store.LoadMeta(sessionID)
+	if err != nil || !found {
+		return 0
+	}
+	return meta.ResetCount
+}
+
 // SessionProfiles returns the profile names bound to a session (nil if none
 // or the session doesn't exist).
 func (a *Agent) SessionProfiles(sessionID string) []string {

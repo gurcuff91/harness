@@ -188,3 +188,63 @@ func TestEventTokensZeroesSurviveReEncode(t *testing.T) {
 		t.Errorf("total_input = %v, want 5000", round["total_input"])
 	}
 }
+
+// sseServer serves one SSE stream: a normal event, then one data line of
+// lineBytes bytes, then another normal event.
+func sseServer(t *testing.T, lineBytes int) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"turn_start\"}\n\n")
+		fmt.Fprintf(w, "data: {\"type\":\"text\",\"delta\":\"%s\"}\n\n", strings.Repeat("x", lineBytes))
+		fmt.Fprint(w, "data: {\"type\":\"turn_end\"}\n\n")
+	}))
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func drain(t *testing.T, ch <-chan Event) []Event {
+	t.Helper()
+	var got []Event
+	timeout := time.After(20 * time.Second)
+	for {
+		select {
+		case e, ok := <-ch:
+			if !ok {
+				return got
+			}
+			got = append(got, e)
+		case <-timeout:
+			t.Fatal("stream never closed")
+		}
+	}
+}
+
+// A line far above the old 4 MB cap (an album of original-size images, a huge
+// tool result) is delivered intact.
+func TestStreamCarriesLargeLines(t *testing.T) {
+	ts := sseServer(t, 20<<20) // 20 MB
+	ch, err := New(ts.URL).StreamEvents(context.Background(), "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := drain(t, ch)
+	if len(got) != 3 || len(got[1].Delta) != 20<<20 || got[2].Type != "turn_end" {
+		t.Fatalf("got %d events (want 3, the 20 MB one intact)", len(got))
+	}
+}
+
+// Above even the new cap, the stream must NOT end silently: a final "error"
+// event says why before the channel closes.
+func TestStreamNeverEndsSilently(t *testing.T) {
+	ts := sseServer(t, sseScanMaxLine+1)
+	ch, err := New(ts.URL).StreamEvents(context.Background(), "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := drain(t, ch)
+	last := got[len(got)-1]
+	if last.Type != "error" || !strings.Contains(last.Message, "exceeded") {
+		t.Fatalf("last event = %+v; want an explicit error before the stream closes", last)
+	}
+}

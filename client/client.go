@@ -584,6 +584,34 @@ func (c *Client) GetSessionContext(sessionID string) (*ContextBreakdown, error) 
 	return ptr(decode[ContextBreakdown](c, "GET", "/api/sessions/"+sessionID+"/context", nil))
 }
 
+// GetMessageImage fetches the n-th image (0-based, in message order) of the
+// message at absolute history index — e.g. the MessageIndex + Images of a
+// received_prompt/follow_up_start event — returning its raw bytes and MIME
+// type. Works for active and persisted sessions.
+func (c *Client) GetMessageImage(sessionID string, index, n int) (data []byte, mimeType string, err error) {
+	req, err := http.NewRequestWithContext(c.ctx, "GET",
+		fmt.Sprintf("%s/api/sessions/%s/messages/%d/images/%d", c.baseURL, url.PathEscape(sessionID), index, n), nil)
+	if err != nil {
+		return nil, "", err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("request: %w", err)
+	}
+	defer resp.Body.Close()
+	data, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("read: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		if ae := parseError(data); ae != nil {
+			return nil, "", ae
+		}
+		return nil, "", fmt.Errorf("%s", strings.TrimSpace(string(data)))
+	}
+	return data, resp.Header.Get("Content-Type"), nil
+}
+
 // GetSystemPrompt returns the full system prompt an active session sends to
 // the provider (GET /api/sessions/{id}/sysprompt) — base prompt, skills,
 // project context and every directive, including the session's own

@@ -50,6 +50,10 @@ type SessionMeta struct {
 	// the current checkpoint (working set starts here). CompactCount is audit.
 	CompactOffset int `json:"compact_offset,omitempty"`
 	CompactCount  int `json:"compact_count,omitempty"`
+	// ResetCount counts Reset calls. A reset empties the message log, so
+	// absolute message indices get REUSED; this is the "epoch" that tells
+	// two lives of the same index apart (e.g. in image cache keys).
+	ResetCount int `json:"reset_count,omitempty"`
 
 	// Accumulated stats — persisted after each turn
 	Stats types.SessionStats `json:"stats"`
@@ -206,13 +210,21 @@ func (s *Session) AllMessages() []types.Message {
 // AddMessage appends a message to the log — cached in the working set and
 // written to the port immediately (durable; survives a crash).
 func (s *Session) AddMessage(msg types.Message) error {
+	_, err := s.AppendMessage(msg)
+	return err
+}
+
+// AppendMessage is AddMessage that also returns the message's ABSOLUTE index
+// in the full log (the position GET /messages and AllMessages() report it at)
+// — stable for the session's lifetime, until a Reset empties the log.
+func (s *Session) AppendMessage(msg types.Message) (index int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.port.AppendMessage(s.id, msg); err != nil {
-		return err
+		return 0, err
 	}
 	s.working = append(s.working, msg)
-	return nil
+	return s.baseOffset + len(s.working) - 1, nil
 }
 
 // AddCompactionSummary appends a checkpoint message and advances the compaction
@@ -249,6 +261,7 @@ func (s *Session) Reset() error {
 	s.baseOffset = 0
 	s.meta.CompactOffset = 0
 	s.meta.CompactCount = 0
+	s.meta.ResetCount++ // message indices restart from 0: new epoch
 	s.meta.Stats = types.SessionStats{}
 	s.meta.LastActiveAt = time.Now()
 	return s.port.SaveMeta(s.meta)

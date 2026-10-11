@@ -10,6 +10,18 @@ import (
 // formatEvent converts an agent event to a JSON SSE data line.
 // Returns nil for event types not exposed via SSE.
 // SSE field names are snake_case of the Go Event struct fields.
+// promptEcho is the wire shape of received_prompt/follow_up_start: text and
+// origin, plus message_index (the stored user message — it already exists
+// when the event fires) and, when the prompt has images, their metadata
+// (never the bytes: GET /api/sessions/{id}/messages/{message_index}/images/{n}).
+func promptEcho(typ string, e types.Event) map[string]any {
+	p := map[string]any{"type": typ, "text": e.Output, "origin": e.Origin, "message_index": e.MessageIndex}
+	if len(e.Images) > 0 {
+		p["images"] = e.Images
+	}
+	return p
+}
+
 func formatEvent(e types.Event) []byte {
 	var payload any
 
@@ -54,11 +66,11 @@ func formatEvent(e types.Event) []byte {
 	case types.EventReceivedPrompt:
 		// An immediate (non-queued) prompt was received; text + origin let the
 		// frontend echo it (even for prompts it didn't originate, e.g. scheduled).
-		payload = map[string]any{"type": "received_prompt", "text": e.Output, "origin": e.Origin}
+		payload = promptEcho("received_prompt", e)
 	case types.EventFollowUpStart:
 		// A queued follow-up prompt is starting; text + origin so the frontend can
 		// echo it at the right moment (no client-side queue needed).
-		payload = map[string]any{"type": "follow_up_start", "text": e.Output, "origin": e.Origin}
+		payload = promptEcho("follow_up_start", e)
 	case types.EventTurnEnd:
 		payload = map[string]any{"type": "turn_end"}
 	case types.EventTokens:

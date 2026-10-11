@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -153,6 +155,7 @@ func (s *Server) handler() http.Handler {
 	r.Get("/api/sessions/{id}/commands", s.handleListCommands)
 	r.Post("/api/sessions/{id}/commands", s.handleExecCommand)
 	r.Get("/api/sessions/{id}/messages", s.handleGetMessages)
+	r.Get("/api/sessions/{id}/messages/{index}/images/{n}", s.handleMessageImage)
 	r.Post("/api/sessions/{id}/stop", s.handleStopSession)
 	r.Get("/api/sessions/{id}/info", s.handleSessionInfo)
 	r.Get("/api/sessions/{id}/context", s.handleSessionContext)
@@ -987,6 +990,88 @@ func (s *Server) handleGetMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	messages := proxy.session.AllMessages()
 	writeJSON(w, http.StatusOK, messages)
+}
+
+// handleMessageImage serves the n-th image (0-based, in message order) of the
+// message at absolute history index {index} as raw bytes with its own
+// Content-Type — what the message_index + images of received_prompt /
+// follow_up_start point at, and what a UI rendering the history can use
+// instead of decoding base64 from GET /messages. Works for active and
+// persisted sessions.
+//
+// The history is append-only, so (session, index, n) always names the same
+// bytes and is cached as immutable — EXCEPT across a /reset, which empties
+// the log so indices are reused. The ETag carries the session's created_at
+// plus a content hash, so a conditional request after a reset never matches —
+// and the URL clients get carries the epoch too (?e=), see sessionEpoch.
+func (s *Server) handleMessageImage(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	index, err1 := strconv.Atoi(chi.URLParam(r, "index"))
+	n, err2 := strconv.Atoi(chi.URLParam(r, "n"))
+	if err1 != nil || err2 != nil || index < 0 || n < 0 {
+		writeError(w, http.StatusBadRequest, "index and n must be non-negative integers", nil)
+		return
+	}
+
+	var msgs []types.Message
+	s.mu.RLock()
+	proxy, active := s.sessions[id]
+	s.mu.RUnlock()
+	if active {
+		msgs = proxy.session.AllMessages()
+	} else if all, err := s.agent.LoadMessages(id); err == nil {
+		msgs = all
+	} else {
+		writeError(w, http.StatusNotFound, "session not found", nil)
+		return
+	}
+	if index >= len(msgs) {
+		writeError(w, http.StatusNotFound, "message not found", nil)
+		return
+	}
+	var img *types.ImageData
+	seen := 0
+	for _, p := range msgs[index].Parts {
+		if p.Image == nil {
+			continue
+		}
+		if seen == n {
+			img = p.Image
+			break
+		}
+		seen++
+	}
+	if img == nil {
+		writeError(w, http.StatusNotFound, "image not found", nil)
+		return
+	}
+	data, err := base64.StdEncoding.DecodeString(img.Base64)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "stored image is not valid base64", nil)
+		return
+	}
+	sum := sha256.Sum256(data)
+	etag := fmt.Sprintf(`"%s-%x"`, s.sessionEpoch(id), sum[:8])
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	mime := img.MimeType
+	if mime == "" {
+		mime = http.DetectContentType(data)
+	}
+	w.Header().Set("Content-Type", mime)
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.WriteHeader(http.StatusOK)
+	w.Write(data) //nolint:errcheck
+}
+
+// sessionEpoch identifies one "life" of a session's message log for caching:
+// its ResetCount (each /reset empties the log and reuses indices).
+func (s *Server) sessionEpoch(id string) string {
+	return "r" + strconv.Itoa(s.agent.SessionResetCount(id))
 }
 
 // handleForkSession creates a new session that is an exact copy of the parent

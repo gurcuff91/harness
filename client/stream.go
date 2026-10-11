@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -33,7 +34,7 @@ const eventBufferSize = 4096
 // markdown response) doesn't hit bufio.ErrTooLong and silently end the scan.
 const (
 	sseScanBufferSize = 64 * 1024
-	sseScanMaxLine    = 4 * 1024 * 1024
+	sseScanMaxLine    = 64 * 1024 * 1024
 )
 
 // streamEvents opens an SSE connection and returns a channel of decoded, typed
@@ -62,6 +63,25 @@ func (c *Client) streamEvents(ctx context.Context, sessionID string) (<-chan Eve
 		defer close(ch)
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, sseScanBufferSize), sseScanMaxLine)
+		defer func() {
+			// Never end the stream SILENTLY: a read error (a line over
+			// sseScanMaxLine, a broken connection) is surfaced as a final
+			// "error" event before the channel closes, so the consumer knows
+			// the stream died instead of waiting forever for events that will
+			// never come. A clean EOF (server closed the stream) or our own
+			// ctx cancellation stays silent.
+			if err := scanner.Err(); err != nil && ctx.Err() == nil {
+				msg := "event stream ended: " + err.Error()
+				if errors.Is(err, bufio.ErrTooLong) {
+					msg = fmt.Sprintf("event stream ended: an event exceeded %d MB", sseScanMaxLine>>20)
+				}
+				raw, _ := json.Marshal(map[string]string{"type": "error", "message": msg})
+				select {
+				case ch <- Event{Type: "error", Message: msg, Raw: raw}:
+				case <-ctx.Done():
+				}
+			}
+		}()
 		for scanner.Scan() {
 			line := scanner.Text()
 			if !strings.HasPrefix(line, "data: ") {

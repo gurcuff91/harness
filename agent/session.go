@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -723,25 +724,9 @@ func (s *Session) drainFollowUps() {
 		s.currentCancel = cancel
 		s.followMu.Unlock()
 
-		// Echo the prompt to clients. The immediate (first) prompt gets a
-		// ReceivedPrompt event; queued ones get FollowUpStart. Both carry the text
-		// and origin so transports can render them (e.g. scheduled → clock icon)
-		// even though the client didn't originate the prompt. echoText is
-		// fu.displayText when the caller set one (PromptWithDisplayText) —
-		// the MODEL below always gets the full fu.text regardless; only the
-		// human-facing echo can differ.
-		echoText := fu.text
-		if fu.displayText != "" {
-			echoText = fu.displayText
-		}
-		if first {
-			s.emit(types.Event{Type: types.EventReceivedPrompt, Output: echoText, Origin: fu.origin})
-		} else {
-			s.emit(types.Event{Type: types.EventFollowUpStart, Output: echoText, Origin: fu.origin})
-		}
+		// promptSync stores the user message and THEN echoes it (see there).
+		result, err := s.promptSync(ctx, fu, first)
 		first = false
-
-		result, err := s.promptSync(ctx, fu.text, fu.images)
 
 		// Capture whether the turn was cancelled BEFORE releasing ctx below.
 		// This ordering is the whole point: cancel() is unconditional (it's
@@ -796,10 +781,11 @@ func (s *Session) drainFollowUps() {
 	}
 }
 
-func (s *Session) promptSync(ctx context.Context, text string, images []types.ImageData) (retText string, retErr error) {
+func (s *Session) promptSync(ctx context.Context, fu followUp, first bool) (retText string, retErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.applyPendingReconfigLocked() // turn boundary: never mid-turn
+	text, images := fu.text, fu.images
 
 	var userMsg types.Message
 	if len(images) > 0 {
@@ -807,9 +793,32 @@ func (s *Session) promptSync(ctx context.Context, text string, images []types.Im
 	} else {
 		userMsg = types.NewUserTextMessage(text)
 	}
-	if err := s.store.AddMessage(userMsg); err != nil {
+	if fu.origin != "" && fu.origin != OriginUser {
+		userMsg.Meta = &types.MessageMeta{Origin: fu.origin} // persisted, so a reloaded history knows it too
+	}
+	msgIndex, err := s.store.AppendMessage(userMsg)
+	if err != nil {
 		return "", fmt.Errorf("store user: %w", err)
 	}
+
+	// Echo the prompt to clients — AFTER it's stored (and under the same turn
+	// lock), so the event's MessageIndex already resolves: a client can fetch
+	// the message or its images (GET …/messages/{index}/images/{n}) the moment
+	// the event arrives. The immediate (first) prompt gets a ReceivedPrompt
+	// event; queued ones get FollowUpStart. Both carry the text, origin and
+	// image metadata (never the bytes) so every frontend can render them.
+	// echoText is fu.displayText when the caller set one
+	// (PromptWithDisplayText) — the MODEL always gets the full text; only the
+	// human-facing echo can differ.
+	echoText := text
+	if fu.displayText != "" {
+		echoText = fu.displayText
+	}
+	echo := types.Event{Type: types.EventFollowUpStart, Output: echoText, Origin: fu.origin, MessageIndex: msgIndex, Images: imageRefs(images)}
+	if first {
+		echo.Type = types.EventReceivedPrompt
+	}
+	s.emit(echo)
 
 	// Auto-name session from first prompt (like Claude Code)
 
@@ -1448,6 +1457,19 @@ func (s *Session) CWD() string { return s.cwd }
 // session's own, see WithSessionDirectives). Built once when the session is
 // created/resumed and immutable afterwards, so it's lock-free like CWD().
 func (s *Session) SystemPrompt() string { return s.systemPromptVal.Load().(string) }
+
+// imageRefs describes images without their payload (decoded byte size from
+// the base64 length, no decode needed).
+func imageRefs(images []types.ImageData) []types.ImageRef {
+	if len(images) == 0 {
+		return nil
+	}
+	refs := make([]types.ImageRef, len(images))
+	for i, img := range images {
+		refs[i] = types.ImageRef{MimeType: img.MimeType, Bytes: base64.StdEncoding.DecodedLen(len(img.Base64)) - strings.Count(img.Base64[max(0, len(img.Base64)-2):], "=")}
+	}
+	return refs
+}
 
 // sessionReconfig is a rebuilt system prompt + tool registry waiting for the
 // next turn boundary (see Agent.ReconfigureSession).

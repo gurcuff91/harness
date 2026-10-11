@@ -1,6 +1,10 @@
 package client
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/gurcuff91/harness/types"
+)
 
 // Event is one decoded SSE event from a session's stream
 // (GET /api/sessions/{id}/events). It is a single FLAT struct carrying every
@@ -35,6 +39,12 @@ type Event struct {
 	// Prompt echo — received_prompt / follow_up_start.
 	Text   string `json:"text,omitempty"`
 	Origin string `json:"origin,omitempty"`
+	// MessageIndex is the absolute history index of the user message being
+	// echoed — already stored when the event arrives. Images describes its
+	// attached images (metadata only): fetch the n-th with
+	// Client.GetMessageImage(sessionID, MessageIndex, n).
+	MessageIndex int              `json:"message_index,omitempty"`
+	Images       []types.ImageRef `json:"images,omitempty"`
 
 	// Tokens (EventTokens) — see types.TokenUsage for the full contract. Two
 	// semantics on purpose: live context (input/context_usage/context_window,

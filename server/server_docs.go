@@ -474,6 +474,25 @@ const openAPISpecTemplate = `{
         }
       }
     },
+    "/api/sessions/{id}/messages/{index}/images/{n}": {
+      "get": {
+        "tags": ["sessions"],
+        "summary": "Get a message image",
+        "description": "Raw bytes of the n-th image (0-based, in message order) of the message at absolute history index {index} — what received_prompt/follow_up_start's message_index + images point at, and an alternative to decoding base64 from /messages. Works for active and persisted sessions. Cached as immutable; the ETag changes after a /reset (which reuses indices).",
+        "operationId": "getMessageImage",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "index", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 0 } },
+          { "name": "n", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 0 } }
+        ],
+        "responses": {
+          "200": { "description": "The image (Content-Type is the image's own MIME type; Cache-Control: private, max-age=31536000, immutable; ETag)", "content": { "image/*": { "schema": { "type": "string", "format": "binary" } } } },
+          "304": { "description": "Not modified (If-None-Match matched the ETag)" },
+          "400": { "description": "index or n is not a non-negative integer", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Session, message or image not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
     "/api/sessions/{id}/stop": {
       "post": {
         "tags": ["sessions"],
