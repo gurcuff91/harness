@@ -33,7 +33,7 @@ const (
 type Bot struct {
 	workspace string // e.g. "https://myco.slack.com"
 	xoxc      string // xoxc-... API token (Authorization header)
-	xoxd      string // xoxd-... session cookie (Cookie: d=...)
+	xoxd      string // the d session cookie, URL-encoded (NormalizeXoxD) — sent as Cookie: d=...
 	http      *http.Client
 }
 
@@ -42,7 +42,7 @@ func NewBot(workspace, xoxc, xoxd string) *Bot {
 	return &Bot{
 		workspace: workspace,
 		xoxc:      xoxc,
-		xoxd:      xoxd,
+		xoxd:      NormalizeXoxD(xoxd), // also fixes credentials saved raw by older versions
 		http:      &http.Client{},
 	}
 }

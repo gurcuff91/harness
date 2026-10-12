@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.88.1] - 2026-10-11
+
+### Fixed — Slack login against current Slack (`DeriveXoxC` 403 / no api_token)
+`slack.DeriveXoxC` — behind `harness slack login` and every SDK login flow — failed against current Slack with "workspace returned HTTP 403". Three independent causes, all reproduced live:
+
+- **Non-browser User-Agent → 403.** The login page request now sends a real browser User-Agent.
+- **The `d` cookie must travel URL-encoded.** DevTools shows (and users paste) the DECODED value, containing `/`, `+`, `=`; sent raw, Slack doesn't recognise the session. New **`slack.NormalizeXoxD`** URL-encodes it — idempotent (an already-encoded value is left as-is), and tolerant of a pasted `d=` prefix, whitespace and quotes. `DeriveXoxC` normalizes its input; `VerifyAndSave` persists the encoded form; `NewBot` normalizes too, so every request (API calls, RTM, file downloads) sends it encoded and **credentials saved raw by older versions keep working with no re-login**.
+- **The workspace root no longer embeds `api_token`** (it redirects to a client shell). The token is now read from `<workspace>/ssb/redirect` (the desktop-app bootstrap page), falling back to the root for older workspaces.
+- Errors now distinguish "workspace returned HTTP 403" (wrong URL / cookie from another workspace) from "no api_token found — the d cookie is invalid or expired".
+
 ## [0.88.0] - 2026-10-11
 
 ### Added — prompt images on live events (by reference) and a message-image endpoint

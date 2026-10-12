@@ -106,7 +106,7 @@ func TestDeriveXoxCRejectsInvalidWorkspaceOrCookie(t *testing.T) {
 	if err == nil {
 		t.Fatal("DeriveXoxC succeeded against a page with no api_token")
 	}
-	if !strings.Contains(err.Error(), "could not find api_token") {
+	if !strings.Contains(err.Error(), "no api_token found") {
 		t.Errorf("error = %q, want it to mention the missing api_token", err.Error())
 	}
 }

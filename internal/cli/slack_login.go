@@ -60,15 +60,15 @@ func slackLoginInteractive(ctx context.Context) error {
 	fmt.Println("\nTo get your xoxd cookie:")
 	fmt.Println("  1. Open Slack in your browser (app.slack.com or your workspace URL)")
 	fmt.Println("  2. Press F12 → Application → Cookies → app.slack.com")
-	fmt.Println("  3. Copy the value of the 'd' cookie (starts with xoxd-...)")
+	fmt.Println("  3. Copy the value of the 'd' cookie exactly as DevTools shows it (starts with xoxd-...)")
 	fmt.Print("\nPaste your xoxd cookie: ")
 	xoxd, _ := r.ReadString('\n')
 	xoxd = strings.TrimSpace(xoxd)
 	if xoxd == "" {
 		return fmt.Errorf("xoxd cookie is required")
 	}
-	// Accept with or without the "d=" prefix the user might accidentally include.
-	xoxd = strings.TrimPrefix(xoxd, "d=")
+	// slack.NormalizeXoxD (applied by DeriveXoxC/VerifyAndSave) accepts it
+	// decoded as DevTools shows it, already encoded, or with a "d=" prefix.
 
 	// Step 3 — derive xoxc.
 	fmt.Println("\nDeriving session token from workspace...")
