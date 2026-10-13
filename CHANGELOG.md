@@ -15,6 +15,9 @@ The OpenRouter model catalog (pricing, context window, capabilities for most pro
 - **Warm start**: with a disk copy present, it's served immediately and the network fetch happens in the background — `Models()` never waits on the registry. Concurrent first callers share one fetch.
 - The disk file is a cache (deletable at any time, re-fetched) and only ever a fallback, never the primary source.
 
+### Changed — `Agent.Models()` / `GET /api/models` query providers concurrently
+Each active provider's model list (when not cached) is a network round trip to its API, and they used to run one after another — the call cost the SUM of every provider (~5 s with six connected providers). They now run concurrently, so it costs the slowest one (~0.9 s measured live with the same six providers, down from ~5 s). The listing keeps the same provider order.
+
 ## [0.88.1] - 2026-10-11
 
 ### Fixed — Slack login against current Slack (`DeriveXoxC` 403 / no api_token)

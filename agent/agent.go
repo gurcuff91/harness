@@ -518,16 +518,34 @@ func (a *Agent) Memory() memory.Store { return a.memStore }
 // providers.All in sync with this one.
 func (a *Agent) Models() []types.ModelListing {
 	providers.EnsureRegistry()
+	all := providers.All
+
+	// Each provider may need network I/O — IsActive() can probe (Ollama pings
+	// its local server), and an uncached model list is fetched from the
+	// provider's API — so providers run CONCURRENTLY: the call costs the
+	// slowest provider, not the sum. Results are slotted by index to keep the
+	// providers.All order deterministic.
+	perProvider := make([][]types.ModelMeta, len(all))
+	var wg sync.WaitGroup
+	for i, p := range all {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if !p.IsActive() {
+				return
+			}
+			models := p.Models()
+			if len(models) == 0 {
+				models, _ = p.FetchModels()
+			}
+			perProvider[i] = models
+		}()
+	}
+	wg.Wait()
+
 	var out []types.ModelListing
-	for _, p := range providers.All {
-		if !p.IsActive() {
-			continue
-		}
-		models := p.Models()
-		if len(models) == 0 {
-			models, _ = p.FetchModels()
-		}
-		for _, m := range models {
+	for i, p := range all {
+		for _, m := range perProvider[i] {
 			out = append(out, types.ModelListing{
 				Provider:  p.Name(),
 				Model:     p.Name() + "/" + m.ID,
