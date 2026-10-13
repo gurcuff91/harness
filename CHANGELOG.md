@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.88.2] - 2026-10-12
+
+### Fixed — the model registry fetch could hang forever (and block startup)
+The OpenRouter model catalog (pricing, context window, capabilities for most providers) was fetched with a timeout-less HTTP client inside a `sync.Once`, reached from `Agent.Models()` / `GET /api/models`. Observed live: the plain catalog URL was being served from a broken CDN cache entry — `200`, then the body stalled mid-way and never finished — so the first `Models()` call hung forever and every later caller blocked behind the same `Once`. Reproduced against v0.88.1: `GET /api/models` never returned.
+
+- **Cache-buster**: every request is `…/api/v1/models?ts=<unix-millis>`, so a stale or broken CDN entry is never served.
+- **One timeout over headers AND body** (15 s per attempt).
+- **Retries**: a timed-out, `5xx`, truncated or malformed response is retried up to 2 more times, each with a fresh cache-buster (1 s, 2 s backoff).
+- **Never empty**: if every attempt fails, the last good catalog cached on disk (`~/.harness/cache/model-registry.json`, rewritten atomically on each success) is used; with no disk copy, the built-in registry and name inference still apply, as before.
+- **Failure isn't latched**: a background refresher keeps retrying (30 s → 5 min backoff) until it succeeds, then swaps the fresh catalog in and re-fetches the active providers' model lists, so prices update **without a restart** and the disk copy is refreshed.
+- **Warm start**: with a disk copy present, it's served immediately and the network fetch happens in the background — `Models()` never waits on the registry. Concurrent first callers share one fetch.
+- The disk file is a cache (deletable at any time, re-fetched) and only ever a fallback, never the primary source.
+
 ## [0.88.1] - 2026-10-11
 
 ### Fixed — Slack login against current Slack (`DeriveXoxC` 403 / no api_token)

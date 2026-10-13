@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/gurcuff91/harness/internal/config"
+	"github.com/gurcuff91/harness/internal/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -84,7 +85,28 @@ func buildCustomProviders(custom map[string]config.CustomProvider) []Provider {
 }
 
 func EnsureRegistry() {
-	initOnce.Do(initRegistry)
+	initOnce.Do(func() {
+		initRegistry()
+		// When the model catalog is refreshed in the background (it was
+		// served from the disk cache, or a first fetch failed and was later
+		// retried successfully), re-fetch each active provider's model list so
+		// the prices/capabilities it cached are recomputed from the fresh
+		// catalog — no restart needed.
+		llm.OnRegistryUpdate(refreshCachedModels)
+	})
+}
+
+// refreshCachedModels re-fetches the models of every active provider that
+// already has a cached model list (best effort).
+func refreshCachedModels() {
+	registryMu.Lock()
+	all := append([]Provider(nil), All...)
+	registryMu.Unlock()
+	for _, p := range all {
+		if p.IsActive() && len(p.Models()) > 0 {
+			_, _ = p.FetchModels()
+		}
+	}
 }
 
 // RegisterOpenAI builds a CustomOpenAI provider and appends it to the

@@ -17,7 +17,7 @@
 2. **Always streaming.** There is no non-streaming path. Every provider implements `CompleteStream()`. Never add `Complete()`.
 3. **`provider/model` format everywhere.** Settings, env vars, CLI display, Resolve — all use `provider/model` (e.g., `anthropic/claude-sonnet-4-20250514`).
 4. **Backend/frontend separation.** `agent/` and `internal/providers/` never import `server` or `transports/`. The agent emits events over an HTTP/SSE API (`server`); the clients (`internal/cli`, `internal/tui`, `transports/{telegram,slack,acp}`) consume it.
-5. **Persistent state is explicit.** No model caching. On-disk state is limited to `~/.harness/{credentials.json, settings.json}` and `~/.harness/agent/{sessions/, memory.db}`. Every piece of process-global state (schedules, server instances, Telegram/Slack pairing, sessions and secrets) goes through the `configstore` ports via a typed `internal/config` manager method — never a new ad-hoc JSON file. Secrets go to `CredentialsStore`, everything else to `SettingsStore`, one namespace per domain; composite keys use `entryKey(parts...)` (truncated SHA-256, never parsed back — identity lives in the value).
+5. **Persistent state is explicit.** No model caching (provider model lists are fetched per process). On-disk state is limited to `~/.harness/{credentials.json, settings.json}` and `~/.harness/agent/{sessions/, memory.db}` — plus one approved CACHE, `~/.harness/cache/model-registry.json`: the last good OpenRouter catalog, a fallback only (never the primary source), deletable at any time (see `internal/providers/llm/registry_fetch.go`). Every piece of process-global state (schedules, server instances, Telegram/Slack pairing, sessions and secrets) goes through the `configstore` ports via a typed `internal/config` manager method — never a new ad-hoc JSON file. Secrets go to `CredentialsStore`, everything else to `SettingsStore`, one namespace per domain; composite keys use `entryKey(parts...)` (truncated SHA-256, never parsed back — identity lives in the value).
 6. **SDK boundary.** Public packages (`agent`, `agent/{tools,store,resources,memory}`, `configstore`, `mcp`, `types`) form the SDK. Keep implementation detail (`providers`, `config`, `transport`, `version`) under `internal/`, and never expose an `internal/…` type in a public signature.
 
 ## Architecture
@@ -321,7 +321,7 @@ Universal levels mapped per-provider:
 
 ```
 1. Provider API        (Anthropic, Ollama /api/show)  — authoritative, never overwritten
-2. OpenRouter catalog  (remote, fetched once/session)
+2. OpenRouter catalog  (remote; cache-busted, timeout + retries, disk last-good-copy fallback, background refresh — registry_fetch.go)
 3. Hardcoded registry  (internal/providers/llm/models.go, a handful of aggregator-ID models OpenRouter doesn't carry under a matching key)
 4. Name inference       ("vision" in name → vision=true, etc.)
 5. Generic defaults     (128k context, 32k max tokens)
@@ -353,7 +353,7 @@ Universal levels mapped per-provider:
 - ❌ Adding `Complete()` (non-streaming) to Provider interface
 - ❌ Importing `server` or `transports/` from `agent/` or `internal/providers/`
 - ❌ Exposing an `internal/…` type in a public (SDK) package signature
-- ❌ File-based model cache
+- ❌ File-based model cache as a primary source (the only file cache is the registry's last-good-copy FALLBACK, `~/.harness/cache/model-registry.json`)
 - ❌ Multiple spinner goroutines running simultaneously
 - ❌ Direct `fmt.Print` to stdout (use `printf()` + `flush()`)
 - ❌ Blocking the SSE read loop

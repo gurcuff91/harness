@@ -2,12 +2,10 @@ package llm
 
 import (
 	"encoding/json"
-	"github.com/gurcuff91/harness/types"
-	"io"
-	"net/http"
 	"strconv"
 	"strings"
-	"sync"
+
+	"github.com/gurcuff91/harness/types"
 )
 
 // ── Model metadata lookup ──────────────────────────────────────────────────
@@ -25,13 +23,6 @@ func FindMeta(full string) *types.ModelMeta {
 	}
 	return nil
 }
-
-// ── In-memory registry cache (no disk, fetched once per session) ───────────
-
-var (
-	remoteRegistry     map[string]types.ModelMeta
-	remoteRegistryOnce sync.Once
-)
 
 // hardcodedRegistry is the LAST-RESORT fallback for models that OpenRouter
 // doesn't list under an ID we can match (mostly exact aggregator IDs that
@@ -178,37 +169,6 @@ func normalizeModelID(id string) string {
 	}
 	s = strings.ReplaceAll(s, ".", "-")
 	return s
-}
-
-// getRemoteRegistry fetches the OpenRouter model catalog once per session (no
-// disk cache). OpenRouter is the single remote source of model metadata — it
-// covers our providers better than llm-registry (89% vs 63%) and is kept fresh.
-func getRemoteRegistry() map[string]types.ModelMeta {
-	remoteRegistryOnce.Do(func() {
-		remoteRegistry = fetchRemoteRegistry()
-		if remoteRegistry == nil {
-			remoteRegistry = make(map[string]types.ModelMeta)
-		}
-	})
-	return remoteRegistry
-}
-
-func fetchRemoteRegistry() map[string]types.ModelMeta {
-	const url = "https://openrouter.ai/api/v1/models"
-	req, _ := http.NewRequest("GET", url, nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		if resp != nil {
-			resp.Body.Close()
-		}
-		return nil
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil
-	}
-	return parseRegistry(data)
 }
 
 // parseRegistry decodes the OpenRouter /api/v1/models response into our
