@@ -63,6 +63,9 @@ var (
 	registryCachePath = defaultRegistryCachePath
 )
 
+// registryClient: the provider transport (bounded by the per-attempt ctx).
+var registryClient = NewProviderClient(0)
+
 type registryState struct {
 	mu         sync.Mutex
 	gen        int            // bumped by reset; a refresher of an older gen exits
@@ -211,7 +214,7 @@ func fetchRemoteRegistryOnce(cfg registryConfig) (map[string]types.ModelMeta, er
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Cache-Control", "no-cache")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := registryClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("registry: %w", err)
 	}

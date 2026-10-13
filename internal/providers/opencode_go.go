@@ -41,7 +41,7 @@ const (
 
 func NewOpenCodeGo() *OpenCodeGo {
 	o := &OpenCodeGo{
-		client:  &http.Client{},
+		client:  llm.NewProviderClient(0),
 		cache:   make(map[string]types.ModelMeta),
 		session: uuid.New().String(),
 	}
@@ -150,7 +150,7 @@ func (o *OpenCodeGo) validateKey() bool {
 	req.Header.Set("Authorization", "Bearer "+o.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-opencode-session", o.session)
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := llm.NewProviderClient(10 * time.Second).Do(req)
 	if err != nil {
 		return false
 	}
@@ -176,7 +176,7 @@ func fetchOpenCodeGoModels(apiKey string) ([]types.ModelMeta, error) {
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	resp, err := llm.NewProviderClient(5 * time.Second).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("provider unreachable")
 	}

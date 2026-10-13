@@ -54,7 +54,7 @@ var codexVersion = envOrDefault("CODEX_CLI_VERSION", "0.144.0")
 // refresh client is bounded — the refresh runs while holding the cross-
 // process credentials lock, and an unbounded hang there would let the
 // stale-lock reclaim steal the lock from this still-alive process.
-var codexRefreshClient = &http.Client{Timeout: 30 * time.Second}
+var codexRefreshClient = llm.NewProviderClient(30 * time.Second)
 
 // ── CodexOAuth ───────────────────────────────────────────────────────────
 
@@ -71,7 +71,7 @@ type CodexOAuth struct {
 
 func NewCodexOAuth() (*CodexOAuth, error) {
 	c := &CodexOAuth{
-		client:  &http.Client{Timeout: 5 * time.Minute},
+		client:  llm.NewProviderClient(0), // bounded by header/idle timeouts, not a total cap (it cut long healthy streams)
 		tokens:  newCodexTokenManager(),
 		session: uuid.New().String(),
 		cache:   make(map[string]types.ModelMeta),
@@ -788,7 +788,7 @@ func fetchCodexModels(creds types.Credentials) ([]types.ModelMeta, error) {
 	if creds.AccountID != "" {
 		req.Header.Set("ChatGPT-Account-ID", creds.AccountID)
 	}
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := llm.NewProviderClient(30 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("provider unreachable")

@@ -74,7 +74,7 @@ func NewCustomOpenAI(name string, cfg types.CustomProvider) *CustomOpenAI {
 		baseURL:        cfg.URL,
 		modelsURL:      cfg.ModelsURL,
 		headers:        cfg.Headers,
-		client:         &http.Client{},
+		client:         llm.NewProviderClient(0),
 		cache:          make(map[string]types.ModelMeta),
 		reasoningSplit: cfg.ReasoningSplit,
 	}
@@ -205,7 +205,7 @@ func fetchCustomOpenAIModels(providerName, baseURL, modelsURL string, headers ma
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := modelListClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("provider unreachable")
 	}

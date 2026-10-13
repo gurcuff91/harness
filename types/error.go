@@ -12,6 +12,10 @@ import (
 type ProviderAPIError struct {
 	Message string         `json:"message"`
 	Details map[string]any `json:"details,omitempty"`
+	// Status is the provider's HTTP status code (0 if unknown) — lets
+	// callers classify the error (e.g. retry 502/503/504) without parsing
+	// the message.
+	Status int `json:"status,omitempty"`
 }
 
 // Error implements the error interface. It returns the message, appending the
@@ -30,7 +34,7 @@ func (e *ProviderAPIError) Error() string {
 // status, and raw response body. If the body is a JSON object it's parsed into
 // Details; otherwise the raw text becomes the message suffix.
 func NewProviderAPIError(provider string, status int, body []byte) *ProviderAPIError {
-	e := &ProviderAPIError{Message: fmt.Sprintf("%s API error %d", provider, status)}
+	e := &ProviderAPIError{Message: fmt.Sprintf("%s API error %d", provider, status), Status: status}
 	var obj map[string]any
 	if len(body) > 0 && json.Unmarshal(body, &obj) == nil {
 		e.Details = obj

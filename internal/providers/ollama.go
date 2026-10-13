@@ -39,7 +39,7 @@ type Ollama struct {
 func NewOllama() *Ollama {
 	o := &Ollama{
 		baseURL: getOllamaURL(),
-		client:  &http.Client{},
+		client:  llm.NewProviderClient(0),
 		cache:   make(map[string]types.ModelMeta),
 	}
 	return o
@@ -118,7 +118,7 @@ func (o *Ollama) CompleteStream(ctx context.Context, req *types.Request, cb type
 
 func OllamaAvailable() bool {
 	url := getOllamaURL()
-	resp, err := (&http.Client{Timeout: 2 * time.Second}).Get(url + "/api/version")
+	resp, err := llm.NewProviderClient(2 * time.Second).Get(url + "/api/version")
 	if err != nil {
 		return false
 	}
@@ -127,7 +127,7 @@ func OllamaAvailable() bool {
 }
 
 func fetchOllamaModels(baseURL string) []types.ModelMeta {
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(baseURL + "/api/tags")
+	resp, err := llm.NewProviderClient(5 * time.Second).Get(baseURL + "/api/tags")
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return nil
 	}

@@ -73,6 +73,10 @@ func formatEvent(e types.Event) []byte {
 		payload = promptEcho("follow_up_start", e)
 	case types.EventTurnEnd:
 		payload = map[string]any{"type": "turn_end"}
+	case types.EventRetry:
+		// A transient network failure (dead/stalled connection, 502/503/504)
+		// is being retried on a new connection — non-fatal, for display.
+		payload = map[string]any{"type": "retry", "attempt": e.Attempt, "max": e.MaxAttempts, "error": e.Message}
 	case types.EventTokens:
 		// Two semantics, both intentional (see types.TokenUsage):
 		//   live context  → input, context_usage, context_window

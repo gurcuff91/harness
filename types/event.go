@@ -45,6 +45,9 @@ const (
 	EventCompactStart // session compaction started
 	EventCompactEnd   // session compaction finished
 	EventStop         // turn was stopped by user
+
+	// ── Resilience ─────────────────────────────────────────────────────────
+	EventRetry // a transient network failure is being retried (Attempt/MaxAttempts/Message)
 )
 
 // TokenUsage carries token counts and derived metrics for an EventTokens event.
@@ -105,6 +108,10 @@ type Event struct {
 	// EventReceivedPrompt/EventFollowUpStart echoes — already stored when the
 	// event fires, so clients can fetch it (or its images) immediately.
 	MessageIndex int
+	// Attempt / MaxAttempts describe an EventRetry: attempt Attempt (2-based —
+	// the one about to run) of MaxAttempts; Message is the error retried.
+	Attempt     int
+	MaxAttempts int
 	// Images describes the prompt's attached images for
 	// EventReceivedPrompt/EventFollowUpStart — metadata only, never the
 	// bytes (fetch them by MessageIndex + position).

@@ -32,7 +32,7 @@ type OllamaCloud struct {
 
 func NewOllamaCloud() *OllamaCloud {
 	o := &OllamaCloud{
-		client: &http.Client{},
+		client: llm.NewProviderClient(0),
 		cache:  make(map[string]types.ModelMeta),
 	}
 	o.baseURL = ollamaCloudURL
@@ -185,7 +185,7 @@ func fetchOllamaCloudModelInfo(name string) *types.ModelMeta {
 	req, _ := http.NewRequest("POST", "https://ollama.com/api/show", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	resp, err := llm.NewProviderClient(5 * time.Second).Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		if resp != nil {
 			resp.Body.Close()

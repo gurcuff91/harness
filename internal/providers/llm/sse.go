@@ -3,10 +3,29 @@ package llm
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"sync/atomic"
+	"time"
 )
+
+// sseIdleTimeout is StreamIdleTimeout, overridable by tests.
+var sseIdleTimeout = StreamIdleTimeout
+
+// activityReader records the time of every read that returned data.
+type activityReader struct {
+	r    io.Reader
+	last *atomic.Int64
+}
+
+func (a *activityReader) Read(p []byte) (int, error) {
+	n, err := a.r.Read(p)
+	if n > 0 {
+		a.last.Store(time.Now().UnixNano())
+	}
+	return n, err
+}
 
 // SSEEvent represents a single Server-Sent Event.
 type SSEEvent struct {
@@ -44,9 +63,24 @@ type SSEEvent struct {
 // the only real-world caller), it is closed — which turns the blocked Scan()
 // into an I/O error and lets the scan goroutine exit. The output channel is
 // closed exactly once, by whichever goroutine finishes the scan.
+//
+// Idle timeout: if r delivers NO bytes for sseIdleTimeout (StreamIdleTimeout),
+// the connection is presumed dead (a peer that vanished mid-stream keeps TCP
+// "open" until the kernel gives up, ~15 min). The same watchdog closes r and
+// errFn reports a wrapped ErrStreamIdle — a transient error, safe to retry.
+// Any byte resets the timer, including SSE comments / keep-alive pings.
 func ParseSSE(ctx context.Context, r io.Reader) (out <-chan SSEEvent, errFn func() error) {
 	ch := make(chan SSEEvent, 32)
 	scanDone := make(chan struct{})
+
+	idleTimeout := sseIdleTimeout // snapshot: the watchdog reads it on every tick
+
+	// Wrap r so every successful read refreshes lastRead (unix nanos).
+	var lastRead atomic.Int64
+	lastRead.Store(time.Now().UnixNano())
+	var idled atomic.Bool
+	src := r
+	r = &activityReader{r: src, last: &lastRead}
 
 	// cancelled is set by the watchdog goroutine BEFORE it closes r, so the
 	// scan goroutine's error classification (below) can tell "I was closed on
@@ -118,27 +152,48 @@ func ParseSSE(ctx context.Context, r io.Reader) (out <-chan SSEEvent, errFn func
 		// stopped because of a read error, which is either the watchdog
 		// deliberately closing r (cancelled == true — not a failure to
 		// report) or a genuine, unprompted I/O break (report it).
-		if err := scanner.Err(); err != nil && !cancelled.Load() {
-			streamErr = err
+		switch {
+		case idled.Load():
+			streamErr = fmt.Errorf("%w for %s (connection presumed dead)", ErrStreamIdle, idleTimeout)
+		case scanner.Err() != nil && !cancelled.Load():
+			streamErr = scanner.Err()
 		}
 	}()
 
-	// Watchdog: if ctx is cancelled before the scan finishes on its own, close
-	// the reader to force the blocked Scan() to unblock with an I/O error.
+	// Watchdog: if ctx is cancelled before the scan finishes on its own, or
+	// the stream goes idle, close the reader to force the blocked Scan() to
+	// unblock with an I/O error.
+	var ctxDone <-chan struct{}
 	if ctx != nil {
-		go func() {
+		ctxDone = ctx.Done()
+	}
+	go func() {
+		closeSrc := func() {
+			if closer, ok := src.(io.Closer); ok {
+				closer.Close()
+			}
+		}
+		tick := time.NewTicker(max(idleTimeout/20, 5*time.Millisecond))
+		defer tick.Stop()
+		for {
 			select {
 			case <-scanDone:
-				// Scan finished on its own — nothing to do.
-			case <-ctx.Done():
+				return // scan finished on its own — nothing to do
+			case <-ctxDone:
 				cancelled.Store(true) // set BEFORE closing r — see its doc comment
-				if closer, ok := r.(io.Closer); ok {
-					closer.Close()
-				}
+				closeSrc()
 				<-scanDone // wait for the scan goroutine to actually exit
+				return
+			case <-tick.C:
+				if time.Since(time.Unix(0, lastRead.Load())) >= idleTimeout {
+					idled.Store(true) // set BEFORE closing r, same ordering as cancelled
+					closeSrc()
+					<-scanDone
+					return
+				}
 			}
-		}()
-	}
+		}
+	}()
 
 	return ch, func() error { return streamErr }
 }

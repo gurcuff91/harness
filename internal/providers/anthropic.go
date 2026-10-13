@@ -25,7 +25,7 @@ type Anthropic struct {
 const anthropicAPIKeyEnv = "ANTHROPIC_API_KEY"
 
 func NewAnthropic() *Anthropic {
-	a := &Anthropic{client: &http.Client{}, cache: make(map[string]types.ModelMeta)}
+	a := &Anthropic{client: llm.NewProviderClient(0), cache: make(map[string]types.ModelMeta)}
 	// ResolveCredentials populates a.apiKey from env or file
 	a.ResolveCredentials() //nolint:errcheck
 	return a
@@ -196,7 +196,7 @@ func fetchAnthropicModels(tokenOrKey string) ([]types.ModelMeta, error) {
 	req, _ := http.NewRequest("GET", "https://api.anthropic.com/v1/models", nil)
 	req.Header.Set("x-api-key", tokenOrKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := modelListClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		if resp != nil {
 			resp.Body.Close()
@@ -205,7 +205,7 @@ func fetchAnthropicModels(tokenOrKey string) ([]types.ModelMeta, error) {
 		req.Header.Set("Authorization", "Bearer "+tokenOrKey)
 		req.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
 		req.Header.Set("x-app", "cli")
-		resp, err = http.DefaultClient.Do(req)
+		resp, err = modelListClient.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("provider unreachable")
 		}

@@ -296,6 +296,11 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 				// "(turn/max_iterations)" counter, driven by loop_start alone.)
 				t.addRaw(ansi.Warn(fmt.Sprintf("⚠ reached the %d-iteration limit — summarizing progress", evt.MaxIterations)))
 
+			case "retry":
+				// A transient network failure is being retried on a new
+				// connection — non-fatal; the turn continues.
+				t.addRaw(ansi.Warn(fmt.Sprintf("↻ connection problem, retrying (%d/%d): %s", evt.Attempt, evt.Max, evt.Error)))
+
 			case "error":
 				msg := evt.Message
 				t.addRaw(ansi.Err("✘ " + msg))

@@ -27,7 +27,7 @@ const (
 func NewOpenAI() *OpenAI {
 	o := &OpenAI{
 		baseURL: "https://api.openai.com/v1",
-		client:  &http.Client{},
+		client:  llm.NewProviderClient(0),
 		cache:   make(map[string]types.ModelMeta),
 	}
 	o.ResolveCredentials() //nolint:errcheck
@@ -129,7 +129,7 @@ func fetchOpenAIModels(apiKey, baseURL string) ([]types.ModelMeta, error) {
 		return nil, fmt.Errorf("provider unreachable")
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := modelListClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("provider unreachable")
 	}

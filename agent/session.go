@@ -1767,9 +1767,50 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 		hadThinking  bool
 		hadText      bool
 		pendingCalls []pendingToolCall
+		// emitted is set the moment this attempt surfaces ANYTHING to clients
+		// (content, a tool call, usage) — after that a retry could duplicate
+		// or contradict what they already rendered, so the error is final.
+		emitted bool
 	)
 
-	resp, err := s.provider.CompleteStream(ctx, req, func(se types.StreamEvent) {
+	var resp *types.Response
+	var err error
+	for attempt := 1; ; attempt++ {
+		resp, err = s.provider.CompleteStream(ctx, req, func(se types.StreamEvent) {
+			switch se.Type {
+			case types.StreamThinkingDelta, types.StreamTextDelta, types.StreamToolStart,
+				types.StreamToolDelta, types.StreamToolEnd, types.StreamUsage:
+				emitted = true
+			}
+			s.handleStreamEvent(se, &hadThinking, &hadText, &pendingCalls)
+		})
+		if err == nil || emitted || ctx.Err() != nil || !isTransientNetworkError(err) || attempt >= llmMaxAttempts {
+			break
+		}
+		// Transient network failure before anything streamed: retry on a new
+		// connection (the provider transport discards a dead one), telling
+		// clients so it's visible rather than a silent stall.
+		s.emit(types.Event{Type: types.EventRetry, Attempt: attempt + 1, MaxAttempts: llmMaxAttempts, Message: err.Error()})
+		select {
+		case <-ctx.Done():
+		case <-time.After(llmRetryBackoff(attempt)):
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if err != nil {
+		return resp, nil, err
+	}
+	return s.runPendingTools(ctx, resp, pendingCalls)
+}
+
+// handleStreamEvent translates one provider stream event into session events
+// (runStream's callback body).
+func (s *Session) handleStreamEvent(se types.StreamEvent, hadThinkingP, hadTextP *bool, pendingCallsP *[]pendingToolCall) {
+	hadThinking, hadText, pendingCalls := *hadThinkingP, *hadTextP, *pendingCallsP
+	defer func() { *hadThinkingP, *hadTextP, *pendingCallsP = hadThinking, hadText, pendingCalls }()
+	{
 		switch se.Type {
 		case types.StreamThinkingDelta:
 			s.emit(types.Event{Type: types.EventStreamThinkingDelta, Delta: se.Delta})
@@ -1826,12 +1867,12 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 			// to promptSync, which emits EventError via errorEvent(err). Emitting
 			// here too produces a duplicate error message in the TUI.
 		}
-	})
-	if err != nil {
-		return resp, nil, err
 	}
+}
 
-	// Execute all pending tool calls in parallel, emit results as they complete.
+// runPendingTools executes all tool calls collected from one stream in
+// parallel, emitting results as they complete.
+func (s *Session) runPendingTools(ctx context.Context, resp *types.Response, pendingCalls []pendingToolCall) (*types.Response, []types.ToolResult, error) {
 	if len(pendingCalls) == 0 {
 		return resp, nil, nil
 	}

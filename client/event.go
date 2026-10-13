@@ -66,6 +66,12 @@ type Event struct {
 	CacheWrite    int     `json:"cache_write"`
 	CostUSD       float64 `json:"cost_usd"`
 
+	// Retry ("retry"): a transient network failure is being retried —
+	// attempt Attempt (2-based) of Max; Error is what failed. Non-fatal.
+	Attempt int    `json:"attempt,omitempty"`
+	Max     int    `json:"max,omitempty"`
+	Error   string `json:"error,omitempty"`
+
 	// Errors (EventError).
 	Message string         `json:"message,omitempty"`
 	Details map[string]any `json:"details,omitempty"`

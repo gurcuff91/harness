@@ -35,7 +35,7 @@ const (
 
 func NewMiniMax() *MiniMax {
 	m := &MiniMax{
-		client: &http.Client{},
+		client: llm.NewProviderClient(0),
 		cache:  make(map[string]types.ModelMeta),
 	}
 	m.ResolveCredentials() //nolint:errcheck
@@ -165,7 +165,7 @@ func fetchMiniMaxModels(apiKey string) ([]types.ModelMeta, error) {
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := llm.NewProviderClient(10 * time.Second).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("provider unreachable")
 	}

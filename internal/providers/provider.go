@@ -4,10 +4,18 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/gurcuff91/harness/internal/config"
+	"github.com/gurcuff91/harness/internal/providers/llm"
 	"github.com/gurcuff91/harness/types"
 )
+
+// modelListClient is for the providers' short, non-streaming model-listing
+// and validation calls: on the provider transport (no shared fate with the
+// embedding process) with a total timeout, so a stalled listing can never
+// hang Agent.Models().
+var modelListClient = llm.NewProviderClient(30 * time.Second)
 
 // Provider is the core interface implemented by all LLM providers.
 // It lives in providers/ (not providers/llm/) because it's the contract

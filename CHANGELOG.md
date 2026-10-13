@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.89.0] - 2026-10-13
+
+### Fixed — dead LLM connections are detected in seconds and the turn retries
+Observed in production: a turn stayed "active" for 15m46s with nothing streaming, then failed with `read: connection timed out`. Its single connection to the provider had died silently (peer gone, data stuck un-ACKed in the send queue) while the provider itself was healthy; with no HTTP/2 health check or response-header timeout, only the kernel's TCP retransmission timeout (~15 min) ended it — and the turn then failed instead of retrying.
+
+- **Dedicated LLM transport.** Every provider (Anthropic, Claude/Codex OAuth, OpenAI, MiniMax, Ollama, Ollama Cloud, OpenCode Go, custom OpenAI-compatible) now uses one shared `*http.Transport` instead of `http.DefaultTransport` — LLM traffic no longer shares HTTP/2 connections (or their fate) with the embedding process's own HTTP calls to the same host. It keeps the default proxy/dialer/TLS settings and adds:
+  - **HTTP/2 PING health checks**: a PING after 30 s without frames, connection closed if unanswered in 15 s — a blackholed connection is dropped in ~45 s, not ~15 min. (PINGs are answered by the server's HTTP/2 layer even while a model is thinking.) Also a 30 s write-progress timeout.
+  - **`ResponseHeaderTimeout` of 3 min** — generous for reasoning models, but a request with no headers can no longer hang indefinitely.
+- **Stream idle timeout (3 min)**: a response stream that delivers no bytes at all for 3 minutes is aborted with a typed transient error (`llm.ErrStreamIdle`). Covers HTTP/1.1 providers, which have no PINGs; any byte (including SSE keep-alives) resets it.
+- **The turn's LLM call is retried on transient network failures**: up to 3 attempts (2 s, 4 s backoff), aborted by Stop. Retried: dial/read/write timeouts, connection reset/refused, broken pipe, unexpected EOF, HTTP/2 GOAWAY / RST_STREAM / lost connection, the header and idle timeouts, and HTTP 502/503/504. Never retried: context overflow, 4xx (auth, validation, 429), user Stop. Only retried if nothing had streamed yet in that iteration, so a client never sees duplicated or contradictory content, and the history never gets a broken assistant message.
+- **New `retry` event** per retry (`{"type":"retry","attempt":2,"max":3,"error":"…"}`), on `GET /api/sessions/{id}/events` and as `client.Event.Attempt/Max/Error`; the TUI shows it as a warning.
+- Claude/Codex OAuth clients drop their 5-minute TOTAL request timeout, which also cut long but healthy streams; they're now bounded by the header and idle timeouts like every other provider.
+- `types.ProviderAPIError` gains `Status` (the provider's HTTP status), for classification without parsing messages.
+
 ## [0.88.2] - 2026-10-12
 
 ### Fixed — the model registry fetch could hang forever (and block startup)

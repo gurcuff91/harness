@@ -2,7 +2,6 @@ package providers
 
 import (
 	"fmt"
-	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -143,7 +142,7 @@ func RegisterOpenAI(name, url, display string, headers map[string]string, reason
 		headers:        headers,
 		reasoningSplit: reasoningSplit,
 		fetchModelsFn:  fetchModels,
-		client:         &http.Client{},
+		client:         llm.NewProviderClient(0),
 		cache:          make(map[string]types.ModelMeta),
 	})
 	return nil

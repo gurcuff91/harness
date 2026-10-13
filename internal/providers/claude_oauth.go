@@ -48,9 +48,10 @@ const oauthTokenURL = "https://platform.claude.com/v1/oauth/token"
 // refresh runs while holding the cross-process credentials lock, and an
 // unbounded hang there would let the stale-lock reclaim (see filelock.go) steal
 // the lock from this still-alive process, causing a double redemption. Distinct
-// from c.client (5min, for streaming) and from http.DefaultClient (0 = infinite,
-// what this code used before).
-var oauthRefreshClient = &http.Client{Timeout: 30 * time.Second}
+// from c.client (streaming, bounded by the provider transport's header/idle
+// timeouts) and from http.DefaultClient (0 = infinite, what this code used
+// before).
+var oauthRefreshClient = llm.NewProviderClient(30 * time.Second)
 
 var ccVersion = envOrDefault("CLAUDE_CLI_VERSION", "2.1.280")
 
@@ -69,7 +70,7 @@ type ClaudeOAuth struct {
 
 func NewClaudeOAuth() (*ClaudeOAuth, error) {
 	c := &ClaudeOAuth{
-		client:  &http.Client{Timeout: 5 * time.Minute},
+		client:  llm.NewProviderClient(0), // bounded by header/idle timeouts, not a total cap (it cut long healthy streams)
 		tokens:  newTokenManager(),
 		session: uuid.New().String(),
 		cache:   make(map[string]types.ModelMeta),
