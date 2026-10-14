@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -109,5 +110,83 @@ func TestDeadStreamIsRetriedEndToEnd(t *testing.T) {
 	}
 	if len(assistant) != 1 || assistant[0] != "recovered" {
 		t.Fatalf("history assistant parts = %q, want exactly [recovered]", assistant)
+	}
+}
+
+// The incident end to end: an OpenAI-compatible gateway completes a stream
+// cleanly ([DONE]) with NO content. The turn retries (a "retry" event), the
+// second attempt answers, and GET /messages holds no empty assistant message
+// and never "parts": null.
+func TestEmptyCompletionIsRetriedEndToEnd(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var calls atomic.Int64
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/models") {
+			w.Write([]byte(`{"data":[{"id":"m"}]}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		if calls.Add(1) == 1 { // empty but clean completion
+			fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`+"\n\n")
+			fmt.Fprint(w, "data: [DONE]\n\n")
+			return
+		}
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"real reply"}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer gw.Close()
+	if err := agent.NewOpenAIProvider("e2e-empty-gw", gw.URL); err != nil {
+		t.Fatal(err)
+	}
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	defer a.Close()
+	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	c := client.New(srv.Addr())
+	sess, _ := c.CreateSession("e2e-empty-gw/m", "/p", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ev, _ := c.StreamEvents(ctx, sess.ID)
+	time.Sleep(50 * time.Millisecond)
+	c.SendPrompt(sess.ID, "hi")
+
+	var retried bool
+	var text string
+	for e := range ev {
+		if e.Type == "retry" && strings.Contains(e.Error, "empty response") {
+			retried = true
+		}
+		if e.Type == "text" {
+			text += e.Delta
+		}
+		if e.Type == "error" {
+			t.Fatalf("turn errored: %s", e.Message)
+		}
+		if e.Type == "turn_end" {
+			break
+		}
+	}
+	if !retried || text != "real reply" {
+		t.Fatalf("retried=%v text=%q", retried, text)
+	}
+	resp, err := http.Get("http://" + srv.Addr() + "/api/sessions/" + sess.ID + "/messages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw bytes.Buffer
+	raw.ReadFrom(resp.Body)
+	resp.Body.Close()
+	if strings.Contains(raw.String(), `"parts":null`) {
+		t.Fatalf("GET /messages returned parts:null: %s", raw.String())
+	}
+	msgs, _ := c.GetMessages(sess.ID)
+	for _, m := range msgs {
+		if m.Role == "assistant" && !m.HasContent() {
+			t.Fatal("an empty assistant message was stored")
+		}
 	}
 }

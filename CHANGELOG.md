@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.89.1] - 2026-10-14
+
+### Fixed — an empty model reply was persisted as `"parts": null` and silently ended the turn
+Observed in production: mid-task, an OpenAI-compatible gateway completed a stream cleanly (`[DONE]`) with no text, no reasoning and no tool call. harness stored it as `{"role":"assistant","parts":null}` and — with no tool calls — ended the turn as if the model had finished: no error, the agent just stopped. Every client loading that history received `"parts": null`.
+
+- **An empty completion is a failed attempt, not an answer**: it's retried through the same transient-retry loop as network failures (up to 3 attempts, 2 s / 4 s backoff, a `retry` event each). If every attempt comes back empty, the turn ends with an `error` event ("model returned an empty response") — never a silent "successful" end — and nothing is stored. (`agent.ErrEmptyResponse`.)
+- **The max-iterations progress summary** checks for an empty reply BEFORE storing it (it used to store first, then report the error).
+- **`parts` is never `null`**: `types.Message` always encodes `"parts": []`, and a stored `"parts": null` decodes to an empty slice — so the JSONL, `GET /api/sessions/{id}/messages` and every client are safe regardless of where an empty message came from.
+- **Existing sessions with a legacy `parts: null` message load and resume**: the message is kept in place (so absolute message indices — e.g. the image endpoint's — never shift) and served as `parts: []`, but it's never replayed to the provider (several providers reject an empty assistant turn).
+- New `types.Message.HasContent()`.
+- Retry eligibility: usage/done stream events no longer count as "content already streamed" — they render nothing, and an empty completion always sends them.
+
 ## [0.89.0] - 2026-10-13
 
 ### Fixed — dead LLM connections are detected in seconds and the turn retries

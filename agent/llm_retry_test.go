@@ -18,6 +18,11 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
+// errEmpty in a scriptedProvider's errs makes that call return a clean but
+// EMPTY completion (no text/reasoning/tool call — the observed gateway flake)
+// instead of an error.
+var errEmpty = errors.New("scripted: empty completion")
+
 // scriptedProvider fails its first len(errs) CompleteStream calls with errs
 // (optionally after streaming some text first), then answers "done".
 type scriptedProvider struct {
@@ -34,6 +39,10 @@ func (p *scriptedProvider) CompleteStream(ctx context.Context, req *types.Reques
 	p.calls++
 	p.mu.Unlock()
 	if n < len(p.errs) {
+		if p.errs[n] == errEmpty { // a clean, successful, EMPTY completion
+			cb(types.StreamEvent{Type: types.StreamDone})
+			return &types.Response{Message: types.NewAssistantToolCallMessage("", "", "", nil)}, nil
+		}
 		if p.streamFirst {
 			cb(types.StreamEvent{Type: types.StreamTextDelta, Delta: "partial "})
 		}
@@ -223,5 +232,80 @@ func TestStopDuringRetryBackoff(t *testing.T) {
 	}
 	if time.Since(start) > time.Second || p.callCount() != 1 {
 		t.Errorf("stop took %v, calls = %d; want prompt stop and no further attempts", time.Since(start), p.callCount())
+	}
+}
+
+// Criterion 1: an empty completion is retried; the retry's content completes
+// the turn and nothing empty is stored.
+func TestEmptyResponseIsRetried(t *testing.T) {
+	p := &scriptedProvider{errs: []error{errEmpty}}
+	sess, events, err := retrySession(t, p)
+	if err != nil {
+		t.Fatalf("turn failed: %v", err)
+	}
+	if p.callCount() != 2 || countType(events, types.EventRetry) != 1 {
+		t.Errorf("calls = %d, retries = %d; want 2, 1", p.callCount(), countType(events, types.EventRetry))
+	}
+	for _, m := range sess.AllMessages() {
+		if m.Role == types.RoleAssistant && !m.HasContent() {
+			t.Fatal("an empty assistant message was persisted")
+		}
+	}
+}
+
+// Criterion 2: three empty completions → an error event, the turn ends, and
+// nothing empty is stored.
+func TestEmptyResponsesExhaustToError(t *testing.T) {
+	p := &scriptedProvider{errs: []error{errEmpty, errEmpty, errEmpty}}
+	sess, events, err := retrySession(t, p)
+	if !errors.Is(err, ErrEmptyResponse) {
+		t.Fatalf("turn err = %v, want ErrEmptyResponse", err)
+	}
+	var sawError bool
+	for _, e := range events {
+		if e.Type == types.EventError && strings.Contains(e.Message, "empty response") {
+			sawError = true
+		}
+	}
+	if !sawError {
+		t.Error("an error event must report the empty response")
+	}
+	if p.callCount() != llmMaxAttempts {
+		t.Errorf("calls = %d, want %d", p.callCount(), llmMaxAttempts)
+	}
+	for _, m := range sess.AllMessages() {
+		if m.Role == types.RoleAssistant {
+			t.Fatalf("nothing must be stored for an empty turn, got %+v", m)
+		}
+	}
+}
+
+// The max-iterations progress summary never persists an empty assistant
+// message either: empty summaries surface as an error and nothing is stored.
+func TestEmptyProgressSummaryIsNotStored(t *testing.T) {
+	p := &scriptedProvider{} // first turn answers "done"
+	sess, _, err := retrySession(t, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	p.errs = make([]error, 100) // from here on: every call is an empty completion
+	for i := range p.errs {
+		p.errs[i] = errEmpty
+	}
+	p.calls = 0
+	p.mu.Unlock()
+
+	before := len(sess.AllMessages())
+	sess.mu.Lock() // requestProgressUpdate runs under the turn lock in production
+	_, err = sess.requestProgressUpdate(context.Background())
+	sess.mu.Unlock()
+	if err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("err = %v, want an empty-summary error", err)
+	}
+	for _, m := range sess.AllMessages()[before:] {
+		if m.Role == types.RoleAssistant {
+			t.Fatalf("an empty summary was persisted: %+v", m)
+		}
 	}
 }

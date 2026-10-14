@@ -13,6 +13,11 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
+// ErrEmptyResponse: the model's stream completed cleanly but carried no text,
+// reasoning or tool call. Transient — retried like a network failure — and
+// never persisted.
+var ErrEmptyResponse = errors.New("model returned an empty response")
+
 // llmMaxAttempts bounds a ReAct iteration's LLM call: one try plus up to two
 // retries on a transient network failure (see isTransientNetworkError).
 const llmMaxAttempts = 3
@@ -36,6 +41,9 @@ var llmRetryBackoff = func(failedAttempt int) time.Duration {
 func isTransientNetworkError(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
+	}
+	if errors.Is(err, ErrEmptyResponse) {
+		return true
 	}
 	if isContextOverflowError(err) {
 		return false

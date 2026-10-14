@@ -127,6 +127,35 @@ func (m Message) IsEmpty() bool {
 	return len(m.Parts) == 0
 }
 
+// HasContent reports whether an ASSISTANT message carries anything a model
+// actually produced — text, reasoning or a tool call. An assistant reply with
+// none (a stream that completed cleanly but empty — a known flake of some
+// OpenAI-compatible gateways) must never be persisted or replayed.
+func (m Message) HasContent() bool {
+	for _, p := range m.Parts {
+		if p.Text != "" || p.ToolCall != nil || p.Image != nil || p.ToolResult != nil ||
+			(p.Thinking != nil && (p.Thinking.Content != "" || p.Thinking.Signature != "")) {
+			return true
+		}
+	}
+	return false
+}
+
+// UnmarshalJSON normalizes a stored "parts": null (written by older versions)
+// to an empty slice, so a decoded message always has non-nil Parts.
+func (m *Message) UnmarshalJSON(data []byte) error {
+	type plain Message
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	if p.Parts == nil {
+		p.Parts = []ContentPart{}
+	}
+	*m = Message(p)
+	return nil
+}
+
 // TextContent returns all text parts concatenated.
 func (m Message) TextContent() string {
 	var s string
@@ -147,12 +176,18 @@ func (m Message) ToolCalls() []ToolCall {
 	return calls
 }
 
-// MarshalJSON implements json.Marshaler — compact wire format.
+// MarshalJSON implements json.Marshaler — compact wire format. Parts is
+// always an array — "parts": [] — never null, whatever produced the message:
+// clients iterate it unconditionally.
 func (m Message) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		Role  MessageRole   `json:"role"`
 		Parts []ContentPart `json:"parts"`
 		Meta  *MessageMeta  `json:"meta,omitempty"`
 	}
-	return json.Marshal(wire{Role: m.Role, Parts: m.Parts, Meta: m.Meta})
+	parts := m.Parts
+	if parts == nil {
+		parts = []ContentPart{}
+	}
+	return json.Marshal(wire{Role: m.Role, Parts: parts, Meta: m.Meta})
 }

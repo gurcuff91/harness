@@ -863,7 +863,7 @@ func (s *Session) promptSync(ctx context.Context, fu followUp, first bool) (retT
 		// the provider. Providers like Anthropic reject requests with multiple
 		// large images (>2000px) across the full history. Images in the current
 		// turn are always preserved so the model can see what was just shared.
-		history := stripOldTurnImages(s.store.Messages())
+		history := stripOldTurnImages(withoutEmptyAssistant(s.store.Messages()))
 
 		req := &types.Request{
 			SystemPrompt:  s.systemPrompt,
@@ -1229,7 +1229,7 @@ func (s *Session) generateCompactionSummary(ctx context.Context, provider provid
 	// together in a single request (error: "image dimensions exceed max allowed
 	// size for many-image requests"). Replacing each image part with a placeholder
 	// text preserves the conversational structure without triggering the limit.
-	history := stripImages(s.store.Messages())
+	history := stripImages(withoutEmptyAssistant(s.store.Messages()))
 
 	// Emergency prune: if the history to summarize is ITSELF already too large
 	// for the model's window, the summary request would fail with the very
@@ -1767,9 +1767,11 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 		hadThinking  bool
 		hadText      bool
 		pendingCalls []pendingToolCall
-		// emitted is set the moment this attempt surfaces ANYTHING to clients
-		// (content, a tool call, usage) — after that a retry could duplicate
-		// or contradict what they already rendered, so the error is final.
+		// emitted is set the moment this attempt surfaces CONTENT to clients
+		// (a text/thinking delta or a tool call) — after that a retry could
+		// duplicate or contradict what they already rendered, so the error is
+		// final. Usage/done events don't count: they render nothing (an empty
+		// completion still sends them, and must stay retryable).
 		emitted bool
 	)
 
@@ -1779,11 +1781,19 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 		resp, err = s.provider.CompleteStream(ctx, req, func(se types.StreamEvent) {
 			switch se.Type {
 			case types.StreamThinkingDelta, types.StreamTextDelta, types.StreamToolStart,
-				types.StreamToolDelta, types.StreamToolEnd, types.StreamUsage:
+				types.StreamToolDelta, types.StreamToolEnd:
 				emitted = true
 			}
 			s.handleStreamEvent(se, &hadThinking, &hadText, &pendingCalls)
 		})
+		// A stream that completed cleanly but produced NOTHING (no text, no
+		// reasoning, no tool call) is a failed attempt, not a final answer:
+		// persisting it stored {"role":"assistant","parts":null} and ended
+		// the turn silently mid-task. Treat it as transient (re-asking with
+		// the same history usually yields a real reply).
+		if err == nil && (resp == nil || !resp.Message.HasContent()) {
+			err = ErrEmptyResponse
+		}
 		if err == nil || emitted || ctx.Err() != nil || !isTransientNetworkError(err) || attempt >= llmMaxAttempts {
 			break
 		}
@@ -2029,7 +2039,7 @@ func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 	req := &types.Request{
 		SystemPrompt: s.systemPrompt,
 		Model:        s.modelID,
-		Messages:     stripImages(s.store.Messages()),
+		Messages:     stripImages(withoutEmptyAssistant(s.store.Messages())),
 		Tools:        nil, // no tools — force text response
 		MaxTokens:    s.maxTokens,
 	}
@@ -2050,7 +2060,6 @@ func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 	// same block rather than corrupting state. Losing the summary entirely is
 	// strictly worse than a rare duplicated fragment.
 	const maxSummaryAttempts = 3
-	backoff := 2 * time.Second
 	var (
 		resp    *types.Response
 		lastErr error
@@ -2060,9 +2069,8 @@ func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 			select {
 			case <-ctx.Done():
 				return "", ctx.Err()
-			case <-time.After(backoff):
+			case <-time.After(llmRetryBackoff(attempt)): // 2s, 4s
 			}
-			backoff *= 2
 		}
 		var err error
 		resp, _, err = s.runStream(ctx, req)
@@ -2081,16 +2089,18 @@ func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 		return "", lastErr
 	}
 
-	if err := s.store.AddMessage(resp.Message); err != nil {
-		return "", err
-	}
-
 	// Guard against providers that return an empty response when asked for a
 	// progress summary (e.g. some OpenAI-compatible endpoints ignore Tools:nil
 	// or fail to emit content deltas). Returning an error lets drainFollowUps
 	// emit EventError so the user sees something instead of a silent stop.
+	// Checked BEFORE storing: an empty assistant message must never be
+	// persisted (it used to land as {"role":"assistant","parts":null}).
 	if resp.Text == "" {
 		return "", fmt.Errorf("model returned an empty summary; conversation capped at %d iterations", s.maxIterations)
+	}
+
+	if err := s.store.AddMessage(resp.Message); err != nil {
+		return "", err
 	}
 
 	return resp.Text, nil
@@ -2114,6 +2124,21 @@ func (s *Session) emit(e types.Event) {
 // whatever was just shared (pasted screenshot, Read tool result, etc.).
 //
 // The on-disk store is never modified — this only affects the wire payload.
+// withoutEmptyAssistant drops assistant messages with no content from a
+// request's history. Older versions could persist one ({"parts":null});
+// they stay in the store (so absolute message indices never shift) but must
+// never be replayed — several providers reject an empty assistant turn.
+func withoutEmptyAssistant(msgs []types.Message) []types.Message {
+	out := msgs[:0:0]
+	for _, m := range msgs {
+		if m.Role == types.RoleAssistant && !m.HasContent() {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
 func stripOldTurnImages(msgs []types.Message) []types.Message {
 	// Find the boundary: scan backward for the last assistant message without
 	// tool_calls. Everything after that index is the current turn.
