@@ -689,15 +689,9 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 		return nil, fmt.Errorf("new session: %w", err)
 	}
 
-	// MaxTokens from model if not set
-	maxTokens := a.maxTokens
-	if maxTokens == 0 {
-		if meta := provider.ModelMeta(modelID); meta != nil && meta.MaxTokens > 0 {
-			maxTokens = meta.MaxTokens
-		} else {
-			maxTokens = 32000
-		}
-	}
+	// Output ceiling: the user's AgentOptions.MaxTokens when set (always
+	// wins), else the catalog value capped at defaultMaxOutputTokens.
+	maxTokens := sessionMaxTokens(a.maxTokens, provider.ModelMeta(modelID))
 
 	// Resources
 	loader := a.newLoader(cwd)
@@ -795,14 +789,7 @@ func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session
 		maxIterations = meta.MaxIterations
 	}
 
-	maxTokens := a.maxTokens
-	if maxTokens == 0 {
-		if m := provider.ModelMeta(modelID); m != nil && m.MaxTokens > 0 {
-			maxTokens = m.MaxTokens
-		} else {
-			maxTokens = 32000
-		}
-	}
+	maxTokens := sessionMaxTokens(a.maxTokens, provider.ModelMeta(modelID))
 
 	cwd := meta.CWD
 	loader := a.newLoader(cwd)
@@ -980,14 +967,7 @@ func (a *Agent) ForkSession(sessionID string) (*Session, error) {
 		maxIterations = meta.MaxIterations
 	}
 
-	maxTokens := a.maxTokens
-	if maxTokens == 0 {
-		if m := provider.ModelMeta(modelID); m != nil && m.MaxTokens > 0 {
-			maxTokens = m.MaxTokens
-		} else {
-			maxTokens = 32000
-		}
-	}
+	maxTokens := sessionMaxTokens(a.maxTokens, provider.ModelMeta(modelID))
 
 	cwd := meta.CWD
 	loader := a.newLoader(cwd)

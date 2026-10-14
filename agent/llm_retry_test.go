@@ -145,14 +145,14 @@ func TestTransientErrorGivesUpAfterMaxAttempts(t *testing.T) {
 	}
 }
 
-// Context overflow, 4xx and partially-streamed responses are NOT retried.
+// 4xx and partially-streamed responses are NOT retried. (A context overflow
+// isn't blindly retried either — it compacts first; see output_budget_test.go.)
 func TestNonTransientErrorsAreNotRetried(t *testing.T) {
 	cases := map[string]*scriptedProvider{
-		"context overflow": {errs: []error{errors.New("prompt is too long: 250000 tokens > 200000 maximum")}},
-		"401":              {errs: []error{types.NewProviderAPIError("x", 401, []byte(`{"error":"unauthorized"}`))}},
-		"403":              {errs: []error{types.NewProviderAPIError("x", 403, nil)}},
-		"400":              {errs: []error{types.NewProviderAPIError("x", 400, []byte(`{"error":"bad request"}`))}},
-		"partial stream":   {errs: []error{fmt.Errorf("stream: %w", io.ErrUnexpectedEOF)}, streamFirst: true},
+		"401":            {errs: []error{types.NewProviderAPIError("x", 401, []byte(`{"error":"unauthorized"}`))}},
+		"403":            {errs: []error{types.NewProviderAPIError("x", 403, nil)}},
+		"400":            {errs: []error{types.NewProviderAPIError("x", 400, []byte(`{"error":"bad request"}`))}},
+		"partial stream": {errs: []error{fmt.Errorf("stream: %w", io.ErrUnexpectedEOF)}, streamFirst: true},
 	}
 	for name, p := range cases {
 		t.Run(name, func(t *testing.T) {

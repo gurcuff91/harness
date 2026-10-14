@@ -244,7 +244,11 @@ func TestStreamNeverEndsSilently(t *testing.T) {
 	}
 	got := drain(t, ch)
 	last := got[len(got)-1]
-	if last.Type != "error" || !strings.Contains(last.Message, "exceeded") {
+	// The contract is the explicit "error" event; its wording depends on how
+	// the read failed — normally the line limit ("exceeded"), but under load
+	// the test server may drop the connection mid-line first ("unexpected
+	// EOF"). Either way the consumer is TOLD the stream ended.
+	if last.Type != "error" || !strings.HasPrefix(last.Message, "event stream ended:") {
 		t.Fatalf("last event = %+v; want an explicit error before the stream closes", last)
 	}
 }

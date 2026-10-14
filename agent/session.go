@@ -356,10 +356,10 @@ func (s *Session) loadModelMeta(modelID string) {
 	}
 	s.contextWindow = meta.ContextWindow
 	s.contextWindowVal.Store(int64(s.contextWindow)) // lock-free snapshot for ContextBreakdown()
-	// Update maxTokens to match the new model's capability
-	if meta.MaxTokens > 0 {
-		s.maxTokens = meta.MaxTokens
-	}
+	// (The output ceiling is NOT touched here: it's resolved once at session
+	// creation and, on a model switch, by SwitchModel via sessionMaxTokens —
+	// taking the catalog value raw here used to undo both the user's
+	// AgentOptions.MaxTokens and the default cap.)
 	s.pricing = modelPricing{
 		InputPrice:  meta.InputPrice,
 		OutputPrice: meta.OutputPrice,
@@ -855,28 +855,32 @@ func (s *Session) promptSync(ctx context.Context, fu followUp, first bool) (retT
 		// requests is the safe point). Its own error is already emitted as
 		// EventError; we continue either way — a failed compaction shouldn't
 		// abort a turn that might still fit.
-		if s.stats.ContextUsage >= autoCompactThreshold {
-			s.compact(ctx) //nolint:errcheck — error already emitted as EventError
-		}
-
-		// Strip images from all turns except the current one before sending to
-		// the provider. Providers like Anthropic reject requests with multiple
-		// large images (>2000px) across the full history. Images in the current
-		// turn are always preserved so the model can see what was just shared.
-		history := stripOldTurnImages(withoutEmptyAssistant(s.store.Messages()))
-
-		req := &types.Request{
-			SystemPrompt:  s.systemPrompt,
-			Model:         s.modelID,
-			Messages:      history,
-			Tools:         s.tools.Definitions(),
-			MaxTokens:     s.maxTokens,
-			ThinkingLevel: s.thinkingLvl,
+		req := s.buildTurnRequest()
+		// The trigger accounts for the output the request must reserve, not
+		// input alone: a provider that sums input + max_tokens refuses long
+		// before the input reaches the window (see needsCompaction).
+		if s.stats.ContextUsage >= autoCompactThreshold ||
+			needsCompaction(s.contextWindow, estimateInputTokens(s.lastInputTokens, req), s.maxTokens) {
+			if s.compact(ctx) == nil { //nolint:errcheck — error already emitted as EventError
+				req = s.buildTurnRequest() // rebuilt from the compacted history
+			}
 		}
 
 		s.emit(types.Event{Type: types.EventLoopStart, Loop: i})
 
 		resp, toolResults, err := s.runStream(ctx, req)
+		// Context overflow: the provider refused the request as too large
+		// (its tokenizer / limit disagreed with our estimate). Compact ONCE
+		// and retry the rebuilt request — a growing session degrades into a
+		// compaction, not a failed turn. A second overflow is final.
+		if err != nil && ctx.Err() == nil && isContextOverflowError(err) {
+			s.emit(types.Event{Type: types.EventRetry, Attempt: 2, MaxAttempts: 2,
+				Message: "context too large, compacting and retrying: " + err.Error()})
+			if s.compact(ctx) == nil {
+				req = s.buildTurnRequest()
+				resp, toolResults, err = s.runStream(ctx, req)
+			}
+		}
 		if ctx.Err() != nil {
 			// Cancelled by user Stop() — close the loop, emit stop.
 			// turn_end is handled by defer emitTurnEnd().
@@ -1064,7 +1068,14 @@ func (s *Session) SwitchModel(ctx context.Context, fullModel string) error {
 		// example, but the same gap that let a since-grown, image-heavy
 		// turn overflow before ANY check ran again).
 		mandatory := s.lastInputTokens > meta.ContextWindow
-		preventive := !mandatory && float64(s.lastInputTokens)/float64(meta.ContextWindow) >= autoCompactThreshold
+		// Preventive also reserves room for the destination's output (input
+		// + reserve against the threshold — see needsCompaction).
+		explicitMax := 0
+		if s.agent != nil {
+			explicitMax = s.agent.maxTokens
+		}
+		preventive := !mandatory && (float64(s.lastInputTokens)/float64(meta.ContextWindow) >= autoCompactThreshold ||
+			needsCompaction(meta.ContextWindow, s.lastInputTokens, sessionMaxTokens(explicitMax, meta)))
 		if mandatory || preventive {
 			if compactErr := s.compactWithTarget(ctx, compactProvider, compactModelID); compactErr != nil {
 				// Compact already emitted EventError — just return
@@ -1078,6 +1089,14 @@ func (s *Session) SwitchModel(ctx context.Context, fullModel string) error {
 	s.provider = provider
 	s.modelID = modelID
 	s.loadModelMeta(modelID)
+	// Re-resolve the output ceiling for the new model with the same rule as
+	// session creation: the agent's explicit AgentOptions.MaxTokens wins,
+	// else this model's catalog value capped at defaultMaxOutputTokens.
+	agentMax := 0
+	if s.agent != nil {
+		agentMax = s.agent.maxTokens
+	}
+	s.maxTokens = sessionMaxTokens(agentMax, provider.ModelMeta(modelID))
 	s.modelStr.Store(fullModel)              // update lock-free snapshot for Model()
 	s.providerNameVal.Store(provider.Name()) // update lock-free snapshot for ContextBreakdown()
 	meta := s.store.Meta()
@@ -2036,13 +2055,18 @@ func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 	// images so the model can see what was just shared. After ~120 iterations
 	// the "current turn" can have accumulated many of them, and this final
 	// call used to send every single one at full size.
-	req := &types.Request{
-		SystemPrompt: s.systemPrompt,
-		Model:        s.modelID,
-		Messages:     stripImages(withoutEmptyAssistant(s.store.Messages())),
-		Tools:        nil, // no tools — force text response
-		MaxTokens:    s.maxTokens,
+	buildSummaryReq := func() *types.Request {
+		req := &types.Request{
+			SystemPrompt: s.systemPrompt,
+			Model:        s.modelID,
+			Messages:     stripImages(withoutEmptyAssistant(s.store.Messages())),
+			Tools:        nil, // no tools — force text response
+		}
+		req.MaxTokens = requestMaxTokens(s.maxTokens, s.contextWindow, estimateInputTokens(s.lastInputTokens, req))
+		return req
 	}
+	req := buildSummaryReq()
+	compactedOnce := false
 
 	// Retry the summary call, same 3-attempts-with-backoff shape
 	// generateCompactionSummary already uses (see its loop) — and for the same
@@ -2084,6 +2108,21 @@ func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 		if ctx.Err() != nil {
 			return "", err
 		}
+		// Context overflow: retrying the same request can't succeed —
+		// compact ONCE and retry the rebuilt (smaller) one; a second
+		// overflow is final.
+		if isContextOverflowError(err) {
+			if compactedOnce {
+				return "", err
+			}
+			compactedOnce = true
+			s.emit(types.Event{Type: types.EventRetry, Attempt: attempt + 2, MaxAttempts: maxSummaryAttempts,
+				Message: "context too large, compacting and retrying: " + err.Error()})
+			if cerr := s.compact(ctx); cerr != nil {
+				return "", err
+			}
+			req = buildSummaryReq()
+		}
 	}
 	if lastErr != nil {
 		return "", lastErr
@@ -2124,6 +2163,24 @@ func (s *Session) emit(e types.Event) {
 // whatever was just shared (pasted screenshot, Read tool result, etc.).
 //
 // The on-disk store is never modified — this only affects the wire payload.
+// buildTurnRequest assembles a ReAct iteration's request from the CURRENT
+// history, with max_tokens bounded by the room left in the window (see
+// requestMaxTokens). Images are stripped from all turns but the current one
+// (providers like Anthropic reject many large images across the history; the
+// current turn keeps them so the model sees what was just shared). Caller
+// holds s.mu.
+func (s *Session) buildTurnRequest() *types.Request {
+	req := &types.Request{
+		SystemPrompt:  s.systemPrompt,
+		Model:         s.modelID,
+		Messages:      stripOldTurnImages(withoutEmptyAssistant(s.store.Messages())),
+		Tools:         s.tools.Definitions(),
+		ThinkingLevel: s.thinkingLvl,
+	}
+	req.MaxTokens = requestMaxTokens(s.maxTokens, s.contextWindow, estimateInputTokens(s.lastInputTokens, req))
+	return req
+}
+
 // withoutEmptyAssistant drops assistant messages with no content from a
 // request's history. Older versions could persist one ({"parts":null});
 // they stay in the store (so absolute message indices never shift) but must

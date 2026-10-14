@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.0] - 2026-10-14
+
+### Changed — output budget: a default 64k cap, bounded per request by the room left in the window
+Observed in production: a long MiniMax-M3 session failed with `400 invalid params, context window exceeds limit (2013)`. harness sent `max_tokens = 512000` — the OpenRouter catalog's per-model ceiling, passed through unchanged — with ~775k tokens of input. MiniMax counts **input + max_tokens** against its ~1M window, so the request was refused as soon as the input passed roughly half the window, while the auto-compact (which only looked at the input, at 95%) never got a chance to fire.
+
+- **Session output ceiling**: `AgentOptions.MaxTokens`, when set, **always wins** — over the catalog and the default cap. Otherwise the catalog's per-model value is capped at **64,000** (a coding agent never needs a 512k reply); with no catalog value, 32,000 as before. Model switches re-resolve it with the same rule (they used to take the catalog value raw, undoing both).
+- **Per-request bound**: each request's `max_tokens` is `min(ceiling, window − estimated input − 5% margin)`, never below 16,000 (or the user's own ceiling, if lower) — a nearly-full session still gets a useful answer, and never sends a request the provider must refuse. The input estimate is the larger of the provider's last real count and a generous chars-based estimate of the request about to be sent.
+- **Auto-compact counts the reserved output**: it fires when input + the minimum output reserve crosses 95% of the window (not input alone), so a session compacts *before* a request would be refused. Same rule for the preventive compaction on a model switch.
+- **Recover from a context-overflow rejection**: if a provider still refuses a request as too large (its tokenizer disagreeing with our estimate) — MiniMax's `context window exceeds limit`, Anthropic's `prompt is too long`, OpenAI's `maximum context length` — the session compacts **once**, emits a `retry` event ("context too large, compacting and retrying"), and retries the rebuilt request. A second overflow is final (error event, no loop); a user Stop is honoured. Applies to the main ReAct call and the max-iterations summary.
+- Small sessions are unaffected beyond the new default cap: below the threshold, requests carry the session's ceiling as before.
+
 ## [0.89.1] - 2026-10-14
 
 ### Fixed — an empty model reply was persisted as `"parts": null` and silently ended the turn
