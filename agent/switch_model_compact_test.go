@@ -67,7 +67,7 @@ func newSwitchModelTestSession(t *testing.T, originWindow, destWindow int, origi
 	calls = &[]string{}
 	origin = &fakeSwitchModelProvider{name: "fake-origin", contextWindow: originWindow, calls: calls, failWith: originFail}
 	dest = &fakeSwitchModelProvider{name: "fake-dest", contextWindow: destWindow, calls: calls}
-	providers.All = append(providers.All, origin, dest)
+	providers.AddForTest(origin, dest)
 
 	a = New(AgentOptions{Store: store.NewInMemoryStore()})
 	var err error

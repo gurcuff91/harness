@@ -152,7 +152,7 @@ func windowSession(t *testing.T, p *windowProvider, opts AgentOptions, inputToke
 
 	var thinking string
 	p.fakeThinkingProbeProvider = fakeThinkingProbeProvider{name: "window-" + strings.NewReplacer("/", "-").Replace(t.Name()), lastThinking: &thinking}
-	providers.All = append(providers.All, p)
+	providers.AddForTest(p)
 	opts.Store = store.NewInMemoryStore()
 	a := New(opts)
 	t.Cleanup(func() { a.Close() })
@@ -267,8 +267,10 @@ func TestContextOverflowCompactsAndRetries(t *testing.T) {
 			p := &overflowOnceProvider{msg: msg}
 			sess := windowSession(t, &p.windowProvider, AgentOptions{}, 0)
 			// Re-register the wrapper so its CompleteStream is the one used.
-			providers.All[len(providers.All)-1] = p
 			p.name = p.windowProvider.name
+			list := providers.All()
+			repl := append([]providers.Provider{}, list[:len(list)-1]...)
+			providers.SetForTest(append(repl, p))
 			sess.provider = p
 			evs, err := runTurn(t, sess)
 			if err != nil {

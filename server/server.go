@@ -740,7 +740,7 @@ type providerInfo struct {
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 	providers.EnsureRegistry()
 	var list []providerInfo
-	for _, p := range providers.All {
+	for _, p := range providers.All() {
 		models := p.Models()
 		if p.IsActive() && len(models) == 0 {
 			// Lazy-fetch models for active providers
@@ -784,7 +784,7 @@ func (s *Server) handleConnectProvider(w http.ResponseWriter, r *http.Request) {
 	providers.EnsureRegistry()
 
 	var target providers.Provider
-	for _, p := range providers.All {
+	for _, p := range providers.All() {
 		if p.Name() == name {
 			target = p
 			break
@@ -824,7 +824,7 @@ func (s *Server) handleDisconnectProvider(w http.ResponseWriter, r *http.Request
 	providers.EnsureRegistry()
 
 	var target providers.Provider
-	for _, p := range providers.All {
+	for _, p := range providers.All() {
 		if p.Name() == name {
 			target = p
 			break
@@ -1582,7 +1582,7 @@ func (s *Server) handleListCommands(w http.ResponseWriter, r *http.Request) {
 			for j, p := range list[i].Params {
 				if p.Name == "model" {
 					var vals []string
-					for _, prov := range providers.All {
+					for _, prov := range providers.All() {
 						if !prov.IsActive() {
 							continue
 						}

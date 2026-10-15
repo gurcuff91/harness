@@ -67,7 +67,7 @@ func retrySession(t *testing.T, p *scriptedProvider) (*Session, []types.Event, e
 	var thinking string
 	name := "retry-" + strings.NewReplacer("/", "-", " ", "-").Replace(t.Name())
 	p.fakeThinkingProbeProvider = fakeThinkingProbeProvider{name: name, lastThinking: &thinking}
-	providers.All = append(providers.All, p)
+	providers.AddForTest(p)
 
 	a := New(AgentOptions{Store: store.NewInMemoryStore()})
 	t.Cleanup(func() { a.Close() })
@@ -206,7 +206,7 @@ func TestStopDuringRetryBackoff(t *testing.T) {
 	var thinking string
 	p := &scriptedProvider{errs: []error{syscall.ECONNRESET, syscall.ECONNRESET, syscall.ECONNRESET}}
 	p.fakeThinkingProbeProvider = fakeThinkingProbeProvider{name: "retry-stop", lastThinking: &thinking}
-	providers.All = append(providers.All, p)
+	providers.AddForTest(p)
 	a := New(AgentOptions{Store: store.NewInMemoryStore()})
 	defer a.Close()
 	sess, _ := a.NewSession(t.TempDir(), "retry-stop/fake-model")

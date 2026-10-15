@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.91.0] - 2026-10-14
+
+### Added — `UnregisterCustomProvider`: drop a code-registered provider and register it again, live
+An SDK embedder that registers custom OpenAI-compatible providers from code (`NewOpenAIProvider`) could never remove one: a second registration failed with `provider "…" is already registered`. Reconnecting with a new API key kept using the old key until a restart; reconnecting to another tenant left the old provider orphaned in the model list.
+
+- **`agent.UnregisterCustomProvider(name) error`** (+ `harness.UnregisterCustomProvider`) removes a provider registered with `NewOpenAIProvider`; the name can then be registered again with new URL/headers in the same process. It no longer appears in `GET /api/providers` or the model list, and resolving `"<name>/<model>"` fails.
+- **Errors** (`errors.Is`): `agent.ErrProviderNotFound` for an unknown name; `agent.ErrProviderNotRemovable` for built-in providers and custom providers declared in `settings.json` (manage those through settings — `harness provider rm` / `DELETE /api/settings/provider/{name}` — which applies on the next start).
+- **Running sessions follow the provider by name**: at the start of each turn a session re-resolves its provider. If the name was unregistered and registered again, the session adopts the new registration (new key/URL) and continues normally; if it's gone, the turn fails with a clear error wrapping `ErrProviderNotFound` — no panic.
+
+### Fixed — the provider registry is safe to change while agents run
+The registry was read without any lock (from the agent, the server, model resolution and status listing) on the assumption that registration only ever happens in `main()`, before any agent exists — already untrue for embedders registering providers on connect. It's now copy-on-write behind a lock: readers take an immutable snapshot (`providers.All()`), writers swap in a new slice. Registering and unregistering providers concurrently with live agents and servers is race-free (verified under `-race`).
+
 ## [0.90.0] - 2026-10-14
 
 ### Changed — output budget: a default 64k cap, bounded per request by the room left in the window

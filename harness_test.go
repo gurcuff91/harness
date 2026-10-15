@@ -396,8 +396,7 @@ func TestCustomProviderEndToEnd(t *testing.T) {
 func TestNewOpenAIProviderFacadeAliasIsWired(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	providers.EnsureRegistry()
-	snapshot := append([]providers.Provider{}, providers.All...)
-	defer func() { providers.All = snapshot }()
+	defer providers.SetForTest(append([]providers.Provider{}, providers.All()...))()
 
 	var gotBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -423,7 +422,7 @@ func TestNewOpenAIProviderFacadeAliasIsWired(t *testing.T) {
 	defer a.Close()
 
 	var found bool
-	for _, p := range providers.All {
+	for _, p := range providers.All() {
 		if p.Name() == "facade-proxy" {
 			found = true
 			if p.DisplayName() != "Facade Proxy" {
@@ -438,7 +437,7 @@ func TestNewOpenAIProviderFacadeAliasIsWired(t *testing.T) {
 	// ProviderWithReasoningSplit() (no argument, always means "on") must
 	// genuinely reach the wire through the facade alias, not just type-check.
 	req := &types.Request{Model: "facade-model", Messages: []types.Message{}, MaxTokens: 10}
-	for _, prov := range providers.All {
+	for _, prov := range providers.All() {
 		if prov.Name() == "facade-proxy" {
 			if _, err := prov.CompleteStream(context.Background(), req, func(types.StreamEvent) {}); err != nil {
 				t.Fatalf("CompleteStream: %v", err)

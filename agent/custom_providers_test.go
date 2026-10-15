@@ -27,10 +27,7 @@ func withCleanProviderRegistry(t *testing.T) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	providers.EnsureRegistry()
-	snapshot := append([]providers.Provider{}, providers.All...)
-	t.Cleanup(func() {
-		providers.All = snapshot
-	})
+	t.Cleanup(providers.SetForTest(append([]providers.Provider{}, providers.All()...)))
 }
 
 func TestNewOpenAIProvider_RegistersAndResolvableThroughAgent(t *testing.T) {
@@ -52,7 +49,7 @@ func TestNewOpenAIProvider_RegistersAndResolvableThroughAgent(t *testing.T) {
 	defer a.Close()
 
 	var found providers.Provider
-	for _, p := range providers.All {
+	for _, p := range providers.All() {
 		if p.Name() == "agent-sdk-proxy" {
 			found = p
 			break
@@ -131,7 +128,7 @@ func TestNewOpenAIProvider_AlwaysActiveNoConnectStep(t *testing.T) {
 	a := New(AgentOptions{Store: store.NewInMemoryStore()})
 	defer a.Close()
 
-	for _, p := range providers.All {
+	for _, p := range providers.All() {
 		if p.Name() == "always-active-proxy" {
 			if !p.IsActive() {
 				t.Error("IsActive = false, want true — no connect step should be needed")
@@ -171,7 +168,7 @@ func TestNewOpenAIProvider_ReasoningSplitReachesTheWire(t *testing.T) {
 	}
 
 	var found providers.Provider
-	for _, p := range providers.All {
+	for _, p := range providers.All() {
 		if p.Name() == "minimax-gateway" {
 			found = p
 			break

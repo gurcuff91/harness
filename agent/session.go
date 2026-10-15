@@ -836,6 +836,13 @@ func (s *Session) promptSync(ctx context.Context, fu followUp, first bool) (retT
 	}
 	defer emitTurnEnd()
 
+	// The provider may have been unregistered (and possibly registered again)
+	// since the last turn — see refreshProviderLocked.
+	if err := s.refreshProviderLocked(); err != nil {
+		s.emit(errorEvent(err))
+		return "", reported(err)
+	}
+
 	// Reserve one iteration for the summary call if max iterations is reached mid-task.
 	for i := range s.maxIterations - 1 {
 		if ctx.Err() != nil {
@@ -1476,6 +1483,30 @@ func (s *Session) CWD() string { return s.cwd }
 // session's own, see WithSessionDirectives). Built once when the session is
 // created/resumed and immutable afterwards, so it's lock-free like CWD().
 func (s *Session) SystemPrompt() string { return s.systemPromptVal.Load().(string) }
+
+// refreshProviderLocked re-resolves the session's provider by NAME at a turn
+// boundary. Providers registered from code can be unregistered and
+// registered again while sessions run (agent.UnregisterCustomProvider): a
+// session adopts the provider now registered under its name (new
+// URL/headers — e.g. a rotated API key), and fails the turn with a clear
+// ErrProviderNotFound if none is. Built-in and settings.json providers never
+// change, so for them this is a cheap no-op. Caller holds s.mu.
+func (s *Session) refreshProviderLocked() error {
+	name := s.provider.Name()
+	current := providers.Find(name)
+	if current == nil {
+		return fmt.Errorf("%w: %q was unregistered — register it again or switch model", providers.ErrNotFound, name)
+	}
+	if current == s.provider {
+		return nil
+	}
+	s.provider = current
+	s.loadModelMeta(s.modelID)
+	if current.ModelMeta(s.modelID) == nil && len(current.Models()) == 0 {
+		_, _ = current.FetchModels()
+	}
+	return nil
+}
 
 // imageRefs describes images without their payload (decoded byte size from
 // the base64 length, no decode needed).

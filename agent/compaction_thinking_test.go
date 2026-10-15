@@ -66,7 +66,7 @@ func TestCompactionSummaryUsesSessionThinkingLevel(t *testing.T) {
 
 	var lastThinking string
 	fake := &fakeThinkingProbeProvider{name: "fake-thinking-probe", lastThinking: &lastThinking}
-	providers.All = append(providers.All, fake)
+	providers.AddForTest(fake)
 
 	a := New(AgentOptions{Store: store.NewInMemoryStore(), ThinkingLevel: "high"})
 	defer a.Close()
@@ -99,7 +99,7 @@ func TestCompactionSummaryUsesUpdatedThinkingLevelAfterSwitch(t *testing.T) {
 
 	var lastThinking string
 	fake := &fakeThinkingProbeProvider{name: "fake-thinking-probe-2", lastThinking: &lastThinking}
-	providers.All = append(providers.All, fake)
+	providers.AddForTest(fake)
 
 	a := New(AgentOptions{Store: store.NewInMemoryStore(), ThinkingLevel: "low"})
 	defer a.Close()

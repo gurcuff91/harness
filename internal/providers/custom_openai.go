@@ -36,6 +36,10 @@ import (
 // and programmatic (agent.NewOpenAIProvider) registration paths land here
 // identically — there is no per-path branching in this file at all.
 type CustomOpenAI struct {
+	// programmatic marks a provider registered from code (RegisterOpenAI /
+	// agent.NewOpenAIProvider) — the only kind Unregister may remove.
+	programmatic bool
+
 	name        string
 	displayName string
 	baseURL     string

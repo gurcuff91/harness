@@ -15,10 +15,8 @@ type ProviderStatus struct {
 
 // GetProviderStatuses returns the status of all known providers from the registry.
 func GetProviderStatuses() []ProviderStatus {
-	EnsureRegistry()
-
 	var statuses []ProviderStatus
-	for _, p := range All {
+	for _, p := range All() {
 		active := p.IsActive()
 		note := "disconnected"
 		if active {
@@ -51,7 +49,7 @@ func GetModelGroups(currentModel string) []ModelGroup {
 
 	var groups []ModelGroup
 	for _, name := range order {
-		for _, p := range All {
+		for _, p := range All() {
 			if !p.IsActive() || p.Name() != name {
 				continue
 			}

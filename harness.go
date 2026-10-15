@@ -247,7 +247,7 @@ func AgentWithWebSearch() AgentOption {
 //
 // Registers a custom OpenAI Chat Completions-compatible provider globally
 // for this process — usable by any Agent built afterward via "name/model".
-// Call once, early (typically in main(), before constructing any Agent).
+// May be called at any time, and paired with UnregisterCustomProvider.
 // See agent.NewOpenAIProvider's doc comment for the full contract
 // (why apiKey is memory-only, how this differs from the declarative
 // `harness provider add` / settings.json path, registration-ordering
@@ -256,6 +256,19 @@ func AgentWithWebSearch() AgentOption {
 // NewOpenAIProvider registers a custom OpenAI-compatible provider. See
 // [agent.NewOpenAIProvider].
 var NewOpenAIProvider = agent.NewOpenAIProvider
+
+// UnregisterCustomProvider removes a provider registered with
+// NewOpenAIProvider, so the name can be registered again in the same process.
+// See [agent.UnregisterCustomProvider].
+var UnregisterCustomProvider = agent.UnregisterCustomProvider
+
+// ErrProviderNotFound: no provider is registered under that name. See
+// [agent.ErrProviderNotFound].
+var ErrProviderNotFound = agent.ErrProviderNotFound
+
+// ErrProviderNotRemovable: built-in or settings.json-declared provider. See
+// [agent.ErrProviderNotRemovable].
+var ErrProviderNotRemovable = agent.ErrProviderNotRemovable
 
 // CustomProviderOption configures a NewOpenAIProvider call. See
 // [agent.CustomProviderOption].

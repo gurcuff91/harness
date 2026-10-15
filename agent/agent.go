@@ -435,7 +435,7 @@ func (a *Agent) webSearchBackends() []tools.SearchBackend {
 	out := make([]tools.SearchBackend, 0, len(want))
 	for _, w := range want {
 		var p providers.Provider
-		for _, candidate := range providers.All {
+		for _, candidate := range providers.All() {
 			if candidate.Name() == w.name {
 				p = candidate
 				break
@@ -517,8 +517,7 @@ func (a *Agent) Memory() memory.Store { return a.memStore }
 // as-is, rather than keeping a second, hand-duplicated loop over
 // providers.All in sync with this one.
 func (a *Agent) Models() []types.ModelListing {
-	providers.EnsureRegistry()
-	all := providers.All
+	all := providers.All() // snapshot: safe while providers are (un)registered
 
 	// Each provider may need network I/O — IsActive() can probe (Ollama pings
 	// its local server), and an uncached model list is fetched from the

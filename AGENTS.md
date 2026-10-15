@@ -232,9 +232,14 @@ travels as static request headers configured up front — never a stored key:
   `agent.ProviderWithHeaders(map[string]string{...})`; an optional
   `agent.ProviderWithFetchModels(func() ([]types.ModelMeta, error))` hook
   replaces model discovery entirely — capture whatever auth it needs in its
-  own closure. Call it once, early (typically in `main()`, before
-  constructing any `Agent` — see `internal/providers/registry.go`'s
-  `registryMu` doc comment for why registration ordering matters).
+  own closure. It may be called at any time, even while agents run, and
+  paired with `agent.UnregisterCustomProvider(name)` (aliased in `harness.go`)
+  to drop and re-register a provider live (new key/tenant); running sessions
+  re-resolve their provider by name at each turn. The registry is
+  copy-on-write behind a lock: always read it through `providers.All()` /
+  `providers.Find(name)` — never a package variable — and only programmatic
+  providers can be unregistered (built-in and settings.json ones return
+  `ErrProviderNotRemovable`).
 
 Both paths also accept an opt-in `ReasoningSplit`/`--reasoning-split`/
 `agent.ProviderWithReasoningSplit()` flag (default `false`, additive —

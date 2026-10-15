@@ -61,7 +61,7 @@ func TestSessionWithLegacyNullPartsResumes(t *testing.T) {
 	var thinking string
 	p := &recordingProvider{}
 	p.fakeThinkingProbeProvider = fakeThinkingProbeProvider{name: "legacy-null", lastThinking: &thinking}
-	providers.All = append(providers.All, p)
+	providers.AddForTest(p)
 
 	dir := t.TempDir()
 	fs, err := store.NewFileStore(dir)

@@ -83,11 +83,10 @@ func ProviderWithFetchModels(fn func() ([]types.ModelMeta, error)) CustomProvide
 // Agent.Providers()/Agent.Models()). name must not collide with a
 // built-in provider's own name (anthropic, openai, minimax, …).
 //
-// This is the fully PROGRAMMATIC registration path — call it once, early,
-// typically in main() before constructing any Agent (registration is not
-// safe to race against concurrent reads; see internal/providers/
-// registry.go's registryMu doc comment for the exact contract). It is
-// deliberately distinct from the DECLARATIVE settings.json path
+// This is the fully PROGRAMMATIC registration path. It may be called at any
+// time — including while agents and servers are running — and paired with
+// UnregisterCustomProvider to drop a provider and register it again (e.g. a
+// new API key or tenant) in the same process. It is deliberately distinct from the DECLARATIVE settings.json path
 // (`harness provider add`, backed by types.CustomProvider): there's no
 // Disabled flag here (simply don't call this to leave a provider out) and
 // no ModelsURL (use ProviderWithFetchModels for non-default model
@@ -113,4 +112,33 @@ func NewOpenAIProvider(name, url string, opts ...CustomProviderOption) error {
 		opt(&cfg)
 	}
 	return providers.RegisterOpenAI(name, url, cfg.display, cfg.headers, cfg.reasoningSplit, cfg.fetchModels)
+}
+
+// ErrProviderNotFound is returned (wrapped) when no provider is registered
+// under a name — by UnregisterCustomProvider for an unknown name, and as the
+// cause of a turn that fails because its session's provider was
+// unregistered. Test with errors.Is.
+var ErrProviderNotFound = providers.ErrNotFound
+
+// ErrProviderNotRemovable is returned (wrapped) by UnregisterCustomProvider
+// for a provider that wasn't registered with NewOpenAIProvider: a built-in
+// one, or a custom one declared in settings.json (manage those through
+// settings — `harness provider rm`, DELETE /api/settings/provider/{name} —
+// which applies on the next start).
+var ErrProviderNotRemovable = providers.ErrNotRemovable
+
+// UnregisterCustomProvider removes a provider registered with
+// NewOpenAIProvider, so the same name can be registered again (with a new
+// URL or headers — e.g. a new API key, or another tenant) without
+// restarting the process. Safe while agents and servers are running.
+//
+// Sessions using it: their next turn adopts a provider registered again
+// under the same name (picking up its new URL/headers); if none is
+// registered by then, the turn fails with an error wrapping
+// ErrProviderNotFound.
+//
+// Errors: ErrProviderNotFound for an unknown name; ErrProviderNotRemovable
+// for built-in providers and settings.json-declared ones.
+func UnregisterCustomProvider(name string) error {
+	return providers.Unregister(name)
 }

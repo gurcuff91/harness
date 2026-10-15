@@ -21,14 +21,7 @@ import (
 func withCleanRegistry(t *testing.T) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	registryMu.Lock()
-	snapshot := append([]Provider{}, All...)
-	registryMu.Unlock()
-	t.Cleanup(func() {
-		registryMu.Lock()
-		All = snapshot
-		registryMu.Unlock()
-	})
+	t.Cleanup(SetForTest(append([]Provider{}, All()...)))
 }
 
 func TestRegisterOpenAI_AppearsInAllWithCorrectFields(t *testing.T) {
@@ -39,7 +32,7 @@ func TestRegisterOpenAI_AppearsInAllWithCorrectFields(t *testing.T) {
 	}
 
 	var found Provider
-	for _, p := range All {
+	for _, p := range All() {
 		if p.Name() == "sdk-proxy" {
 			found = p
 			break
@@ -80,7 +73,7 @@ func TestRegisterOpenAI_ReasoningSplitPropagatesToConstructedProvider(t *testing
 		t.Fatalf("RegisterOpenAI: %v", err)
 	}
 	var found Provider
-	for _, p := range All {
+	for _, p := range All() {
 		if p.Name() == "reasoning-split-proxy" {
 			found = p
 			break
@@ -125,7 +118,7 @@ func TestRegisterOpenAI_DisplayFallsBackToName(t *testing.T) {
 	if err := RegisterOpenAI("no-display-proxy", "https://x", "", nil, false, nil); err != nil {
 		t.Fatalf("RegisterOpenAI: %v", err)
 	}
-	for _, p := range All {
+	for _, p := range All() {
 		if p.Name() == "no-display-proxy" {
 			if p.DisplayName() != "no-display-proxy" {
 				t.Errorf("DisplayName() = %q, want the name as fallback", p.DisplayName())
@@ -147,7 +140,7 @@ func TestRegisterOpenAI_ConnectRejected(t *testing.T) {
 	if err := RegisterOpenAI("connect-rejected-proxy", "https://x", "", nil, false, nil); err != nil {
 		t.Fatalf("RegisterOpenAI: %v", err)
 	}
-	for _, p := range All {
+	for _, p := range All() {
 		if p.Name() == "connect-rejected-proxy" {
 			if err := p.Connect(types.Credentials{Type: types.CredTypeAPIKey, APIKey: "whatever"}); err == nil {
 				t.Error("Connect() must be rejected for an SDK-registered custom provider")
@@ -184,7 +177,7 @@ func TestRegisterOpenAI_FetchModelsHookIsUsed(t *testing.T) {
 	}
 
 	var found Provider
-	for _, p := range All {
+	for _, p := range All() {
 		if p.Name() == "hook-proxy" {
 			found = p
 			break
@@ -218,7 +211,7 @@ func TestRegisterOpenAI_NilFetchModelsUsesDefaultHTTPPath(t *testing.T) {
 		t.Fatalf("RegisterOpenAI: %v", err)
 	}
 	var found Provider
-	for _, p := range All {
+	for _, p := range All() {
 		if p.Name() == "default-fetch-proxy" {
 			found = p
 			break

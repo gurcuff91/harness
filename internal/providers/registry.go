@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,31 +12,54 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
-// All is the fixed registry of provider instances.
-var All = []Provider{}
+// all is the provider registry. It is COPY-ON-WRITE: a writer (initRegistry,
+// RegisterOpenAI, Unregister) builds a NEW slice and swaps it in under
+// registryMu; readers take the current slice via All() and iterate it with
+// no lock held. A slice handed out is never mutated afterwards, so iterating
+// it is race-free while providers are (un)registered live — an SDK embedder
+// connecting/disconnecting providers while agents and servers run.
+var all = []Provider{}
 
 var initOnce sync.Once
 
-// registryMu guards WRITES to All — initRegistry's own construction and
-// RegisterOpenAI's append. Reads throughout the codebase (agent.go,
-// server.go, Resolve below, …) remain unprotected by design: the
-// documented usage pattern is "call RegisterOpenAI in main(), before
-// constructing any Agent" (see agent.NewOpenAIProvider's doc comment) —
-// registration finishes before any reader goroutine exists, so this mutex
-// only needs to protect concurrent registration calls against EACH OTHER
-// and against initRegistry's own first-run construction, not against the
-// wider read traffic that starts once Agents are up and running.
-var registryMu sync.Mutex
+// registryMu guards all (the slice header); see all's doc comment.
+var registryMu sync.RWMutex
+
+// All returns a snapshot of the registry: safe to iterate concurrently with
+// (un)registration, never mutated after it's returned.
+func All() []Provider {
+	EnsureRegistry()
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	return all
+}
+
+// Find returns the registered provider named name (nil if none).
+func Find(name string) Provider {
+	for _, p := range All() {
+		if p.Name() == name {
+			return p
+		}
+	}
+	return nil
+}
+
+// ErrNotFound is returned when no provider is registered under a name.
+var ErrNotFound = errors.New("provider not found")
+
+// ErrNotRemovable is returned by Unregister for a provider that wasn't
+// registered programmatically (built-in, or declared in settings.json).
+var ErrNotRemovable = errors.New("provider cannot be unregistered")
 
 func initRegistry() {
-	All = []Provider{}
+	list := []Provider{}
 	if oauth, err := NewClaudeOAuth(); err == nil {
-		All = append(All, oauth)
+		list = append(list, oauth)
 	}
 	if codex, err := NewCodexOAuth(); err == nil {
-		All = append(All, codex)
+		list = append(list, codex)
 	}
-	All = append(All,
+	list = append(list,
 		NewAnthropic(),
 		NewOpenAI(),
 		NewOpenCodeGo(),
@@ -47,7 +71,10 @@ func initRegistry() {
 	// Custom providers (settings.json's "provider" collection) — same
 	// no-hot-reload contract as MCP servers: read once here, take effect
 	// on the next process start.
-	All = append(All, buildCustomProviders(config.GetSettingsManager().CustomProviders())...)
+	list = append(list, buildCustomProviders(config.GetSettingsManager().CustomProviders())...)
+	registryMu.Lock()
+	all = list
+	registryMu.Unlock()
 }
 
 // buildCustomProviders constructs a Provider for each ENABLED, non-reserved
@@ -98,10 +125,7 @@ func EnsureRegistry() {
 // refreshCachedModels re-fetches the models of every active provider that
 // already has a cached model list (best effort).
 func refreshCachedModels() {
-	registryMu.Lock()
-	all := append([]Provider(nil), All...)
-	registryMu.Unlock()
-	for _, p := range all {
+	for _, p := range All() {
 		if p.IsActive() && len(p.Models()) > 0 {
 			_, _ = p.FetchModels()
 		}
@@ -126,16 +150,16 @@ func RegisterOpenAI(name, url, display string, headers map[string]string, reason
 	if config.IsReservedProviderName(name) {
 		return fmt.Errorf("%q is a built-in provider name and cannot be used for a custom provider", name)
 	}
-	EnsureRegistry() // make sure the built-in/settings.json-configured providers are already in All
+	EnsureRegistry() // make sure the built-in/settings.json-configured providers are already registered
 
 	registryMu.Lock()
 	defer registryMu.Unlock()
-	for _, p := range All {
+	for _, p := range all {
 		if p.Name() == name {
 			return fmt.Errorf("provider %q is already registered", name)
 		}
 	}
-	All = append(All, &CustomOpenAI{
+	next := append(append(make([]Provider, 0, len(all)+1), all...), &CustomOpenAI{
 		name:           name,
 		displayName:    display,
 		baseURL:        url,
@@ -144,8 +168,34 @@ func RegisterOpenAI(name, url, display string, headers map[string]string, reason
 		fetchModelsFn:  fetchModels,
 		client:         llm.NewProviderClient(0),
 		cache:          make(map[string]types.ModelMeta),
+		programmatic:   true,
 	})
+	all = next // copy-on-write: snapshots already handed out stay intact
 	return nil
+}
+
+// Unregister removes a provider registered programmatically (RegisterOpenAI)
+// so the name can be registered again (new URL/headers) in the same process.
+// Built-in providers and settings.json-declared custom providers return
+// ErrNotRemovable (the latter are managed through settings: they'd come back
+// on the next start). An unknown name returns ErrNotFound.
+func Unregister(name string) error {
+	EnsureRegistry()
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	for i, p := range all {
+		if p.Name() != name {
+			continue
+		}
+		if c, ok := p.(*CustomOpenAI); !ok || !c.programmatic {
+			return fmt.Errorf("%w: %q is built in or declared in settings.json", ErrNotRemovable, name)
+		}
+		next := make([]Provider, 0, len(all)-1)
+		next = append(append(next, all[:i]...), all[i+1:]...)
+		all = next // copy-on-write
+		return nil
+	}
+	return fmt.Errorf("%w: %q", ErrNotFound, name)
 }
 
 // Resolve returns the provider and bare model ID for a "provider/model" string.
@@ -168,15 +218,9 @@ func Resolve(fullModel string) (Provider, string, error) {
 	}
 
 	// 2. Find provider + check credentials
-	var p Provider
-	for _, candidate := range All {
-		if candidate.Name() == providerName {
-			p = candidate
-			break
-		}
-	}
+	p := Find(providerName)
 	if p == nil {
-		return nil, "", fmt.Errorf("provider %q not found", providerName)
+		return nil, "", fmt.Errorf("%w: %q", ErrNotFound, providerName)
 	}
 	if !p.IsActive() {
 		return nil, "", fmt.Errorf("provider %q is not active (missing credentials)", providerName)
@@ -204,8 +248,7 @@ func Resolve(fullModel string) (Provider, string, error) {
 // RefreshModels fetches models from all active providers.
 // Used by the CLI on startup — not needed in SDK usage (Resolve handles lazy fetch).
 func RefreshModels() {
-	EnsureRegistry()
-	for _, p := range All {
+	for _, p := range All() {
 		if p.IsActive() {
 			_, _ = p.FetchModels()
 		}
@@ -214,8 +257,7 @@ func RefreshModels() {
 
 // RefreshProviderModels refreshes models for a single provider by name.
 func RefreshProviderModels(providerName string) {
-	EnsureRegistry()
-	for _, p := range All {
+	for _, p := range All() {
 		if p.Name() == providerName && p.IsActive() {
 			_, _ = p.FetchModels()
 			return
