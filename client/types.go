@@ -72,6 +72,10 @@ type Model struct {
 type Session struct {
 	store.SessionMeta
 	MaxIterations int `json:"max_iterations,omitempty"`
+	// MaxTokens is the session's output-token ceiling (the agent's
+	// AgentOptions.MaxTokens when set, else the model's catalog value capped
+	// at 64k) — also in SessionInfo.Session.
+	MaxTokens int `json:"max_tokens,omitempty"`
 }
 
 // Schedule is one element of GET /api/schedules — a cron-scheduled prompt in

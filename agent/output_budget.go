@@ -82,25 +82,39 @@ func needsCompaction(window, inputTokens, ceiling int) bool {
 	return float64(inputTokens+outputFloor(ceiling, window)) >= autoCompactThreshold*float64(window)
 }
 
-// estimateTokens is a deliberately GENEROUS chars→tokens estimate for content
-// the provider hasn't counted yet (messages appended since the last real
-// usage report): over-estimating only costs a slightly smaller max_tokens or
-// an earlier compaction; under-estimating costs a refused request.
-func estimateTokens(chars int) int {
-	return int(float64(chars) / compactionCharsPerToken)
+// deltaCharsPerToken is the deliberately GENEROUS chars→tokens ratio for
+// content the provider hasn't counted yet (messages appended since its last
+// usage report): over-estimating a small delta only costs a slightly smaller
+// max_tokens; under-estimating costs a refused request.
+const deltaCharsPerToken = 2.0
+
+// coldCharsPerToken estimates a WHOLE request when no provider count exists
+// yet (first request, or a session resumed without stored usage). Text and
+// code average ~3.5–4 chars/token; 3 stays mildly pessimistic without
+// doubling real counts — the generous delta ratio applied to an entire long
+// history overestimated it ~2× and compacted sessions at ~45% real usage.
+const coldCharsPerToken = 3.0
+
+func estimateTokens(chars int, charsPerToken float64) int {
+	return int(float64(chars) / charsPerToken)
 }
 
-// estimateInputTokens estimates a request's input size as the larger of two
-// figures, each covering the other's blind spot:
-//   - lastReal: the provider's own count for the previous request (exact,
-//     but stale — it misses whatever was appended since: tool results, the
-//     model's last reply);
-//   - a generous chars-based estimate of the request about to be sent
-//     (current, but blind to provider tokenization quirks).
-func estimateInputTokens(lastReal int, req *types.Request) int {
+// estimateInputTokens estimates a request's input size. The provider's own
+// count is authoritative whenever one exists:
+//   - lastReal > 0 (the provider counted a previous request whose history had
+//     countedMsgs messages): lastReal + a generous estimate of ONLY the
+//     messages appended since (tool results, the model's last reply) — the
+//     part the provider hasn't counted yet. The real count always wins for
+//     everything it covered.
+//   - no real count yet: a chars-based estimate of the whole request
+//     (coldCharsPerToken).
+func estimateInputTokens(lastReal, countedMsgs int, req *types.Request) int {
+	if lastReal > 0 && countedMsgs > 0 && countedMsgs <= len(req.Messages) {
+		return lastReal + estimateTokens(approxSize(req.Messages[countedMsgs:]), deltaCharsPerToken)
+	}
 	chars := len(req.SystemPrompt) + approxSize(req.Messages)
 	for _, t := range req.Tools {
 		chars += len(t.Name) + len(t.Description) + len(t.InputSchema)
 	}
-	return max(lastReal, estimateTokens(chars))
+	return estimateTokens(chars, coldCharsPerToken)
 }

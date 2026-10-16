@@ -898,6 +898,21 @@ func (a *Agent) SessionResetCount(sessionID string) int {
 	return meta.ResetCount
 }
 
+// MaxTokensFor returns the output-token ceiling a session on fullModel
+// ("provider/model") would run with — the same rule sessions use
+// (sessionMaxTokens): AgentOptions.MaxTokens when set, else the model's
+// catalog value capped at the default, else the fallback. For persisted
+// (inactive) sessions, where there's no live Session to ask.
+func (a *Agent) MaxTokensFor(fullModel string) int {
+	var meta *types.ModelMeta
+	if name, model, ok := strings.Cut(fullModel, "/"); ok {
+		if p := providers.Find(name); p != nil {
+			meta = p.ModelMeta(model)
+		}
+	}
+	return sessionMaxTokens(a.maxTokens, meta)
+}
+
 // SessionProfiles returns the profile names bound to a session (nil if none
 // or the session doesn't exist).
 func (a *Agent) SessionProfiles(sessionID string) []string {

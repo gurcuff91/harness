@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.91.1] - 2026-10-15
+
+### Fixed — premature auto-compaction on long sessions
+Observed in production: a long MiniMax-M3 session auto-compacted at ~45–50% real context usage, losing its detailed context for nothing. The input estimate introduced in 0.90.0 was `max(provider's real count, history chars / 2)`; at 2 chars/token (text and code average ~3.5–4) the chars estimate roughly doubles the real count, and because of the `max` it overrode the provider's exact figure on every long session — 1,887,298 chars "estimated" at 943,649 tokens against ~half that in reality, crossing 95% of the window.
+
+- **The provider's count wins for everything it covered**: when a previous request was counted, the estimate is that real count **plus** a generous estimate (2 chars/token) of only the messages appended since — tool results, the model's last reply — the part the provider hasn't counted yet. A large tool result appended since the last request is still accounted for.
+- **No real count yet** (first request, or a session resumed without stored usage): a chars estimate of the whole request at **3** chars/token — mildly pessimistic without doubling.
+- The same estimate bounds each request's `max_tokens`, which was also being needlessly squeezed on long sessions. Context-overflow recovery (compact once and retry) is unchanged.
+
+### Added — the output-token ceiling in the session API
+- **`Session.MaxTokens()`** (lock-free, like `MaxIterations()`): the session's output-token ceiling — `AgentOptions.MaxTokens` when set, else the model's catalog value capped at 64k, else 32k; re-resolved on a model switch.
+- **`max_tokens`** in `GET /api/sessions/{id}` and `/info` (next to `max_iterations`; also on create/resume/fork responses). For a persisted session it's what its model would resolve to (`Agent.MaxTokensFor`). Client: `client.Session.MaxTokens` (so `SessionInfo.Session.MaxTokens`).
+
 ## [0.91.0] - 2026-10-14
 
 ### Added — `UnregisterCustomProvider`: drop a code-registered provider and register it again, live

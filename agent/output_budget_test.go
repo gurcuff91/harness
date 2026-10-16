@@ -166,6 +166,7 @@ func windowSession(t *testing.T, p *windowProvider, opts AgentOptions, inputToke
 		sess.store.AddMessage(types.NewAssistantToolCallMessage("noted", "", "", nil))
 		sess.mu.Lock()
 		sess.lastInputTokens = inputTokens
+		sess.countedMsgs = 2 // the provider's count covers exactly the prefilled history
 		sess.mu.Unlock()
 	}
 	return sess
@@ -348,5 +349,113 @@ func TestStopDuringOverflowCompaction(t *testing.T) {
 	case <-stopped:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Stop during the overflow compaction wasn't honoured")
+	}
+}
+
+// ── Estimate respects real usage (the premature-compaction fix) ──────────
+
+func msgs(texts ...string) []types.Message {
+	var out []types.Message
+	for _, t := range texts {
+		out = append(out, types.NewUserTextMessage(t))
+	}
+	return out
+}
+
+// Part 1, criteria 1 + 5a: a huge history (chars/2 alone would be ~95% of
+// the window) whose provider-reported count is 50% does NOT compact — the
+// real count wins for everything it covered.
+func TestEstimateRespectsRealCountOnLongHistory(t *testing.T) {
+	const window = 1_048_576
+	// The production session's history: chars/2 ≈ 990k (with the system
+	// prompt and tool schemas it was over 95% of the window with the 16k floor).
+	big := strings.Repeat("x", 1_970_000)
+	req := &types.Request{Messages: msgs(big)}
+	got := estimateInputTokens(window/2, 1, req) // provider counted all of it: 50%
+	if got != window/2 {
+		t.Fatalf("estimate = %d, want the real count %d (nothing appended since)", got, window/2)
+	}
+	if needsCompaction(window, got, 64000) {
+		t.Error("a 50%-real session must not auto-compact")
+	}
+	// The pre-fix formula, for contrast: chars/2 ≈ 943k crossed the threshold.
+	if !needsCompaction(window, len(big)/2, 64000) {
+		t.Fatal("precondition: chars/2 of this history would have compacted")
+	}
+}
+
+// Criteria 2 + 5b: a real count near the threshold does compact.
+func TestEstimateNearThresholdCompacts(t *testing.T) {
+	const window = 1_000_000
+	req := &types.Request{Messages: msgs("a", "b")}
+	if !needsCompaction(window, estimateInputTokens(940_000, 2, req), 64000) {
+		t.Error("real 94% + output floor crosses 95%: must compact")
+	}
+}
+
+// Criterion 5c: a large tool result appended since the last request is counted
+// (generous delta ratio), on top of the real count.
+func TestEstimateCountsAppendedDelta(t *testing.T) {
+	const window = 1_000_000
+	counted := msgs("old history")
+	toolResult := types.NewToolResultMessage([]types.ToolResult{{ID: "1", Output: strings.Repeat("y", 200_000)}})
+	req := &types.Request{Messages: append(append([]types.Message{}, counted...), toolResult)}
+	got := estimateInputTokens(860_000, len(counted), req)
+	if got != 860_000+100_000 { // 200k chars / 2
+		t.Fatalf("estimate = %d, want real 860000 + delta 100000", got)
+	}
+	if !needsCompaction(window, got, 64000) {
+		t.Error("real 86% + a 100k-token tool result must compact")
+	}
+	if needsCompaction(window, estimateInputTokens(860_000, len(counted), &types.Request{Messages: counted}), 64000) {
+		t.Error("without the delta the same session must not compact")
+	}
+}
+
+// Criterion 4: no real count (fresh session, or resumed without stored usage)
+// → the whole-request chars estimate at coldCharsPerToken.
+func TestEstimateWithoutRealCount(t *testing.T) {
+	req := &types.Request{SystemPrompt: strings.Repeat("s", 3000), Messages: msgs(strings.Repeat("z", 9000))}
+	if got := estimateInputTokens(0, 0, req); got != 4000 { // 12000 chars / 3
+		t.Fatalf("cold estimate = %d, want 4000", got)
+	}
+	// A real count with an unknown boundary (resumed: count restored from
+	// stats, message count not) also falls back to the chars estimate.
+	if got := estimateInputTokens(123_456, 0, req); got != 4000 {
+		t.Fatalf("unknown boundary = %d, want the cold estimate 4000", got)
+	}
+}
+
+// End to end, criterion 1: a running session whose provider reports 50% real
+// usage on a history whose chars/2 exceeds 95% of the window runs its turn
+// WITHOUT compacting.
+func TestLongSessionAtHalfRealUsageDoesNotCompact(t *testing.T) {
+	// charsPerToken 4 in the fake = realistic tokenization; prefill 50%.
+	p := &windowProvider{window: 1_048_576, charsPerToken: 4}
+	sess := windowSession(t, p, AgentOptions{}, 524_288)
+	if float64(524_288*4/2) < 0.95*1_048_576 {
+		t.Fatal("precondition: chars/2 must exceed 95% of the window")
+	}
+	evs, err := runTurn(t, sess)
+	if err != nil {
+		t.Fatalf("turn failed: %v", err)
+	}
+	if p.compacts != 0 || countType(evs, types.EventCompactStart) != 0 {
+		t.Errorf("compacted %d times at 50%% real usage; want 0", p.compacts)
+	}
+}
+
+// After a real turn, the session records which messages the count covered,
+// so the next request's estimate is real + delta (not the whole history).
+func TestCountedBoundaryTracksRealUsage(t *testing.T) {
+	p := &windowProvider{window: 1_000_000, charsPerToken: 4}
+	sess := windowSession(t, p, AgentOptions{}, 0)
+	if _, err := runTurn(t, sess); err != nil {
+		t.Fatal(err)
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.lastInputTokens <= 0 || sess.countedMsgs <= 0 {
+		t.Fatalf("after a turn: lastInputTokens=%d countedMsgs=%d; want both recorded", sess.lastInputTokens, sess.countedMsgs)
 	}
 }

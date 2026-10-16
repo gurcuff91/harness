@@ -701,7 +701,8 @@ const openAPISpecTemplate = `{
           {
             "type": "object",
             "properties": {
-              "max_iterations": { "type": "integer" }
+              "max_iterations": { "type": "integer" },
+              "max_tokens": { "type": "integer", "description": "Output-token ceiling: the agent's MaxTokens when set, else the model's catalog value capped at 64k (each request is further bounded by the room left in the window)" }
             }
           }
         ]

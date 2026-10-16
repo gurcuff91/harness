@@ -72,8 +72,14 @@ type Session struct {
 	// Stats — accumulated over the session lifetime
 	stats           types.SessionStats
 	lastInputTokens int // last turn input tokens — used to compute ContextUsage
-	contextWindow   int // from model meta, updated on SwitchModel
-	pricing         modelPricing
+	// countedMsgs is how many messages the request lastInputTokens counted
+	// carried (0 = unknown) — the boundary for estimateInputTokens' delta.
+	// sentMsgs is the message count of the request currently in flight;
+	// updateStats promotes it to countedMsgs when its usage arrives.
+	countedMsgs   int
+	sentMsgs      int
+	contextWindow int // from model meta, updated on SwitchModel
+	pricing       modelPricing
 
 	// pendingDelegatedCost accumulates token/cost accounting handed back by
 	// delegated executions (a Subagent call, or Fetch's prompt-condensing
@@ -122,6 +128,9 @@ type Session struct {
 	// lock-free by MaxIterations(). atomic.Int64 (not atomic.Value)
 	// since it's already a plain int — no boxing needed.
 	maxIterationsVal atomic.Int64
+	// maxTokensVal mirrors maxTokens (the output ceiling) for lock-free reads
+	// (MaxTokens()), same pattern as maxIterationsVal.
+	maxTokensVal atomic.Int64
 
 	// modelStr is the session's active "provider/model" string, stored in an
 	// atomic.Value so it can be read lock-free from Model(). The value
@@ -330,6 +339,7 @@ func newSession(storeInst *store.Session,
 	s.modelStr.Store(provider.Name() + "/" + modelID)
 	s.thinkingStr.Store(thinkingLvl)
 	s.maxIterationsVal.Store(int64(maxIterations))
+	s.maxTokensVal.Store(int64(maxTokens))
 	s.providerNameVal.Store(provider.Name()) // lock-free snapshot for ContextBreakdown()
 	s.snapshotStatsLocked()                  // no lock needed yet — s isn't reachable by any other goroutine until newSession returns
 
@@ -501,6 +511,7 @@ func (s *Session) Reset() error {
 	s.mu.Lock()
 	s.stats = types.SessionStats{}
 	s.lastInputTokens = 0
+	s.countedMsgs = 0
 	s.lastInputTokensVal.Store(0) // lock-free snapshot for ContextBreakdown()
 	s.snapshotStatsLocked()
 	s.mu.Unlock()
@@ -867,7 +878,7 @@ func (s *Session) promptSync(ctx context.Context, fu followUp, first bool) (retT
 		// input alone: a provider that sums input + max_tokens refuses long
 		// before the input reaches the window (see needsCompaction).
 		if s.stats.ContextUsage >= autoCompactThreshold ||
-			needsCompaction(s.contextWindow, estimateInputTokens(s.lastInputTokens, req), s.maxTokens) {
+			needsCompaction(s.contextWindow, estimateInputTokens(s.lastInputTokens, s.countedMsgs, req), s.maxTokens) {
 			if s.compact(ctx) == nil { //nolint:errcheck — error already emitted as EventError
 				req = s.buildTurnRequest() // rebuilt from the compacted history
 			}
@@ -1104,6 +1115,7 @@ func (s *Session) SwitchModel(ctx context.Context, fullModel string) error {
 		agentMax = s.agent.maxTokens
 	}
 	s.maxTokens = sessionMaxTokens(agentMax, provider.ModelMeta(modelID))
+	s.maxTokensVal.Store(int64(s.maxTokens)) // lock-free snapshot for MaxTokens()
 	s.modelStr.Store(fullModel)              // update lock-free snapshot for Model()
 	s.providerNameVal.Store(provider.Name()) // update lock-free snapshot for ContextBreakdown()
 	meta := s.store.Meta()
@@ -1212,6 +1224,7 @@ func (s *Session) compactWithTarget(ctx context.Context, provider providers.Prov
 	// from); the accumulated input/output token totals are historical — they
 	// already happened and drive cost/stats, so they must be preserved.
 	s.lastInputTokens = 0
+	s.countedMsgs = 0
 	s.lastInputTokensVal.Store(0) // lock-free snapshot for ContextBreakdown()
 	s.stats.ContextUsage = 0
 	s.snapshotStatsLocked()
@@ -1591,6 +1604,13 @@ func (s *Session) Name() string { return s.name }
 // budget — there is no separate blocking alternative.
 func (s *Session) MaxIterations() int { return int(s.maxIterationsVal.Load()) }
 
+// MaxTokens returns the session's output-token ceiling — the most a single
+// reply may use (each request is further bounded by the room left in the
+// context window). The agent's explicit AgentOptions.MaxTokens when set, else
+// the model's catalog value capped at the default (64k), else the fallback;
+// re-resolved on a model switch. Lock-free, like MaxIterations().
+func (s *Session) MaxTokens() int { return int(s.maxTokensVal.Load()) }
+
 // Rename sets a friendly display name.
 func (s *Session) Rename(name string) error {
 	s.name = name
@@ -1828,6 +1848,7 @@ func (s *Session) runStream(ctx context.Context, req *types.Request) (*types.Res
 	var resp *types.Response
 	var err error
 	for attempt := 1; ; attempt++ {
+		s.sentMsgs = len(req.Messages) // what this request's usage report will count
 		resp, err = s.provider.CompleteStream(ctx, req, func(se types.StreamEvent) {
 			switch se.Type {
 			case types.StreamThinkingDelta, types.StreamTextDelta, types.StreamToolStart,
@@ -2023,6 +2044,7 @@ func (s *Session) updateStats(se types.StreamEvent) {
 	// provider overflow error instead of compacting in time.
 	s.lastInputTokens = se.InputTokens + se.CacheRead + se.CacheWrite
 	s.lastInputTokensVal.Store(int64(s.lastInputTokens)) // lock-free snapshot for ContextBreakdown()
+	s.countedMsgs = s.sentMsgs                           // the delta boundary: messages this count covers
 	s.stats.ContextWindow = s.contextWindow              // persist current model's context window
 	if s.contextWindow > 0 {
 		s.stats.ContextUsage = float64(s.lastInputTokens) / float64(s.contextWindow)
@@ -2093,7 +2115,7 @@ func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 			Messages:     stripImages(withoutEmptyAssistant(s.store.Messages())),
 			Tools:        nil, // no tools — force text response
 		}
-		req.MaxTokens = requestMaxTokens(s.maxTokens, s.contextWindow, estimateInputTokens(s.lastInputTokens, req))
+		req.MaxTokens = requestMaxTokens(s.maxTokens, s.contextWindow, estimateInputTokens(s.lastInputTokens, s.countedMsgs, req))
 		return req
 	}
 	req := buildSummaryReq()
@@ -2208,7 +2230,7 @@ func (s *Session) buildTurnRequest() *types.Request {
 		Tools:         s.tools.Definitions(),
 		ThinkingLevel: s.thinkingLvl,
 	}
-	req.MaxTokens = requestMaxTokens(s.maxTokens, s.contextWindow, estimateInputTokens(s.lastInputTokens, req))
+	req.MaxTokens = requestMaxTokens(s.maxTokens, s.contextWindow, estimateInputTokens(s.lastInputTokens, s.countedMsgs, req))
 	return req
 }
 

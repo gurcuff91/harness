@@ -902,7 +902,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	s.sessions[sess.ID()] = newSessionProxy(sess, s.logger)
 	s.mu.Unlock()
 
-	writeJSON(w, http.StatusCreated, sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations()})
+	writeJSON(w, http.StatusCreated, liveDetail(sess))
 }
 
 // handleListSessions returns all sessions, optionally filtered by ?cwd=
@@ -1102,7 +1102,7 @@ func (s *Server) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	s.sessions[sess.ID()] = newSessionProxy(sess, s.logger)
 	s.mu.Unlock()
 
-	writeJSON(w, http.StatusCreated, sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations()})
+	writeJSON(w, http.StatusCreated, liveDetail(sess))
 }
 
 func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
@@ -1131,7 +1131,7 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	}
 	// Meta() is the lock-free public accessor — safe even if the session is
 	// mid-turn (see its doc comment).
-	writeJSON(w, http.StatusOK, sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations()})
+	writeJSON(w, http.StatusOK, liveDetail(sess))
 }
 
 // openSession resumes session id in this server — idempotent and atomic, so
@@ -1188,6 +1188,14 @@ func (s *Server) openSession(id string, addProfiles, extraDirectives []string) (
 type sessionDetailDTO struct {
 	store.SessionMeta
 	MaxIterations int `json:"max_iterations"`
+	// MaxTokens is the session's output-token ceiling (Session.MaxTokens;
+	// for a persisted session, what its model would resolve to).
+	MaxTokens int `json:"max_tokens"`
+}
+
+// liveDetail is the detail DTO of an active session.
+func liveDetail(sess *agent.Session) sessionDetailDTO {
+	return sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations(), MaxTokens: sess.MaxTokens()}
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
@@ -1201,10 +1209,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	proxy, ok := s.sessions[id]
 	s.mu.RUnlock()
 	if ok {
-		writeJSON(w, http.StatusOK, sessionDetailDTO{
-			SessionMeta:   proxy.session.Meta(),
-			MaxIterations: proxy.session.MaxIterations(),
-		})
+		writeJSON(w, http.StatusOK, liveDetail(proxy.session))
 		return
 	}
 
@@ -1222,6 +1227,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, sessionDetailDTO{
 				SessionMeta:   meta,
 				MaxIterations: s.agent.Options().MaxIterations,
+				MaxTokens:     s.agent.MaxTokensFor(meta.Model),
 			})
 			return
 		}
@@ -1438,11 +1444,8 @@ func (s *Server) handleSessionInfo(w http.ResponseWriter, r *http.Request) {
 	// one accepted trade-off: delegated Subagent/Fetch cost isn't drained
 	// here — that's what syncMeta()/syncStats() are for, internal-only).
 	writeJSON(w, http.StatusOK, sessionInfoDTO{
-		Version: version.Version,
-		Session: sessionDetailDTO{
-			SessionMeta:   sess.Meta(),
-			MaxIterations: sess.MaxIterations(),
-		},
+		Version:       version.Version,
+		Session:       liveDetail(sess),
 		Busy:          sess.IsBusy(),
 		QueueDepth:    sess.FollowUpCount(),
 		MCPConnected:  mcpConnected,
