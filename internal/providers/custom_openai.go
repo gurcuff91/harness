@@ -39,6 +39,12 @@ type CustomOpenAI struct {
 	// programmatic marks a provider registered from code (RegisterOpenAI /
 	// agent.NewOpenAIProvider) — the only kind Unregister may remove.
 	programmatic bool
+	// fromSettings marks a provider declared in settings.json's "provider"
+	// collection — the only kind ReloadCustom replaces. settingsCfg is the
+	// entry it was built from: an unchanged entry keeps this same object
+	// (and its model cache) across reloads.
+	fromSettings bool
+	settingsCfg  types.CustomProvider
 
 	name        string
 	displayName string
@@ -73,6 +79,8 @@ type CustomOpenAI struct {
 // NewCustomOpenAI builds a CustomOpenAI provider named name from cfg.
 func NewCustomOpenAI(name string, cfg types.CustomProvider) *CustomOpenAI {
 	return &CustomOpenAI{
+		fromSettings:   true,
+		settingsCfg:    cfg,
 		name:           name,
 		displayName:    cfg.Display,
 		baseURL:        cfg.URL,

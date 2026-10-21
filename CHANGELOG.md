@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.92.0] - 2026-10-16
+
+### Added — live reload of settings.json custom providers (`ReloadCustomProviders`)
+Custom providers declared in settings.json's `"provider"` collection were read once at process start: `PUT`/`DELETE /api/settings/provider/{name}` wrote the file, but the running process didn't change until a restart — an embedder exposing that collection in its own UI couldn't apply an edit live.
+
+- **`agent.ReloadCustomProviders() error`** (+ `harness.ReloadCustomProviders`) re-reads the collection from the active SettingsStore and applies it live — with agents and servers running — under the same rules as at start (disabled entries and reserved names skipped, name order). It swaps **only the settings-declared providers**, in one copy-on-write swap: built-in providers and those registered from code (`NewOpenAIProvider`) are never touched, and snapshots already handed out stay intact (a turn in flight finishes with the provider it had).
+- **Sessions** pick the change up at their next turn: an edited provider is used with its new URL/headers; a deleted or disabled one fails the turn with `ErrProviderNotFound` (no panic).
+- **Idempotent and cache-friendly**: an unchanged entry keeps its existing provider object and model cache; an edited one gets a fresh provider whose models are re-fetched on demand, so `GET /api/models` / `Agent.Models()` reflect the new list.
+- **Name conflicts**: if a provider registered from code already uses an entry's name, the programmatic one wins and the entry is skipped; the rest of the reload is still applied, and the returned error (wrapping `agent.ErrProviderNameConflict`) lists the skipped names.
+- **`POST /api/settings/provider/reload`** + `client.ReloadCustomProviders()`: status `reloaded`, or `reloaded_with_conflicts` with the skipped names in the message.
+- Docs no longer say custom providers have "no hot reload" (`types.CustomProvider`, README, AGENTS.md, the OpenAPI spec).
+
 ## [0.91.1] - 2026-10-15
 
 ### Fixed — premature auto-compaction on long sessions

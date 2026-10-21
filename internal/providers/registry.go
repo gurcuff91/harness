@@ -3,6 +3,7 @@ package providers
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -47,6 +48,81 @@ func Find(name string) Provider {
 // ErrNotFound is returned when no provider is registered under a name.
 var ErrNotFound = errors.New("provider not found")
 
+// ErrNameConflict is returned (wrapped) by ReloadCustom when a settings.json
+// entry was skipped because a provider registered from code already uses its
+// name. The programmatic provider wins; the rest of the reload is applied.
+var ErrNameConflict = errors.New("custom provider name already used by a provider registered from code")
+
+// ReloadCustom re-reads settings.json's "provider" collection from the active
+// SettingsStore and swaps the settings-declared providers in the registry —
+// live, with agents and servers running. Built-in and programmatic
+// (RegisterOpenAI) providers are never touched. Same rules as at start: disabled
+// entries and reserved names are skipped, in name order.
+//
+// One copy-on-write swap: snapshots already handed out (All) stay intact, so
+// a turn in flight finishes with the provider it had; sessions re-resolve
+// their provider by name at their next turn (an edited provider is picked up,
+// a deleted/disabled one fails with ErrNotFound).
+//
+// An entry whose config is unchanged keeps its existing provider object (and
+// model cache) — reloading twice without changes leaves the registry
+// identical. An edited entry gets a fresh provider (empty model cache: its
+// models are re-fetched on demand).
+//
+// Name conflicts: if a provider registered from code already uses an entry's
+// name, the programmatic one WINS and the entry is skipped; the rest of the
+// reload is still applied, and the returned error (wrapping ErrNameConflict)
+// lists the skipped names.
+func ReloadCustom() error {
+	EnsureRegistry()
+	fresh := buildCustomProviders(config.GetSettingsManager().CustomProviders())
+
+	registryMu.Lock()
+	defer registryMu.Unlock()
+
+	current := map[string]*CustomOpenAI{} // settings-declared, by name
+	programmatic := map[string]bool{}
+	var kept []Provider // built-in + programmatic, in registry order
+	for _, p := range all {
+		if c, ok := p.(*CustomOpenAI); ok && c.fromSettings {
+			current[c.name] = c
+			continue
+		}
+		if c, ok := p.(*CustomOpenAI); ok && c.programmatic {
+			programmatic[c.name] = true
+		}
+		kept = append(kept, p)
+	}
+
+	var conflicts []string
+	next := append(make([]Provider, 0, len(kept)+len(fresh)), kept...)
+	for _, p := range fresh {
+		c := p.(*CustomOpenAI)
+		if programmatic[c.name] {
+			conflicts = append(conflicts, c.name)
+			continue
+		}
+		if old, ok := current[c.name]; ok && reflect.DeepEqual(old.settingsCfg, c.settingsCfg) {
+			next = append(next, old) // unchanged: keep the object and its model cache
+			continue
+		}
+		next = append(next, c)
+	}
+	all = next // copy-on-write swap
+
+	if len(conflicts) > 0 {
+		return fmt.Errorf("%w: skipped %s (the programmatic provider wins)", ErrNameConflict, strings.Join(conflicts, ", "))
+	}
+	return nil
+}
+
+// IsSettingsDeclared reports whether p was declared in settings.json's
+// "provider" collection (the kind ReloadCustom manages).
+func IsSettingsDeclared(p Provider) bool {
+	c, ok := p.(*CustomOpenAI)
+	return ok && c.fromSettings
+}
+
 // ErrNotRemovable is returned by Unregister for a provider that wasn't
 // registered programmatically (built-in, or declared in settings.json).
 var ErrNotRemovable = errors.New("provider cannot be unregistered")
@@ -68,9 +144,8 @@ func initRegistry() {
 		NewOllama(),
 	)
 
-	// Custom providers (settings.json's "provider" collection) — same
-	// no-hot-reload contract as MCP servers: read once here, take effect
-	// on the next process start.
+	// Custom providers (settings.json's "provider" collection), read at start;
+	// ReloadCustom re-reads them live.
 	list = append(list, buildCustomProviders(config.GetSettingsManager().CustomProviders())...)
 	registryMu.Lock()
 	all = list

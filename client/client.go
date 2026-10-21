@@ -306,6 +306,16 @@ func (c *Client) PutCustomProvider(name string, p CustomProvider) (*CustomProvid
 	return ptr(decode[CustomProvider](c, "PUT", "/api/settings/provider/"+name, p))
 }
 
+// ReloadCustomProviders applies settings.json's "provider" collection live on
+// the server (POST /api/settings/provider/reload) — e.g. right after
+// PutCustomProvider/DeleteCustomProvider, so the change takes effect without
+// a restart. Status.Code is "reloaded", or "reloaded_with_conflicts" with
+// Status.Message listing entries skipped because a provider registered from
+// code already uses their name.
+func (c *Client) ReloadCustomProviders() (*Status, error) {
+	return c.decodeStatus("POST", "/api/settings/provider/reload", nil)
+}
+
 // DeleteCustomProvider removes one custom provider.
 func (c *Client) DeleteCustomProvider(name string) (*Status, error) {
 	return c.decodeStatus("DELETE", "/api/settings/provider/"+name, nil)

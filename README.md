@@ -262,8 +262,10 @@ time it's passed in.
 Beyond these built-ins, `harness provider add` registers a **custom
 OpenAI-compatible provider** — any proxy, gateway, or self-hosted endpoint
 speaking the OpenAI Chat Completions dialect. Configured in `settings.json`'s
-`"provider"` collection (same singular style as `"mcp"`), read once at
-process start (no hot reload — same trade-off MCP servers already accept).
+`"provider"` collection (same singular style as `"mcp"`), read at process
+start; changes are applied live with `harness.ReloadCustomProviders()` or
+`POST /api/settings/provider/reload` (`client.ReloadCustomProviders`) — no
+restart needed.
 These providers have no credential concept of their own — `harness connect`
 is rejected for them — so any auth the gateway needs (a bearer token, an
 `X-Api-Key`, whatever) goes in `--header` at add time and is sent on every

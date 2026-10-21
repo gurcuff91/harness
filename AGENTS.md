@@ -222,8 +222,13 @@ travels as static request headers configured up front — never a stored key:
   X-Api-Key:<key> ...` writes a `types.CustomProvider` entry (with its
   `Headers` map) to `settings.json`'s `"provider"` collection (singular,
   same style as `"mcp"`), and `internal/providers/registry.go`'s
-  `initRegistry()` constructs a `CustomOpenAI` for each enabled entry at the
-  next process start. Headers are sent on every request, including model
+  `initRegistry()` constructs a `CustomOpenAI` for each enabled entry at
+  start; `providers.ReloadCustom()` (`agent.ReloadCustomProviders`, `POST
+  /api/settings/provider/reload`) re-applies the collection live — it only
+  swaps settings-declared providers (unchanged entries keep their object and
+  model cache), never built-in or programmatic ones; on a name clash the
+  programmatic provider wins and the skipped entries are reported
+  (`ErrNameConflict`). Headers are sent on every request, including model
   discovery.
 - **Programmatic (SDK)**: `agent.NewOpenAIProvider(name, url, ...opts)`
   (aliased in `harness.go`) registers one directly in Go code — global to

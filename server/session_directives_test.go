@@ -11,6 +11,9 @@ import (
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/client"
+	"github.com/gurcuff91/harness/configstore"
+	"github.com/gurcuff91/harness/internal/config"
+	"github.com/gurcuff91/harness/internal/providers"
 	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/types"
 )
@@ -243,4 +246,65 @@ func TestSessionMaxTokensInAPI(t *testing.T) {
 			t.Errorf("persisted: max_tokens = %d, %v; want 64000", got.MaxTokens, err)
 		}
 	})
+}
+
+// POST /api/settings/provider/reload through the client: the embedder's flow
+// — PutCustomProvider, then ReloadCustomProviders — makes the provider live
+// (it appears in /api/models) without a restart; deleting + reloading drops it.
+func TestReloadCustomProvidersEndpoint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), nil))
+	models := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":[{"id":"m"}]}`))
+	}))
+	defer models.Close()
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	defer a.Close()
+	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	c := client.New(srv.Addr())
+	providers.EnsureRegistry() // the registry is built (from settings) BEFORE the PUT below
+	listed := func() bool {
+		ms, _ := c.ListModels()
+		for _, m := range ms {
+			if m.Model == "ep-live/m" {
+				return true
+			}
+		}
+		return false
+	}
+
+	if _, err := c.PutCustomProvider("ep-live", types.CustomProvider{Type: "openai", URL: models.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if listed() {
+		t.Fatal("precondition: not live before the reload")
+	}
+	st, err := c.ReloadCustomProviders()
+	if err != nil || st.Code != "reloaded" {
+		t.Fatalf("reload = %+v, %v", st, err)
+	}
+	if !listed() {
+		t.Fatal("after reload the provider's models must be listed")
+	}
+
+	c.DeleteCustomProvider("ep-live")
+	c.ReloadCustomProviders()
+	if listed() {
+		t.Fatal("after delete + reload the provider must be gone")
+	}
+
+	// Conflict with a programmatic provider: reported, not fatal.
+	if err := agent.NewOpenAIProvider("ep-code", models.URL); err != nil {
+		t.Fatal(err)
+	}
+	defer agent.UnregisterCustomProvider("ep-code")
+	c.PutCustomProvider("ep-code", types.CustomProvider{Type: "openai", URL: models.URL})
+	st, err = c.ReloadCustomProviders()
+	if err != nil || st.Code != "reloaded_with_conflicts" || !strings.Contains(st.Message, "ep-code") {
+		t.Fatalf("conflict reload = %+v, %v", st, err)
+	}
 }

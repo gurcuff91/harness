@@ -86,6 +86,10 @@ func (s MCPServer) Argv() []string {
 //
 //	{ "provider": { "my-proxy": { "type": "openai", "url": "https://…/v1", "headers": {"X-Api-Key": "..."} } } }
 //
+// Read at process start; adding, editing, disabling or deleting an entry is
+// applied LIVE by agent.ReloadCustomProviders / POST
+// /api/settings/provider/reload — no restart needed.
+//
 // Lives in types (not internal/config) for the same reason MCPServer does:
 // part of the public HTTP API contract, needed by the client SDK without
 // pulling in the config package.

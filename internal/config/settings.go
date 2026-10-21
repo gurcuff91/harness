@@ -185,8 +185,9 @@ func (m *SettingsManager) DeleteMCPServer(name string) error {
 // ── Custom providers collection ─────────────────────────────────────────
 // Exact same agnostic pattern as MCP servers above: keyed by provider name,
 // stored verbatim. internal/providers/registry.go's initRegistry reads this
-// collection once at process start (no hot reload — same trade-off MCP
-// servers already accept) to construct a CustomOpenAI per enabled entry.
+// collection at process start to construct a CustomOpenAI per enabled entry;
+// providers.ReloadCustom (agent.ReloadCustomProviders, POST
+// /api/settings/provider/reload) re-reads it live.
 
 // CustomProvider returns the stored config for a custom provider by name.
 func (m *SettingsManager) CustomProvider(name string) (CustomProvider, bool) {

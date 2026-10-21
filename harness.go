@@ -262,6 +262,14 @@ var NewOpenAIProvider = agent.NewOpenAIProvider
 // See [agent.UnregisterCustomProvider].
 var UnregisterCustomProvider = agent.UnregisterCustomProvider
 
+// ReloadCustomProviders applies settings.json's "provider" collection live.
+// See [agent.ReloadCustomProviders].
+var ReloadCustomProviders = agent.ReloadCustomProviders
+
+// ErrProviderNameConflict: a settings.json entry was skipped because a
+// programmatic provider uses its name. See [agent.ErrProviderNameConflict].
+var ErrProviderNameConflict = agent.ErrProviderNameConflict
+
 // ErrProviderNotFound: no provider is registered under that name. See
 // [agent.ErrProviderNotFound].
 var ErrProviderNotFound = agent.ErrProviderNotFound

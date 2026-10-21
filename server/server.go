@@ -132,6 +132,7 @@ func (s *Server) handler() http.Handler {
 	r.Get("/api/settings/provider", s.handleListCustomProviders)
 	r.Put("/api/settings/provider/{name}", s.handlePutCustomProvider)
 	r.Delete("/api/settings/provider/{name}", s.handleDeleteCustomProvider)
+	r.Post("/api/settings/provider/reload", s.handleReloadCustomProviders)
 	r.Get("/api/memories", s.handleListMemories)
 	r.Get("/api/memories/{slug}", s.handleGetMemory)
 	r.Put("/api/memories/{slug}", s.handlePutMemory)
@@ -719,6 +720,23 @@ func (s *Server) handleDeleteCustomProvider(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeStatus(w, http.StatusOK, "deleted", "")
+}
+
+// handleReloadCustomProviders handles POST /api/settings/provider/reload:
+// applies settings.json's "provider" collection live (agent.
+// ReloadCustomProviders). 200 {"status":{"code":"reloaded"}} — with a
+// message listing any entries skipped because a programmatic provider
+// already uses their name (code "reloaded_with_conflicts").
+func (s *Server) handleReloadCustomProviders(w http.ResponseWriter, r *http.Request) {
+	if err := agent.ReloadCustomProviders(); err != nil {
+		if errors.Is(err, agent.ErrProviderNameConflict) {
+			writeStatus(w, http.StatusOK, "reloaded_with_conflicts", err.Error())
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeStatus(w, http.StatusOK, "reloaded", "")
 }
 
 // providerInfo is the API representation of a provider.

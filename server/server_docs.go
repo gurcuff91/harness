@@ -136,11 +136,20 @@ const openAPISpecTemplate = `{
       "get": {
         "tags": ["settings"],
         "summary": "List custom provider configs",
-        "description": "Custom OpenAI-compatible providers (proxies, gateways, self-hosted endpoints) configured under settings.json's \"provider\" collection. Takes effect on the next process start (no hot reload), same as MCP servers.",
+        "description": "Custom OpenAI-compatible providers (proxies, gateways, self-hosted endpoints) configured under settings.json's \"provider\" collection. Changes take effect after POST /api/settings/provider/reload (or on the next process start).",
         "operationId": "listCustomProviders",
         "responses": {
           "200": { "description": "Custom provider config map", "content": { "application/json": { "schema": { "type": "object" } } } }
         }
+      }
+    },
+    "/api/settings/provider/reload": {
+      "post": {
+        "tags": ["settings"],
+        "summary": "Apply custom providers live",
+        "description": "Re-reads settings.json's \"provider\" collection and applies it to the running process: added/edited/disabled/deleted entries take effect without a restart (sessions pick them up at their next turn). Built-in and programmatic providers are untouched; an entry whose name is used by a programmatic provider is skipped (code \"reloaded_with_conflicts\", message lists them).",
+        "operationId": "reloadCustomProviders",
+        "responses": { "200": { "description": "Applied", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } } }
       }
     },
     "/api/settings/provider/{name}": {

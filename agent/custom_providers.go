@@ -127,6 +127,28 @@ var ErrProviderNotFound = providers.ErrNotFound
 // which applies on the next start).
 var ErrProviderNotRemovable = providers.ErrNotRemovable
 
+// ErrProviderNameConflict is returned (wrapped) by ReloadCustomProviders when
+// a settings.json entry was skipped because a provider registered from code
+// (NewOpenAIProvider) already uses its name — the programmatic one wins.
+var ErrProviderNameConflict = providers.ErrNameConflict
+
+// ReloadCustomProviders applies settings.json's "provider" collection LIVE —
+// with agents and servers running: entries added, edited, disabled or deleted
+// (e.g. through PUT/DELETE /api/settings/provider/{name}) take effect without
+// a restart. Built-in providers and those registered from code are untouched.
+// Running sessions pick the change up at their next turn (an edited provider
+// is used with its new URL/headers; a deleted/disabled one fails the turn with
+// ErrProviderNotFound); a turn in flight finishes with the provider it had.
+// Idempotent: unchanged entries keep their provider (and model cache).
+//
+// If an entry's name is already used by a provider registered with
+// NewOpenAIProvider, the programmatic one wins and the entry is skipped; the
+// rest is still applied and the returned error (wrapping
+// ErrProviderNameConflict) lists the skipped names.
+func ReloadCustomProviders() error {
+	return providers.ReloadCustom()
+}
+
 // UnregisterCustomProvider removes a provider registered with
 // NewOpenAIProvider, so the same name can be registered again (with a new
 // URL or headers — e.g. a new API key, or another tenant) without

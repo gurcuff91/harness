@@ -297,10 +297,10 @@ func TestMaxIterCommandEndToEnd(t *testing.T) {
 // providers.EnsureRegistry() itself (that's a SEPARATE providers-package
 // singleton with its own irreversible sync.Once, already fired once for
 // every other test in this binary needing a real model) — GET
-// /api/providers reflecting the new custom provider requires a fresh
-// process, which is exactly the documented no-hot-reload behavior custom
-// providers share with MCP servers, not something this test can observe
-// within one binary.
+// /api/providers reflecting the new custom provider needs a reload
+// (POST /api/settings/provider/reload), covered by
+// server.TestReloadCustomProvidersEndpoint — this test only checks the
+// settings round trip.
 func TestCustomProviderEndToEnd(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
