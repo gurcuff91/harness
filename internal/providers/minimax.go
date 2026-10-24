@@ -62,7 +62,8 @@ func (o *MiniMax) CredentialType() types.CredentialType { return types.CredTypeA
 func (o *MiniMax) Dialect() string { return DialectOpenAI }
 
 // Upstream implements Provider: MiniMax's OpenAI-compatible API with the stored
-// key. The caller decides on "reasoning_split" in its own body.
+// key. "reasoning_split": true is added to a chat completion that doesn't set
+// it (see injectReasoningSplit).
 func (o *MiniMax) Upstream() (Upstream, error) {
 	creds, err := o.ResolveCredentials()
 	if err != nil || creds.APIKey == "" {
@@ -72,6 +73,9 @@ func (o *MiniMax) Upstream() (Upstream, error) {
 		BaseURL: minimaxURL,
 		Headers: map[string]string{"Authorization": "Bearer " + creds.APIKey},
 		Allowed: openAIStyleAllow,
+		// CompleteStream always sends reasoning_split; so does the proxy (unless
+		// the caller says otherwise), or the answer comes with inline <think>.
+		Rewrite: injectReasoningSplit,
 		Client:  o.client,
 	}, nil
 }

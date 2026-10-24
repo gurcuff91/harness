@@ -121,6 +121,47 @@ func CleanProxyPath(p string) string {
 	return p
 }
 
+// ── reasoning_split injection (MiniMax-dialect backends) ─────────────────
+
+// injectReasoningSplit is the proxy's equivalent of what a session does for a
+// MiniMax-compatible backend: ask for "reasoning_split": true. Without it the
+// backend emits its thinking INLINE, as literal <think>…</think> wrapped around
+// the answer inside "content"; with it the thinking goes to the separate
+// reasoning_content / reasoning_details fields and "content" is just the
+// answer. A session always sends the flag (MiniMax.CompleteStream, custom
+// providers declared with reasoning_split), but a proxy client forwards its own
+// body and so keeps tripping over the inline tags.
+//
+// It only acts on a chat-completions JSON object that does not already say
+// anything about reasoning_split — a caller that sends it (true OR false)
+// decides — and edits the text rather than re-encoding the document: the flag is
+// spliced in right after the opening brace, so every other byte the caller sent
+// reaches the backend untouched. Anything that is not a JSON object is passed
+// through as-is (the backend answers with its own error, not harness).
+func injectReasoningSplit(path string, body []byte, _ map[string]string) ([]byte, error) {
+	if path != "/chat/completions" {
+		return body, nil
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil || top == nil {
+		return body, nil
+	}
+	if _, set := top["reasoning_split"]; set {
+		return body, nil
+	}
+	open := bytes.IndexByte(body, '{') // the object's own brace: leading whitespace only precedes it
+	rest := body[open+1:]
+	sep := ","
+	if bytes.HasPrefix(bytes.TrimLeft(rest, " \t\r\n"), []byte("}")) {
+		sep = "" // empty object: no comma
+	}
+	out := make([]byte, 0, len(body)+len(`"reasoning_split":true,`))
+	out = append(out, body[:open+1]...)
+	out = append(out, `"reasoning_split":true`...)
+	out = append(out, sep...)
+	return append(out, rest...), nil
+}
+
 // ── Anthropic OAuth (Claude Code identity) rewrite ───────────────────────
 
 // claudeCodeIdentity is the system block Anthropic's backend requires on a

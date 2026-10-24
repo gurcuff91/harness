@@ -106,19 +106,28 @@ func (o *CustomOpenAI) CredentialType() types.CredentialType { return types.Cred
 func (o *CustomOpenAI) Dialect() string { return DialectOpenAI }
 
 // Upstream implements Provider: the declared endpoint with its static headers
-// (the only "credential" a custom provider has). Works for providers added at
+// (the only "credential" a custom provider has) and, when it was declared with
+// reasoning_split, the same flag injection a session applies. Works for providers added at
 // runtime, through settings.json or from code.
 func (o *CustomOpenAI) Upstream() (Upstream, error) {
 	h := make(map[string]string, len(o.headers))
 	for k, v := range o.headers {
 		h[k] = v
 	}
-	return Upstream{
+	up := Upstream{
 		BaseURL: strings.TrimRight(o.baseURL, "/"),
 		Headers: h,
 		Allowed: openAIStyleAllow,
 		Client:  o.client,
-	}, nil
+	}
+	// A provider declared with reasoning_split (a MiniMax-compatible backend)
+	// gets the flag on proxied chat completions too, exactly as a session sends
+	// it — otherwise the answer carries inline <think> tags. Every other custom
+	// provider is forwarded untouched.
+	if o.reasoningSplit {
+		up.Rewrite = injectReasoningSplit
+	}
+	return up, nil
 }
 
 func (o *CustomOpenAI) ResolveCredentials() (types.Credentials, error) {

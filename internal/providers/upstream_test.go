@@ -368,3 +368,141 @@ func TestCleanProxyPath(t *testing.T) {
 		}
 	}
 }
+
+// ── reasoning_split injection ────────────────────────────────────────────
+
+func TestInjectReasoningSplit(t *testing.T) {
+	const path = "/chat/completions"
+	cases := []struct{ name, in, want string }{
+		{"added to an ordinary request",
+			`{"model":"m","messages":[{"role":"user","content":"hi"}]}`,
+			`{"reasoning_split":true,"model":"m","messages":[{"role":"user","content":"hi"}]}`},
+		{"every other byte untouched (spacing, escapes, order)",
+			"{ \"model\" :\"m\",\n  \"messages\":[{\"role\":\"user\",\"content\":\"a < b \\u0026 <think>\"}] }",
+			"{\"reasoning_split\":true, \"model\" :\"m\",\n  \"messages\":[{\"role\":\"user\",\"content\":\"a < b \\u0026 <think>\"}] }"},
+		{"leading whitespace before the brace", "  \n{\"model\":\"m\"}", "  \n{\"reasoning_split\":true,\"model\":\"m\"}"},
+		{"empty object", `{}`, `{"reasoning_split":true}`},
+		{"empty object with whitespace", "{ \n}", "{\"reasoning_split\":true \n}"},
+		{"caller says true: left alone", `{"model":"m","reasoning_split":true}`, `{"model":"m","reasoning_split":true}`},
+		{"caller says false: the caller decides", `{"model":"m","reasoning_split":false}`, `{"model":"m","reasoning_split":false}`},
+		{"caller says null: still the caller's", `{"model":"m","reasoning_split":null}`, `{"model":"m","reasoning_split":null}`},
+		{"the word inside a string is not the field",
+			`{"model":"m","messages":[{"role":"user","content":"set \"reasoning_split\":false please"}]}`,
+			`{"reasoning_split":true,"model":"m","messages":[{"role":"user","content":"set \"reasoning_split\":false please"}]}`},
+		{"nested key of that name is not the top-level field",
+			`{"model":"m","metadata":{"reasoning_split":false}}`,
+			`{"reasoning_split":true,"model":"m","metadata":{"reasoning_split":false}}`},
+		{"not JSON: passed through", `not json`, `not json`},
+		{"JSON array: passed through", `[1,2]`, `[1,2]`},
+		{"JSON null: passed through", `null`, `null`},
+		{"empty body: passed through", ``, ``},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := injectReasoningSplit(path, []byte(tc.in), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("\n got %q\nwant %q", got, tc.want)
+			}
+			// whatever comes out of a valid object stays valid JSON
+			if json.Valid([]byte(tc.in)) {
+				if !json.Valid(got) {
+					t.Errorf("output is not valid JSON: %q", got)
+				}
+			}
+		})
+	}
+	// only chat completions: /models and anything else is untouched.
+	for _, p := range []string{"/models", "/embeddings"} {
+		if got, _ := injectReasoningSplit(p, []byte(`{"a":1}`), nil); string(got) != `{"a":1}` {
+			t.Errorf("%s was rewritten: %s", p, got)
+		}
+	}
+}
+
+// The injected flag is a real boolean the backend parses, and the rest of the
+// document is unchanged semantically.
+func TestInjectReasoningSplitSemantics(t *testing.T) {
+	in := `{"model":"MiniMax-M3","stream":true,"max_tokens":50,"messages":[{"role":"user","content":"Say pong"}],"temperature":0.2}`
+	out, _ := injectReasoningSplit("/chat/completions", []byte(in), nil)
+	var a, b map[string]any
+	json.Unmarshal([]byte(in), &a)
+	if err := json.Unmarshal(out, &b); err != nil {
+		t.Fatal(err)
+	}
+	if b["reasoning_split"] != true {
+		t.Errorf("reasoning_split = %v, want true", b["reasoning_split"])
+	}
+	delete(b, "reasoning_split")
+	if !reflect.DeepEqual(a, b) {
+		t.Errorf("document changed beyond the flag:\n in  %v\n out %v", a, b)
+	}
+}
+
+// Which providers inject — and that the proxy sends what a SESSION sends.
+func TestReasoningSplitUpstreamPerProvider(t *testing.T) {
+	has := func(u Upstream) bool { return u.Rewrite != nil }
+
+	// MiniMax: always.
+	mm := NewMiniMax()
+	mm.apiKey = "k"
+	up, err := mm.Upstream()
+	if err != nil || !has(up) {
+		t.Fatalf("minimax must inject: err=%v rewrite=%v", err, has(up))
+	}
+	// Custom, declared with reasoning_split: yes. Without: untouched.
+	with := NewCustomOpenAI("rs-yes", types.CustomProvider{Type: "openai", URL: "http://x/v1", ReasoningSplit: true})
+	without := NewCustomOpenAI("rs-no", types.CustomProvider{Type: "openai", URL: "http://x/v1"})
+	if up, _ := with.Upstream(); !has(up) {
+		t.Error("a custom provider declared with reasoning_split must inject")
+	}
+	if up, _ := without.Upstream(); has(up) {
+		t.Error("a custom provider WITHOUT reasoning_split must be forwarded untouched")
+	}
+	// Other OpenAI-style providers are untouched.
+	for name, p := range map[string]Provider{"openai": NewOpenAI(), "ollama-cloud": NewOllamaCloud(), "opencode-go": NewOpenCodeGo()} {
+		switch v := p.(type) {
+		case *OpenAI:
+			v.apiKey = "k"
+		case *OllamaCloud:
+			v.apiKey = "k"
+		case *OpenCodeGo:
+			v.apiKey = "k"
+		}
+		if up, err := p.Upstream(); err != nil || has(up) {
+			t.Errorf("%s: err=%v rewrite=%v, want a plain passthrough", name, err, has(up))
+		}
+	}
+}
+
+// The wire body the proxy produces carries the same flag CompleteStream puts on
+// a session request to the same provider.
+func TestMiniMaxProxyBodyMatchesSessionRequest(t *testing.T) {
+	var sess map[string]any
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		json.Unmarshal(b, &sess)
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer fake.Close()
+	mm := NewMiniMax()
+	mm.apiKey = "k"
+	RedirectForTest(mm, fake.URL)
+	mm.CompleteStream(context.Background(), &types.Request{Model: "MiniMax-M3", MaxTokens: 10, Messages: []types.Message{types.NewUserTextMessage("Say pong")}}, nil)
+	if sess["reasoning_split"] != true {
+		t.Fatalf("test premise broken: a session request has reasoning_split=%v", sess["reasoning_split"])
+	}
+	up, _ := mm.Upstream()
+	out, err := up.Rewrite("/chat/completions", []byte(`{"model":"MiniMax-M3","max_tokens":10,"messages":[{"role":"user","content":"Say pong"}]}`), map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proxied map[string]any
+	json.Unmarshal(out, &proxied)
+	if proxied["reasoning_split"] != sess["reasoning_split"] {
+		t.Errorf("proxy sends reasoning_split=%v, a session sends %v", proxied["reasoning_split"], sess["reasoning_split"])
+	}
+}

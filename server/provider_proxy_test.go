@@ -640,3 +640,130 @@ func TestOpenAPISpecDocumentsProviderProxy(t *testing.T) {
 		}
 	}
 }
+
+// ── MiniMax-style backends: reasoning_split ──────────────────────────────
+
+// miniMaxLike behaves like MiniMax's API: with "reasoning_split": true the
+// thinking goes to reasoning_content and content is the bare answer; without
+// it the thinking comes INLINE as <think>…</think> inside content.
+func miniMaxLike(t *testing.T) *fakeUpstream {
+	return newFakeUpstream(t, func(w http.ResponseWriter, r *http.Request, body []byte) {
+		var req struct {
+			Stream         bool  `json:"stream"`
+			ReasoningSplit *bool `json:"reasoning_split"`
+		}
+		json.Unmarshal(body, &req)
+		split := req.ReasoningSplit != nil && *req.ReasoningSplit
+		if req.Stream {
+			w.Header().Set("Content-Type", "text/event-stream")
+			if split {
+				io.WriteString(w, `data: {"choices":[{"delta":{"reasoning_content":"need to say pong"}}]}`+"\n\n")
+				io.WriteString(w, `data: {"choices":[{"delta":{"content":"pong"}}]}`+"\n\n")
+			} else {
+				io.WriteString(w, `data: {"choices":[{"delta":{"content":"<think>need to say pong</think>\n\npong"}}]}`+"\n\n")
+			}
+			io.WriteString(w, "data: [DONE]\n\n")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if split {
+			io.WriteString(w, `{"choices":[{"message":{"content":"pong","reasoning_content":"need to say pong"}}]}`)
+		} else {
+			io.WriteString(w, `{"choices":[{"message":{"content":"<think>need to say pong</think>\n\npong"}}]}`)
+		}
+	})
+}
+
+// A consumer that knows nothing about reasoning_split gets a clean answer from
+// a MiniMax-compatible provider — stream and non-stream — and the caller's own
+// body otherwise reaches the backend untouched.
+func TestProxyInjectsReasoningSplitForDeclaredProvider(t *testing.T) {
+	up := miniMaxLike(t)
+	t.Setenv("HOME", t.TempDir())
+	name := fmt.Sprintf("mm-like-%d", proxySeq.Add(1))
+	if err := agent.NewOpenAIProvider(name, up.URL, agent.ProviderWithReasoningSplit(),
+		agent.ProviderWithFetchModels(func() ([]types.ModelMeta, error) { return []types.ModelMeta{{ID: "m"}}, nil })); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { agent.UnregisterCustomProvider(name) })
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	t.Cleanup(func() { a.Close() })
+	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { srv.Close() })
+
+	const plain = `{"model":"m","max_tokens":50,"messages":[{"role":"user","content":"Say pong"}]}`
+	_, body := do(t, "POST", proxyURL(srv, name, "/chat/completions"), plain, nil)
+	if strings.Contains(string(body), "<think>") || !strings.Contains(string(body), `"content":"pong"`) {
+		t.Errorf("non-stream answer carries the thinking inline: %s", body)
+	}
+	if !strings.Contains(string(body), "reasoning_content") {
+		t.Errorf("the thinking should still be available in reasoning_content: %s", body)
+	}
+	// the backend saw the caller's body plus the flag, nothing else changed
+	var sent map[string]any
+	json.Unmarshal(up.last(t).Body, &sent)
+	if sent["reasoning_split"] != true || sent["model"] != "m" || sent["max_tokens"] != float64(50) {
+		t.Errorf("backend received %s", up.last(t).Body)
+	}
+
+	_, sse := do(t, "POST", proxyURL(srv, name, "/chat/completions"), `{"model":"m","stream":true,"messages":[{"role":"user","content":"Say pong"}]}`, nil)
+	if strings.Contains(string(sse), "<think>") || !strings.Contains(string(sse), `"content":"pong"`) {
+		t.Errorf("streamed answer carries the thinking inline: %s", sse)
+	}
+
+	// An explicit reasoning_split:false from the caller is honored.
+	_, raw := do(t, "POST", proxyURL(srv, name, "/chat/completions"), `{"model":"m","reasoning_split":false,"messages":[{"role":"user","content":"x"}]}`, nil)
+	if !strings.Contains(string(raw), "<think>") {
+		t.Errorf("the caller's explicit false was overridden: %s", raw)
+	}
+}
+
+// A custom provider NOT declared with reasoning_split is forwarded exactly as
+// sent — no flag added to a backend that may not know it.
+func TestProxyDoesNotInjectForOtherProviders(t *testing.T) {
+	up := miniMaxLike(t)
+	srv, name := proxyEnv(t, up, ServerOptions{}) // declared without reasoning_split
+	const plain = `{"model":"m","messages":[{"role":"user","content":"Say pong"}]}`
+	do(t, "POST", proxyURL(srv, name, "/chat/completions"), plain, nil)
+	if got := string(up.last(t).Body); got != plain {
+		t.Errorf("body was altered for a provider that doesn't use reasoning_split:\n got %s\nwant %s", got, plain)
+	}
+}
+
+// MiniMax itself: the real provider, redirected at the backend double.
+func TestProxyMiniMaxInjectsReasoningSplit(t *testing.T) {
+	up := miniMaxLike(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MINIMAX_API_KEY", "")
+	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
+	if err := config.GetCredentialsManager().SetCredential("minimax", config.ProviderCredential{Type: "api_key", APIKey: "mm-key"}); err != nil {
+		t.Fatal(err)
+	}
+	mm := providers.NewMiniMax()
+	providers.RedirectForTest(mm, up.URL)
+	t.Cleanup(providers.SetForTest([]providers.Provider{mm}))
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	t.Cleanup(func() { a.Close() })
+	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { srv.Close() })
+
+	resp, body := do(t, "POST", "http://"+srv.Addr()+"/api/providers/minimax/proxy/chat/completions",
+		`{"model":"MiniMax-M3","max_tokens":50,"stream":false,"messages":[{"role":"user","content":"Say pong"}]}`, nil)
+	if resp.StatusCode != 200 || strings.Contains(string(body), "<think>") || !strings.Contains(string(body), `"content":"pong"`) {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	if up.last(t).Header.Get("Authorization") != "Bearer mm-key" {
+		t.Errorf("auth = %q", up.last(t).Header.Get("Authorization"))
+	}
+	// GET /models goes through unchanged
+	do(t, "GET", "http://"+srv.Addr()+"/api/providers/minimax/proxy/models", "", nil)
+	if got := up.last(t); got.Method != "GET" || len(got.Body) != 0 {
+		t.Errorf("GET /models was altered: %+v", got)
+	}
+}

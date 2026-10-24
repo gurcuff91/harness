@@ -47,6 +47,8 @@ func RedirectForTest(p Provider, target string) Provider {
 		v.client = c
 	case *Anthropic:
 		v.client = c
+	case *MiniMax:
+		v.client = c
 	default:
 		panic("RedirectForTest: unsupported provider")
 	}

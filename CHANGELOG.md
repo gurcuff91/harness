@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.95.1] - 2026-10-24
+
+### Fixed — provider proxy: MiniMax-compatible backends answered with inline `<think>…</think>`
+Reported by a proxy consumer: through `/api/providers/minimax/proxy/chat/completions` the answer came back with the model's thinking embedded in `content` as literal `<think>…</think>`. A session never shows this because `MiniMax.CompleteStream` (and any custom provider declared with `reasoning_split`) always sends `"reasoning_split": true`, which makes the backend put the thinking in the separate `reasoning_content` / `reasoning_details` fields and leave `content` as the bare answer. The proxy forwards the caller's body verbatim, so a consumer that knows nothing about the flag got the raw MiniMax behavior and had to rediscover the workaround.
+
+- **The proxy now adds `"reasoning_split": true` to a chat completion** for `minimax` (always) and for any custom provider declared with `reasoning_split` (settings.json `"reasoning_split": true` / `agent.ProviderWithReasoningSplit()`) — exactly what a session sends for the same provider. Stream and non-stream.
+- **The caller still decides**: a body that already carries `reasoning_split` — `true`, `false` or `null` — is left alone, so `false` gets the inline-tag behavior back.
+- **Nothing else in the body changes.** The flag is spliced in right after the opening brace instead of re-encoding the document, so every other byte the caller sent (key order, spacing, escapes) reaches the backend untouched. Only `POST /chat/completions` is touched; `GET /models`, bodies that aren't a JSON object, and every other provider (`openai`, `ollama-cloud`, `opencode-go`, and custom providers declared without `reasoning_split`) are forwarded exactly as sent.
+- **The response is not rewritten** — no `<think>` scrubbing, no stream parsing. The tags are simply no longer generated. The thinking is still available to a consumer that wants it, in `reasoning_content` (the same field a session reads).
+- Verified live against the real MiniMax API and a Kaiban-gateway custom provider: with no flag in the request, `content` is `pong`, with the thinking in `reasoning_content`; with an explicit `reasoning_split:false` the inline tags come back, as asked.
+
 ## [0.95.0] - 2026-10-24
 
 ### Added — the model registry: complete schema, visible failures, per-model lookup, provenance, dialect
