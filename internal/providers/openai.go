@@ -36,6 +36,20 @@ func NewOpenAI() *OpenAI {
 
 func (o *OpenAI) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
 
+// Upstream implements Provider: the OpenAI API with the stored key.
+func (o *OpenAI) Upstream() (Upstream, error) {
+	creds, err := o.ResolveCredentials()
+	if err != nil || creds.APIKey == "" {
+		return Upstream{}, fmt.Errorf("%w: openai has no API key", ErrNoUpstream)
+	}
+	return Upstream{
+		BaseURL: o.baseURL,
+		Headers: map[string]string{"Authorization": "Bearer " + creds.APIKey},
+		Allowed: openAIStyleAllow,
+		Client:  o.client,
+	}, nil
+}
+
 func (o *OpenAI) ResolveCredentials() (types.Credentials, error) {
 	if o.apiKey != "" {
 		return types.APIKeyCredentials(o.apiKey), nil

@@ -139,6 +139,27 @@ func (a *Anthropic) CompleteStream(ctx context.Context, req *types.Request, cb t
 
 const anthropicAPI = "https://api.anthropic.com/v1/messages"
 
+// anthropicAllow is the proxy allowlist of the Anthropic Messages API, shared
+// by the API-key and OAuth providers.
+var anthropicAllow = allowList("POST /v1/messages", "POST /v1/messages/count_tokens", "GET /v1/models")
+
+// Upstream implements Provider: Anthropic's native API, authenticated with the
+// stored API key. anthropic-version is a default, so an SDK that pins its own
+// keeps it.
+func (a *Anthropic) Upstream() (Upstream, error) {
+	creds, err := a.ResolveCredentials()
+	if err != nil || creds.APIKey == "" {
+		return Upstream{}, fmt.Errorf("%w: anthropic has no API key", ErrNoUpstream)
+	}
+	return Upstream{
+		BaseURL:  "https://api.anthropic.com",
+		Headers:  map[string]string{"x-api-key": creds.APIKey},
+		Defaults: map[string]string{"anthropic-version": "2023-06-01"},
+		Allowed:  anthropicAllow,
+		Client:   a.client,
+	}, nil
+}
+
 // anthropicEffortLevelKeys are the effort level names fetchAnthropicModels
 // looks for under capabilities.effort in GET /v1/models' response — kept
 // as a package-level var (not inline in applyAnthropicCapabilities) so it

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	llm "github.com/gurcuff91/harness/internal/providers/llm"
@@ -101,6 +102,22 @@ func (o *CustomOpenAI) CredentialType() types.CredentialType { return types.Cred
 
 // ResolveCredentials always succeeds with CredTypeNone — there is nothing
 // to resolve. Mirrors Ollama.ResolveCredentials exactly.
+// Upstream implements Provider: the declared endpoint with its static headers
+// (the only "credential" a custom provider has). Works for providers added at
+// runtime, through settings.json or from code.
+func (o *CustomOpenAI) Upstream() (Upstream, error) {
+	h := make(map[string]string, len(o.headers))
+	for k, v := range o.headers {
+		h[k] = v
+	}
+	return Upstream{
+		BaseURL: strings.TrimRight(o.baseURL, "/"),
+		Headers: h,
+		Allowed: openAIStyleAllow,
+		Client:  o.client,
+	}, nil
+}
+
 func (o *CustomOpenAI) ResolveCredentials() (types.Credentials, error) {
 	return types.Credentials{Type: types.CredTypeNone}, nil
 }

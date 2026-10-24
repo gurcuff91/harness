@@ -54,6 +54,21 @@ func (o *OllamaCloud) IsActive() bool {
 
 func (o *OllamaCloud) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
 
+// Upstream implements Provider: Ollama Cloud's OpenAI-compatible API with the
+// stored key.
+func (o *OllamaCloud) Upstream() (Upstream, error) {
+	creds, err := o.ResolveCredentials()
+	if err != nil || creds.APIKey == "" {
+		return Upstream{}, fmt.Errorf("%w: ollama-cloud has no API key", ErrNoUpstream)
+	}
+	return Upstream{
+		BaseURL: o.baseURL,
+		Headers: map[string]string{"Authorization": "Bearer " + creds.APIKey},
+		Allowed: openAIStyleAllow,
+		Client:  o.client,
+	}, nil
+}
+
 func (o *OllamaCloud) ResolveCredentials() (types.Credentials, error) {
 	if o.apiKey != "" {
 		return types.APIKeyCredentials(o.apiKey), nil

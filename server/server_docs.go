@@ -293,6 +293,39 @@ const openAPISpecTemplate = `{
         }
       }
     },
+    "/api/providers/{name}/proxy/{path}": {
+      "post": {
+        "tags": ["providers"],
+        "summary": "Transparent proxy to a provider's native API",
+        "description": "Calls a connected provider's own API (Anthropic Messages, OpenAI Chat Completions, Codex Responses, …) in ITS dialect, without a session: the request body and the response — SSE streams included, flushed as they arrive — pass through untouched, and harness supplies the credentials (OAuth refresh included) and identity headers. Point a vendor SDK's base URL at /api/providers/{name}/proxy (any API key; Authorization/x-api-key headers sent by the caller are dropped). {path} is relative to the provider's native base URL: anthropic and claude-oauth → /v1/messages, /v1/messages/count_tokens (POST), /v1/models (GET); openai-style providers (openai, minimax, opencode-go, ollama-cloud and custom ones) → /chat/completions, /models; codex-oauth → /responses, /models; ollama → /v1/chat/completions, /v1/models, /api/chat, /api/generate, /api/tags, /api/show. Anything else is 403. What the caller omits (tools, system prompt, max_tokens) is simply absent: the provider answers with its own error where its API requires it. Nothing is created or persisted. The one adapted provider is claude-oauth, whose backend only accepts Claude Code-shaped requests: harness prepends the Claude Code identity block to system, maps tool names to Claude Code's (Fetch→WebFetch, others→mcp__x__<name>) and back in the response, and adds the billing header. The upstream's own status and body are returned as-is, 4xx/5xx included; harness's own errors use the standard error shape: 404 unknown provider, 409 provider not connected, 403 path/method not allowed, 400 unusable path or (claude-oauth) body, 413 body over the limit (32 MiB by default), 502 upstream unreachable. A stream that goes silent for 3 minutes is aborted, and the upstream call is cancelled when the caller disconnects.",
+        "operationId": "providerProxy",
+        "parameters": [
+          { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "path", "in": "path", "required": true, "description": "Path relative to the provider's native base URL (may contain slashes).", "schema": { "type": "string" }, "allowReserved": true }
+        ],
+        "requestBody": { "required": false, "content": { "application/json": { "schema": { "type": "object", "description": "The provider's own request body, verbatim." } } } },
+        "responses": {
+          "200": { "description": "The provider's own response (JSON or text/event-stream), verbatim. Any other status the upstream returns is passed through too." },
+          "400": { "description": "Invalid path, or (claude-oauth) a body that is not a Messages request" },
+          "403": { "description": "Method/path not allowed through this provider's proxy" },
+          "404": { "description": "Unknown provider" },
+          "409": { "description": "Provider not connected" },
+          "413": { "description": "Request body over the proxy limit" },
+          "502": { "description": "Provider unreachable" }
+        }
+      },
+      "get": {
+        "tags": ["providers"],
+        "summary": "Transparent proxy to a provider's native API (GET, e.g. /v1/models)",
+        "description": "Same proxy as the POST operation, for the provider's read-only endpoints (model listing).",
+        "operationId": "providerProxyGet",
+        "parameters": [
+          { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "path", "in": "path", "required": true, "schema": { "type": "string" }, "allowReserved": true }
+        ],
+        "responses": { "200": { "description": "The provider's own response, verbatim." } }
+      }
+    },
     "/api/models": {
       "get": {
         "tags": ["models"],

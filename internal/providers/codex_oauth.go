@@ -295,6 +295,32 @@ func (c *CodexOAuth) CompleteStream(ctx context.Context, req *types.Request, cb 
 	return resp, nil
 }
 
+// Upstream implements Provider: the Codex Responses API over the ChatGPT
+// subscription — same identity headers CompleteStream sends. The body is the
+// caller's responsibility (the backend demands store:false, stream:true and
+// instructions).
+func (c *CodexOAuth) Upstream() (Upstream, error) {
+	creds, err := c.ResolveCredentials()
+	if err != nil || creds.AccessToken == "" {
+		return Upstream{}, fmt.Errorf("%w: codex-oauth has no valid token", ErrNoUpstream)
+	}
+	h := map[string]string{
+		"Authorization": "Bearer " + creds.AccessToken,
+		"originator":    codexOriginator,
+		"User-Agent":    codexUserAgent(),
+		"session-id":    c.session,
+	}
+	if creds.AccountID != "" {
+		h["ChatGPT-Account-ID"] = creds.AccountID
+	}
+	return Upstream{
+		BaseURL: "https://chatgpt.com/backend-api/codex",
+		Headers: h,
+		Allowed: allowList("POST /responses", "GET /models"),
+		Client:  c.client,
+	}, nil
+}
+
 // ── Request translation: internal format → Codex Responses dialect ───────
 
 // codexToolStreamState tracks one in-flight function_call announced by

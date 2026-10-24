@@ -58,6 +58,21 @@ func (o *MiniMax) IsActive() bool {
 
 func (o *MiniMax) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
 
+// Upstream implements Provider: MiniMax's OpenAI-compatible API with the stored
+// key. The caller decides on "reasoning_split" in its own body.
+func (o *MiniMax) Upstream() (Upstream, error) {
+	creds, err := o.ResolveCredentials()
+	if err != nil || creds.APIKey == "" {
+		return Upstream{}, fmt.Errorf("%w: minimax has no API key", ErrNoUpstream)
+	}
+	return Upstream{
+		BaseURL: minimaxURL,
+		Headers: map[string]string{"Authorization": "Bearer " + creds.APIKey},
+		Allowed: openAIStyleAllow,
+		Client:  o.client,
+	}, nil
+}
+
 func (o *MiniMax) ResolveCredentials() (types.Credentials, error) {
 	if o.apiKey != "" {
 		return types.APIKeyCredentials(o.apiKey), nil

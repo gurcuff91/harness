@@ -282,6 +282,28 @@ func (c *ClaudeOAuth) CompleteStream(ctx context.Context, req *types.Request, cb
 	return llm.DoAnthropicStream(ctx, c.client, anthropicOAuthAPI, token, anthrReq, headers, cb)
 }
 
+// Upstream implements Provider: Anthropic's native API over the Claude Code
+// subscription. The token is refreshed here (same locking as CompleteStream),
+// the headers are the Claude Code identity ones, and the body rewrite makes a
+// plain Messages request acceptable to the subscription backend — identity
+// system block, tool-name mapping both ways, billing header.
+func (c *ClaudeOAuth) Upstream() (Upstream, error) {
+	c.mu.Lock()
+	token, err := c.tokens.getValidToken()
+	c.mu.Unlock()
+	if err != nil || token == "" {
+		return Upstream{}, fmt.Errorf("%w: claude-oauth has no valid token", ErrNoUpstream)
+	}
+	return Upstream{
+		BaseURL:         "https://api.anthropic.com",
+		Headers:         buildCCHeaders(token, "", c.session),
+		Allowed:         anthropicAllow,
+		Rewrite:         rewriteClaudeOAuthBody,
+		RewriteResponse: unmapClaudeOAuthResponse,
+		Client:          c.client,
+	}, nil
+}
+
 // ── Request builders ─────────────────────────────────────────────────────
 
 var ephemeralCC = &llm.AnthropicCacheControl{Type: "ephemeral"}

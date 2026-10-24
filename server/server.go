@@ -51,6 +51,8 @@ type Server struct {
 	transport string      // name of the calling transport
 	keepAgent bool        // Close leaves the agent open (it belongs to the caller)
 
+	proxyMaxBody int64 // request-body cap of /api/providers/{name}/proxy/*; 0 = DefaultProxyMaxBodyBytes
+
 	// openMu serializes session create/resume so a session can never get a
 	// second proxy (two concurrent resumes of the same id used to both miss
 	// s.sessions and each build one — the second stealing the event stream).
@@ -85,6 +87,11 @@ type ServerOptions struct {
 	// scheduler or store — for a server fronting an agent it doesn't own.
 	// Default false: the server closes its agent (server.Run's semantics).
 	KeepAgentOpen bool
+
+	// ProxyMaxBodyBytes caps the request body of the provider proxy
+	// (/api/providers/{name}/proxy/*); a larger one is answered 413. Zero means
+	// DefaultProxyMaxBodyBytes (32 MiB).
+	ProxyMaxBodyBytes int64
 }
 
 // NewServer creates an HTTP server wrapping the agent.
@@ -98,12 +105,13 @@ func NewServer(a *agent.Agent, opts ServerOptions) *Server {
 		logger = logx.NewNilLogger()
 	}
 	return &Server{
-		agent:     a,
-		logger:    logger,
-		transport: transport,
-		keepAgent: opts.KeepAgentOpen,
-		sessions:  make(map[string]*SessionProxy),
-		profiles:  make(map[string]Profile),
+		agent:        a,
+		logger:       logger,
+		transport:    transport,
+		keepAgent:    opts.KeepAgentOpen,
+		proxyMaxBody: opts.ProxyMaxBodyBytes,
+		sessions:     make(map[string]*SessionProxy),
+		profiles:     make(map[string]Profile),
 	}
 }
 
@@ -141,6 +149,7 @@ func (s *Server) handler() http.Handler {
 	r.Get("/api/providers", s.handleProviders)
 	r.Post("/api/providers/{name}/connect", s.handleConnectProvider)
 	r.Post("/api/providers/{name}/disconnect", s.handleDisconnectProvider)
+	r.HandleFunc("/api/providers/{name}/proxy/*", s.handleProviderProxy)
 	r.Post("/api/oauth/{provider}", s.handleOAuth)
 	r.Get("/api/models", s.handleModels)
 	r.Get("/api/sessions", s.handleListSessions)

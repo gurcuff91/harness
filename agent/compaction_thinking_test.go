@@ -50,6 +50,9 @@ func (f *fakeThinkingProbeProvider) ActivationSource() providers.ActivationSourc
 }
 func (f *fakeThinkingProbeProvider) Connect(types.Credentials) error { return nil }
 func (f *fakeThinkingProbeProvider) Disconnect() error               { return nil }
+func (f *fakeThinkingProbeProvider) Upstream() (providers.Upstream, error) {
+	return providers.Upstream{}, providers.ErrNoUpstream
+}
 
 // TestCompactionSummaryUsesSessionThinkingLevel is the regression test for
 // a real bug: generateCompactionSummary's own *types.Request never set

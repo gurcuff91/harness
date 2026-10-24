@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,6 +58,19 @@ func (o *Ollama) ActivationSource() ActivationSource {
 func (o *Ollama) IsActive() bool { return OllamaAvailable() }
 
 func (o *Ollama) CredentialType() types.CredentialType { return types.CredTypeNone }
+
+// Upstream implements Provider: the local Ollama server — both its
+// OpenAI-compatible /v1 routes and its native /api ones. No credentials.
+func (o *Ollama) Upstream() (Upstream, error) {
+	return Upstream{
+		BaseURL: strings.TrimRight(o.baseURL, "/"),
+		Allowed: allowList(
+			"POST /v1/chat/completions", "GET /v1/models",
+			"POST /api/chat", "POST /api/generate", "GET /api/tags", "POST /api/show",
+		),
+		Client: o.client,
+	}, nil
+}
 
 // ResolveCredentials — no-op, ollama is auto-detected via ping.
 func (o *Ollama) ResolveCredentials() (types.Credentials, error) {

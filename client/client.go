@@ -707,6 +707,58 @@ func (c *Client) GetMessagesWith(sessionID string, opts MessagesOptions) (msgs [
 	return msgs, from, total, nil
 }
 
+// ProviderBaseURL returns the root of harness's transparent proxy to a
+// provider's NATIVE API: point a vendor SDK's base URL at it (any API key will
+// do — harness drops it and applies the provider's own credentials, OAuth
+// refresh included).
+//
+//	anthropic.NewClient(option.WithBaseURL(c.ProviderBaseURL("claude-oauth")), …)
+//
+// It is the provider's own base URL with the path after it unchanged, so what
+// an SDK appends ("/v1/messages", "/chat/completions", "/responses") lands on
+// the right endpoint. See ProviderDo for a plain-HTTP call.
+func (c *Client) ProviderBaseURL(provider string) string {
+	return c.baseURL + "/api/providers/" + url.PathEscape(provider) + "/proxy"
+}
+
+// ProviderDo sends one raw request through the provider proxy and returns the
+// upstream's response as-is: a 4xx/5xx is the provider's own answer, NOT an
+// error here (only a failure to complete the exchange is). path is relative to
+// the provider's native base URL ("/v1/messages", "/chat/completions"); body
+// may be nil. Set "Accept: text/event-stream" and a streaming body (the
+// dialect's own "stream": true) to stream — resp.Body then yields the events
+// as they arrive. The caller closes resp.Body; ctx cancels the upstream call.
+//
+// Authorization and API-key headers in headers are ignored by the server.
+// There are deliberately no typed completion methods: the client does not
+// know any provider's dialect — it speaks the provider's own.
+func (c *Client) ProviderDo(ctx context.Context, provider, method, path string, body []byte, headers http.Header) (*http.Response, error) {
+	if path == "" || path[0] != '/' {
+		path = "/" + path
+	}
+	var r io.Reader
+	if body != nil {
+		r = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.ProviderBaseURL(provider)+path, r)
+	if err != nil {
+		return nil, err
+	}
+	for k, vs := range headers {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
+	}
+	if body != nil && req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request: %w", err)
+	}
+	return resp, nil
+}
+
 // GetSessionTools returns the tool definitions (name, description, input
 // schema) currently registered for an active session — the exact set sent
 // to the provider on the next turn, including any MCP tools and

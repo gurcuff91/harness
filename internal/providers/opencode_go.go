@@ -62,6 +62,18 @@ func (o *OpenCodeGo) IsActive() bool {
 
 func (o *OpenCodeGo) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
 
+// Upstream implements Provider: OpenCode Go's OpenAI-compatible API with the
+// stored key and the mandatory x-opencode-session header.
+func (o *OpenCodeGo) Upstream() (Upstream, error) {
+	creds, err := o.ResolveCredentials()
+	if err != nil || creds.APIKey == "" {
+		return Upstream{}, fmt.Errorf("%w: opencode-go has no API key", ErrNoUpstream)
+	}
+	h := openCodeGoSessionHeaders(o.session)
+	h["Authorization"] = "Bearer " + creds.APIKey
+	return Upstream{BaseURL: openCodeGoURL, Headers: h, Allowed: openAIStyleAllow, Client: o.client}, nil
+}
+
 func (o *OpenCodeGo) ResolveCredentials() (types.Credentials, error) {
 	if o.apiKey != "" {
 		return types.APIKeyCredentials(o.apiKey), nil

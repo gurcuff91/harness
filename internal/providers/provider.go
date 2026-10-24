@@ -53,6 +53,15 @@ type Provider interface {
 	// Returns nil if nothing is known about the model.
 	ModelMeta(modelID string) *types.ModelMeta
 
+	// Upstream resolves how to reach this provider's NATIVE API on a caller's
+	// behalf (base URL, authentication headers with any OAuth token already
+	// refreshed, allowed paths, and the claude-oauth body rewrite) — what the
+	// server's transparent proxy (/api/providers/{name}/proxy/*) forwards
+	// through. Returns an error wrapping ErrNoUpstream when the provider isn't
+	// usable right now (no credentials). Headers come from the same builders
+	// CompleteStream uses.
+	Upstream() (Upstream, error)
+
 	// CredentialType returns what kind of credentials this provider expects.
 	CredentialType() types.CredentialType
 
