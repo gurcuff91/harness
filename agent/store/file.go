@@ -144,6 +144,28 @@ func (m *FileStore) LoadMessages(sessionID string, fromIndex int) ([]types.Messa
 	return readJSONLFrom(path, fromIndex)
 }
 
+// LoadMessagesWindow implements WindowReader. It does NOT hold m.mu for the
+// scan: the log can be hundreds of MB, and appends (which take m.mu) must not
+// stall behind a reader. The lock is held only to sample the file's size —
+// appends are whole lines under the same lock, so that size is always a line
+// boundary — and the scan then reads exactly that many bytes, ignoring
+// anything appended meanwhile.
+func (m *FileStore) LoadMessagesWindow(sessionID string, w MessageWindow) ([]types.Message, int, int, error) {
+	m.mu.Lock()
+	path, found := m.findJSONLPath(sessionID)
+	var size int64
+	if found {
+		if st, err := os.Stat(path); err == nil {
+			size = st.Size()
+		}
+	}
+	m.mu.Unlock()
+	if !found || size == 0 {
+		return []types.Message{}, 0, 0, nil
+	}
+	return readJSONLWindow(path, size, w)
+}
+
 // CopyMessages duplicates the JSONL log of srcID into dstID byte-for-byte.
 // If srcID has no log yet (never written), dstID gets an empty file.
 func (m *FileStore) CopyMessages(srcID, dstID string) error {

@@ -82,6 +82,17 @@ func (m *InMemoryStore) LoadMessages(sessionID string, fromIndex int) ([]types.M
 	return out, nil
 }
 
+// LoadMessagesWindow implements WindowReader over the in-memory log.
+func (m *InMemoryStore) LoadMessagesWindow(sessionID string, w MessageWindow) ([]types.Message, int, int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	log := m.logs[sessionID]
+	cut := windowCut(log, w)
+	out := make([]types.Message, len(log)-cut)
+	copy(out, log[cut:])
+	return out, cut, len(log), nil
+}
+
 // CopyMessages duplicates the in-memory log of srcID into dstID.
 func (m *InMemoryStore) CopyMessages(srcID, dstID string) error {
 	m.mu.Lock()

@@ -1732,6 +1732,15 @@ func (s *Session) ContextBreakdown() ContextBreakdown {
 	}
 }
 
+// MessagesWindow returns a window of the complete history — everything from an
+// absolute index, or from just after the k-th-to-last compaction checkpoint —
+// plus the absolute index of the first message returned and the full log's
+// length, without materializing what precedes the window when the store
+// supports it. See store.MessageWindow.
+func (s *Session) MessagesWindow(w store.MessageWindow) (msgs []types.Message, from, total int, err error) {
+	return s.store.MessagesWindow(w)
+}
+
 // AllMessages returns the complete conversation history including pre-compaction messages.
 // Use this for display purposes. The LLM only sees store.Messages() (from last compact offset).
 func (s *Session) AllMessages() []types.Message {

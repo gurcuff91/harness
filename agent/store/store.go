@@ -207,6 +207,16 @@ func (s *Session) AllMessages() []types.Message {
 	return msgs
 }
 
+// MessagesWindow returns a window of the complete history (see MessageWindow)
+// with the absolute index of its first message and the full log's length. A
+// zero window is the whole history. Cold path, like AllMessages.
+func (s *Session) MessagesWindow(w MessageWindow) (msgs []types.Message, from, total int, err error) {
+	s.mu.Lock()
+	id := s.id
+	s.mu.Unlock()
+	return LoadMessagesWindow(s.port, id, w)
+}
+
 // AddMessage appends a message to the log — cached in the working set and
 // written to the port immediately (durable; survives a crash).
 func (s *Session) AddMessage(msg types.Message) error {

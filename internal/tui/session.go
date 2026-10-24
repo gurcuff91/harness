@@ -272,52 +272,39 @@ func (t *TUI) loadStatsFromSession(sess *client.Session) {
 	}
 }
 
-// trimToRecentHistory caps how much prior history the TUI renders on resume.
-// Rendering is the bottleneck (the markdown engine processes every message), and
-// nobody scrolls back through a long, multiple-times-compacted conversation — so
-// for a session compacted at least twice we render only from just AFTER the
-// SECOND-TO-LAST compaction checkpoint onward. That yields the last pre-compaction
-// block plus the current working set: enough recent context that a freshly-
-// compacted session isn't visually empty, without paying to render thousands of
-// stale messages.
+// resumeCompactions is how many compaction checkpoints back the TUI reaches
+// when it replays a resumed session: it renders from just AFTER the
+// SECOND-TO-LAST checkpoint onward. That yields the last pre-compaction block
+// plus the current working set — enough recent context that a freshly-compacted
+// session isn't visually empty, without paying to fetch, parse and render
+// thousands of stale messages (rendering through the markdown engine is the
+// bottleneck, and nobody scrolls back through a long, many-times-compacted
+// conversation).
 //
-// The cut is one past the second-to-last checkpoint (not on it) so the trimmed
-// history doesn't OPEN with a bare "◎ Compacting" marker — which looks odd right
-// under the "N earlier messages hidden" hint. The LAST checkpoint still falls
-// inside the rendered range and shows normally, where it reads naturally.
+// The cut is one past the checkpoint (not on it), so the replay doesn't OPEN
+// with a bare "◎ Compacting" marker right under the "N earlier messages
+// hidden" hint; the LAST checkpoint still falls inside the range and shows
+// normally. A session compacted fewer than twice is replayed whole.
 //
-// A session compacted 0 or 1 times is returned untouched (there's nothing useful
-// to trim). Returns the messages to render and how many were hidden ahead of them
-// (0 when no trim happened) so the caller can show a transparency hint.
-func trimToRecentHistory(messages []types.Message) (trimmed []types.Message, hidden int) {
-	// Collect the absolute indices of every compaction checkpoint marker.
-	var marks []int
-	for i := range messages {
-		if m := messages[i].Meta; m != nil && m.IsCompaction {
-			marks = append(marks, i)
-		}
-	}
-	if len(marks) < 2 {
-		return messages, 0 // short or singly-compacted — render everything
-	}
-	cut := marks[len(marks)-2] + 1 // just past the second-to-last checkpoint
-	return messages[cut:], cut
-}
+// The server does the cutting (GET /messages?compactions=2), so the skipped
+// part of the log is never even sent, let alone parsed.
+const resumeCompactions = 2
 
 // renderHistory fetches and replays prior messages on resume. Messages carry a
 // parts[] array of typed blocks (text, tool_call, tool_result) — the same
 // shape the live stream produces — so we render each into the block history.
 // Thinking is intentionally skipped (not persisted). Mirrors v1's renderHistory.
 func (t *TUI) renderHistory() {
-	messages, err := t.client.GetMessages(t.sessionID)
+	messages, hidden, _, err := t.client.GetMessagesWith(t.sessionID, client.MessagesOptions{Compactions: resumeCompactions})
 	if err != nil {
 		return
 	}
+	t.replayMessages(messages, hidden)
+}
 
-	// Cap how far back we render — the full history stays in the fetched slice,
-	// but replaying every message through the markdown engine is what makes a
-	// long, compacted session slow to resume. See trimToRecentHistory.
-	messages, hidden := trimToRecentHistory(messages)
+// replayMessages renders messages into the block history; hidden is how many
+// earlier messages were left out ahead of them (0 = none), shown as a hint.
+func (t *TUI) replayMessages(messages []types.Message, hidden int) {
 	if hidden > 0 {
 		t.addRaw(ansi.Dimmed(fmt.Sprintf("↑ %d earlier messages hidden", hidden)))
 	}

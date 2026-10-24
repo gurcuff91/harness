@@ -882,6 +882,22 @@ func (a *Agent) LoadMessages(sessionID string) ([]types.Message, error) {
 	return a.store.LoadMessages(sessionID, 0)
 }
 
+// LoadMessagesWindow is LoadMessages restricted to a window of the log (see
+// store.MessageWindow), for an active or a persisted session alike. It returns
+// the messages, the absolute index of the first one and the full log's length.
+func (a *Agent) LoadMessagesWindow(sessionID string, w store.MessageWindow) ([]types.Message, int, int, error) {
+	a.sessMu.Lock()
+	sess, ok := a.activeSessions[sessionID]
+	a.sessMu.Unlock()
+	if ok {
+		return sess.MessagesWindow(w)
+	}
+	if _, found, err := a.store.LoadMeta(sessionID); err != nil || !found {
+		return nil, 0, 0, fmt.Errorf("session %s not found", sessionID)
+	}
+	return store.LoadMessagesWindow(a.store, sessionID, w)
+}
+
 // SessionResetCount returns how many times a session's history was reset
 // (store.SessionMeta.ResetCount) — 0 for a never-reset or unknown session.
 func (a *Agent) SessionResetCount(sessionID string) int {

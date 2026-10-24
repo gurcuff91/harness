@@ -997,17 +997,66 @@ func (s *Server) handleStopSession(w http.ResponseWriter, r *http.Request) {
 	writeStatus(w, http.StatusOK, "stopped", "")
 }
 
+// handleGetMessages returns a session's message history — all of it by
+// default, or a suffix of it:
+//
+//	?from=<n>         start at absolute index n (n >= total → empty array)
+//	?compactions=<k>  start just after the k-th-to-last compaction checkpoint
+//	                  (k >= 1; fewer checkpoints than k → everything)
+//
+// from and compactions are mutually exclusive (400 if both are present). The
+// body is always a plain JSON array; X-Messages-From carries the absolute index
+// of its first element (what /messages/{index}/images/{n} expects) and
+// X-Messages-Total the length of the full log. Works for active and persisted
+// sessions. The skipped part of the log is never parsed (see
+// store.WindowReader).
 func (s *Server) handleGetMessages(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	s.mu.RLock()
-	proxy, ok := s.sessions[id]
-	s.mu.RUnlock()
-	if !ok {
-		writeError(w, http.StatusBadRequest, "session is not active", nil)
+	q := r.URL.Query()
+	win, errMsg := parseMessageWindow(q.Get("from"), q.Has("from"), q.Get("compactions"), q.Has("compactions"))
+	if errMsg != "" {
+		writeError(w, http.StatusBadRequest, errMsg, nil)
 		return
 	}
-	messages := proxy.session.AllMessages()
+	messages, from, total, err := s.agent.LoadMessagesWindow(id, win)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, "session not found", nil)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error(), nil)
+		return
+	}
+	if messages == nil {
+		messages = []types.Message{}
+	}
+	w.Header().Set("X-Messages-From", strconv.Itoa(from))
+	w.Header().Set("X-Messages-Total", strconv.Itoa(total))
 	writeJSON(w, http.StatusOK, messages)
+}
+
+// parseMessageWindow validates GET /messages' query parameters. It returns a
+// client-facing message (and a zero window) on the first problem.
+func parseMessageWindow(from string, hasFrom bool, compactions string, hasCompactions bool) (store.MessageWindow, string) {
+	var win store.MessageWindow
+	if hasFrom && hasCompactions {
+		return win, "from and compactions are mutually exclusive"
+	}
+	if hasFrom {
+		n, err := strconv.Atoi(from)
+		if err != nil || n < 0 {
+			return win, "from must be a non-negative integer"
+		}
+		win.From = n
+	}
+	if hasCompactions {
+		k, err := strconv.Atoi(compactions)
+		if err != nil || k < 1 {
+			return win, "compactions must be a positive integer"
+		}
+		win.Compactions = k
+	}
+	return win, ""
 }
 
 // handleMessageImage serves the n-th image (0-based, in message order) of the
@@ -1842,6 +1891,8 @@ func corsMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		// Without this a browser client can't read GET /messages' paging headers.
+		w.Header().Set("Access-Control-Expose-Headers", "X-Messages-From, X-Messages-Total")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)

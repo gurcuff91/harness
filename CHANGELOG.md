@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.93.0] - 2026-10-17
+
+### Added — `GET /api/sessions/{id}/messages` can return history from a checkpoint
+A long, many-times-compacted session was effectively unopenable by any client that fetched its history: the endpoint always returned the whole log (a real session: 131k messages, 597 MB on disk, a 569 MB response a browser can't take), and the TUI downloaded all of it only to throw away everything before the second-to-last checkpoint.
+
+- **`?from=<n>`** starts at absolute index `n`; **`?compactions=<k>`** starts just after the k-th-to-last compaction checkpoint (`k >= 1`; with fewer checkpoints than `k`, the whole history from 0 — the TUI's rule with `k=2`). `from` at or past the end returns `[]`.
+- **`from` and `compactions` are mutually exclusive** — both present is a 400. Negative, non-numeric, empty or `compactions < 1` values are a 400 with a clear message.
+- The body is still a plain JSON array. New headers: **`X-Messages-From`** (absolute index of the first returned message — what `/messages/{index}/images/{n}` counts from) and **`X-Messages-Total`** (length of the full log), also exposed to browsers via `Access-Control-Expose-Headers`. With no params the body is exactly what it was.
+- **Works for persisted sessions too** — it used to answer 400 "session is not active" unless the session was open; an unknown session is now a 404.
+- **The skipped part of the log is never parsed.** One pass over the bytes finds the cut and counts the lines (a checkpoint line is spotted by the `"is_compaction":true` byte sequence and only then confirmed by parsing it, so content merely quoting that text is never mistaken for one); then only the window is unmarshalled. On the 597 MB session, `compactions=2` returns 3,755 messages (~11 MB) in ~0.36 s allocating ~27 MB, vs ~4.1 s / ~845 MB for the full load. Positions are the same line indices `LoadMessages(fromIndex)` uses, and the scan reads exactly the file size sampled under the store lock, so concurrent appends neither stall behind it nor corrupt it.
+- **SDK**: `store.WindowReader` is a new OPTIONAL interface (`FileStore` and `InMemoryStore` implement it); `SessionStore` itself is unchanged, and a custom store without it still works (the log is loaded and cut in memory). New `store.MessageWindow`, `store.LoadMessagesWindow`, `(*Session).MessagesWindow`, `(*Agent).LoadMessagesWindow`.
+- **Go client**: `GetMessagesWith(sessionID, MessagesOptions{From, Compactions}) (msgs, from, total, err)`; `GetMessages` is unchanged.
+- **TUI**: resuming a session now calls `GetMessagesWith(Compactions: 2)` instead of downloading the whole log and trimming it locally (`trimToRecentHistory` is gone; the "↑ N earlier messages hidden" hint uses the returned `from`).
+- OpenAPI documents the parameters, headers and the 400/404 responses.
+
 ## [0.92.0] - 2026-10-16
 
 ### Added — live reload of settings.json custom providers (`ReloadCustomProviders`)

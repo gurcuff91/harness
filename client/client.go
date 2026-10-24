@@ -19,6 +19,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -98,35 +99,42 @@ func (c *Client) do(method, path string, body any) ([]byte, error) {
 // the wait without needing a client-wide http.Client.Timeout, which would
 // also (incorrectly) cut off the unrelated, long-lived SSE stream.
 func (c *Client) doCtx(ctx context.Context, method, path string, body any) ([]byte, error) {
+	data, _, err := c.doHeaders(ctx, method, path, body)
+	return data, err
+}
+
+// doHeaders is doCtx that also returns the response headers, for the few
+// endpoints that carry data there (GET /messages' X-Messages-*).
+func (c *Client) doHeaders(ctx context.Context, method, path string, body any) ([]byte, http.Header, error) {
 	var r io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return nil, fmt.Errorf("marshal: %w", err)
+			return nil, nil, fmt.Errorf("marshal: %w", err)
 		}
 		r = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, r)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request: %w", err)
+		return nil, nil, fmt.Errorf("request: %w", err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read: %w", err)
+		return nil, nil, fmt.Errorf("read: %w", err)
 	}
 	if resp.StatusCode >= 400 {
 		if ae := parseError(data); ae != nil {
-			return data, ae
+			return data, resp.Header, ae
 		}
-		return data, fmt.Errorf("%s", string(bytes.TrimSpace(data)))
+		return data, resp.Header, fmt.Errorf("%s", string(bytes.TrimSpace(data)))
 	}
-	return data, nil
+	return data, resp.Header, nil
 }
 
 // decode runs do() and unmarshals the successful body into *T. A transport
@@ -647,6 +655,56 @@ func (c *Client) GetSessionInfo(sessionID string) (*SessionInfo, error) {
 // types.Message format (the same shape the live stream produces).
 func (c *Client) GetMessages(sessionID string) ([]types.Message, error) {
 	return decode[[]types.Message](c, "GET", "/api/sessions/"+sessionID+"/messages", nil)
+}
+
+// MessagesOptions selects a suffix of a session's history for GetMessagesWith.
+// The zero value selects everything. From and Compactions are mutually
+// exclusive (the server answers 400 if both are set).
+type MessagesOptions struct {
+	// From starts at this absolute index of the history (0-based). An index at
+	// or past the end returns no messages.
+	From int
+	// Compactions starts just after the Compactions-th-to-last compaction
+	// checkpoint (1 = the last, 2 = the second-to-last, …); with fewer
+	// checkpoints than that, the whole history is returned. This is what the
+	// TUI uses (2) to render only recent history on resume.
+	Compactions int
+}
+
+// GetMessagesWith is GetMessages restricted to a window of the history. It also
+// returns from — the absolute index of the first message returned, the one the
+// image endpoint's {index} counts from — and total, the length of the full
+// history. The server never parses the part of a long log it skips, so asking
+// for the tail of a huge compacted session is cheap. Works for active and
+// persisted sessions.
+func (c *Client) GetMessagesWith(sessionID string, opts MessagesOptions) (msgs []types.Message, from, total int, err error) {
+	q := url.Values{}
+	if opts.From != 0 {
+		q.Set("from", strconv.Itoa(opts.From))
+	}
+	if opts.Compactions != 0 {
+		q.Set("compactions", strconv.Itoa(opts.Compactions))
+	}
+	path := "/api/sessions/" + sessionID + "/messages"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	data, hdr, err := c.doHeaders(c.ctx, "GET", path, nil)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	if err := json.Unmarshal(data, &msgs); err != nil {
+		return nil, 0, 0, fmt.Errorf("decode GET %s: %w", path, err)
+	}
+	from, err = strconv.Atoi(hdr.Get("X-Messages-From"))
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("GET %s: bad X-Messages-From header %q", path, hdr.Get("X-Messages-From"))
+	}
+	total, err = strconv.Atoi(hdr.Get("X-Messages-Total"))
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("GET %s: bad X-Messages-Total header %q", path, hdr.Get("X-Messages-Total"))
+	}
+	return msgs, from, total, nil
 }
 
 // GetSessionTools returns the tool definitions (name, description, input

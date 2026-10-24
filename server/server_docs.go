@@ -475,11 +475,24 @@ const openAPISpecTemplate = `{
       "get": {
         "tags": ["sessions"],
         "summary": "Get message history",
-        "description": "Returns the full message history for the session (used by TUI on resume).",
+        "description": "Returns the session's message history as a plain JSON array — all of it by default, or a suffix: ?from=<n> starts at absolute index n (n >= total returns []), ?compactions=<k> starts just after the k-th-to-last compaction checkpoint (k >= 1; with fewer checkpoints than k the whole history is returned). from and compactions are mutually exclusive (400 if both). X-Messages-From is the absolute index of the first returned message (the {index} the image endpoint counts from) and X-Messages-Total the length of the full log. The skipped part of the log is never parsed, so the tail of a huge compacted session is cheap. Works for active and persisted sessions.",
         "operationId": "getMessages",
-        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "from", "in": "query", "required": false, "description": "Start at this absolute message index (>= 0). Mutually exclusive with compactions.", "schema": { "type": "integer", "minimum": 0 } },
+          { "name": "compactions", "in": "query", "required": false, "description": "Start just after the k-th-to-last compaction checkpoint (k >= 1; the TUI uses 2). Mutually exclusive with from.", "schema": { "type": "integer", "minimum": 1 } }
+        ],
         "responses": {
-          "200": { "description": "Message list", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Message" } } } } }
+          "200": {
+            "description": "Message list",
+            "headers": {
+              "X-Messages-From": { "description": "Absolute index of the first returned message.", "schema": { "type": "integer" } },
+              "X-Messages-Total": { "description": "Number of messages in the full log.", "schema": { "type": "integer" } }
+            },
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Message" } } } }
+          },
+          "400": { "description": "Invalid from/compactions (negative, non-numeric, compactions < 1) or both given" },
+          "404": { "description": "Session not found" }
         }
       }
     },
