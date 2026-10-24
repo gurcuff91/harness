@@ -330,10 +330,35 @@ const openAPISpecTemplate = `{
       "get": {
         "tags": ["models"],
         "summary": "List models",
-        "description": "Returns all available models across active providers.",
+        "description": "The model registry: every model of every active provider with its capabilities, pricing and provenance (see the Model schema). An active provider whose model fetch fails simply contributes nothing here — GET /api/providers reports why (its 'error' field), and ?provider= turns it into an error response.",
         "operationId": "listModels",
+        "parameters": [
+          { "name": "provider", "in": "query", "required": false, "description": "Restrict to one provider. With it, a problem is reported instead of hidden: 404 unknown provider, 409 not connected, 502 its model fetch failed (with the provider's own message).", "schema": { "type": "string" } }
+        ],
         "responses": {
-          "200": { "description": "Model list", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Model" } } } } }
+          "200": { "description": "Model list", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Model" } } } } },
+          "400": { "description": "Empty provider" },
+          "404": { "description": "Unknown provider (with ?provider=)" },
+          "409": { "description": "Provider not connected (with ?provider=)" },
+          "502": { "description": "The provider's model fetch failed (with ?provider=)" }
+        }
+      }
+    },
+    "/api/models/{provider}/{id}": {
+      "get": {
+        "tags": ["models"],
+        "summary": "Get one model",
+        "description": "One model's full listing (see the Model schema). {id} is the provider-local model id and may contain slashes or colons (org/model, gemma3:4b).",
+        "operationId": "getModel",
+        "parameters": [
+          { "name": "provider", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "id", "in": "path", "required": true, "description": "Provider-local model id (may contain slashes).", "schema": { "type": "string" }, "allowReserved": true }
+        ],
+        "responses": {
+          "200": { "description": "The model", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Model" } } } },
+          "404": { "description": "Unknown provider or model" },
+          "409": { "description": "Provider not connected" },
+          "502": { "description": "The provider's model fetch failed" }
         }
       }
     },
@@ -661,9 +686,14 @@ const openAPISpecTemplate = `{
           "name":            { "type": "string", "example": "claude-oauth" },
           "display_name":    { "type": "string" },
           "description":     { "type": "string" },
-          "is_active":       { "type": "boolean" },
+          "active":          { "type": "boolean" },
+          "activation":      { "type": "string", "enum": ["credentials","env","auto","inactive"] },
           "is_subscription": { "type": "boolean" },
-          "credential_type": { "type": "string", "enum": ["api_key","oauth","none"] }
+          "credential_type": { "type": "string", "enum": ["api_key","oauth","none"] },
+          "model_count":     { "type": "integer" },
+          "error":           { "type": "string", "description": "Why an ACTIVE provider has no models right now (its model fetch failed: expired token, unreachable, rejected key…) — what model_count 0 alone hides. Omitted when there is nothing to report." },
+          "dialect":         { "type": "string", "enum": ["anthropic","openai","openai-responses","ollama"], "description": "Wire dialect of the provider's native API — what its proxy speaks." },
+          "proxy_path":      { "type": "string", "example": "/api/providers/claude-oauth/proxy", "description": "The provider's transparent-proxy root on this server." }
         }
       },
       "ConnectRequest": {
@@ -677,10 +707,26 @@ const openAPISpecTemplate = `{
       },
       "Model": {
         "type": "object",
+        "description": "One model of one provider with everything harness knows about it, assembled from the provider's own API first, then the OpenRouter catalog, a small built-in table and name inference — 'sources' says which.",
         "properties": {
-          "model":           { "type": "string", "example": "anthropic/claude-opus-4-8" },
-          "provider":        { "type": "string", "example": "anthropic" },
-          "is_subscription": { "type": "boolean" }
+          "model":             { "type": "string", "example": "anthropic/claude-opus-4-8", "description": "provider/model — what NewSession and /api/sessions take." },
+          "provider":          { "type": "string", "example": "anthropic" },
+          "dialect":           { "type": "string", "enum": ["anthropic","openai","openai-responses","ollama"], "description": "Wire dialect of the provider's native API — what its proxy (/api/providers/{provider}/proxy) speaks." },
+          "id":                { "type": "string", "description": "Provider-local model id (what the provider's own API and the proxy take)." },
+          "display_name":      { "type": "string", "description": "Human-friendly name; falls back to id (sources.display_name = default)." },
+          "context_window":    { "type": "integer", "description": "Tokens." },
+          "max_tokens":        { "type": "integer", "description": "Output-token ceiling of the model's catalog entry." },
+          "vision":            { "type": "boolean", "description": "Accepts image input." },
+          "thinking":          { "type": "boolean", "description": "Supports reasoning/thinking." },
+          "thinking_adaptive": { "type": "boolean", "description": "Anthropic adaptive thinking (effort-driven)." },
+          "thinking_legacy":   { "type": "boolean", "description": "Anthropic legacy budget_tokens thinking." },
+          "effort_levels":     { "type": "object", "additionalProperties": { "type": "boolean" }, "description": "Which of low|medium|high|xhigh|max this model supports. Absent or missing key = not reported, NOT unsupported." },
+          "input_price":       { "type": "number", "description": "USD per million input tokens. Read with sources.pricing: 0 is free only when the source is catalog/provider, unknown otherwise." },
+          "output_price":      { "type": "number", "description": "USD per million output tokens." },
+          "cache_read":        { "type": "number", "description": "USD per million cache-read tokens." },
+          "cache_write":       { "type": "number", "description": "USD per million cache-write tokens." },
+          "is_subscription":   { "type": "boolean", "description": "Billed as a flat fee (Claude Max, Codex, OpenCode Go, MiniMax subscription keys) — prices then are informational." },
+          "sources":           { "type": "object", "additionalProperties": { "type": "string", "enum": ["provider","catalog","registry","inferred","default","unknown"] }, "description": "Where each datum came from, by group: display_name, context_window, max_tokens, vision, thinking, pricing. provider = the provider's own API (authoritative); catalog = OpenRouter (a fallback, may describe a different deployment); registry = harness's built-in table; inferred = guessed from the name; default = nothing knew, a generic default (128k context, 32k output, capability false, name = id); unknown = pricing only, no source had prices so the 0s mean no data. Omitted for models built without provenance (a custom provider's own fetch hook)." }
         }
       },
       "MCPStatus": {

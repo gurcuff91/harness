@@ -50,6 +50,7 @@ func (f *fakeThinkingProbeProvider) ActivationSource() providers.ActivationSourc
 }
 func (f *fakeThinkingProbeProvider) Connect(types.Credentials) error { return nil }
 func (f *fakeThinkingProbeProvider) Disconnect() error               { return nil }
+func (f *fakeThinkingProbeProvider) Dialect() string                 { return "openai" }
 func (f *fakeThinkingProbeProvider) Upstream() (providers.Upstream, error) {
 	return providers.Upstream{}, providers.ErrNoUpstream
 }

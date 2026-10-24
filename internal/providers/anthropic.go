@@ -143,6 +143,9 @@ const anthropicAPI = "https://api.anthropic.com/v1/messages"
 // by the API-key and OAuth providers.
 var anthropicAllow = allowList("POST /v1/messages", "POST /v1/messages/count_tokens", "GET /v1/models")
 
+// Dialect implements Provider.
+func (a *Anthropic) Dialect() string { return DialectAnthropic }
+
 // Upstream implements Provider: Anthropic's native API, authenticated with the
 // stored API key. anthropic-version is a default, so an SDK that pins its own
 // keeps it.
@@ -262,21 +265,37 @@ func fetchAnthropicModels(tokenOrKey string) ([]types.ModelMeta, error) {
 		if len(m.ID) == 0 || m.ID[0] != 'c' {
 			continue
 		}
-		cw := m.MaxInputTokens
+		cw, cwSrc := m.MaxInputTokens, types.SourceProvider
 		if cw <= 0 {
-			cw = 200000
+			cw, cwSrc = 200000, types.SourceDefault
 		}
-		mt := m.MaxOutputTokens
+		mt, mtSrc := m.MaxOutputTokens, types.SourceProvider
 		if mt <= 0 {
-			mt = 64000
+			mt, mtSrc = 64000, types.SourceDefault
 		}
 
 		meta := types.ModelMeta{
 			ID: m.ID, DisplayName: m.DisplayName,
 			ContextWindow: cw, MaxTokens: mt,
 		}
+		meta.Sources = map[string]string{
+			types.FieldContextWindow: cwSrc,
+			types.FieldMaxTokens:     mtSrc,
+			types.FieldDisplayName:   types.SourceProvider,
+		}
+		if m.DisplayName == "" {
+			meta.DisplayName, meta.Sources[types.FieldDisplayName] = m.ID, types.SourceDefault
+		}
 
 		applyAnthropicCapabilities(&meta, m.Capabilities)
+		// Capabilities come from the API's own capabilities object when it
+		// carries one; with none, vision/thinking are simply not reported.
+		capSrc := types.SourceProvider
+		if m.Capabilities == nil {
+			capSrc = types.SourceDefault
+		}
+		meta.Sources[types.FieldVision] = capSrc
+		meta.Sources[types.FieldThinking] = capSrc
 
 		llm.ApplyRegistryPricing(&meta)
 		metas = append(metas, meta)

@@ -508,49 +508,83 @@ func (a *Agent) MCPTools() []tools.Tool {
 // own tools use a scoped adapter over the same store.
 func (a *Agent) Memory() memory.Store { return a.memStore }
 
-// Models returns every available model across all ACTIVE providers, each tagged
-// with its provider and a fully-qualified "provider/model" id ready to pass to
-// NewSession. Inactive providers are skipped. Models are lazily fetched.
-//
-// This is the single source of truth for the model listing — server.go's
-// GET /api/models handler calls this directly and serializes the result
-// as-is, rather than keeping a second, hand-duplicated loop over
-// providers.All in sync with this one.
-func (a *Agent) Models() []types.ModelListing {
+// ProviderModels is one provider's slice of the model registry: its models, or
+// the reason it has none right now.
+type ProviderModels struct {
+	// Provider is the provider's slug.
+	Provider string
+	// Active reports whether the provider has valid credentials / is reachable.
+	Active bool
+	// Models are the provider's models (nil when inactive or when Err is set).
+	Models []types.ModelListing
+	// Err is why an ACTIVE provider has no model list — the failure of its
+	// FetchModels (expired token, unreachable, rejected key…). Nil when the
+	// provider is inactive (not an error: it simply isn't connected) or when
+	// the fetch worked, including a fetch that legitimately returned nothing.
+	Err error
+}
+
+// ListModels is the model registry, per provider: for every registered provider
+// (or only the one named by provider, "" = all) its models AND, for an active
+// one that couldn't produce them, the error — the part Models() has to drop.
+// Providers run concurrently, so the call costs the slowest one, and results
+// keep providers.All order. An unknown provider name yields an empty result.
+func (a *Agent) ListModels(provider string) []ProviderModels {
 	all := providers.All() // snapshot: safe while providers are (un)registered
+	if provider != "" {
+		var one []providers.Provider
+		for _, p := range all {
+			if p.Name() == provider {
+				one = append(one, p)
+			}
+		}
+		all = one
+	}
 
 	// Each provider may need network I/O — IsActive() can probe (Ollama pings
 	// its local server), and an uncached model list is fetched from the
-	// provider's API — so providers run CONCURRENTLY: the call costs the
-	// slowest provider, not the sum. Results are slotted by index to keep the
-	// providers.All order deterministic.
-	perProvider := make([][]types.ModelMeta, len(all))
+	// provider's API — so providers run CONCURRENTLY, slotted by index.
+	out := make([]ProviderModels, len(all))
 	var wg sync.WaitGroup
 	for i, p := range all {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if !p.IsActive() {
+			pm := ProviderModels{Provider: p.Name()}
+			defer func() { out[i] = pm }()
+			if pm.Active = p.IsActive(); !pm.Active {
 				return
 			}
 			models := p.Models()
 			if len(models) == 0 {
-				models, _ = p.FetchModels()
+				var err error
+				if models, err = p.FetchModels(); err != nil {
+					pm.Err = err
+					return
+				}
 			}
-			perProvider[i] = models
+			dialect := p.Dialect()
+			for _, m := range models {
+				pm.Models = append(pm.Models, types.ModelListing{
+					Provider:  p.Name(),
+					Model:     p.Name() + "/" + m.ID,
+					Dialect:   dialect,
+					ModelMeta: m,
+				})
+			}
 		}()
 	}
 	wg.Wait()
+	return out
+}
 
+// Models lists every model of every active provider, flat — the shape of GET
+// /api/models. It is ListModels without the per-provider errors (a provider
+// that fails simply contributes nothing); use ListModels to see why.
+func (a *Agent) Models() []types.ModelListing {
 	var out []types.ModelListing
-	for i, p := range all {
-		for _, m := range perProvider[i] {
-			out = append(out, types.ModelListing{
-				Provider:  p.Name(),
-				Model:     p.Name() + "/" + m.ID,
-				ModelMeta: m,
-			})
-		}
+	for _, pm := range a.ListModels("") {
+		out = append(out, pm.Models...)
 	}
 	return out
 }

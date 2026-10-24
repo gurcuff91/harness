@@ -59,6 +59,9 @@ func (o *Ollama) IsActive() bool { return OllamaAvailable() }
 
 func (o *Ollama) CredentialType() types.CredentialType { return types.CredTypeNone }
 
+// Dialect implements Provider.
+func (o *Ollama) Dialect() string { return DialectOllama }
+
 // Upstream implements Provider: the local Ollama server — both its
 // OpenAI-compatible /v1 routes and its native /api ones. No credentials.
 func (o *Ollama) Upstream() (Upstream, error) {

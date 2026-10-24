@@ -116,3 +116,44 @@ func TestProviderDo(t *testing.T) {
 		t.Error("a cancelled context must fail the call")
 	}
 }
+
+// GetModel escapes each segment of the id but keeps its slashes, so ids like
+// "org/beta:7b" or ones with spaces/percent reach the server intact.
+func TestGetModelEscapesIDSegments(t *testing.T) {
+	var gotRaw string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotRaw = r.URL.EscapedPath()
+		w.Write([]byte(`{"provider":"p","model":"p/x","id":"x","dialect":"openai","sources":{"pricing":"unknown"}}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	for id, want := range map[string]string{
+		"plain":       "/api/models/p%20q/plain",
+		"org/beta:7b": "/api/models/p%20q/org/beta:7b",
+		"a b/c%d":     "/api/models/p%20q/a%20b/c%25d",
+		"x?y#z":       "/api/models/p%20q/x%3Fy%23z",
+	} {
+		m, err := c.GetModel("p q", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gotRaw != want {
+			t.Errorf("id %q: request path %q, want %q", id, gotRaw, want)
+		}
+		if m.Dialect != "openai" || m.Sources["pricing"] != "unknown" {
+			t.Errorf("decoded model = %+v", m)
+		}
+	}
+}
+
+func TestListProviderModelsQuery(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+	if _, err := New(srv.URL).ListProviderModels("a&b c"); err != nil || gotQuery != "provider=a%26b+c" {
+		t.Errorf("query = %q err=%v", gotQuery, err)
+	}
+}

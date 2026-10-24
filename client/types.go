@@ -53,6 +53,18 @@ type Provider struct {
 	// "none" (auto-detected), "api_key", or "oauth".
 	CredentialType string `json:"credential_type"`
 	ModelCount     int    `json:"model_count"`
+	// Error is why an ACTIVE provider has no models right now (its model fetch
+	// failed) — what ModelCount 0 alone hides. Empty when there is nothing to
+	// report.
+	Error string `json:"error,omitempty"`
+	// Dialect is the wire dialect of the provider's native API: "anthropic",
+	// "openai" (Chat Completions), "openai-responses" or "ollama" — what its
+	// proxy speaks.
+	Dialect string `json:"dialect"`
+	// ProxyPath is the provider's proxy root on the server
+	// (/api/providers/{name}/proxy); Client.ProviderBaseURL joins it to the
+	// server's address.
+	ProxyPath string `json:"proxy_path"`
 }
 
 // Model is one element of GET /api/models — a model paired with its provider
@@ -61,6 +73,10 @@ type Provider struct {
 type Model struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
+	// Dialect is the wire dialect of the provider's native API ("anthropic",
+	// "openai", "openai-responses", "ollama") — what the provider proxy speaks
+	// for this model.
+	Dialect string `json:"dialect,omitempty"`
 	types.ModelMeta
 }
 

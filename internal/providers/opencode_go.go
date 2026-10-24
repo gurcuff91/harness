@@ -62,6 +62,9 @@ func (o *OpenCodeGo) IsActive() bool {
 
 func (o *OpenCodeGo) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
 
+// Dialect implements Provider.
+func (o *OpenCodeGo) Dialect() string { return DialectOpenAI }
+
 // Upstream implements Provider: OpenCode Go's OpenAI-compatible API with the
 // stored key and the mandatory x-opencode-session header.
 func (o *OpenCodeGo) Upstream() (Upstream, error) {

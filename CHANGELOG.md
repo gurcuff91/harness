@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.95.0] - 2026-10-24
+
+### Added — the model registry: complete schema, visible failures, per-model lookup, provenance, dialect
+`GET /api/models` already listed every model of every active provider with its capabilities and prices, but it was hard to trust and hard to diagnose. Measured against a real install: the OpenAPI schema documented 3 of its 16 fields; three providers showed `connected` with 0 models and no reason; 23 models had an empty `display_name`; a price of `0` meant "free" and "nobody knows" at once; prices carried float noise (`0.049999999999999996`); and a client of the new provider proxy had to hardcode which dialect each provider speaks. Everything below is additive — the existing fields and the unfiltered listing keep their exact contract.
+
+- **Schema.** The OpenAPI `Model` and `Provider` schemas now document every field the API returns (a test fails if the wire grows a field the spec doesn't describe).
+- **Failures are visible.** `GET /api/providers` gains **`error`** — why an *active* provider has no models (its model fetch failed: `invalid or expired credentials (HTTP 401)`, `invalid API key`, …); an inactive provider is not an error. `GET /api/models?provider=<name>` restricts the listing to one provider and, unlike the unfiltered call (where a failing provider still just contributes nothing), reports the problem: 404 unknown provider, 409 not connected, 502 with the provider's own message. New `Agent.ListModels(provider)` returns the registry per provider with each one's error; `Agent.Models()` is unchanged (it is `ListModels` flattened).
+- **`GET /api/models/{provider}/{id}`** — one model's listing; ids with slashes or colons (`org/model`, `gemma3:4b`) work. 404 / 409 / 502 as above. Go client: `ListProviderModels(provider)` and `GetModel(provider, id)`.
+- **Provenance: `sources`** on every model says where each datum came from, by group (`display_name`, `context_window`, `max_tokens`, `vision`, `thinking`, `pricing`): **`provider`** (the provider's own API — authoritative), **`catalog`** (OpenRouter — a fallback), **`registry`** (harness's built-in table), **`inferred`** (guessed from the name), **`default`** (nothing knew: 128k context, 32k output, capability false, name = id) and, for pricing only, **`unknown`**. So `input_price: 0` is now readable: `catalog`/`provider` = a genuinely free model, `unknown` = no data. On the real install: 16 of 64 models had unknown prices that looked free. A provider's own fetch hook that supplies no `sources` simply has none.
+- **`display_name` is never empty** — falls back to the id (`sources.display_name = default`). 23 Ollama Cloud models had none.
+- **Prices are clean** — rounded to 6 decimals (`0.05`, not `0.049999999999999996`), on parse and on every read of the catalog, including a disk cache written by an earlier version.
+- **`dialect`** on every model and provider — the wire dialect of the provider's native API (`anthropic`, `openai`, `openai-responses`, `ollama`) — and **`proxy_path`** on every provider (`/api/providers/{name}/proxy`): a proxy client now discovers what to call and how from the registry itself. New `Provider.Dialect()` (internal).
+- No model data VALUES changed except filling the empty names and rounding prices; verified by diffing the real install's 64 models before and after.
+
 ## [0.94.0] - 2026-10-24
 
 ### Added — transparent proxy to a provider's native API (`/api/providers/{name}/proxy/*`)

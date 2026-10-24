@@ -282,6 +282,9 @@ func (c *ClaudeOAuth) CompleteStream(ctx context.Context, req *types.Request, cb
 	return llm.DoAnthropicStream(ctx, c.client, anthropicOAuthAPI, token, anthrReq, headers, cb)
 }
 
+// Dialect implements Provider.
+func (c *ClaudeOAuth) Dialect() string { return DialectAnthropic }
+
 // Upstream implements Provider: Anthropic's native API over the Claude Code
 // subscription. The token is refreshed here (same locking as CompleteStream),
 // the headers are the Claude Code identity ones, and the body rewrite makes a

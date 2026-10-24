@@ -54,6 +54,7 @@ func (f *fakeSwitchModelProvider) ActivationSource() providers.ActivationSource 
 }
 func (f *fakeSwitchModelProvider) Connect(types.Credentials) error { return nil }
 func (f *fakeSwitchModelProvider) Disconnect() error               { return nil }
+func (f *fakeSwitchModelProvider) Dialect() string                 { return "openai" }
 func (f *fakeSwitchModelProvider) Upstream() (providers.Upstream, error) {
 	return providers.Upstream{}, providers.ErrNoUpstream
 }

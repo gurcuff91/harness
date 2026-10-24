@@ -36,6 +36,9 @@ func NewOpenAI() *OpenAI {
 
 func (o *OpenAI) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
 
+// Dialect implements Provider.
+func (o *OpenAI) Dialect() string { return DialectOpenAI }
+
 // Upstream implements Provider: the OpenAI API with the stored key.
 func (o *OpenAI) Upstream() (Upstream, error) {
 	creds, err := o.ResolveCredentials()

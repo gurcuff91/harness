@@ -152,6 +152,7 @@ func (s *Server) handler() http.Handler {
 	r.HandleFunc("/api/providers/{name}/proxy/*", s.handleProviderProxy)
 	r.Post("/api/oauth/{provider}", s.handleOAuth)
 	r.Get("/api/models", s.handleModels)
+	r.Get("/api/models/{provider}/*", s.handleModel)
 	r.Get("/api/sessions", s.handleListSessions)
 	r.Post("/api/sessions", s.handleCreateSession)
 	r.Get("/api/sessions/{id}", s.handleGetSession)
@@ -761,25 +762,35 @@ type providerInfo struct {
 	// CLI uses this to decide whether to prompt for a secret at connect time.
 	CredentialType string `json:"credential_type"`
 	ModelCount     int    `json:"model_count"`
+	// Error is why an ACTIVE provider has no models right now (its model fetch
+	// failed: expired token, unreachable, rejected key…) — what a bare
+	// model_count of 0 hides. Omitted when there is nothing to report.
+	Error string `json:"error,omitempty"`
+	// Dialect is the wire dialect of the provider's native API ("anthropic",
+	// "openai", "openai-responses", "ollama") — what its proxy speaks.
+	Dialect string `json:"dialect"`
+	// ProxyPath is the provider's transparent-proxy root on this server
+	// (/api/providers/{name}/proxy), to be appended to the server's base URL.
+	ProxyPath string `json:"proxy_path"`
 }
 
 // handleProviders returns all registered providers.
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 	providers.EnsureRegistry()
+	byName := map[string]agent.ProviderModels{}
+	for _, pm := range s.agent.ListModels("") {
+		byName[pm.Provider] = pm
+	}
 	var list []providerInfo
 	for _, p := range providers.All() {
-		models := p.Models()
-		if p.IsActive() && len(models) == 0 {
-			// Lazy-fetch models for active providers
-			models, _ = p.FetchModels()
-		}
+		pm := byName[p.Name()]
 		act := string(p.ActivationSource())
 		if act == "none" {
 			act = "inactive"
 		} else if act == "envvar" {
 			act = "env"
 		}
-		list = append(list, providerInfo{
+		info := providerInfo{
 			Name:           p.Name(),
 			DisplayName:    p.DisplayName(),
 			Description:    p.Description(),
@@ -787,8 +798,14 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 			Activation:     act,
 			IsSubscription: p.CredentialType() == types.CredTypeOAuth,
 			CredentialType: string(p.CredentialType()),
-			ModelCount:     len(models),
-		})
+			ModelCount:     len(pm.Models),
+			Dialect:        p.Dialect(),
+			ProxyPath:      "/api/providers/" + url.PathEscape(p.Name()) + "/proxy",
+		}
+		if pm.Err != nil {
+			info.Error = pm.Err.Error()
+		}
+		list = append(list, info)
 	}
 	if list == nil {
 		list = []providerInfo{}
@@ -875,12 +892,70 @@ func (s *Server) handleDisconnectProvider(w http.ResponseWriter, r *http.Request
 // is_subscription — lives in a.Models() (agent/agent.go), the single source
 // of truth; this handler is a thin serialize-as-is wrapper so the wire
 // contract can never drift out of sync with the SDK's own Agent.Models().
+//
+// ?provider=<name> restricts the listing to one provider — and, unlike the
+// unfiltered call (where a failing provider just contributes nothing), says
+// what is wrong with it: 404 unknown provider, 409 not connected, 502 with the
+// provider's own error when its model fetch fails.
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	list := s.agent.Models()
-	if list == nil {
-		list = []types.ModelListing{}
+	name := r.URL.Query().Get("provider")
+	if name == "" && r.URL.Query().Has("provider") {
+		writeError(w, http.StatusBadRequest, "provider must not be empty", nil)
+		return
+	}
+	pms := s.agent.ListModels(name)
+	if name != "" {
+		if len(pms) == 0 {
+			writeError(w, http.StatusNotFound, fmt.Sprintf("provider %q not found", name), nil)
+			return
+		}
+		if !pms[0].Active {
+			writeError(w, http.StatusConflict, fmt.Sprintf("provider %q is not connected", name), nil)
+			return
+		}
+		if pms[0].Err != nil {
+			writeError(w, http.StatusBadGateway, fmt.Sprintf("provider %q: could not list models: %v", name, pms[0].Err), nil)
+			return
+		}
+	}
+	list := []types.ModelListing{}
+	for _, pm := range pms {
+		list = append(list, pm.Models...)
 	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+// handleModel handles GET /api/models/{provider}/{id}: one model's listing.
+// The id is the provider-local one (as in "id" of /api/models) and may itself
+// contain slashes or colons ("org/model", "gemma3:4b"), hence the wildcard.
+// 404 unknown provider or model, 409 provider not connected, 502 with the
+// provider's own error when its model list can't be fetched.
+func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "provider")
+	id, err := url.PathUnescape(chi.URLParam(r, "*"))
+	if err != nil || id == "" {
+		writeError(w, http.StatusBadRequest, "invalid model id", nil)
+		return
+	}
+	pms := s.agent.ListModels(name)
+	switch {
+	case len(pms) == 0:
+		writeError(w, http.StatusNotFound, fmt.Sprintf("provider %q not found", name), nil)
+		return
+	case !pms[0].Active:
+		writeError(w, http.StatusConflict, fmt.Sprintf("provider %q is not connected", name), nil)
+		return
+	case pms[0].Err != nil:
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("provider %q: could not list models: %v", name, pms[0].Err), nil)
+		return
+	}
+	for _, m := range pms[0].Models {
+		if m.ID == id {
+			writeJSON(w, http.StatusOK, m)
+			return
+		}
+	}
+	writeError(w, http.StatusNotFound, fmt.Sprintf("model %q not found in provider %q", id, name), nil)
 }
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {

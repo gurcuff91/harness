@@ -279,6 +279,31 @@ func (c *Client) ListModels() ([]Model, error) {
 	return decode[[]Model](c, "GET", "/api/models", nil)
 }
 
+// ListProviderModels is ListModels restricted to one provider — and, unlike the
+// unfiltered call (where a failing provider just contributes nothing), it says
+// what is wrong with it: an *Error with status 404 (unknown provider), 409 (not
+// connected) or 502 (its model fetch failed, with the provider's own message).
+func (c *Client) ListProviderModels(provider string) ([]Model, error) {
+	return decode[[]Model](c, "GET", "/api/models?provider="+url.QueryEscape(provider), nil)
+}
+
+// GetModel returns one model's listing — metadata, pricing, provenance
+// (Sources) and the dialect of its provider's native API. provider and id are
+// the provider slug and the provider-local model id ("id" of ListModels, which
+// may contain slashes or colons). A 404/409/502 comes back as an *Error.
+func (c *Client) GetModel(provider, id string) (*Model, error) {
+	return ptr(decode[Model](c, "GET", "/api/models/"+url.PathEscape(provider)+"/"+escapeModelID(id), nil))
+}
+
+// escapeModelID path-escapes each segment of a model id but keeps its slashes.
+func escapeModelID(id string) string {
+	parts := strings.Split(id, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	return strings.Join(parts, "/")
+}
+
 // ── MCP servers ──────────────────────────────────────────────────────────
 
 // GetMCPServers returns the whole MCP-server collection, keyed by name.

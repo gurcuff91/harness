@@ -38,7 +38,47 @@ type ModelMeta struct {
 
 	// Subscription — true if billed as a flat fee (e.g. Claude Max, OpenCode Go)
 	IsSubscription bool `json:"is_subscription"`
+
+	// Sources says where each datum above came from, keyed by field group:
+	// "display_name", "context_window", "max_tokens", "vision", "thinking" and
+	// "pricing". Values (SourceProvider … SourceUnknown) tell a client how far to
+	// trust a number — a provider-reported context window is authoritative, a
+	// name-inferred or default one is a guess — and disambiguate what a zero
+	// means: pricing from the catalog with 0 prices is a free model, pricing
+	// "unknown" with 0 prices is no data at all. Absent (nil) on metadata that
+	// was built without provenance (e.g. a custom provider's FetchModels hook).
+	Sources map[string]string `json:"sources,omitempty"`
 }
+
+// Provenance values for ModelMeta.Sources, strongest to weakest.
+const (
+	// SourceProvider — reported by the provider's own API (authoritative).
+	SourceProvider = "provider"
+	// SourceCatalog — taken from the OpenRouter catalog (a fallback; it may
+	// describe a different deployment of the same model).
+	SourceCatalog = "catalog"
+	// SourceRegistry — harness's small built-in table of models the catalog
+	// doesn't carry under a matching id.
+	SourceRegistry = "registry"
+	// SourceInferred — guessed from the model's name.
+	SourceInferred = "inferred"
+	// SourceDefault — no source knew; a generic default (128k context, 32k
+	// output, false capability, display name = id).
+	SourceDefault = "default"
+	// SourceUnknown — pricing only: no source had prices, so the 0s mean
+	// "unknown", not "free".
+	SourceUnknown = "unknown"
+)
+
+// Source field-group keys of ModelMeta.Sources.
+const (
+	FieldDisplayName   = "display_name"
+	FieldContextWindow = "context_window"
+	FieldMaxTokens     = "max_tokens"
+	FieldVision        = "vision"
+	FieldThinking      = "thinking"
+	FieldPricing       = "pricing"
+)
 
 // ModelInfo is a lightweight reference used for listing available models.
 type ModelInfo struct {

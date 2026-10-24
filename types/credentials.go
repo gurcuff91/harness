@@ -52,6 +52,10 @@ type Credentials struct {
 type ModelListing struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"` // "provider/model" — pass to NewSession
+	// Dialect is the wire dialect of the provider's native API — what the
+	// provider proxy (/api/providers/{provider}/proxy) speaks: "anthropic",
+	// "openai" (Chat Completions), "openai-responses" or "ollama".
+	Dialect string `json:"dialect,omitempty"`
 	ModelMeta
 }
 

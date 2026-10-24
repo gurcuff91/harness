@@ -295,6 +295,9 @@ func (c *CodexOAuth) CompleteStream(ctx context.Context, req *types.Request, cb 
 	return resp, nil
 }
 
+// Dialect implements Provider.
+func (c *CodexOAuth) Dialect() string { return DialectOpenAIResponses }
+
 // Upstream implements Provider: the Codex Responses API over the ChatGPT
 // subscription — same identity headers CompleteStream sends. The body is the
 // caller's responsibility (the backend demands store:false, stream:true and

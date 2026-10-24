@@ -54,6 +54,9 @@ func (o *OllamaCloud) IsActive() bool {
 
 func (o *OllamaCloud) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
 
+// Dialect implements Provider.
+func (o *OllamaCloud) Dialect() string { return DialectOpenAI }
+
 // Upstream implements Provider: Ollama Cloud's OpenAI-compatible API with the
 // stored key.
 func (o *OllamaCloud) Upstream() (Upstream, error) {
@@ -161,10 +164,20 @@ func (o *OllamaCloud) FetchModels() ([]types.ModelMeta, error) {
 			ContextWindow: llm.InferContextWindow(item.ID),
 			MaxTokens:     32000,
 			Vision:        llm.InferVision(item.ID),
+			Sources: map[string]string{
+				types.FieldContextWindow: types.SourceInferred,
+				types.FieldMaxTokens:     types.SourceDefault,
+				types.FieldVision:        types.SourceInferred,
+				types.FieldThinking:      types.SourceDefault,
+			},
 		}
 		// Enrich with /api/show capabilities
 		if info := fetchOllamaCloudModelInfo(item.ID); info != nil {
 			meta = *info
+		}
+		if meta.DisplayName == "" {
+			meta.DisplayName = meta.ID // /api/show carries no display name
+			meta.Sources[types.FieldDisplayName] = types.SourceDefault
 		}
 		llm.ApplyRegistryPricing(&meta)
 		o.cache[item.ID] = meta
@@ -217,7 +230,7 @@ func fetchOllamaCloudModelInfo(name string) *types.ModelMeta {
 		return nil
 	}
 
-	meta := &types.ModelMeta{ID: name, MaxTokens: 32000}
+	meta := &types.ModelMeta{ID: name, MaxTokens: 32000, Sources: map[string]string{types.FieldMaxTokens: types.SourceDefault}}
 	for k, v := range info.ModelInfo {
 		if strings.HasSuffix(k, ".context_length") {
 			if f, ok := v.(float64); ok {
@@ -225,9 +238,18 @@ func fetchOllamaCloudModelInfo(name string) *types.ModelMeta {
 			}
 		}
 	}
+	meta.Sources[types.FieldContextWindow] = types.SourceProvider
 	if meta.ContextWindow == 0 {
 		meta.ContextWindow = llm.InferContextWindow(name)
+		meta.Sources[types.FieldContextWindow] = types.SourceInferred
 	}
+	// /api/show lists the capabilities the model HAS: present → provider-
+	// reported true; absent while the list exists → provider-reported false.
+	capSrc := types.SourceDefault
+	if len(info.Capabilities) > 0 {
+		capSrc = types.SourceProvider
+	}
+	meta.Sources[types.FieldVision], meta.Sources[types.FieldThinking] = capSrc, capSrc
 	for _, cap := range info.Capabilities {
 		switch cap {
 		case "vision":

@@ -102,6 +102,9 @@ func (o *CustomOpenAI) CredentialType() types.CredentialType { return types.Cred
 
 // ResolveCredentials always succeeds with CredTypeNone — there is nothing
 // to resolve. Mirrors Ollama.ResolveCredentials exactly.
+// Dialect implements Provider.
+func (o *CustomOpenAI) Dialect() string { return DialectOpenAI }
+
 // Upstream implements Provider: the declared endpoint with its static headers
 // (the only "credential" a custom provider has). Works for providers added at
 // runtime, through settings.json or from code.

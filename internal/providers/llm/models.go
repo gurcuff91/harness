@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/json"
+	"math"
 	"strconv"
 	"strings"
 
@@ -71,49 +72,117 @@ var defaultMeta = types.ModelMeta{
 // should NOT call EnrichMeta — their data is already authoritative; they call
 // ApplyRegistryPricing instead to fill only missing prices.
 func EnrichMeta(m types.ModelMeta) types.ModelMeta {
+	src := newSources(&m)
 	// Tier 1: OpenRouter.
 	if r := lookupRemote(m.ID); r != nil {
-		fillMeta(&m, r)
+		fillMeta(&m, r, types.SourceCatalog, src)
 	}
 	// Tier 2: hardcoded registry.
 	if r, ok := hardcodedRegistry[normalizeModelID(m.ID)]; ok {
-		fillMeta(&m, &r)
+		fillMeta(&m, &r, types.SourceRegistry, src)
 	}
 	// Tier 3: name inference (no struct source — computed).
 	if m.ContextWindow <= 0 {
 		m.ContextWindow = InferContextWindow(m.ID)
+		src[types.FieldContextWindow] = types.SourceInferred
 	}
 	if !m.Vision {
-		m.Vision = InferVision(m.ID)
+		if m.Vision = InferVision(m.ID); m.Vision {
+			src[types.FieldVision] = types.SourceInferred
+		}
 	}
 	// Tier 4: generic defaults.
 	if m.ContextWindow <= 0 {
 		m.ContextWindow = defaultMeta.ContextWindow
+		src[types.FieldContextWindow] = types.SourceDefault
 	}
 	if m.MaxTokens <= 0 {
 		m.MaxTokens = defaultMeta.MaxTokens
+		src[types.FieldMaxTokens] = types.SourceDefault
 	}
 	if m.DisplayName == "" {
 		m.DisplayName = m.ID
+		src[types.FieldDisplayName] = types.SourceDefault
 	}
+	finishSources(&m, src)
 	return m
+}
+
+// hasPrice reports whether any price is set.
+func hasPrice(m *types.ModelMeta) bool {
+	return m.InputPrice != 0 || m.OutputPrice != 0 || m.CacheRead != 0 || m.CacheWrite != 0
+}
+
+// newSources starts a provenance map for m: every field m ALREADY carries on
+// entry was supplied by the caller — the provider's own API — and is marked
+// SourceProvider; the cascade then marks only what it fills in itself.
+func newSources(m *types.ModelMeta) map[string]string {
+	src := map[string]string{}
+	if m.DisplayName != "" {
+		src[types.FieldDisplayName] = types.SourceProvider
+	}
+	if m.ContextWindow > 0 {
+		src[types.FieldContextWindow] = types.SourceProvider
+	}
+	if m.MaxTokens > 0 {
+		src[types.FieldMaxTokens] = types.SourceProvider
+	}
+	if m.Vision {
+		src[types.FieldVision] = types.SourceProvider
+	}
+	if m.Thinking {
+		src[types.FieldThinking] = types.SourceProvider
+	}
+	if hasPrice(m) {
+		src[types.FieldPricing] = types.SourceProvider
+	}
+	return src
+}
+
+// finishSources settles the entries a field can only have by ELIMINATION: a
+// capability still false after every tier is simply known-absent as far as any
+// source says (marked default), and pricing nobody supplied is "unknown" — so a
+// consumer can tell it from a genuinely free (catalog-priced 0) model.
+func finishSources(m *types.ModelMeta, src map[string]string) {
+	if _, ok := src[types.FieldVision]; !ok {
+		src[types.FieldVision] = types.SourceDefault
+	}
+	if _, ok := src[types.FieldThinking]; !ok {
+		src[types.FieldThinking] = types.SourceDefault
+	}
+	if _, ok := src[types.FieldPricing]; !ok {
+		src[types.FieldPricing] = types.SourceUnknown
+	}
+	m.Sources = src
 }
 
 // fillMeta copies fields from src into dst ONLY where dst's field is still
 // empty (zero/false/""). It never overwrites existing data — the heart of the
-// priority cascade. Pricing is a group: filled only if dst has no price at all.
-func fillMeta(dst *types.ModelMeta, src *types.ModelMeta) {
-	if dst.ContextWindow <= 0 {
+// priority cascade — and records in sources which tier supplied each field it
+// did fill. Pricing is a group: filled only if dst has no price at all, and a
+// catalog entry that exists with all-zero prices is recorded as the catalog's
+// answer ("free"), not as unknown.
+func fillMeta(dst *types.ModelMeta, src *types.ModelMeta, tier string, sources map[string]string) {
+	fill := func(field string) {
+		if _, set := sources[field]; !set {
+			sources[field] = tier
+		}
+	}
+	if dst.ContextWindow <= 0 && src.ContextWindow > 0 {
 		dst.ContextWindow = src.ContextWindow
+		fill(types.FieldContextWindow)
 	}
-	if dst.MaxTokens <= 0 {
+	if dst.MaxTokens <= 0 && src.MaxTokens > 0 {
 		dst.MaxTokens = src.MaxTokens
+		fill(types.FieldMaxTokens)
 	}
-	if !dst.Vision {
-		dst.Vision = src.Vision
+	if !dst.Vision && src.Vision {
+		dst.Vision = true
+		fill(types.FieldVision)
 	}
-	if !dst.Thinking {
-		dst.Thinking = src.Thinking
+	if !dst.Thinking && src.Thinking {
+		dst.Thinking = true
+		fill(types.FieldThinking)
 	}
 	if !dst.ThinkingAdaptive {
 		dst.ThinkingAdaptive = src.ThinkingAdaptive
@@ -121,16 +190,22 @@ func fillMeta(dst *types.ModelMeta, src *types.ModelMeta) {
 	if !dst.ThinkingLegacy {
 		dst.ThinkingLegacy = src.ThinkingLegacy
 	}
-	if dst.DisplayName == "" {
+	if dst.DisplayName == "" && src.DisplayName != "" {
 		dst.DisplayName = src.DisplayName
+		fill(types.FieldDisplayName)
 	}
 	// Pricing as a group: only fill when dst has none, so we never blend a
 	// provider's prices with a registry's.
-	if dst.InputPrice == 0 && dst.OutputPrice == 0 && dst.CacheRead == 0 && dst.CacheWrite == 0 {
+	if !hasPrice(dst) {
 		dst.InputPrice = src.InputPrice
 		dst.OutputPrice = src.OutputPrice
 		dst.CacheRead = src.CacheRead
 		dst.CacheWrite = src.CacheWrite
+		if tier == types.SourceCatalog { // the catalog KNOWS this model's price, even if it is 0
+			fill(types.FieldPricing)
+		} else if hasPrice(dst) {
+			fill(types.FieldPricing)
+		}
 	}
 }
 
@@ -148,9 +223,23 @@ func LookupModel(id string) *types.ModelMeta {
 func lookupRemote(id string) *types.ModelMeta {
 	reg := getRemoteRegistry()
 	if m, ok := reg[normalizeModelID(id)]; ok {
+		cleanPrices(&m)
 		return &m
 	}
 	return nil
+}
+
+// roundPrice rounds a USD-per-million price to 6 decimals, removing the float
+// noise the per-token → per-million multiplication leaves (0.049999999999999996
+// for 0.05).
+func roundPrice(v float64) float64 { return math.Round(v*1e6) / 1e6 }
+
+// cleanPrices rounds every price of m. Needed where catalog entries are READ,
+// not just where they are parsed: the disk cache written by an earlier version
+// holds unrounded prices.
+func cleanPrices(m *types.ModelMeta) {
+	m.InputPrice, m.OutputPrice = roundPrice(m.InputPrice), roundPrice(m.OutputPrice)
+	m.CacheRead, m.CacheWrite = roundPrice(m.CacheRead), roundPrice(m.CacheWrite)
 }
 
 // normalizeModelID canonicalizes a model ID for cross-source matching:
@@ -208,7 +297,7 @@ func parseRegistry(data []byte) map[string]types.ModelMeta {
 		if err != nil {
 			return 0
 		}
-		return v * 1e6
+		return roundPrice(v * 1e6)
 	}
 	result := make(map[string]types.ModelMeta, len(raw.Data))
 	for _, m := range raw.Data {
@@ -255,10 +344,18 @@ func ApplyRegistryPricing(m *types.ModelMeta) {
 	if m == nil {
 		return
 	}
+	if m.Sources == nil {
+		m.Sources = map[string]string{}
+	}
 	// Respect provider-supplied pricing — only fill when all prices are zero.
-	if m.InputPrice != 0 || m.OutputPrice != 0 || m.CacheRead != 0 || m.CacheWrite != 0 {
+	if hasPrice(m) {
+		if _, ok := m.Sources[types.FieldPricing]; !ok {
+			m.Sources[types.FieldPricing] = types.SourceProvider
+		}
 		return
 	}
+	// Nobody has priced this model unless the catalog says so below.
+	m.Sources[types.FieldPricing] = types.SourceUnknown
 	reg := getRemoteRegistry()
 	if reg == nil {
 		return
@@ -275,10 +372,12 @@ func ApplyRegistryPricing(m *types.ModelMeta) {
 	if !ok {
 		return
 	}
+	cleanPrices(&entry)
 	m.InputPrice = entry.InputPrice
 	m.OutputPrice = entry.OutputPrice
 	m.CacheRead = entry.CacheRead
 	m.CacheWrite = entry.CacheWrite
+	m.Sources[types.FieldPricing] = types.SourceCatalog // a catalog hit, even with 0 prices, is the catalog's answer
 }
 
 // stripDateSuffix removes trailing -YYYYMMDD or -YYYYMM from model IDs.

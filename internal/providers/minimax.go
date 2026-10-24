@@ -58,6 +58,9 @@ func (o *MiniMax) IsActive() bool {
 
 func (o *MiniMax) CredentialType() types.CredentialType { return types.CredTypeAPIKey }
 
+// Dialect implements Provider.
+func (o *MiniMax) Dialect() string { return DialectOpenAI }
+
 // Upstream implements Provider: MiniMax's OpenAI-compatible API with the stored
 // key. The caller decides on "reasoning_split" in its own body.
 func (o *MiniMax) Upstream() (Upstream, error) {

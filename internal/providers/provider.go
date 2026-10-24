@@ -53,6 +53,11 @@ type Provider interface {
 	// Returns nil if nothing is known about the model.
 	ModelMeta(modelID string) *types.ModelMeta
 
+	// Dialect names the wire dialect of this provider's native API — what the
+	// proxy speaks and what a client must send through it: one of the Dialect*
+	// constants.
+	Dialect() string
+
 	// Upstream resolves how to reach this provider's NATIVE API on a caller's
 	// behalf (base URL, authentication headers with any OAuth token already
 	// refreshed, allowed paths, and the claude-oauth body rewrite) — what the
@@ -78,6 +83,14 @@ type Provider interface {
 	// Disconnect clears all credentials and deactivates the provider.
 	Disconnect() error
 }
+
+// Wire dialects a provider's native API can speak (Provider.Dialect).
+const (
+	DialectAnthropic       = "anthropic"        // Messages API
+	DialectOpenAI          = "openai"           // Chat Completions
+	DialectOpenAIResponses = "openai-responses" // Responses API (codex-oauth)
+	DialectOllama          = "ollama"           // OpenAI-compatible /v1 plus native /api
+)
 
 // ActivationSource describes how a provider got its credentials.
 type ActivationSource string
