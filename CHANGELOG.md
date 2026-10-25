@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.96.1] - 2026-10-25
+
+### Fixed — provider proxy: official SDKs' `models.retrieve()` was blocked (403)
+Running the official Anthropic and OpenAI SDKs (Python, Node and Go) against the proxy showed one call that did not work: `client.models.retrieve(id)`. Every SDK asks for a single model with `GET /v1/models/<id>` (Anthropic-style) or `GET /models/<id>` (OpenAI-style), and the allowlist only had the list route, so the proxy answered 403. Everything else those SDKs do — chat/messages, streaming, tool use, `count_tokens`, model listing, typed errors — already worked.
+
+- **`GET …/models/<id>` is now allowed** for every provider that has a model listing: `anthropic`, `claude-oauth`, custom `anthropic` providers, `openai`, `minimax`, `opencode-go`, `ollama-cloud`, custom `openai` providers, and local `ollama` (`/v1/models/<id>`). `codex-oauth` is unchanged (its `/models` takes a `client_version` query and has no per-id route).
+- **Exactly one segment.** The allowlist gained an `/:id` form that matches one non-empty path segment: `/v1/models/claude-x` passes, `/v1/models/`, `/v1/models/a/b`, and any non-GET method on it are still 403. It is a read of a single resource, not a wildcard under `/models/`.
+- **Ids with a slash.** A model id may contain `/` (`org/model`) and every SDK sends it percent-encoded (`/models/org%2Fmodel`). The path check used to reject any encoded slash as a traversal attempt; it now accepts one **only** as the last segment of `/models/<id>` or `/v1/models/<id>`, and still rejects an empty or `.`/`..` part inside the id, and an encoded slash anywhere else (`/chat%2Fcompletions`, `/other/a%2Fb`, `/models/x/a%2Fb`). The encoded form is forwarded to the provider byte for byte, which was verified for ids with `:`, `/`, `.` and spaces in all six SDK/language combinations (the upstream saw five identical request paths).
+- Verified live: `models.retrieve()` against real `claude-oauth` and `ollama-cloud` from the Python, Node and Go SDKs.
+- Proxy-SDK demos for the three languages (messages/chat, streaming, tool calling, models, errors, awkward ids) live outside the repo; the full surface passes on all of them.
+
 ## [0.96.0] - 2026-10-25
 
 ### Added — custom providers of type `anthropic`: share a subscription between harness instances

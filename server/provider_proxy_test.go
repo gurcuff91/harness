@@ -27,9 +27,9 @@ import (
 
 // seenReq is what the fake upstream actually received.
 type seenReq struct {
-	Method, Path, Query string
-	Header              http.Header
-	Body                []byte
+	Method, Path, RawPath, Query string
+	Header                       http.Header
+	Body                         []byte
 }
 
 // fakeUpstream is a provider's "native API": records every request and answers
@@ -46,7 +46,7 @@ func newFakeUpstream(t *testing.T, h func(w http.ResponseWriter, r *http.Request
 	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
-		f.seen = append(f.seen, seenReq{r.Method, r.URL.Path, r.URL.RawQuery, r.Header.Clone(), b})
+		f.seen = append(f.seen, seenReq{r.Method, r.URL.Path, r.URL.EscapedPath(), r.URL.RawQuery, r.Header.Clone(), b})
 		f.mu.Unlock()
 		h(w, r, b)
 	}))
@@ -765,5 +765,96 @@ func TestProxyMiniMaxInjectsReasoningSplit(t *testing.T) {
 	do(t, "GET", "http://"+srv.Addr()+"/api/providers/minimax/proxy/models", "", nil)
 	if got := up.last(t); got.Method != "GET" || len(got.Body) != 0 {
 		t.Errorf("GET /models was altered: %+v", got)
+	}
+}
+
+// ── models.retrieve(): GET /models/<id> ──────────────────────────────────
+
+// An official SDK's models.retrieve() asks for ONE model by id. The id may hold
+// a colon ("gemma3:4b") or — percent-encoded by every SDK — a slash
+// ("org/model"); both must reach the provider exactly as the SDK wrote them.
+func TestProxyForwardsModelRetrieveWithAwkwardIDs(t *testing.T) {
+	up := newFakeUpstream(t, func(w http.ResponseWriter, r *http.Request, body []byte) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"x","object":"model"}`)
+	})
+	srv, name := proxyEnv(t, up, ServerOptions{})
+	for _, tc := range []struct{ sent, wantRaw string }{
+		{"/models/gpt-4o", "/models/gpt-4o"},
+		{"/models/gemma3:4b", "/models/gemma3:4b"},
+		{"/models/deepseek-v4.1-flash:1017", "/models/deepseek-v4.1-flash:1017"},
+		{"/models/org%2Fmodel-x", "/models/org%2Fmodel-x"},
+		{"/models/org%2Fmodel-x:7b", "/models/org%2Fmodel-x:7b"},
+		{"/models/a%20b", "/models/a%20b"},
+	} {
+		resp, b := do(t, "GET", proxyURL(srv, name, tc.sent), "", nil)
+		if resp.StatusCode != 200 {
+			t.Errorf("%s: %d %s", tc.sent, resp.StatusCode, b)
+			continue
+		}
+		got := up.last(t)
+		if got.Method != "GET" || got.RawPath != tc.wantRaw {
+			t.Errorf("%s: upstream saw %s %s, want %s", tc.sent, got.Method, got.RawPath, tc.wantRaw)
+		}
+	}
+}
+
+// The retrieve route must not become a way around the allowlist.
+func TestProxyModelRetrieveStaysConfined(t *testing.T) {
+	up := newFakeUpstream(t, func(w http.ResponseWriter, r *http.Request, body []byte) { w.Write([]byte(`{}`)) })
+	srv, name := proxyEnv(t, up, ServerOptions{})
+	n0 := up.count()
+	for _, tc := range []struct {
+		method, path string
+		want         int
+	}{
+		{"GET", "/models/a/b", 403},       // two real segments: not a model id
+		{"GET", "/models/", 403},          // empty id
+		{"DELETE", "/models/gpt-4o", 403}, // a model is read-only here
+		{"POST", "/models/gpt-4o", 403},
+		{"PUT", "/models/gpt-4o", 403},
+		{"GET", "/models/..%2Fadmin", 400}, // a dot part inside the id
+		{"GET", "/models/%2e%2e%2fadmin", 400},
+		{"GET", "/models/a%2F%2Fb", 400},      // empty part
+		{"GET", "/chat%2Fcompletions", 400},   // an encoded slash outside a model id
+		{"GET", "/other/org%2Fmodel", 400},    // ...or under any other prefix
+		{"GET", "/models/x/org%2Fmodel", 400}, // ...or not the last segment of /models/<id>
+	} {
+		req, _ := http.NewRequest(tc.method, proxyURL(srv, name, tc.path), nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != tc.want {
+			t.Errorf("%s %s = %d, want %d", tc.method, tc.path, resp.StatusCode, tc.want)
+		}
+	}
+	if up.count() != n0 {
+		t.Error("a rejected models request still reached the upstream")
+	}
+}
+
+// Every provider's allowlist covers retrieve — and ONLY a single-segment id.
+func TestEveryProviderAllowsModelRetrieve(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, p := range providers.All() {
+		up, err := p.Upstream()
+		if err != nil || up.Allowed == nil {
+			continue // not connected here: the allowlist is the same code regardless
+		}
+		models := "/models"
+		if p.Dialect() == providers.DialectAnthropic || p.Name() == "ollama" {
+			models = "/v1/models"
+		}
+		if p.Dialect() == providers.DialectOpenAIResponses {
+			continue // codex: its /models takes client_version and has no per-id route
+		}
+		if !up.Allowed("GET", models+"/some-id") {
+			t.Errorf("%s: GET %s/<id> not allowed", p.Name(), models)
+		}
+		if up.Allowed("GET", models+"/a/b") || up.Allowed("DELETE", models+"/some-id") {
+			t.Errorf("%s: retrieve allowlist too wide", p.Name())
+		}
 	}
 }

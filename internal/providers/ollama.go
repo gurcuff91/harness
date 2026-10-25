@@ -68,7 +68,7 @@ func (o *Ollama) Upstream() (Upstream, error) {
 	return Upstream{
 		BaseURL: strings.TrimRight(o.baseURL, "/"),
 		Allowed: allowList(
-			"POST /v1/chat/completions", "GET /v1/models",
+			"POST /v1/chat/completions", "GET /v1/models", "GET /v1/models/:id",
 			"POST /api/chat", "POST /api/generate", "GET /api/tags", "POST /api/show",
 		),
 		Client: o.client,

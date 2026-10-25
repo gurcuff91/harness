@@ -70,13 +70,21 @@ var ErrUpstreamNotAllowed = errors.New("path not allowed for this provider")
 // to proxy to (or isn't usable right now — e.g. no credentials).
 var ErrNoUpstream = errors.New("provider has no upstream available")
 
-// allowList builds an Allowed func from "METHOD /path" entries; a path ending
-// in "/*" matches any single or nested suffix under that prefix.
+// allowList builds an Allowed func from "METHOD /path" entries. A path ending
+// in "/*" matches any single or nested suffix under that prefix; one ending in
+// "/:id" matches exactly ONE non-empty segment under it (a resource id — "GET
+// /v1/models/:id" is one model, never "/v1/models/a/b").
 func allowList(entries ...string) func(method, path string) bool {
 	return func(method, path string) bool {
 		for _, e := range entries {
 			m, p, ok := strings.Cut(e, " ")
 			if !ok || m != method {
+				continue
+			}
+			if strings.HasSuffix(p, "/:id") {
+				if id, found := strings.CutPrefix(path, strings.TrimSuffix(p, ":id")); found && id != "" && !strings.Contains(id, "/") {
+					return true
+				}
 				continue
 			}
 			if strings.HasSuffix(p, "/*") {
@@ -94,23 +102,43 @@ func allowList(entries ...string) func(method, path string) bool {
 }
 
 // openAIStyleAllow is the allowlist of every OpenAI Chat Completions-dialect
-// provider, relative to its BaseURL (which already carries any "/v1").
-var openAIStyleAllow = allowList("POST /chat/completions", "GET /models")
+// provider, relative to its BaseURL (which already carries any "/v1"). "GET
+// /models/:id" is what an official SDK's models.retrieve() calls.
+var openAIStyleAllow = allowList("POST /chat/completions", "GET /models", "GET /models/:id")
 
 // CleanProxyPath normalizes the path the proxy was asked for: it must be
 // absolute, free of dot segments and encoded separators, so an allowlist
 // match really is a match on what will be requested. Returns "" if unusable.
+//
+// One exception to "no encoded separators": a MODEL ID may contain a slash
+// ("org/model"), and every official SDK sends it percent-encoded
+// (GET /v1/models/org%2Fmodel), so the last segment of a "…/models/<id>" path
+// may carry %2F — provided the decoded id has no empty or dot parts, so it
+// still cannot climb out of /models/.
 func CleanProxyPath(p string) string {
 	if p == "" || p[0] != '/' || strings.ContainsAny(p, "\\\x00") {
 		return ""
 	}
-	for _, seg := range strings.Split(p, "/") {
+	segs := strings.Split(p, "/")
+	for i, seg := range segs {
 		if seg == ".." || seg == "." {
 			return ""
 		}
 		dec, err := url.PathUnescape(seg)
-		if err != nil || strings.ContainsAny(dec, "/\\") || dec == ".." || dec == "." {
+		if err != nil || strings.ContainsAny(dec, "\\") || dec == ".." || dec == "." {
 			return ""
+		}
+		if strings.Contains(dec, "/") {
+			// "/models/<id>" or "/v1/models/<id>", and nothing after the id.
+			isModelID := i == len(segs)-1 && segs[i-1] == "models" && (i == 2 || (i == 3 && segs[1] == "v1"))
+			if !isModelID {
+				return ""
+			}
+			for _, part := range strings.Split(dec, "/") {
+				if part == "" || part == "." || part == ".." {
+					return ""
+				}
+			}
 		}
 		for _, r := range dec {
 			if r < 0x20 || r == 0x7f {

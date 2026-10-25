@@ -144,7 +144,7 @@ const anthropicAPI = "https://api.anthropic.com/v1/messages"
 
 // anthropicAllow is the proxy allowlist of the Anthropic Messages API, shared
 // by the API-key and OAuth providers.
-var anthropicAllow = allowList("POST /v1/messages", "POST /v1/messages/count_tokens", "GET /v1/models")
+var anthropicAllow = allowList("POST /v1/messages", "POST /v1/messages/count_tokens", "GET /v1/models", "GET /v1/models/:id")
 
 // Dialect implements Provider.
 func (a *Anthropic) Dialect() string { return DialectAnthropic }

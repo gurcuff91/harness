@@ -317,7 +317,9 @@ func TestCustomAnthropic_Upstream(t *testing.T) {
 	for _, c := range []struct {
 		m, p string
 		ok   bool
-	}{{"POST", "/v1/messages", true}, {"POST", "/v1/messages/count_tokens", true}, {"GET", "/v1/models", true}, {"GET", "/v1/messages", false}, {"POST", "/v1/complete", false}} {
+	}{{"POST", "/v1/messages", true}, {"POST", "/v1/messages/count_tokens", true}, {"GET", "/v1/models", true},
+		{"GET", "/v1/models/claude-x", true}, {"GET", "/v1/models/a/b", false}, {"DELETE", "/v1/models/claude-x", false}, // models.retrieve()
+		{"GET", "/v1/messages", false}, {"POST", "/v1/complete", false}} {
 		if up.Allowed(c.m, c.p) != c.ok {
 			t.Errorf("Allowed(%s %s) = %v", c.m, c.p, !c.ok)
 		}
@@ -509,6 +511,26 @@ func TestCustomAnthropic_TrailingSlashInURL(t *testing.T) {
 	for _, r := range d.reqs {
 		if strings.Contains(r.Path, "//") || (r.Path != "/v1/models" && r.Path != "/v1/messages") {
 			t.Errorf("request path %q", r.Path)
+		}
+	}
+}
+
+// Every Anthropic-dialect provider (native key, OAuth subscription, custom) serves
+// the SDK's models.retrieve(): the shared allowlist is what carries it.
+func TestAnthropicDialectProvidersAllowModelRetrieve(t *testing.T) {
+	d := newAnthropicDouble(t)
+	for name, allowed := range map[string]func(string, string) bool{
+		"anthropic allowlist": anthropicAllow,
+		"custom anthropic": func() func(string, string) bool {
+			up, _ := newCA(d, types.CustomProvider{}).Upstream()
+			return up.Allowed
+		}(),
+	} {
+		if !allowed("GET", "/v1/models/claude-haiku-4-5") || !allowed("GET", "/v1/models/org%2Fmodel") {
+			t.Errorf("%s: GET /v1/models/<id> is not allowed", name)
+		}
+		if allowed("GET", "/v1/models/a/b") || allowed("POST", "/v1/models/claude-haiku-4-5") {
+			t.Errorf("%s: retrieve allowlist is too wide", name)
 		}
 	}
 }

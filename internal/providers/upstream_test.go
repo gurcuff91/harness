@@ -341,7 +341,7 @@ func TestUnmapClaudeOAuthResponse(t *testing.T) {
 
 // Every provider hands back what the proxy needs, with the right allowlist.
 func TestUpstreamAllowlists(t *testing.T) {
-	a := allowList("POST /v1/messages", "GET /v1/models", "GET /x/*")
+	a := allowList("POST /v1/messages", "GET /v1/models", "GET /x/*", "GET /v1/models/:id")
 	for _, tc := range []struct {
 		m, p string
 		ok   bool
@@ -350,6 +350,11 @@ func TestUpstreamAllowlists(t *testing.T) {
 		{"GET", "/v1/messages", false}, {"POST", "/v1/models", false},
 		{"POST", "/v1/messages/count_tokens", false},
 		{"GET", "/x/a/b", true}, {"GET", "/x", false}, {"DELETE", "/v1/models", false},
+		// "/:id" = exactly one non-empty segment
+		{"GET", "/v1/models/claude-x", true}, {"GET", "/v1/models/gemma3:4b", true},
+		{"GET", "/v1/models/org%2Fmodel", true}, // encoded slash stays ONE segment
+		{"GET", "/v1/models/", false}, {"GET", "/v1/models/a/b", false},
+		{"POST", "/v1/models/claude-x", false}, {"DELETE", "/v1/models/claude-x", false},
 	} {
 		if a(tc.m, tc.p) != tc.ok {
 			t.Errorf("%s %s = %v, want %v", tc.m, tc.p, !tc.ok, tc.ok)
@@ -362,6 +367,13 @@ func TestCleanProxyPath(t *testing.T) {
 		"/v1/messages": "/v1/messages", "/a/b": "/a/b",
 		"": "", "v1": "", "/a/../b": "", "/a/./b": "", "/a/%2e%2e/b": "", "/a%2fb": "",
 		"/a\\b": "", "/a%5cb": "", "/a%00": "",
+		// an encoded slash is allowed ONLY as the id in …/models/<id>
+		"/models/org%2Fmodel": "/models/org%2Fmodel", "/v1/models/org%2Fmodel:7b": "/v1/models/org%2Fmodel:7b",
+		"/models/a%2Fb%2Fc": "/models/a%2Fb%2Fc", "/models/gemma3:4b": "/models/gemma3:4b",
+		"/models/..%2Fx": "", "/models/%2e%2e%2fx": "", "/models/a%2F%2Fb": "", "/models/%2Fa": "", "/models/a%2F": "",
+		"/models/a%2F.": "", "/models/a%2F..": "",
+		"/chat%2Fcompletions": "", "/v1/chat%2Fcompletions": "", "/other/a%2Fb": "",
+		"/models/x/a%2Fb": "", "/a/b/models/a%2Fb": "", "/v2/models/a%2Fb": "", "/models/a%5Cb": "",
 	} {
 		if got := CleanProxyPath(p); got != want {
 			t.Errorf("CleanProxyPath(%q) = %q, want %q", p, got, want)
