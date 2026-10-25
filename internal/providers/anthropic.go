@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 
 	llm "github.com/gurcuff91/harness/internal/providers/llm"
@@ -217,32 +220,106 @@ func applyAnthropicCapabilities(meta *types.ModelMeta, caps map[string]any) {
 }
 
 func fetchAnthropicModels(tokenOrKey string) ([]types.ModelMeta, error) {
-	req, _ := http.NewRequest("GET", "https://api.anthropic.com/v1/models", nil)
-	req.Header.Set("x-api-key", tokenOrKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	resp, err := modelListClient.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		if resp != nil {
-			resp.Body.Close()
+	return fetchAnthropicModelsFrom(anthropicBaseURL, "anthropic", isClaudeModelID, func(req *http.Request, attempt int) {
+		req.Header.Set("anthropic-version", "2023-06-01")
+		if attempt == 0 {
+			req.Header.Set("x-api-key", tokenOrKey)
+			return
 		}
+		// Second attempt: the credential may be an OAuth token, not an API key.
 		req.Header.Del("x-api-key")
 		req.Header.Set("Authorization", "Bearer "+tokenOrKey)
 		req.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
 		req.Header.Set("x-app", "cli")
-		resp, err = modelListClient.Do(req)
+	}, 2)
+}
+
+// isClaudeModelID is the filter for Anthropic's OWN catalog: its API lists
+// only Claude models, and every id starts with "c"; anything else is not a chat
+// model this provider should offer. A custom provider fronting some other
+// Messages-compatible endpoint cannot assume that, and keeps every model.
+func isClaudeModelID(id string) bool { return len(id) > 0 && id[0] == 'c' }
+
+// anthropicBaseURL is Anthropic's own API root.
+const anthropicBaseURL = "https://api.anthropic.com"
+
+// anthropicModelsPageSize is the page size asked of GET /v1/models (the API's
+// maximum). Without it the API returns its default page of 20 and a longer
+// catalog would be silently truncated.
+const anthropicModelsPageSize = 1000
+
+// anthropicModelsMaxPages bounds the pagination loop: a server that keeps
+// answering has_more:true must not hold FetchModels forever.
+const anthropicModelsMaxPages = 20
+
+// fetchAnthropicModelsFrom lists models from an Anthropic Messages-dialect API
+// rooted at baseURL — Anthropic itself, or any compatible endpoint, including
+// another harness's provider proxy — and returns them with the capabilities,
+// context and output limits the API reports. It follows the API's pagination
+// (has_more / last_id → after_id) so a catalog longer than one page is complete.
+//
+// keep decides which model ids are offered (nil = all); auth stamps the
+// credential headers on each request; attempt is the 0-based
+// credential strategy tried (the API-key provider retries once as an OAuth
+// bearer token, hence maxAttempts; a custom provider has a single, fixed set of
+// headers and passes 1). providerName labels errors.
+func fetchAnthropicModelsFrom(baseURL, providerName string, keep func(id string) bool, auth func(req *http.Request, attempt int), maxAttempts int) ([]types.ModelMeta, error) {
+	var metas []types.ModelMeta
+	afterID := ""
+	for page := 0; page < anthropicModelsMaxPages; page++ {
+		u := strings.TrimRight(baseURL, "/") + "/v1/models?limit=" + strconv.Itoa(anthropicModelsPageSize)
+		if afterID != "" {
+			u += "&after_id=" + url.QueryEscape(afterID)
+		}
+		pageMetas, hasMore, lastID, err := fetchAnthropicModelsPage(u, providerName, keep, auth, maxAttempts)
 		if err != nil {
-			return nil, fmt.Errorf("provider unreachable")
+			return nil, err
+		}
+		metas = append(metas, pageMetas...)
+		if !hasMore || lastID == "" || lastID == afterID {
+			break
+		}
+		afterID = lastID
+	}
+	return metas, nil
+}
+
+// fetchAnthropicModelsAt fetches the single page served at an explicit models
+// URL (a custom provider's models_url override), used exactly as given.
+func fetchAnthropicModelsAt(modelsURL, providerName string, keep func(id string) bool, auth func(req *http.Request, attempt int)) ([]types.ModelMeta, error) {
+	metas, _, _, err := fetchAnthropicModelsPage(modelsURL, providerName, keep, auth, 1)
+	return metas, err
+}
+
+// fetchAnthropicModelsPage fetches ONE page of a models listing from the full URL u.
+func fetchAnthropicModelsPage(u, providerName string, keep func(id string) bool, auth func(req *http.Request, attempt int), maxAttempts int) (metas []types.ModelMeta, hasMore bool, lastID string, err error) {
+	var resp *http.Response
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		req, rerr := http.NewRequest("GET", u, nil)
+		if rerr != nil {
+			return nil, false, "", fmt.Errorf("provider unreachable")
+		}
+		auth(req, attempt)
+		resp, err = modelListClient.Do(req)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			break
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+		if attempt == maxAttempts-1 && err != nil {
+			return nil, false, "", fmt.Errorf("provider unreachable")
 		}
 	}
 	if resp == nil || resp.StatusCode == 401 || resp.StatusCode == 403 {
 		if resp != nil {
 			resp.Body.Close()
 		}
-		return nil, fmt.Errorf("invalid API key")
+		return nil, false, "", fmt.Errorf("invalid API key")
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, types.NewProviderAPIError("anthropic", resp.StatusCode, nil)
+		return nil, false, "", types.NewProviderAPIError(providerName, resp.StatusCode, nil)
 	}
 	defer resp.Body.Close()
 
@@ -255,14 +332,15 @@ func fetchAnthropicModels(tokenOrKey string) ([]types.ModelMeta, error) {
 			MaxOutputTokens int            `json:"max_tokens"`
 			Capabilities    map[string]any `json:"capabilities"`
 		} `json:"data"`
+		HasMore bool   `json:"has_more"`
+		LastID  string `json:"last_id"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to parse models response")
+		return nil, false, "", fmt.Errorf("failed to parse models response")
 	}
 
-	var metas []types.ModelMeta
 	for _, m := range result.Data {
-		if len(m.ID) == 0 || m.ID[0] != 'c' {
+		if m.ID == "" || (keep != nil && !keep(m.ID)) {
 			continue
 		}
 		cw, cwSrc := m.MaxInputTokens, types.SourceProvider
@@ -300,5 +378,5 @@ func fetchAnthropicModels(tokenOrKey string) ([]types.ModelMeta, error) {
 		llm.ApplyRegistryPricing(&meta)
 		metas = append(metas, meta)
 	}
-	return metas, nil
+	return metas, result.HasMore, result.LastID, nil
 }

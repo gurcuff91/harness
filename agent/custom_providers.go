@@ -77,6 +77,33 @@ func ProviderWithFetchModels(fn func() ([]types.ModelMeta, error)) CustomProvide
 	return func(c *customProviderConfig) { c.fetchModels = fn }
 }
 
+// NewAnthropicProvider registers a custom Anthropic Messages-compatible provider
+// globally for this PROCESS, exactly like NewOpenAIProvider does for the OpenAI
+// dialect (same options, same live Register/Unregister lifecycle, same rule that
+// authentication is ONLY headers — there is no API-key parameter).
+//
+// url is the API root WITHOUT "/v1": "/v1/messages" and "/v1/models" are
+// appended. Anthropic itself is "https://api.anthropic.com" with an
+// "x-api-key" header; another harness instance's provider proxy is its
+// "/api/providers/<name>/proxy" root — which is how a second instance uses the
+// first one's claude-oauth subscription as if it were its own, with no
+// credential at all (the proxy drops whatever it is sent and applies its own):
+//
+//	err := agent.NewAnthropicProvider("shared-claude",
+//		"http://10.0.0.5:8080/api/providers/claude-oauth/proxy")
+//
+// The request is plain Anthropic Messages: when the target is a harness proxy
+// for claude-oauth, the proxy — not this provider — adds the Claude Code
+// identity, maps tool names and bills as that subscription. ProviderWithReasoningSplit
+// has no meaning for this dialect and is ignored.
+func NewAnthropicProvider(name, url string, opts ...CustomProviderOption) error {
+	var cfg customProviderConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return providers.RegisterAnthropic(name, url, cfg.display, cfg.headers, cfg.fetchModels)
+}
+
 // NewOpenAIProvider registers a custom OpenAI Chat Completions-compatible
 // provider globally for this PROCESS — usable by any Agent built
 // afterward via "name/model", exactly like a built-in provider (see

@@ -80,16 +80,18 @@ func ReloadCustom() error {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 
-	current := map[string]*CustomOpenAI{} // settings-declared, by name
+	current := map[string]customProvider{} // settings-declared, by name
 	programmatic := map[string]bool{}
 	var kept []Provider // built-in + programmatic, in registry order
 	for _, p := range all {
-		if c, ok := p.(*CustomOpenAI); ok && c.fromSettings {
-			current[c.name] = c
-			continue
-		}
-		if c, ok := p.(*CustomOpenAI); ok && c.programmatic {
-			programmatic[c.name] = true
+		if c, ok := p.(customProvider); ok {
+			if c.meta().fromSettings {
+				current[c.Name()] = c
+				continue
+			}
+			if c.meta().programmatic {
+				programmatic[c.Name()] = true
+			}
 		}
 		kept = append(kept, p)
 	}
@@ -97,13 +99,16 @@ func ReloadCustom() error {
 	var conflicts []string
 	next := append(make([]Provider, 0, len(kept)+len(fresh)), kept...)
 	for _, p := range fresh {
-		c := p.(*CustomOpenAI)
-		if programmatic[c.name] {
-			conflicts = append(conflicts, c.name)
+		c := p.(customProvider)
+		if programmatic[c.Name()] {
+			conflicts = append(conflicts, c.Name())
 			continue
 		}
-		if old, ok := current[c.name]; ok && reflect.DeepEqual(old.settingsCfg, c.settingsCfg) {
-			next = append(next, old) // unchanged: keep the object and its model cache
+		// Unchanged entry: keep the object and its model cache. settingsCfg
+		// includes the entry's Type, so switching a name from one type to
+		// another is a change and gets a fresh provider of the new type.
+		if old, ok := current[c.Name()]; ok && reflect.DeepEqual(old.meta().settingsCfg, c.meta().settingsCfg) {
+			next = append(next, old.(Provider))
 			continue
 		}
 		next = append(next, c)
@@ -119,8 +124,8 @@ func ReloadCustom() error {
 // IsSettingsDeclared reports whether p was declared in settings.json's
 // "provider" collection (the kind ReloadCustom manages).
 func IsSettingsDeclared(p Provider) bool {
-	c, ok := p.(*CustomOpenAI)
-	return ok && c.fromSettings
+	c, ok := p.(customProvider)
+	return ok && c.meta().fromSettings
 }
 
 // ErrNotRemovable is returned by Unregister for a provider that wasn't
@@ -177,9 +182,22 @@ func buildCustomProviders(custom map[string]config.CustomProvider) []Provider {
 		if cfg.Disabled || config.IsReservedProviderName(name) {
 			continue
 		}
+		// TODO(openai-responses): a third custom type, "openai-responses", is
+		// still missing — it is what would let one harness instance consume the
+		// codex-oauth of another through its proxy, the way "anthropic" does for
+		// claude-oauth. It needs a CustomResponses provider (the Codex request
+		// translation and stream parser already exist in codex_oauth.go and can
+		// be reused) plus a case here, a line in validateCustomProvider, the
+		// CLI's --type, the OpenAPI enum and a RegisterResponses. It was left out
+		// of the "anthropic" change on purpose: it could not be tried live while
+		// the only codex-oauth login at hand had an expired token. The proxy side
+		// already speaks it (dialect "openai-responses"); only the consuming side
+		// is absent.
 		switch cfg.Type {
 		case "openai":
 			out = append(out, NewCustomOpenAI(name, cfg))
+		case "anthropic":
+			out = append(out, NewCustomAnthropic(name, cfg))
 		}
 	}
 	return out
@@ -235,6 +253,7 @@ func RegisterOpenAI(name, url, display string, headers map[string]string, reason
 		}
 	}
 	next := append(append(make([]Provider, 0, len(all)+1), all...), &CustomOpenAI{
+		customMeta:     customMeta{programmatic: true},
 		name:           name,
 		displayName:    display,
 		baseURL:        url,
@@ -243,9 +262,41 @@ func RegisterOpenAI(name, url, display string, headers map[string]string, reason
 		fetchModelsFn:  fetchModels,
 		client:         llm.NewProviderClient(0),
 		cache:          make(map[string]types.ModelMeta),
-		programmatic:   true,
 	})
 	all = next // copy-on-write: snapshots already handed out stay intact
+	return nil
+}
+
+// RegisterAnthropic is RegisterOpenAI for an Anthropic Messages-compatible
+// endpoint (agent.NewAnthropicProvider is its public wrapper): it builds a
+// CustomAnthropic and appends it to the registry. url is the API root WITHOUT
+// "/v1" (…/v1/messages and …/v1/models are appended), so pointing at another
+// harness's proxy is just its "/api/providers/<name>/proxy" root. Same rules as
+// RegisterOpenAI: reserved and duplicate names are rejected, nothing is written
+// to settings.json or credentials.json, and authentication is entirely headers.
+func RegisterAnthropic(name, url, display string, headers map[string]string, fetchModels func() ([]types.ModelMeta, error)) error {
+	if config.IsReservedProviderName(name) {
+		return fmt.Errorf("%q is a built-in provider name and cannot be used for a custom provider", name)
+	}
+	EnsureRegistry()
+
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	for _, p := range all {
+		if p.Name() == name {
+			return fmt.Errorf("provider %q is already registered", name)
+		}
+	}
+	all = append(append(make([]Provider, 0, len(all)+1), all...), &CustomAnthropic{
+		customMeta:    customMeta{programmatic: true},
+		name:          name,
+		displayName:   display,
+		baseURL:       url,
+		headers:       headers,
+		fetchModelsFn: fetchModels,
+		client:        llm.NewProviderClient(0),
+		cache:         make(map[string]types.ModelMeta),
+	})
 	return nil
 }
 
@@ -262,7 +313,7 @@ func Unregister(name string) error {
 		if p.Name() != name {
 			continue
 		}
-		if c, ok := p.(*CustomOpenAI); !ok || !c.programmatic {
+		if c, ok := p.(customProvider); !ok || !c.meta().programmatic {
 			return fmt.Errorf("%w: %q is built in or declared in settings.json", ErrNotRemovable, name)
 		}
 		next := make([]Provider, 0, len(all)-1)

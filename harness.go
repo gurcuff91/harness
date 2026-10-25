@@ -257,8 +257,13 @@ func AgentWithWebSearch() AgentOption {
 // [agent.NewOpenAIProvider].
 var NewOpenAIProvider = agent.NewOpenAIProvider
 
+// NewAnthropicProvider registers a custom Anthropic Messages-compatible
+// provider — Anthropic itself, a gateway, or another harness instance's
+// provider proxy. See [agent.NewAnthropicProvider].
+var NewAnthropicProvider = agent.NewAnthropicProvider
+
 // UnregisterCustomProvider removes a provider registered with
-// NewOpenAIProvider, so the name can be registered again in the same process.
+// NewOpenAIProvider or NewAnthropicProvider, so the name can be registered again in the same process.
 // See [agent.UnregisterCustomProvider].
 var UnregisterCustomProvider = agent.UnregisterCustomProvider
 

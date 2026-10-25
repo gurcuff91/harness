@@ -280,9 +280,9 @@ type providerListCmd struct{}
 
 type providerAddCmd struct {
 	Name      string `arg:"" help:"Provider name (must not collide with a built-in provider)"`
-	Type      string `default:"openai" help:"API dialect (only \"openai\" is supported for now)"`
-	URL       string `required:"" help:"Base URL for chat completions"`
-	ModelsURL string `help:"Models listing URL (default: <url>/models)"`
+	Type      string `default:"openai" enum:"openai,anthropic" help:"API dialect: openai (Chat Completions) or anthropic (Messages — also what to use to share another harness instance's claude-oauth via its proxy)"`
+	URL       string `required:"" help:"Base URL: openai → chat completions base (incl. /v1); anthropic → API root WITHOUT /v1, e.g. https://api.anthropic.com or http://host:8080/api/providers/claude-oauth/proxy"`
+	ModelsURL string `help:"Models listing URL (default: <url>/models, or <url>/v1/models for anthropic)"`
 	// []string (not map[string]string) — same repeatable-flag UX as mcpAddCmd.Header.
 	Header   []string `help:"HTTP header KEY:VAL (repeatable) — put any authentication here (e.g. Authorization:Bearer <token> or X-Api-Key:...)"`
 	Display  string   `help:"Human-friendly display name (default: the provider name)"`

@@ -3,6 +3,7 @@ package providers
 import (
 	"testing"
 
+	"github.com/gurcuff91/harness/configstore"
 	"github.com/gurcuff91/harness/internal/config"
 )
 
@@ -78,5 +79,41 @@ func TestBuildCustomProviders_DeterministicOrder(t *testing.T) {
 		if got[i].Name() != w {
 			t.Errorf("position %d: got %q, want %q (order must be deterministic/sorted)", i, got[i].Name(), w)
 		}
+	}
+}
+
+// Reloading with the same name switched from one custom type to another must
+// replace the provider (a CustomOpenAI is not a CustomAnthropic), even though a
+// DeepEqual of the settings alone could be confused by an otherwise-equal entry.
+func TestReloadCustom_TypeSwitchUnderTheSameNameReplacesTheProvider(t *testing.T) {
+	withCleanRegistry(t)
+	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), nil))
+	sm := config.GetSettingsManager()
+
+	sm.SetCustomProvider("flip", config.CustomProvider{Type: "openai", URL: "http://x"})
+	if err := ReloadCustom(); err != nil {
+		t.Fatal(err)
+	}
+	first := Find("flip")
+	if _, ok := first.(*CustomOpenAI); !ok {
+		t.Fatalf("first = %T", first)
+	}
+	if err := ReloadCustom(); err != nil || Find("flip") != first {
+		t.Error("an unchanged entry must be the same object after a reload")
+	}
+	sm.SetCustomProvider("flip", config.CustomProvider{Type: "anthropic", URL: "http://x"})
+	if err := ReloadCustom(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := Find("flip").(*CustomAnthropic); !ok {
+		t.Errorf("after switching the type the provider is still %T", Find("flip"))
+	}
+	if IsSettingsDeclared(Find("flip")) != true {
+		t.Error("IsSettingsDeclared must see an anthropic custom provider")
+	}
+	sm.DeleteCustomProvider("flip")
+	ReloadCustom()
+	if Find("flip") != nil {
+		t.Error("a deleted anthropic custom provider must disappear on reload")
 	}
 }

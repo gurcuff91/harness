@@ -68,8 +68,11 @@ func (s MCPServer) Argv() []string {
 
 // CustomProvider is the configuration of one user-defined LLM provider —
 // e.g. a proxy or self-hosted endpoint speaking an existing API dialect.
-// Only Type "openai" is supported for now (an OpenAI Chat Completions-
-// compatible HTTP endpoint). The map key it's stored under (settings.json's
+// Type is the API dialect: "openai" (an OpenAI Chat Completions-compatible
+// HTTP endpoint) or "anthropic" (an Anthropic Messages-compatible one —
+// Anthropic itself, a gateway, or ANOTHER HARNESS INSTANCE's provider proxy,
+// e.g. url "http://host:8080/api/providers/claude-oauth/proxy" to share that
+// instance's subscription). The map key it's stored under (settings.json's
 // "provider" collection) IS the provider name used everywhere else:
 // `<name>/<model>` in provider/model strings and GET /api/providers — there
 // is no separate name field here, same as MCPServer.
@@ -94,14 +97,14 @@ func (s MCPServer) Argv() []string {
 // part of the public HTTP API contract, needed by the client SDK without
 // pulling in the config package.
 type CustomProvider struct {
-	Type      string            `json:"type"`                 // "openai" — only supported value for now
-	URL       string            `json:"url"`                  // base URL for chat completions
-	ModelsURL string            `json:"models_url,omitempty"` // optional; falls back to <url>/models
+	Type      string            `json:"type"`                 // "openai" | "anthropic"
+	URL       string            `json:"url"`                  // openai: base URL for chat completions (incl. any /v1); anthropic: API root WITHOUT /v1 (/v1/messages and /v1/models are appended)
+	ModelsURL string            `json:"models_url,omitempty"` // optional; openai: falls back to <url>/models; anthropic: to <url>/v1/models
 	Headers   map[string]string `json:"headers,omitempty"`    // extra HTTP headers, sent on every request — this is where ANY authentication goes
 	Display   string            `json:"display,omitempty"`    // optional human-friendly name; falls back to the map key
 	Disabled  bool              `json:"disabled,omitempty"`   // enabled by default; set true to skip
 
-	// ReasoningSplit, when true, adds "reasoning_split": true to every
+	// ReasoningSplit (type "openai" only — rejected for "anthropic"), when true, adds "reasoning_split": true to every
 	// chat-completions request — the same wire flag the built-in
 	// `minimax` provider always sends. Opt-in and false by default: most
 	// OpenAI-compatible backends don't recognize this field at all (an

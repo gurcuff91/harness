@@ -265,8 +265,16 @@ off for any other backend.
 
 See `internal/providers/custom_openai.go`,
 `docs/plans/2026-09-21-custom-providers-design.md` (including its
-Addendum section for the programmatic path). Only `type: "openai"` is
-supported either way today.
+Addendum section for the programmatic path) and
+`internal/providers/custom_anthropic.go`. Two types are supported, either way:
+`type: "openai"` (Chat Completions) and `type: "anthropic"` (Messages, the same
+shape — `harness provider add --type anthropic`, `agent.NewAnthropicProvider`).
+An anthropic custom provider pointed at another harness instance's
+`/api/providers/claude-oauth/proxy` shares that instance's subscription: it sends
+PLAIN Messages requests and never applies the Claude Code identity / tool
+mapping itself — the proxy does, once. `type: "openai-responses"` (to share
+codex-oauth the same way) is NOT supported yet: see the TODO in
+`internal/providers/registry.go`'s `buildCustomProviders`.
 
 1. Create `providers/<name>.go`
 2. Implement the `providers.Provider` interface
@@ -274,6 +282,16 @@ supported either way today.
 4. Register the provider key + status in `internal/providers/status.go`
 5. Add credential handling (`config/credentials.go` is the store; api-key providers use `resolveAPIKey`)
 6. For an API-key provider, `RunConnect` (`internal/cli/commands.go`) already handles it generically via the credential type — no new code needed there. For OAuth, add an `OauthFlow` implementation in `internal/oauthflow/<provider>.go` (one file implementing `Start() (authURL, verifierCode string, err error)` / `Exchange(code, verifierCode string) (*types.Credentials, error)` — see `claude.go`/`codex.go`) plus a `case` in `oauthflow.For`. This flow is driven ENTIRELY by `server/oauth.go`'s `POST /api/oauth/{provider}` handler — the CLI and TUI never call `oauthflow` directly, they call `client.Client`'s `StartOAuth`/`ExchangeOAuth`, which hit that endpoint. The server holds no state between the two calls; the PKCE verifier travels through the caller.
+
+### Pending: `openai-responses` custom providers
+
+Custom providers cover `openai` and `anthropic`. Sharing **codex-oauth** between
+harness instances needs a third type, `"openai-responses"` (a `CustomResponses`
+provider reusing the Codex request translation and stream parser, plus a case in
+`buildCustomProviders`, `customProviderTypes`, the CLI `--type` enum, the OpenAPI
+enum and a `RegisterResponses`). Deferred on purpose — see the
+`TODO(openai-responses)` markers in `internal/providers/registry.go` and
+`internal/config/settings.go`. The proxy side already serves that dialect.
 
 ### Adding a New Tool
 

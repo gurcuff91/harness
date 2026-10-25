@@ -201,15 +201,26 @@ func (m *SettingsManager) CustomProviders() map[string]CustomProvider {
 	return listJSON[CustomProvider](m.store, nsProvider)
 }
 
-// validateCustomProvider enforces: Type must be the one currently supported
-// dialect ("openai"); URL must be set; and name must not collide with a
+// customProviderTypes are the API dialects a custom provider can declare:
+// "openai" (Chat Completions) and "anthropic" (Messages).
+//
+// TODO(openai-responses): "openai-responses" (the Codex Responses dialect) is
+// not supported yet — see the TODO in internal/providers/registry.go's
+// buildCustomProviders for what it needs and why it was deferred.
+var customProviderTypes = map[string]bool{"openai": true, "anthropic": true}
+
+// validateCustomProvider enforces: Type must be a supported dialect (see
+// customProviderTypes); URL must be set; and name must not collide with a
 // RESERVED built-in provider name (see reservedProviderNames) — a custom
 // provider shadowing e.g. "anthropic" would be genuinely ambiguous (which
 // one does "anthropic/claude-..." resolve to?) and is rejected outright
 // rather than deciding an implicit precedence order.
 func validateCustomProvider(name string, p CustomProvider) error {
-	if p.Type != "openai" {
-		return fmt.Errorf("%w: unsupported type %q (only \"openai\" is supported for now)", ErrInvalidCustomProvider, p.Type)
+	if !customProviderTypes[p.Type] {
+		return fmt.Errorf("%w: unsupported type %q (supported: \"openai\", \"anthropic\")", ErrInvalidCustomProvider, p.Type)
+	}
+	if p.ReasoningSplit && p.Type != "openai" {
+		return fmt.Errorf("%w: \"reasoning_split\" only applies to type \"openai\"", ErrInvalidCustomProvider)
 	}
 	if p.URL == "" {
 		return fmt.Errorf("%w: \"url\" is required", ErrInvalidCustomProvider)

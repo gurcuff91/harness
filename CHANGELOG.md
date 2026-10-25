@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.96.0] - 2026-10-25
+
+### Added — custom providers of type `anthropic`: share a subscription between harness instances
+Custom providers only spoke the OpenAI Chat Completions dialect. A harness instance could expose a provider through its proxy (v0.94.0), but another instance could only consume it if the provider was OpenAI-style — `claude-oauth`, the one people most want to share, was out. Now a custom provider can declare `"type": "anthropic"`.
+
+- **The use case**: instance A has `claude-oauth` connected and runs `harness serve :8080`. Instance B (another machine, another TUI) runs `harness provider add shared-claude --type anthropic --url http://A:8080/api/providers/claude-oauth/proxy` and uses `shared-claude/<model>` exactly like the native provider — **with no credential on B at all**. A's proxy applies the OAuth token, the Claude Code identity block, the tool-name mapping (both ways) and the billing header; B sends a plain Messages request and its tools keep their own names. Chains work too (C → B → A: the identity is applied once, at A). Verified live: B, with an empty credentials store, listed A's 14 models with their full capabilities and ran a real session on the shared subscription, including a Bash tool call.
+- **`type: "anthropic"`** in settings.json's `"provider"` collection, `harness provider add --type anthropic` (the flag is now an enum), the OpenAPI `CustomProvider` schema, and live reload — a name switched from one type to another is replaced by a provider of the new type. `url` is the API root **without `/v1`** (`/v1/messages` and `/v1/models` are appended); `models_url` overrides the listing. As with `openai`, there is no API-key field: authentication is only `headers` (`x-api-key` for Anthropic itself; nothing for a harness proxy), and `anthropic-version: 2023-06-01` is supplied unless you configure your own. A configured `anthropic-beta` is merged with the thinking beta, not lost. `reasoning_split` is rejected for this type (it is a Chat Completions flag).
+- **Models keep what the API reports**: context window, output limit, display name, vision, thinking (adaptive/legacy) and per-model `effort_levels`, all marked `provider` in `sources`, and thinking is shaped from them — an adaptive-only model gets `{"type":"adaptive"}` + `output_config.effort`, never the `disabled` shape the API rejects. Every id the endpoint lists is accepted (Anthropic's own catalog keeps its historical `claude…` filter).
+- **SDK**: `agent.NewAnthropicProvider(name, url, ...opts)` (+ `harness.NewAnthropicProvider`), the sibling of `NewOpenAIProvider` with the same options and the same live `UnregisterCustomProvider` lifecycle. `ProviderWithReasoningSplit` is ignored for it.
+- **Registry**: ReloadCustom, Unregister and IsSettingsDeclared no longer assume a `CustomOpenAI`; they work on any custom provider type through one small interface.
+
+### Fixed — Anthropic model listing was truncated at 20
+`GET /v1/models` is paginated (default page of 20) and harness read only the first page, for the `anthropic` and `claude-oauth` providers alike — an account with more models silently lost the rest. The listing now asks for the maximum page and follows `has_more` / `last_id`, bounded at 20 pages and guarded against a cursor that doesn't advance. The API-key → OAuth-bearer retry of the native providers is unchanged.
+
+### Not yet — `type: "openai-responses"`
+Sharing **codex-oauth** the same way needs a third custom type speaking the Responses dialect. It is left out on purpose: it could not be exercised live (the only codex-oauth login at hand had an expired token). The proxy side already speaks it (dialect `openai-responses`); only the consuming side is missing. Marked with a `TODO(openai-responses)` in `internal/providers/registry.go`, `internal/config/settings.go` and AGENTS.md.
+
 ## [0.95.1] - 2026-10-24
 
 ### Fixed — provider proxy: MiniMax-compatible backends answered with inline `<think>…</think>`

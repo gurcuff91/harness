@@ -260,8 +260,9 @@ time it's passed in.
 | `ollama` | None (auto-detect) | `/api/tags` + `/api/show` | `/api/show` |
 
 Beyond these built-ins, `harness provider add` registers a **custom
-OpenAI-compatible provider** — any proxy, gateway, or self-hosted endpoint
-speaking the OpenAI Chat Completions dialect. Configured in `settings.json`'s
+provider** — any proxy, gateway, or self-hosted endpoint speaking the OpenAI
+Chat Completions dialect (`--type openai`, the default) or the Anthropic
+Messages dialect (`--type anthropic`). Configured in `settings.json`'s
 `"provider"` collection (same singular style as `"mcp"`), read at process
 start; changes are applied live with `harness.ReloadCustomProviders()` or
 `POST /api/settings/provider/reload` (`client.ReloadCustomProviders`) — no
@@ -272,8 +273,26 @@ is rejected for them — so any auth the gateway needs (a bearer token, an
 request. Once added, `<name>/<model>` works exactly like any built-in
 provider — no further setup needed.
 
+**Sharing a subscription between harness instances.** Every provider is also
+served by the server's transparent proxy (`/api/providers/<name>/proxy`), and a
+custom provider can point at it. Instance A has `claude-oauth` connected and
+runs `harness serve :8080`; instance B (another machine, another TUI) does
+
+```
+harness provider add shared-claude --type anthropic \
+  --url http://A:8080/api/providers/claude-oauth/proxy
+```
+
+and uses `shared-claude/<model>` exactly like the native provider — no
+credential on B at all: A's proxy applies the OAuth token and the Claude Code
+identity. The same works for any OpenAI-dialect provider with `--type openai`
+and `--url http://A:8080/api/providers/<name>/proxy` (note the difference: for
+`anthropic` the URL has no `/v1`, for `openai` it is the chat-completions base).
+The one dialect not yet consumable this way is `codex-oauth`'s (Responses).
+
 SDK embedders can instead register one programmatically —
-`harness.NewOpenAIProvider(name, url, ...opts)` with
+`harness.NewOpenAIProvider(name, url, ...opts)` (or
+`harness.NewAnthropicProvider`) with
 `harness.ProviderWithHeaders(...)` carrying the auth — without touching
 `settings.json` at all; see [Embedding the SDK](#embedding-the-sdk) below.
 
@@ -313,8 +332,8 @@ harness mcp add <name> ...    — Add an MCP server (--command → local, --url 
 harness mcp rm <name>         — Remove an MCP server
 harness mcp enable <name>     — Enable a server
 harness mcp disable <name>    — Disable a server (keeps its config)
-harness provider [list]       — List custom OpenAI-compatible providers
-harness provider add <name> --url <url> [--models-url <url>] [--header K:V ...] [--display <name>] [--disabled] [--reasoning-split]
+harness provider [list]       — List custom providers
+harness provider add <name> --url <url> [--type openai|anthropic] [--models-url <url>] [--header K:V ...] [--display <name>] [--disabled] [--reasoning-split]
 harness provider rm <name>    — Remove a custom provider
 
 harness memo [<query>]        — List (no query) or search memories

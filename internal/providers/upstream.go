@@ -121,6 +121,21 @@ func CleanProxyPath(p string) string {
 	return p
 }
 
+// mergeBetaTokens unions comma-separated anthropic-beta lists, first-seen order.
+func mergeBetaTokens(lists ...string) string {
+	seen := map[string]bool{}
+	var out []string
+	for _, l := range lists {
+		for _, t := range strings.Split(l, ",") {
+			if t = strings.TrimSpace(t); t != "" && !seen[t] {
+				seen[t] = true
+				out = append(out, t)
+			}
+		}
+	}
+	return strings.Join(out, ",")
+}
+
 // ── reasoning_split injection (MiniMax-dialect backends) ─────────────────
 
 // injectReasoningSplit is the proxy's equivalent of what a session does for a

@@ -315,9 +315,14 @@ func TestCustomProviderValidation(t *testing.T) {
 	m, _ := newTestSettings(t, "")
 
 	bad := map[string]CustomProvider{
-		"unsupported-type": {Type: "anthropic", URL: "https://x"},
-		"empty-type":       {URL: "https://x"},
-		"missing-url":      {Type: "openai"},
+		"unsupported-type": {Type: "gemini", URL: "https://x"},
+		// "openai-responses" is the planned (TODO) third dialect: not accepted yet.
+		"responses-not-yet": {Type: "openai-responses", URL: "https://x"},
+		"empty-type":        {URL: "https://x"},
+		"missing-url":       {Type: "openai"},
+		"missing-url-anth":  {Type: "anthropic"},
+		// reasoning_split is a MiniMax/Chat-Completions flag: meaningless for Messages.
+		"anthropic-reasoning-split": {Type: "anthropic", URL: "https://x", ReasoningSplit: true},
 	}
 	for name, p := range bad {
 		if err := m.SetCustomProvider(name, p); err == nil {
@@ -415,5 +420,25 @@ func TestCustomProviderDisabledField(t *testing.T) {
 	}
 	if out["provider"]["p1"]["disabled"] != true {
 		t.Errorf("disabled:true missing from raw JSON: %s", raw)
+	}
+}
+
+// "anthropic" is a supported type: stored and read back like "openai".
+func TestCustomProviderAnthropicIsAccepted(t *testing.T) {
+	m, _ := newTestSettings(t, "")
+	in := CustomProvider{
+		Type: "anthropic", URL: "http://host:8080/api/providers/claude-oauth/proxy",
+		Headers: map[string]string{"x-api-key": "k"}, Display: "Shared Claude", ModelsURL: "http://m/v1/models",
+	}
+	if err := m.SetCustomProvider("shared-claude", in); err != nil {
+		t.Fatalf("anthropic custom provider rejected: %v", err)
+	}
+	got, ok := m.CustomProvider("shared-claude")
+	if !ok || got.Type != "anthropic" || got.URL != in.URL || got.Display != "Shared Claude" || got.Headers["x-api-key"] != "k" || got.ModelsURL != in.ModelsURL {
+		t.Errorf("round trip = %+v ok=%v", got, ok)
+	}
+	// still may not shadow a built-in name
+	if err := m.SetCustomProvider("anthropic", in); !errors.Is(err, ErrInvalidCustomProvider) {
+		t.Errorf("reserved name accepted for an anthropic custom provider: %v", err)
 	}
 }

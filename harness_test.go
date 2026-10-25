@@ -327,8 +327,20 @@ func TestCustomProviderEndToEnd(t *testing.T) {
 	}
 
 	// Reject: unsupported type.
-	if _, err := c.PutCustomProvider("bad-type", client.CustomProvider{Type: "anthropic", URL: "https://x"}); err == nil {
+	if _, err := c.PutCustomProvider("bad-type", client.CustomProvider{Type: "gemini", URL: "https://x"}); err == nil {
 		t.Error("expected an error for an unsupported custom provider type")
+	}
+	// "openai-responses" is the planned (TODO) third dialect: not accepted yet.
+	if _, err := c.PutCustomProvider("bad-responses", client.CustomProvider{Type: "openai-responses", URL: "https://x"}); err == nil {
+		t.Error("openai-responses must not be accepted until it is implemented")
+	}
+	// Accept: "anthropic" is a supported type, stored and listed like "openai".
+	if _, err := c.PutCustomProvider("good-anthropic", client.CustomProvider{Type: "anthropic", URL: "https://x"}); err != nil {
+		t.Errorf("anthropic custom provider rejected: %v", err)
+	}
+	// Reject: reasoning_split is a Chat Completions flag.
+	if _, err := c.PutCustomProvider("anth-rs", client.CustomProvider{Type: "anthropic", URL: "https://x", ReasoningSplit: true}); err == nil {
+		t.Error("reasoning_split must be rejected for an anthropic provider")
 	}
 	// Reject: missing url.
 	if _, err := c.PutCustomProvider("bad-url", client.CustomProvider{Type: "openai"}); err == nil {
@@ -532,5 +544,64 @@ func TestAgentWithMCPsSetsTheServers(t *testing.T) {
 	AgentWithMCPs(servers)(&o)
 	if len(o.MCPServers) != 1 || o.MCPServers["docs"].URL != "https://example.com/mcp" {
 		t.Fatalf("AgentWithMCPs did not set AgentOptions.MCPServers: %v", o.MCPServers)
+	}
+}
+
+// TestNewAnthropicProviderFacadeAliasIsWired is the sibling of the OpenAI one:
+// harness.NewAnthropicProvider must be the real agent.NewAnthropicProvider (not
+// a type-checking alias), its options must reach the provider, and a provider
+// registered through it is resolvable, listable with its dialect, and removable
+// with the same UnregisterCustomProvider.
+func TestNewAnthropicProviderFacadeAliasIsWired(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	providers.EnsureRegistry()
+	defer providers.SetForTest(append([]providers.Provider{}, providers.All()...))()
+
+	var gotKey, gotVersion string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey, gotVersion = r.Header.Get("x-api-key"), r.Header.Get("anthropic-version")
+		if r.URL.Path == "/v1/models" {
+			w.Write([]byte(`{"data":[{"id":"claude-facade","display_name":"Facade"}],"has_more":false}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	if err := NewAnthropicProvider("facade-claude", srv.URL,
+		ProviderWithDisplay("Facade Claude"),
+		ProviderWithHeaders(map[string]string{"x-api-key": "facade-key"}),
+		ProviderWithReasoningSplit(), // meaningless for this dialect: ignored, not an error
+	); err != nil {
+		t.Fatalf("NewAnthropicProvider: %v", err)
+	}
+	if err := NewAnthropicProvider("anthropic", srv.URL); err == nil {
+		t.Error("a built-in name must be rejected")
+	}
+
+	a := NewAgent(AgentWithStore(store.NewInMemoryStore()))
+	defer a.Close()
+	var found bool
+	for _, m := range a.Models() {
+		if m.Model == "facade-claude/claude-facade" {
+			found = true
+			if m.Dialect != "anthropic" || m.DisplayName != "Facade" {
+				t.Errorf("listing = %+v", m)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the provider registered through the facade is not in the model list")
+	}
+	if gotKey != "facade-key" || gotVersion != "2023-06-01" {
+		t.Errorf("the options did not reach the wire: x-api-key=%q anthropic-version=%q", gotKey, gotVersion)
+	}
+	if err := UnregisterCustomProvider("facade-claude"); err != nil {
+		t.Errorf("UnregisterCustomProvider: %v", err)
+	}
+	for _, m := range a.Models() {
+		if strings.HasPrefix(m.Model, "facade-claude/") {
+			t.Errorf("still listed after unregistering: %s", m.Model)
+		}
 	}
 }

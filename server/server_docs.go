@@ -742,12 +742,13 @@ const openAPISpecTemplate = `{
         "type": "object",
         "required": ["type", "url"],
         "properties": {
-          "type":       { "type": "string", "enum": ["openai"], "description": "API dialect — only \"openai\" is supported for now" },
-          "url":        { "type": "string", "example": "https://my-proxy.internal/v1", "description": "Base URL for chat completions" },
-          "models_url": { "type": "string", "description": "Models listing URL; defaults to \"<url>/models\" when omitted" },
+          "type":       { "type": "string", "enum": ["openai","anthropic"], "description": "API dialect: openai (Chat Completions) or anthropic (Messages — Anthropic itself, a gateway, or another harness instance's provider proxy, e.g. url http://host:8080/api/providers/claude-oauth/proxy to share that instance's subscription)" },
+          "url":        { "type": "string", "example": "https://my-proxy.internal/v1", "description": "openai: base URL for chat completions (including any /v1). anthropic: the API root WITHOUT /v1 — /v1/messages and /v1/models are appended" },
+          "models_url": { "type": "string", "description": "Models listing URL; defaults to \"<url>/models\" (openai) or \"<url>/v1/models\" (anthropic) when omitted" },
           "headers":    { "type": "object", "additionalProperties": { "type": "string" }, "description": "Extra HTTP headers sent on every request" },
           "display":    { "type": "string", "description": "Human-friendly display name; defaults to the provider name (the map key) when omitted" },
-          "disabled":   { "type": "boolean", "description": "Enabled by default; set true to skip loading this provider" }
+          "disabled":   { "type": "boolean", "description": "Enabled by default; set true to skip loading this provider" },
+          "reasoning_split": { "type": "boolean", "description": "type openai only (rejected for anthropic): send \"reasoning_split\": true on every request — needed for MiniMax-compatible backends to separate thinking from the answer. The provider proxy adds it too." }
         }
       },
       "Schedule": {
