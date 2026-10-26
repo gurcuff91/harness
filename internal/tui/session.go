@@ -81,6 +81,7 @@ func (t *TUI) autoConnect(ctx context.Context) {
 			t.model = sess.Model
 			t.thinking = sess.Thinking
 			t.maxIterations = sess.MaxIterations
+			t.refreshSubscriptionFlag() // sess.Model may differ from the model resolved above (fallback)
 			if t.overrideModel != "" && t.overrideModel != t.model {
 				t.client.ExecCommand(t.sessionID, "model", map[string]any{"model": t.overrideModel}) //nolint:errcheck
 				t.model = t.overrideModel
@@ -92,6 +93,7 @@ func (t *TUI) autoConnect(ctx context.Context) {
 			t.loadStatsFromSession(sess)
 			t.loadSessionCommands()
 			t.addRaw(ansi.Dimmed(fmt.Sprintf("── resumed: %s ──", t.sessionName)))
+			t.noteModelFallback(sess)
 			t.renderHistory()
 			t.updateInfo()
 			t.startSSE(ctx)
@@ -163,9 +165,22 @@ func (t *TUI) resumeInPlace(sessID string) {
 	t.loadSessionCommands()
 
 	t.addRaw(ansi.Dimmed(fmt.Sprintf("── resumed: %s ──", t.sessionName)))
+	t.noteModelFallback(sess)
 	t.renderHistory()
 	t.updateInfo()
 	t.startSSE(t.baseCtx)
+}
+
+// noteModelFallback tells the user when a resumed session was reopened on a
+// different model than the one it was saved with — its provider was gone, so the
+// server fell back to the harness default. Never silent: the new model changes
+// cost, capabilities and context window.
+func (t *TUI) noteModelFallback(sess *client.Session) {
+	if sess == nil || sess.ModelFallback == nil {
+		return
+	}
+	f := sess.ModelFallback
+	t.addRaw(ansi.Warn(fmt.Sprintf("⚠ %s is not available — resumed on %s (saved as this session's model now)", f.From, f.To)))
 }
 
 // newSessionInPlace closes the currently active session (if any, flushing

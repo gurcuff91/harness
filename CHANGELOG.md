@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.96.2] - 2026-10-26
+
+### Fixed — a session could not be resumed once its provider was disconnected
+Resuming a session whose saved model belonged to a provider that was no longer available (credentials removed, the provider disconnected, the model retired) failed with `provider "claude-oauth/…" no longer available` and the session could not be opened at all — its whole history stranded behind a provider that might stay gone. Models are scoped to the session, so refusing was defensible when nothing else was usable, but not when the harness has a perfectly good default model.
+
+- **Resume now falls back to the harness's default model.** If the session's own model resolves, nothing changes. If its provider/model is unavailable, the session reopens on the configured active model (settings `active_model`) when that is available, otherwise on the first available model of any provider — the same rule a new session follows. The new model is **persisted** in the session, so it does not jump back by itself when the old provider returns (the user switches back with `/model`).
+- **Never silent.** The resume response (`POST /api/sessions/{id}/resume`, and `GET /api/sessions/{id}` while active) carries `model_fallback: {from, to, reason}`; the Go client exposes it as `Session.ModelFallback`, and the TUI prints `⚠ <from> is not available — resumed on <to>` right after the `── resumed ──` line, for both `--resume` and the in-app `/resume`. Omitted when nothing changed.
+- **It is refused only when nothing is usable** — the session's model AND the default (and any other connected provider) are all unavailable. That is now an HTTP **409** with an actionable message naming both: `its model "X" is unavailable (…), and so is the default (…) — connect a provider or set a default model`. New `agent.ErrNoModelAvailable`.
+- **One rule in the agent, every path covered**: `Agent.ResumeSession` (TUI, server, Telegram, Slack, ACP, scheduler, colleagues) and `Agent.ForkSession`, which had the identical stranding bug. A fork whose parent's provider is gone reports its own `model_fallback` and does not touch the parent.
+- **Context window follows the model.** A session saved at 80% of a 1M-token window and reopened on a 200k model really holds ~800k tokens, but the restore rebuilt the count as `usage × the NEW window` (160k) and under-reported it fivefold, so the pre-turn compaction check would stay quiet and the first request would overflow. The token count is now rebuilt from the window it was measured against (`Stats.ContextWindow`) and re-expressed against the current one, so the existing check compacts it first; moving to a larger window lowers the recorded pressure instead of leaving a stale ratio. A resume on the same model is unchanged.
+- Only *unavailability* moves a session: `providers.Resolve` now wraps its three failures in `ErrNotFound` / `ErrNotActive` / `ErrModelNotFound` (`providers.IsUnavailable`), and any other error is returned untouched.
+- TUI: `--resume` already picked an available model at startup but never used it for the resume; it now refreshes the model and subscription flag from the resumed session.
+- OpenAPI documents `model_fallback` and the 409.
+
 ## [0.96.1] - 2026-10-25
 
 ### Fixed — provider proxy: official SDKs' `models.retrieve()` was blocked (403)

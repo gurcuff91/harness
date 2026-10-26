@@ -39,6 +39,9 @@ func resumedTUI(t *testing.T, layout string) *TUI {
 	})); err != nil {
 		t.Fatal(err)
 	}
+	// Leaving it registered leaked a live provider into every later test of the
+	// binary — one that asserts "no provider is available" then finds it.
+	t.Cleanup(func() { agent.UnregisterCustomProvider(prov) })
 	a := agent.New(agent.AgentOptions{Store: fs, ResourceLoader: resources.NilLoader{}})
 	t.Cleanup(func() { a.Close() })
 	srv, err := server.Start(a, "", server.ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})

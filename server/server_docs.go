@@ -423,7 +423,7 @@ const openAPISpecTemplate = `{
       "post": {
         "tags": ["sessions"],
         "summary": "Resume session",
-        "description": "Reactivates a persisted session, loading its history from disk. The body is optional.",
+        "description": "Reactivates a persisted session, loading its history from disk. The body is optional. Models are scoped per session, so the session's own model is used when it is available; if its provider is not (disconnected, credentials removed, model retired) the session still opens — on the harness's default model (settings 'active_model', else the first available model of any provider) — and the response carries 'model_fallback' saying what changed. The new model is persisted. Only when neither the session's model nor any fallback is available is the resume refused (409).",
         "operationId": "resumeSession",
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
         "requestBody": {
@@ -434,8 +434,9 @@ const openAPISpecTemplate = `{
           } } } }
         },
         "responses": {
-          "200": { "description": "Resumed (or already active — idempotent)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SessionDetail" } } } },
-          "404": { "description": "Session not found" }
+          "200": { "description": "Resumed (or already active — idempotent). May carry 'model_fallback'.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SessionDetail" } } } },
+          "404": { "description": "Session not found" },
+          "409": { "description": "The session's model is unavailable AND there is no model to fall back to — connect a provider or set a default model" }
         }
       }
     },
@@ -804,7 +805,16 @@ const openAPISpecTemplate = `{
             "type": "object",
             "properties": {
               "max_iterations": { "type": "integer" },
-              "max_tokens": { "type": "integer", "description": "Output-token ceiling: the agent's MaxTokens when set, else the model's catalog value capped at 64k (each request is further bounded by the room left in the window)" }
+              "max_tokens": { "type": "integer", "description": "Output-token ceiling: the agent's MaxTokens when set, else the model's catalog value capped at 64k (each request is further bounded by the room left in the window)" },
+              "model_fallback": {
+                "type": "object",
+                "description": "Present only when the session was reopened (resume or fork) on a DIFFERENT model than it was saved with, because the saved model's provider was unavailable (disconnected, credentials removed, model retired). 'model' is then the model it runs on now — and is saved with from now on, so the session does not flip back by itself when the provider returns. Omitted in the normal case.",
+                "properties": {
+                  "from": { "type": "string", "description": "provider/model the session was saved with and could not use", "example": "claude-oauth/claude-opus-5-5" },
+                  "to":   { "type": "string", "description": "provider/model it runs on now", "example": "minimax/MiniMax-M3" },
+                  "reason": { "type": "string", "description": "why 'from' was unusable" }
+                }
+              }
             }
           }
         ]

@@ -92,6 +92,20 @@ type Session struct {
 	// AgentOptions.MaxTokens when set, else the model's catalog value capped
 	// at 64k) — also in SessionInfo.Session.
 	MaxTokens int `json:"max_tokens,omitempty"`
+	// ModelFallback is set on a resumed/forked session that was reopened on a
+	// different model than it was saved with, because the saved model's
+	// provider was unavailable. Model then names the model in use now. Nil in
+	// the normal case.
+	ModelFallback *ModelFallback `json:"model_fallback,omitempty"`
+}
+
+// ModelFallback says a session was reopened on another model: From is what it
+// was saved with and couldn't use, To what it runs on now (and is saved with
+// from now on), Reason why From was unusable.
+type ModelFallback struct {
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Reason string `json:"reason"`
 }
 
 // Schedule is one element of GET /api/schedules — a cron-scheduled prompt in

@@ -1242,7 +1242,10 @@ func (s *Server) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.agent.ForkSession(id)
 	if err != nil {
 		status := http.StatusInternalServerError
-		if strings.Contains(err.Error(), "not found") {
+		switch {
+		case errors.Is(err, agent.ErrNoModelAvailable):
+			status = http.StatusConflict // nothing to run the copy on: connect a provider
+		case strings.Contains(err.Error(), "not found"):
 			status = http.StatusNotFound
 		}
 		writeErr(w, status, err)
@@ -1274,7 +1277,12 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.openSession(id, req.Profiles, req.Directives)
 	if err != nil {
 		status := http.StatusInternalServerError
-		if strings.Contains(err.Error(), "not found") {
+		switch {
+		case errors.Is(err, agent.ErrNoModelAvailable):
+			// Neither the session's model nor any fallback is usable: not a
+			// server fault — the operator must connect a provider.
+			status = http.StatusConflict
+		case strings.Contains(err.Error(), "not found"):
 			status = http.StatusNotFound
 		}
 		writeErr(w, status, err)
@@ -1342,11 +1350,17 @@ type sessionDetailDTO struct {
 	// MaxTokens is the session's output-token ceiling (Session.MaxTokens;
 	// for a persisted session, what its model would resolve to).
 	MaxTokens int `json:"max_tokens"`
+	// ModelFallback is present when the session was reopened on a different
+	// model than it was saved with, because the saved model's provider was
+	// unavailable (disconnected, credentials removed, model retired). `model`
+	// is then the model it runs on now (and is saved with from now on); this
+	// says what it was and why it changed. Omitted in the normal case.
+	ModelFallback *agent.ModelFallback `json:"model_fallback,omitempty"`
 }
 
 // liveDetail is the detail DTO of an active session.
 func liveDetail(sess *agent.Session) sessionDetailDTO {
-	return sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations(), MaxTokens: sess.MaxTokens()}
+	return sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations(), MaxTokens: sess.MaxTokens(), ModelFallback: sess.ModelFallback()}
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {

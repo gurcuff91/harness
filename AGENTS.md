@@ -293,6 +293,18 @@ enum and a `RegisterResponses`). Deferred on purpose — see the
 `TODO(openai-responses)` markers in `internal/providers/registry.go` and
 `internal/config/settings.go`. The proxy side already serves that dialect.
 
+### Reopening a session whose provider is gone
+
+`Agent.ResumeSession` and `Agent.ForkSession` resolve the saved model through
+`resolveSessionModel` (`agent/model_fallback.go`): the session's own model first,
+then — only if that is *unavailable* (`providers.IsUnavailable`) — the active
+model, then the first available model. The switch is persisted and reported
+(`Session.ModelFallback()` → `model_fallback` in the API); only "nothing at all
+is usable" refuses (`ErrNoModelAvailable`, HTTP 409). Never add a path that
+reopens a session with a bare `providers.Resolve(meta.Model)`: it would strand the
+history again. A restored context count must come from the window it was measured
+against (`Stats.ContextWindow`), not the current model's.
+
 ### Adding a New Tool
 
 1. Create `agent/tools/<name>.go`

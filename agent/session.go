@@ -132,6 +132,12 @@ type Session struct {
 	// (MaxTokens()), same pattern as maxIterationsVal.
 	maxTokensVal atomic.Int64
 
+	// modelFallback is set when the session was reopened on a different model
+	// than the one it was saved with (see ModelFallback). Written once in
+	// ResumeSession/ForkSession before the session is reachable, never again —
+	// so reading it needs no lock.
+	modelFallback *ModelFallback
+
 	// modelStr is the session's active "provider/model" string, stored in an
 	// atomic.Value so it can be read lock-free from Model(). The value
 	// is written under s.mu (in newSession and SwitchModel — the same lock
@@ -346,9 +352,26 @@ func newSession(storeInst *store.Session,
 	// Restore lastInputTokens from persisted stats so ContextBreakdown() shows
 	// meaningful "actual" + "free space" values immediately on resume, without
 	// requiring a new turn. lastInputTokens is not persisted directly, but
-	// ContextUsage × ContextWindow gives back the same value that was stored.
-	if meta.Stats.ContextUsage > 0 && s.contextWindow > 0 {
-		s.lastInputTokens = int(meta.Stats.ContextUsage * float64(s.contextWindow))
+	// ContextUsage × the window it was measured against gives back the same value
+	// that was stored. That window is Stats.ContextWindow — NOT necessarily this
+	// session's current one: a session reopened on a different model (the saved
+	// model's provider was unavailable, see resolveSessionModel) has a new window,
+	// and multiplying the saved ratio by it would shrink or inflate the history
+	// (80% of a 1M window is 800k tokens, which is 400% of a 200k one — not 80%).
+	// So the token count comes from the saved window, and the ratio is then
+	// re-expressed against the current one, so the pre-turn compaction check sees
+	// the real pressure on the model that will actually run.
+	savedWindow := meta.Stats.ContextWindow
+	if savedWindow <= 0 {
+		savedWindow = s.contextWindow // an older session that never recorded it
+	}
+	if meta.Stats.ContextUsage > 0 && savedWindow > 0 {
+		s.lastInputTokens = int(meta.Stats.ContextUsage * float64(savedWindow))
+		if s.contextWindow > 0 && s.contextWindow != savedWindow {
+			s.stats.ContextWindow = s.contextWindow
+			s.stats.ContextUsage = float64(s.lastInputTokens) / float64(s.contextWindow)
+			s.snapshotStatsLocked()
+		}
 	}
 	s.lastInputTokensVal.Store(int64(s.lastInputTokens)) // lock-free snapshot for ContextBreakdown()
 
@@ -1000,6 +1023,13 @@ func (s *Session) promptSync(ctx context.Context, fu followUp, first bool) (retT
 	// there). turn_end is handled by defer emitTurnEnd() on the way out.
 	return summary, err
 }
+
+// ModelFallback reports whether this session was reopened on a different model
+// than the one it was saved with because that model's provider was unavailable —
+// nil when it runs on its own model, which is the normal case. It describes the
+// reopening (ResumeSession/ForkSession) only: a later SwitchModel does not touch
+// it. The session's current model is Model(); this says why it changed.
+func (s *Session) ModelFallback() *ModelFallback { return s.modelFallback }
 
 // Subscribe registers an event handler for this session.
 func (s *Session) Subscribe(h Handler) {

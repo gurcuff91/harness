@@ -48,6 +48,23 @@ func Find(name string) Provider {
 // ErrNotFound is returned when no provider is registered under a name.
 var ErrNotFound = errors.New("provider not found")
 
+// ErrNotActive is returned (wrapped) by Resolve when the provider exists but has
+// no usable credentials right now (never connected, or disconnected since).
+var ErrNotActive = errors.New("provider not active")
+
+// ErrModelNotFound is returned (wrapped) by Resolve when the provider is active
+// but does not offer the requested model (retired, renamed, or the provider has
+// no models at all).
+var ErrModelNotFound = errors.New("model not available")
+
+// IsUnavailable reports whether err means "this provider/model can't be used
+// right now" — as opposed to a malformed request. It is the test for falling
+// back to another model: the provider is gone, not connected, or no longer
+// offers the model.
+func IsUnavailable(err error) bool {
+	return errors.Is(err, ErrNotFound) || errors.Is(err, ErrNotActive) || errors.Is(err, ErrModelNotFound)
+}
+
 // ErrNameConflict is returned (wrapped) by ReloadCustom when a settings.json
 // entry was skipped because a provider registered from code already uses its
 // name. The programmatic provider wins; the rest of the reload is applied.
@@ -349,7 +366,7 @@ func Resolve(fullModel string) (Provider, string, error) {
 		return nil, "", fmt.Errorf("%w: %q", ErrNotFound, providerName)
 	}
 	if !p.IsActive() {
-		return nil, "", fmt.Errorf("provider %q is not active (missing credentials)", providerName)
+		return nil, "", fmt.Errorf("%w: provider %q is not active (missing credentials)", ErrNotActive, providerName)
 	}
 
 	// 3. Lazy fetch if cache is empty
@@ -361,11 +378,11 @@ func Resolve(fullModel string) (Provider, string, error) {
 	if modelID == "" {
 		models := p.Models()
 		if len(models) == 0 {
-			return nil, "", fmt.Errorf("provider %q has no available models", providerName)
+			return nil, "", fmt.Errorf("%w: provider %q has no available models", ErrModelNotFound, providerName)
 		}
 		modelID = models[0].ID
 	} else if p.ModelMeta(modelID) == nil {
-		return nil, "", fmt.Errorf("model %q not found in provider %q", modelID, providerName)
+		return nil, "", fmt.Errorf("%w: model %q not found in provider %q", ErrModelNotFound, modelID, providerName)
 	}
 
 	return p, modelID, nil

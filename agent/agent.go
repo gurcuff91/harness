@@ -802,10 +802,19 @@ func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session
 
 	meta := storeInst.Meta()
 
-	// Restore provider+model — error if provider no longer available
-	provider, modelID, err := providers.Resolve(meta.Model)
+	// Restore provider+model. Models are scoped per session, so the saved one
+	// comes first; if its provider is gone (disconnected, credentials removed, model
+	// retired) the session is NOT stranded — it reopens on the harness's default
+	// model, and the switch is persisted and reported (Session.ModelFallback).
+	provider, modelID, fallback, err := resolveSessionModel(meta.Model)
 	if err != nil {
-		return nil, fmt.Errorf("resume session: provider %q no longer available: %w", meta.Model, err)
+		return nil, fmt.Errorf("resume session: %w", err)
+	}
+	if fallback != nil {
+		meta.Model = fallback.To
+		if err := storeInst.UpdateMeta(meta); err != nil {
+			return nil, fmt.Errorf("resume session: persist model fallback: %w", err)
+		}
 	}
 
 	thinkingLvl := a.thinkingLevel
@@ -844,6 +853,7 @@ func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session
 		skills, readSkill,
 		a.memStore != nil)
 	sess.agent = a
+	sess.modelFallback = fallback
 	a.registerSession(sess)
 	return sess, nil
 }
@@ -1016,9 +1026,17 @@ func (a *Agent) ForkSession(sessionID string) (*Session, error) {
 
 	// Build a live agent.Session on top of the fork store.
 	meta := forkStore.Meta()
-	provider, modelID, err := providers.Resolve(meta.Model)
+	// Same rule as ResumeSession: an unavailable provider falls back to the default
+	// model rather than making the (copied) history unreachable.
+	provider, modelID, fallback, err := resolveSessionModel(meta.Model)
 	if err != nil {
-		return nil, fmt.Errorf("fork: resolve provider: %w", err)
+		return nil, fmt.Errorf("fork: %w", err)
+	}
+	if fallback != nil {
+		meta.Model = fallback.To
+		if err := forkStore.UpdateMeta(meta); err != nil {
+			return nil, fmt.Errorf("fork: persist model fallback: %w", err)
+		}
 	}
 
 	thinkingLvl := meta.Thinking
@@ -1053,6 +1071,7 @@ func (a *Agent) ForkSession(sessionID string) (*Session, error) {
 		skills, readSkill,
 		a.memStore != nil)
 	sess.agent = a
+	sess.modelFallback = fallback
 	a.registerSession(sess)
 	return sess, nil
 }
