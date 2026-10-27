@@ -30,5 +30,17 @@ var Open = func(u string) {
 	default:
 		cmd, args = "xdg-open", []string{u}
 	}
-	_ = exec.Command(cmd, args...).Start()
+	startAndReap(exec.Command(cmd, args...))
+}
+
+// startAndReap starts c and waits for it in a goroutine. Start alone leaves the
+// launcher (open / xdg-open / rundll32, which exits almost at once) as a zombie
+// child of this process until it dies, because nothing ever wait()s on it. A
+// failed Start has no child to reap, and its error is ignored like before: the
+// callers always print the URL too.
+func startAndReap(c *exec.Cmd) {
+	if c.Start() != nil {
+		return
+	}
+	go func() { _ = c.Wait() }()
 }

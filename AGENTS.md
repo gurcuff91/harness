@@ -387,7 +387,8 @@ Universal levels mapped per-provider:
 - **Error handling:** Return errors up, don't panic. Log to stderr only for fatal.
 - **Streaming callback:** `StreamCallback = func(StreamEvent)` — events fire inline during HTTP read.
 - **Tool execution after stream:** the stream accumulates `pendingCalls`; once it closes, all tool calls run **concurrently** (one goroutine each, joined by `sync.WaitGroup`) and the loop waits for every result before the next iteration.
-- **Goroutines are the exception, not the rule.** The ReAct loop itself is sequential. Deliberate uses: parallel tool execution (`agent/session.go`), TUI spinner (`internal/tui/components/spinner.go`), SSE readers (`internal/providers/llm/sse.go`, `client/stream.go`), `bash` timeout wait, MCP HTTP transport, and the Telegram pump. Don't add new ones without a reason.
+- **Goroutines are the exception, not the rule.** The ReAct loop itself is sequential. Deliberate uses: parallel tool execution (`agent/session.go`), TUI spinner (`internal/tui/components/spinner.go`), SSE readers (`internal/providers/llm/sse.go`, `client/stream.go`), `bash` timeout wait, **reaping a detached child** (`reapInBackground` in `agent/tools/bash.go`, `startAndReap` in `internal/browseropen`), MCP HTTP transport, and the Telegram pump. Don't add new ones without a reason.
+- **Every child process you `Start()` must be `Wait()`ed** (inline, or in a goroutine for a detached one). `Process.Release()` and a bare `Start()` leave a zombie until the harness dies — a long-lived server runs out of PIDs.
 - **`bufio.Writer` for output.** All terminal output goes through the buffered writer with explicit `flush()`. Never use `fmt.Println` directly.
 
 ## Anti-Patterns to Avoid

@@ -124,6 +124,16 @@ func Bash(cwd string) Tool {
 	}
 }
 
+// reapInBackground waits for an already-started child in a goroutine, so the
+// kernel can discard its process-table entry the moment it exits instead of
+// leaving a zombie until this process dies. Use it for every child that is
+// started and not otherwise waited on. The error is deliberately dropped: nobody
+// is waiting on the result, and a non-zero exit of a background job is its own
+// business (it is visible in the job's log).
+func reapInBackground(cmd *exec.Cmd) {
+	go func() { _ = cmd.Wait() }()
+}
+
 // runBashBackground launches the command fully detached: a new session (via
 // setDetached, per-OS) so it survives the tool-call's process-group teardown,
 // with stdout/stderr redirected to a temp log file and stdin from /dev/null.
@@ -154,10 +164,17 @@ func runBashBackground(cwd, command string) (string, error) {
 		return fmt.Sprintf("Error starting background command: %v", err), err
 	}
 	pid := cmd.Process.Pid
-	// The child holds its own fd to the log; we can close ours. Release the
-	// process handle so the Go runtime doesn't try to reap it.
+	// The child holds its own fd to the log; we can close ours.
 	logFile.Close()
-	_ = cmd.Process.Release()
+	// Reap the child when it exits. The command is detached (own session) and the
+	// tool returns right away, but the process is still OUR child: when it
+	// terminates the kernel keeps its table entry as a zombie until its parent
+	// wait()s. Release() only drops Go's handle and never waits, so every finished
+	// background command used to stay <defunct> for the life of the server —
+	// harmless in memory, but each one holds a PID until the table runs out. The
+	// goroutine ends when the child does (immediately for a short command, at
+	// kill/exit for a long one), so it neither leaks nor delays the tool's return.
+	reapInBackground(cmd)
 
 	return fmt.Sprintf("Started in background:\n  PID: %d\n  Log: %s\nStop with: kill %d  ·  Check progress by reading the log.", pid, logPath, pid), nil
 }

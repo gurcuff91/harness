@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.96.3] - 2026-10-26
+
+### Fixed — background `bash` commands left zombie processes
+Every command run with `bash` + `background: true` became a zombie (`<defunct>`) when it finished and stayed one until the harness process died. `runBashBackground` called `cmd.Process.Release()` after starting the child — which only drops Go's handle and never `wait()`s — so the kernel kept each finished child's process-table entry as a zombie of the harness. They use no memory or CPU, but each holds a PID: a long-lived server (a production instance reached 42 after ~10 h) trends toward exhausting `pid_max`, and `ps`/`top` fill with noise. Reproduced end to end with the real binary through the real tool (model → `Bash` with `background:true`): 15 short background commands left 15 zombies.
+
+- **The child is now reaped when it exits**: a goroutine `Wait()`s on it (`reapInBackground`). It ends when the child does — immediately for a short command, at `kill <pid>`/exit for a long one — so it neither leaks nor delays the tool's return. Verified: 15 short backgrounds → 0 zombies; a long-running one stays alive, remains its own session leader (the `Setsid` detach is untouched) and still stops with `kill <pid>`, after which it is reaped too. The tool's reply (PID, log path, the `kill` hint) and the log receiving stdout and stderr are unchanged.
+- The comment that justified `Release()` ("so the Go runtime doesn't try to reap it") was misleading and is replaced by one that explains why the reaper exists.
+- **Same pattern in `internal/browseropen`**: the OAuth login's browser launcher (`open` / `xdg-open` / `rundll32`) was started and never waited on either; it is now started and reaped (`startAndReap`), and a launcher that fails to start leaves no child and no goroutine, silently, as before. (The foreground `bash` path and `mcp/stdio.go` already waited and were not affected.)
+- Tests (unix): a finished command is reaped; 50 short backgrounds leave 0 zombies; a long one stays alive, keeps its own session and can be killed; the log still gets stdout and stderr; a goroutine-count test shows exactly one reaper per live child and none after they exit (without adding a dependency). Each fails without the fix: restoring `Release()`, a reaper that never returns, and no reaper at all were each tried.
+
 ## [0.96.2] - 2026-10-26
 
 ### Fixed — a session could not be resumed once its provider was disconnected
