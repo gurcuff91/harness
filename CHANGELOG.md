@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.96.4] - 2026-10-27
+
+### Fixed — a turn that ends with reasoning only (no answer, no tool call) completed as a success
+Seen in production (MiniMax-M3, an unattended agent): an iteration whose model produced reasoning but neither text nor a tool call was accepted as a normal reply. `Message.HasContent()` counts reasoning as content, so `runStream` kept it, the loop persisted it, and — with no tool calls — returned "turn complete" with no error. The client saw a clean `turn_end` indistinguishable from a finished task, the work stayed half done and the operator had to type "continua". The message was also persisted: one of those was ~55k characters, ~90% a degenerate `hmm: hmm: hmm:` loop, replayed (~18k tokens) in every later request. Reproduced end to end with the real binary against a fake OpenAI-compatible model: the turn returned HTTP 200 `{"text": ""}`, no error event, and the reasoning sat in the history.
+
+- **The turn now fails with an error event**: `model returned reasoning but no answer` (`agent.ErrReasoningOnly`; the text is a stable contract — an orchestrator classifies it as a recoverable stop and retries with a "continue" prompt). `loop_end` and `turn_end` are still emitted, exactly as for any provider error, and `POST …/ask` answers with the error (HTTP 500) instead of an empty `text`.
+- **Not persisted** — checked before the message is stored, same rule as `ErrEmptyResponse` — so the degenerate reasoning is never replayed in later requests. Verified: after the failed turn the history holds no assistant message, and the follow-up request no longer carries the `hmm:` text.
+- **No silent retry inside harness**: the reasoning has already streamed to the client, and a model stuck in a reasoning loop would just produce it again, so the turn ends and the caller decides (the provider is called once). A stream that carries *nothing at all* keeps its existing path — retried up to 3 times, and `ErrEmptyResponse` if it never recovers; the two failures stay distinct.
+- **Unchanged**: reasoning + text, reasoning + a tool call, plain text and a bare tool call behave exactly as before. A response with pending tool calls is never failed as reasoning-only (the tools run), and a reply that is reasoning plus only whitespace counts as reasoning-only. The max-iterations progress summary keeps its own single, unretried failure for a reasoning-only reply (the check lives in the ReAct loop, not in `runStream`, so the summary's 3-attempt retry cannot re-stream a degenerate block).
+- **Not done (out of scope, as agreed)**: the same loop *with* a tool call attached is still accepted and persisted; detecting repetition mid-stream and aborting the attempt is its own story.
+
 ## [0.96.3] - 2026-10-26
 
 ### Fixed — background `bash` commands left zombie processes

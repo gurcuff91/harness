@@ -18,6 +18,37 @@ import (
 // never persisted.
 var ErrEmptyResponse = errors.New("model returned an empty response")
 
+// ErrReasoningOnly: an iteration completed with reasoning but neither an answer
+// nor a tool call. The text is a stable, recognisable contract — an orchestrator
+// classifies it as a recoverable stop and retries with a "continue" prompt.
+//
+// Unlike ErrEmptyResponse it is NOT retried by harness: the reasoning has already
+// streamed to the client (and a model stuck in a degenerate reasoning loop just
+// produces it again), so the turn ends and the caller decides. It is also never
+// persisted: the reasoning of such a response can be tens of thousands of
+// characters of a repetition loop, and storing it would replay that in every
+// later request.
+var ErrReasoningOnly = errors.New("model returned reasoning but no answer")
+
+// reasoningOnly reports whether an assistant message carries reasoning and
+// nothing a user or a tool loop can act on: no (non-blank) text, no tool call,
+// nothing else. A message with no reasoning at all is not this case — an empty
+// one is ErrEmptyResponse's, and plain text is a normal answer.
+func reasoningOnly(m types.Message) bool {
+	reasoning := false
+	for _, p := range m.Parts {
+		switch {
+		case p.ToolCall != nil || p.Image != nil || p.ToolResult != nil:
+			return false
+		case strings.TrimSpace(p.Text) != "":
+			return false
+		case p.Thinking != nil && (p.Thinking.Content != "" || p.Thinking.Signature != ""):
+			reasoning = true
+		}
+	}
+	return reasoning
+}
+
 // llmMaxAttempts bounds a ReAct iteration's LLM call: one try plus up to two
 // retries on a transient network failure (see isTransientNetworkError).
 const llmMaxAttempts = 3

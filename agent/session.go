@@ -939,6 +939,20 @@ func (s *Session) promptSync(ctx context.Context, fu followUp, first bool) (retT
 			return "", reported(err)
 		}
 
+		// An iteration that produced reasoning but no answer and no tool call is not
+		// a finished turn: with no tool calls the loop would end here as a success,
+		// and the work would be left half done with nothing telling the client.
+		// Fail it instead — before it is persisted (a reasoning loop can be tens of
+		// thousands of characters, and every later request would replay it) and
+		// without a retry (the reasoning already streamed; see ErrReasoningOnly).
+		// Same shape as the provider-error exit above: error, loop_end, and
+		// turn_end via the defer.
+		if len(resp.ToolCalls) == 0 && reasoningOnly(resp.Message) {
+			s.emit(errorEvent(ErrReasoningOnly))
+			s.emit(types.Event{Type: types.EventLoopEnd, Loop: i})
+			return "", reported(ErrReasoningOnly)
+		}
+
 		if err := s.store.AddMessage(resp.Message); err != nil {
 			// Store error — emit error + loop_end so clients close cleanly.
 			// turn_end is handled by defer emitTurnEnd().
