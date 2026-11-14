@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.97.1] - 2026-11-14
+
+### Fixed — `ColleagueList` gave no hint of where a colleague without sessions lives
+0.97.0 dropped the instance-level `cwd` from what `ColleagueList` shows, on the reasoning that it belongs to each session. But a headless `harness serve` starts with **no** sessions, so its entry carried no working directory at all — in a real listing of eight colleagues, the `server` one was the only row the model could not place in a project.
+
+- **`ColleagueList` shows each colleague's own `cwd` again**, next to the sessions' (a session may have been opened elsewhere, so both are kept). It is where the instance was started, and it is where a new conversation asked of it works — so it is the right thing to look at when choosing a colleague with nothing open.
+- The tool description and the `## Colleagues` system-prompt section explain it ("all you have to place a colleague that has no active session") and tell the model to choose by the colleague's or a session's working directory.
+- Tests: the entry carries the instance cwd (distinct from its sessions'), a colleague with no sessions still shows it, and the prompt section explains it; each fails without the change.
+
 ## [0.97.0] - 2026-11-14
 
 ### Changed — colleagues talk to ACTIVE sessions, and `ColleagueList` shows them (and only live colleagues)

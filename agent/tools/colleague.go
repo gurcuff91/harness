@@ -66,12 +66,15 @@ func environmentLabel(transport string) string {
 // (not the on-disk field name "transport") is what the model reasons over — see
 // the "## Colleagues" system prompt section.
 //
-// There is deliberately no instance-level working directory: it belongs to each
-// session (they normally all share the instance's, but a session may have been
-// opened elsewhere), so it lives on colleagueSession and is never duplicated here.
+// CWD is the instance's own working directory — where it was started, and where
+// a NEW conversation asked of it will work. It is the only hint of where a
+// colleague lives when it has no active session (a headless server starts with
+// none); each session carries its own cwd too, since one may have been opened
+// elsewhere.
 type colleagueListEntry struct {
 	Name        string `json:"name"`
 	Environment string `json:"environment"`
+	CWD         string `json:"cwd"`
 	Version     string `json:"version"`
 	// Sessions are the colleague's ACTIVE sessions — open right now, so they can be
 	// prompted directly with ColleagueAsk's `session`, no resume. Empty when it has
@@ -124,7 +127,7 @@ func ColleagueList(directory ColleagueDirectory) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolColleagueList,
-			Description: "List the other colleague instances currently reachable — each is a live agent you can delegate to via ColleagueAsk. Returns each colleague's name (use it with ColleagueAsk), its environment (tui, slack, telegram or server), its version, and its ACTIVE sessions: for each one its id, name, working directory, model and whether it is busy right now. Pass a session id to ColleagueAsk to talk to that session directly. Returns an empty list if no colleagues are reachable — that's normal, not an error.",
+			Description: "List the other colleague instances currently reachable — each is a live agent you can delegate to via ColleagueAsk. Returns each colleague's name (use it with ColleagueAsk), its environment (tui, slack, telegram or server), its working directory (where it was started — the project it belongs to, and where a new conversation with it works), its version, and its ACTIVE sessions: for each one its id, name, working directory, model and whether it is busy right now. Pass a session id to ColleagueAsk to talk to that session directly. Returns an empty list if no colleagues are reachable — that's normal, not an error.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 		},
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
@@ -154,6 +157,7 @@ func ColleagueList(directory ColleagueDirectory) Tool {
 					results[i] = &colleagueListEntry{
 						Name:        c.name,
 						Environment: environmentLabel(c.info.Transport),
+						CWD:         c.info.CWD,
 						Version:     c.info.Version,
 						Sessions:    sessions,
 					}

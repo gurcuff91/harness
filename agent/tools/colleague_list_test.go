@@ -31,7 +31,7 @@ func colleagueAt(url, transport string) Colleague {
 }
 
 // What the model receives: per colleague its name, environment, version and ACTIVE
-// sessions (id, name, cwd, model, busy) — and no instance-level cwd.
+// sessions (id, name, cwd, model, busy) — plus the instance's own cwd.
 func TestColleagueListShowsActiveSessions(t *testing.T) {
 	srv := newFakeColleagueServer()
 	srv.addActive("s-1", "Fix the bug", "/proj/a", false)
@@ -58,14 +58,12 @@ func TestColleagueListShowsActiveSessions(t *testing.T) {
 	if s := by["s-2"]; s.Name != "Refactor" || s.CWD != "/proj/b" || !s.Busy {
 		t.Errorf("s-2 = %+v (busy must be reported)", s)
 	}
-	// the instance's cwd is gone from what the model sees: it lives on the sessions
+	// the instance's own cwd is shown too, distinct from the sessions' (a session
+	// may have been opened elsewhere)
 	var generic []map[string]any
 	json.Unmarshal([]byte(raw), &generic)
-	if _, has := generic[0]["cwd"]; has {
-		t.Errorf("the entry still carries an instance-level cwd: %s", raw)
-	}
-	if strings.Contains(raw, "/instance/cwd") {
-		t.Errorf("the registry's instance cwd leaked into the list: %s", raw)
+	if got[0].CWD != "/instance/cwd" || generic[0]["cwd"] != "/instance/cwd" {
+		t.Errorf("instance cwd = %q (raw %v), want /instance/cwd: %s", got[0].CWD, generic[0]["cwd"], raw)
 	}
 	if _, has := generic[0]["sessions"]; !has {
 		t.Errorf("no sessions field: %s", raw)
@@ -84,6 +82,11 @@ func TestColleagueListColleagueWithNoSessionsIsStillListed(t *testing.T) {
 	}
 	if !strings.Contains(raw, `"sessions": []`) {
 		t.Errorf("sessions must encode as [] not null: %s", raw)
+	}
+	// with no session to carry a cwd, the instance's is the only hint of where
+	// this colleague lives
+	if got[0].CWD != "/instance/cwd" || !strings.Contains(raw, `"cwd": "/instance/cwd"`) {
+		t.Errorf("a colleague with no sessions must still show its cwd: %s", raw)
 	}
 }
 
