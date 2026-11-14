@@ -20,6 +20,11 @@ type channelPump struct {
 	sessionID string
 	model     string          // the session's actual model (for logs)
 	buf       strings.Builder // accumulates the current turn's text
+	// quiet is true while the running turn answers a colleague's prompt: its
+	// reply belongs to the colleague, not to this channel, so nothing of it is
+	// posted. Set from the prompt echo, cleared at turn_end. Touched only by the
+	// drain goroutine.
+	quiet bool
 
 	mu              sync.Mutex
 	typingCancel    context.CancelFunc // stops the current typing heartbeat, if any
@@ -172,7 +177,9 @@ func (t *Transport) drain(ctx context.Context, p *channelPump, events <-chan cli
 	for evt := range events {
 		switch evt.Type {
 		case "turn_start":
-			t.startTyping(ctx, p)
+			if !p.quiet {
+				t.startTyping(ctx, p)
+			}
 		case "text":
 			if evt.Delta != "" {
 				p.buf.WriteString(evt.Delta)
@@ -190,6 +197,7 @@ func (t *Transport) drain(ctx context.Context, p *channelPump, events <-chan cli
 		case "turn_end":
 			t.flushReason(ctx, p, "turn_end")
 			t.stopTyping(p)
+			p.quiet = false
 		case "compact_start":
 			if !p.compactExpected.Swap(false) {
 				t.send(ctx, p.channelID, "🗜 Context almost full — compacting automatically…")
@@ -202,15 +210,23 @@ func (t *Transport) drain(ctx context.Context, p *channelPump, events <-chan cli
 		case "error":
 			p.buf.Reset()
 			t.stopTyping(p)
-			if evt.Message != "" || len(evt.Details) > 0 {
+			if !p.quiet && (evt.Message != "" || len(evt.Details) > 0) {
 				t.send(ctx, p.channelID, formatError(evt.Message, evt.Details))
 			}
 		case "max_iterations_reached":
 			t.flushReason(ctx, p, "max_iterations_reached")
-		case "received_prompt":
+		case "received_prompt", "follow_up_start":
+			// A prompt echo: the turn that follows answers THIS prompt, whoever sent
+			// it. A colleague's question is answered to the colleague — posting that
+			// here would show the channel an answer without its question — so the
+			// turn runs quiet. A scheduled task is work this channel asked for: it
+			// keeps its output and gets a typing indicator like a typed message.
+			p.quiet = evt.Origin == "colleague"
 			if evt.Origin == "scheduled" || evt.Origin == "colleague" {
 				t.logger.Info("slack", evt.Origin+"_prompt",
-					"channel", p.channelID, "text", oneLine(evt.Text, 200))
+					"channel", p.channelID, "quiet", p.quiet, "text", oneLine(evt.Text, 200))
+			}
+			if evt.Origin == "scheduled" {
 				t.startTyping(ctx, p)
 			}
 		}
@@ -225,7 +241,7 @@ func (t *Transport) drain(ctx context.Context, p *channelPump, events <-chan cli
 func (t *Transport) flushReason(ctx context.Context, p *channelPump, reason string) {
 	text := strings.TrimSpace(p.buf.String())
 	p.buf.Reset()
-	if text != "" {
+	if text != "" && !p.quiet {
 		t.sendWithUploads(ctx, p.channelID, text, reason)
 	}
 }

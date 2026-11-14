@@ -16,10 +16,15 @@ import (
 // One pump per active chat; it stays alive for the process so scheduled prompts
 // (routed to this session by owner) are delivered to the chat too.
 type chatPump struct {
-	chatID       int64
-	sessionID    string
-	model        string          // the session's actual model (for logs)
-	buf          strings.Builder // accumulates the current turn's text
+	chatID    int64
+	sessionID string
+	model     string          // the session's actual model (for logs)
+	buf       strings.Builder // accumulates the current turn's text
+	// quiet is true while the running turn answers a colleague's prompt: its
+	// reply belongs to the colleague, not to this chat, so nothing of it is sent.
+	// Set from the prompt echo, cleared at turn_end. Touched only by the drain
+	// goroutine.
+	quiet        bool
 	typingMu     sync.Mutex
 	typingCancel context.CancelFunc // stops the current typing heartbeat, if any
 	// compactExpected is set by /compact so the drain knows the next compact_start
@@ -187,17 +192,24 @@ func (t *Transport) drain(ctx context.Context, p *chatPump, events <-chan client
 	for evt := range events {
 		switch evt.Type {
 		case "turn_start":
-			p.startTyping(ctx, t.bot)
+			if !p.quiet {
+				p.startTyping(ctx, t.bot)
+			}
 		case "text":
 			if evt.Delta != "" {
 				p.buf.WriteString(evt.Delta)
 			}
-		case "received_prompt":
-			// A prompt the transport didn't send — a scheduled one fired by the
-			// engine, or one a colleague sent into this session. Log it, and keep
-			// typing alive for it too.
+		case "received_prompt", "follow_up_start":
+			// A prompt echo: the turn that follows answers THIS prompt, whoever sent
+			// it. A colleague's question is answered to the colleague — sending that
+			// here would show the chat an answer without its question — so the turn
+			// runs quiet. A scheduled task is work this chat asked for: it keeps its
+			// output and gets a typing indicator like a typed message.
+			p.quiet = evt.Origin == "colleague"
 			if evt.Origin == "scheduled" || evt.Origin == "colleague" {
-				t.logger.Info("telegram", evt.Origin+"_prompt", "chat", p.chatID, "text", oneLine(evt.Text, 200))
+				t.logger.Info("telegram", evt.Origin+"_prompt", "chat", p.chatID, "quiet", p.quiet, "text", oneLine(evt.Text, 200))
+			}
+			if evt.Origin == "scheduled" {
 				p.startTyping(ctx, t.bot)
 			}
 		case "text_end":
@@ -210,6 +222,7 @@ func (t *Transport) drain(ctx context.Context, p *chatPump, events <-chan client
 		case "turn_end":
 			t.flush(ctx, p)
 			p.stopTyping()
+			p.quiet = false
 		case "compact_start":
 			// A manual /compact already announced itself; only announce here when the
 			// engine compacts on its own (context near full).
@@ -221,7 +234,7 @@ func (t *Transport) drain(ctx context.Context, p *chatPump, events <-chan client
 		case "error":
 			p.buf.Reset()
 			p.stopTyping()
-			if evt.Message != "" || len(evt.Details) > 0 {
+			if !p.quiet && (evt.Message != "" || len(evt.Details) > 0) {
 				t.reply(ctx, p.chatID, formatError(evt.Message, evt.Details))
 			}
 		case "max_iterations_reached":
@@ -236,7 +249,7 @@ func (t *Transport) drain(ctx context.Context, p *chatPump, events <-chan client
 func (t *Transport) flush(ctx context.Context, p *chatPump) {
 	text := strings.TrimSpace(p.buf.String())
 	p.buf.Reset()
-	if text != "" {
+	if text != "" && !p.quiet {
 		t.reply(ctx, p.chatID, text)
 	}
 }

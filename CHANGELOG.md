@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.97.2] - 2026-11-15
+
+### Changed — Slack and Telegram: a colleague's prompt is answered to the colleague, not posted in the chat
+When another harness instance asked a question of a Slack- or Telegram-bound session (`ColleagueAsk` with that session's id), the pump treated it like a scheduled prompt: it turned on the typing indicator and posted the agent's reply in the channel. But the channel never saw the question — people read an answer to something nobody there had said, and the prompt carried no `<slack:user>`/`<slack:channel>` tags, so the agent had nobody to @mention (and could assume the last person who wrote). The answer already goes back to the colleague as the tool's result; posting it in Slack was only noise.
+
+- **A turn that answers a colleague's prompt is quiet in Slack**: no reply text (nor mid-turn text flushed before a tool call), no error message, no typing indicator. The turn still runs, the conversation keeps it and the colleague gets its answer. It is logged (`colleague_prompt … quiet=true`).
+- **Scheduled prompts are unchanged**: they are work the channel asked for, so their output is still posted, with the typing indicator.
+- The quiet flag lasts exactly one turn: it is set from the prompt echo (`received_prompt` and queued `follow_up_start`) and cleared at `turn_end`; the next echo resets it even if a turn ended without `turn_end` (a stop), so a typed message right after is answered normally. Compaction notices still appear — they concern the channel's own conversation.
+- **The Slack directive now covers messages without context tags** (new section): a message with no `<slack:user>` tag was written by another agent or a scheduled task, so rules 5 and 6 (always @mention, never assume the sender) don't apply — no mention, no assumed sender; for another agent, answer plainly because the reply goes back to it and is not posted in the channel; for a scheduled task the reply is posted, just without a mention. Rule 5 now points at that exception.
+- Tests: pump-level (colleague quiet for text, tool-call flush and errors; every other origin still posts; no leak across turns, including a queued colleague follow-up and an interrupted turn; typing only for scheduled), an end-to-end test through the real server/session/pump with a fake Slack (the colleague gets its answer, Slack receives nothing, the model sees the text untouched, and the next typed message is posted), and the directive section. Each fails when the corresponding behaviour is removed.
+- **Telegram behaves the same way** (same `quiet` flag on its pump, same lifecycle and the same tests, including an end-to-end one against a fake Bot API): a colleague's turn sends no reply, no error and no "typing…"; scheduled prompts still send their output with typing. Telegram's directive needed no change — it has no per-sender tags or mentions, so there is no "untagged message" rule to add.
+
 ## [0.97.1] - 2026-11-14
 
 ### Fixed — `ColleagueList` gave no hint of where a colleague without sessions lives
