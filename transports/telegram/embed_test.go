@@ -81,6 +81,7 @@ func embedTransportSrv(t *testing.T, opts Options) (*Transport, *agent.Agent, *s
 	if err := agent.NewOpenAIProvider(provName, models.URL); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { agent.UnregisterCustomProvider(provName) })
 	a := agent.New(agent.AgentOptions{Store: agentstore.NewInMemoryStore()})
 	t.Cleanup(func() { a.Close() })
 	srv, err := server.Start(a, "", server.ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})

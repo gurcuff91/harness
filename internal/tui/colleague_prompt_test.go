@@ -40,6 +40,19 @@ func TestTUIEchoesAColleaguePromptWithItsIcon(t *testing.T) {
 		t.Fatalf("setup: the TUI is on %q, want %q", tu.sessionID, f.sessionID)
 	}
 
+	// autoConnect opens the event stream in a goroutine, so a prompt sent right
+	// away can be emitted before the stream is subscribed and its echo is lost.
+	// Replace it with a stream opened here: StreamEvents returns once the server
+	// has subscribed this client, so everything sent after it is delivered.
+	tu.sseCancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	events, err := f.c.StreamEvents(ctx, f.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go tu.consumeEvents(ctx, events)
+
 	// A colleague prompts the session the TUI holds — exactly what ColleagueAsk does.
 	go f.c.Ask(f.sessionID, "colleague says hi", 20*time.Second, client.WithOrigin("colleague"), client.WithoutQueue()) //nolint:errcheck
 	deadline := time.Now().Add(10 * time.Second)

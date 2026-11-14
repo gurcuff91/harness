@@ -65,6 +65,7 @@ func sharedServer(t *testing.T, llm *fakeLLM) (*Server, *agent.Agent, string) {
 	if err := agent.NewOpenAIProvider(prov, ts.URL); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { agent.UnregisterCustomProvider(prov) })
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
 	t.Cleanup(func() { a.Close() })
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})

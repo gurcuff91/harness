@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -74,6 +75,11 @@ func TestHandleOAuthStartCodexBindsListenerAndSecondCallConflicts(t *testing.T) 
 	if out1["verifier_code"] == "" {
 		t.Fatal("missing verifier_code")
 	}
+	// The flow's listener holds the fixed port 1455 until a callback arrives (or
+	// 5 minutes pass). Release it the way a browser would — the one-shot callback —
+	// so this test can run again in the same process (-count>1) and doesn't leave
+	// the port to whatever runs next.
+	t.Cleanup(func() { releaseCodexCallbackPort(t) })
 
 	// A second concurrent Start for codex-oauth must fail — the first
 	// flow's listener still holds port 1455.
@@ -125,4 +131,22 @@ func TestHandleOAuthCodexListenerTimeoutReleasesPort(t *testing.T) {
 	// server ever grows its own listener bookkeeping.
 	t.Skip("covered by internal/oauthflow.TestCodexListenerAutoShutsDownAfterTimeout")
 	_ = time.Second
+}
+
+// releaseCodexCallbackPort hits the codex login's one-shot callback page, which
+// shuts its listener down, and waits until port 1455 can be bound again.
+func releaseCodexCallbackPort(t *testing.T) {
+	t.Helper()
+	if resp, err := http.Get("http://localhost:1455/auth/callback?code=test-cleanup"); err == nil {
+		resp.Body.Close()
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if l, err := net.Listen("tcp", "localhost:1455"); err == nil {
+			l.Close()
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Error("port 1455 was not released after the callback")
 }

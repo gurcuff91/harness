@@ -47,6 +47,7 @@ func windowServerWithHandle(t *testing.T, layout string) (srv *Server, c *client
 	})); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { agent.UnregisterCustomProvider(prov) })
 	a := agent.New(agent.AgentOptions{Store: fs, ResourceLoader: resources.NilLoader{}})
 	t.Cleanup(func() { a.Close() })
 	srv, err = Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})

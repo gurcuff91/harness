@@ -55,6 +55,7 @@ func TestDeadStreamIsRetriedEndToEnd(t *testing.T) {
 	if err := agent.NewOpenAIProvider("e2e-retry-gw", gw.URL); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { agent.UnregisterCustomProvider("e2e-retry-gw") })
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
 	defer a.Close()
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
@@ -139,6 +140,7 @@ func TestEmptyCompletionIsRetriedEndToEnd(t *testing.T) {
 	if err := agent.NewOpenAIProvider("e2e-empty-gw", gw.URL); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { agent.UnregisterCustomProvider("e2e-empty-gw") })
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
 	defer a.Close()
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})

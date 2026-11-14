@@ -29,6 +29,7 @@ func TestSessionDirectivesOverHTTP(t *testing.T) {
 	if err := agent.NewOpenAIProvider("srv-directives-fake", models.URL); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { agent.UnregisterCustomProvider("srv-directives-fake") })
 	st := store.NewInMemoryStore()
 	a := agent.New(agent.AgentOptions{Store: st, ResourceLoader: resources.NilLoader{}})
 	defer a.Close()
@@ -84,6 +85,7 @@ func TestSessionSystemPromptEndpoint(t *testing.T) {
 	if err := agent.NewOpenAIProvider("srv-sysprompt-fake", models.URL); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { agent.UnregisterCustomProvider("srv-sysprompt-fake") })
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
 	defer a.Close()
 	ts := httptest.NewServer(NewServer(a, ServerOptions{Logger: logx.NewNilLogger()}).handler())
@@ -133,6 +135,7 @@ func TestKeepAgentOpen(t *testing.T) {
 	if err := agent.NewOpenAIProvider("srv-keepopen-fake", models.URL); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { agent.UnregisterCustomProvider("srv-keepopen-fake") })
 	mem := &closeCounter{SessionStore: store.NewInMemoryStore()}
 	a := agent.New(agent.AgentOptions{Store: mem, ResourceLoader: resources.NilLoader{}})
 	defer a.Close()
@@ -188,9 +191,12 @@ func TestSessionMaxTokensInAPI(t *testing.T) {
 	defer models.Close()
 	// Catalogs: "big" says 512k (capped to 64k), "small" says 8k, "none" unknown.
 	reg := func(name string, max int) {
-		agent.NewOpenAIProvider(name, models.URL, agent.ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
+		if err := agent.NewOpenAIProvider(name, models.URL, agent.ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
 			return []types.ModelMeta{{ID: "m", ContextWindow: 1_000_000, MaxTokens: max}}, nil
-		}))
+		})); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { agent.UnregisterCustomProvider(name) })
 	}
 	reg("mt-big", 512000)
 	reg("mt-small", 8000)

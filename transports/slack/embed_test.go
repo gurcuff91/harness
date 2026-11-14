@@ -34,6 +34,7 @@ func newSharedServer(t *testing.T, opts agent.AgentOptions) (*server.Server, *ag
 	if err := agent.NewOpenAIProvider(provName, models.URL); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { agent.UnregisterCustomProvider(provName) })
 	opts.Store = agentstore.NewInMemoryStore()
 	a := agent.New(opts)
 	t.Cleanup(func() { a.Close() })
