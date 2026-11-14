@@ -596,3 +596,28 @@ func TestActiveModelEqualToTheFailedOneIsNotRetried(t *testing.T) {
 		}
 	}
 }
+
+// ResumeSessionReport says whether THIS call opened the session: true for a
+// closed one, false for one that was already live (and then it is the same
+// handle). A caller that must close only what it opened depends on this.
+func TestResumeSessionReportSaysWhetherItOpenedTheSession(t *testing.T) {
+	p := newSwitchable("fb-saved", 1000, "m1")
+	a, _ := fallbackEnv(t, p)
+	id := savedSession(t, a, "fb-saved/m1")
+
+	s, opened, err := a.ResumeSessionReport(id)
+	if err != nil || !opened {
+		t.Fatalf("closed session: opened=%v err=%v, want opened=true", opened, err)
+	}
+	again, opened, err := a.ResumeSessionReport(id)
+	if err != nil || opened || again != s {
+		t.Fatalf("live session: opened=%v same=%v err=%v, want opened=false and the same handle", opened, again == s, err)
+	}
+	// the plain wrapper still behaves
+	if third, err := a.ResumeSession(id); err != nil || third != s {
+		t.Fatalf("ResumeSession wrapper: %v", err)
+	}
+	if _, opened, err := a.ResumeSessionReport("no-such-session"); err == nil || opened {
+		t.Fatalf("unknown id: opened=%v err=%v, want an error and opened=false", opened, err)
+	}
+}

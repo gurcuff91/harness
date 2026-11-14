@@ -25,6 +25,7 @@ import (
 // first, and the default model on the second. disconnect(name) removes a
 // provider from the registry — "the provider got disconnected".
 type fallbackFixture struct {
+	store         *store.Session // a handle on the saved session's log, to seed its history
 	c             *client.Client
 	sessionID     string
 	first, second string
@@ -62,7 +63,8 @@ func newFallbackFixture(t *testing.T) *fallbackFixture {
 		providers.SetForTest(keep) // restored by the Cleanup above, which holds the original
 	}
 
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	fs := store.NewInMemoryStore()
+	a := agent.New(agent.AgentOptions{Store: fs, ResourceLoader: resources.NilLoader{}})
 	t.Cleanup(func() { a.Close() })
 	srv, err := server.Start(a, "", server.ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
 	if err != nil {
@@ -80,6 +82,9 @@ func newFallbackFixture(t *testing.T) *fallbackFixture {
 		t.Fatal(err)
 	}
 	f.sessionID = sess.ID
+	if f.store, err = store.OpenSession(fs, sess.ID); err != nil || f.store == nil {
+		t.Fatalf("open session store: %v", err)
+	}
 	return f
 }
 

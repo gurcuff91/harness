@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -129,7 +130,7 @@ func (c *Client) doHeaders(ctx context.Context, method, path string, body any) (
 		return nil, nil, fmt.Errorf("read: %w", err)
 	}
 	if resp.StatusCode >= 400 {
-		if ae := parseError(data); ae != nil {
+		if ae := parseError(data, resp.StatusCode); ae != nil {
 			return data, resp.Header, ae
 		}
 		return data, resp.Header, fmt.Errorf("%s", string(bytes.TrimSpace(data)))
@@ -492,6 +493,18 @@ func (c *Client) ListSessions(cwd string) ([]Session, error) {
 	return decode[[]Session](c, "GET", path, nil)
 }
 
+// ListActiveSessions returns the sessions open in the server RIGHT NOW (not the
+// persisted ones ListSessions returns), each with whether a turn is in flight.
+// Every one of them can be prompted directly — no ResumeSession needed. cwd,
+// when non-empty, keeps only that working directory's sessions.
+func (c *Client) ListActiveSessions(cwd string) ([]ActiveSession, error) {
+	path := "/api/sessions?active=true"
+	if cwd != "" {
+		path += "&cwd=" + url.QueryEscape(cwd)
+	}
+	return decode[[]ActiveSession](c, "GET", path, nil)
+}
+
 // GetSession returns one session's metadata (model, thinking, stats, …).
 func (c *Client) GetSession(id string) (*Session, error) {
 	return ptr(decode[Session](c, "GET", "/api/sessions/"+id, nil))
@@ -518,7 +531,10 @@ func (c *Client) ForkSession(id string) (*Session, error) {
 	return &s, nil
 }
 
-// ResumeSession reopens an existing session by id.
+// ResumeSession reopens an existing session by id. It is idempotent: a session
+// that is already active is returned as it is. Session.Resumed tells the two
+// apart (true: this call opened it) — check it before CloseSession on a session
+// you only resumed to talk to, so you never close one somebody else has open.
 func (c *Client) ResumeSession(id string, opts ...SessionOption) (*Session, error) {
 	o := applyClientSessionOptions(opts)
 	var body any
@@ -554,6 +570,21 @@ func WithOrigin(origin string) PromptOption {
 			body["origin"] = origin
 		}
 	}
+}
+
+// WithoutQueue makes the prompt run only if the session is idle. A session with a
+// turn in flight answers 409 instead of queueing it behind that turn — Ask /
+// SendPrompt then return an *Error with Status 409 (see IsBusy) and nothing was
+// stored in the session. Use it to talk to a session somebody else is using.
+func WithoutQueue() PromptOption {
+	return func(body map[string]any) { body["no_queue"] = true }
+}
+
+// IsBusy reports whether err is the "session is busy" refusal of a prompt sent
+// WithoutQueue.
+func IsBusy(err error) bool {
+	var ae *Error
+	return errors.As(err, &ae) && ae.Status == http.StatusConflict && ae.Message == "session is busy"
 }
 
 func promptBody(text string, images []types.ImageData, opts []PromptOption) map[string]any {
@@ -647,7 +678,7 @@ func (c *Client) GetMessageImage(sessionID string, index, n int) (data []byte, m
 		return nil, "", fmt.Errorf("read: %w", err)
 	}
 	if resp.StatusCode >= 400 {
-		if ae := parseError(data); ae != nil {
+		if ae := parseError(data, resp.StatusCode); ae != nil {
 			return nil, "", ae
 		}
 		return nil, "", fmt.Errorf("%s", strings.TrimSpace(string(data)))

@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.97.0] - 2026-11-14
+
+### Changed — colleagues talk to ACTIVE sessions, and `ColleagueList` shows them (and only live colleagues)
+`ColleagueAsk` used to create a brand-new session on the colleague for every question (or resume a persisted one by id), so it could never reach the conversation a person was actually having in a TUI, left an unlabelled session on disk each time, and — worse — if the target was mid-turn the message was queued behind it, stalled the call and was written into somebody else's conversation. `ColleagueList` couldn't say who was busy or even who was alive. Now:
+
+- **`ColleagueList` returns each colleague's active sessions**: `id`, `name`, `cwd`, `model` and `busy`. The instance-level `cwd` is gone from the model's view — it belongs to the session (they normally share it, but one can be opened elsewhere). It also **probes every colleague concurrently** (2 s cap, the same request that fetches the sessions) and **omits the ones that don't answer** — a crashed instance or one suspended with Ctrl+Z no longer shows up as available; the call costs about one probe, not N.
+- **`environment` is `tui`, `slack`, `telegram` or `server`** — `server` is everything that isn't one of the other three (headless `serve`, the CLI, ACP…). `generic` no longer exists.
+- **`ColleagueAsk` with an ACTIVE `session` prompts it directly**: no resume, no new session, and the session is left open (it isn't ours to close).
+- **A conversation can be continued by id.** Without `session`, `ColleagueAsk` still starts a NEW conversation (the colleague's working directory and its default model) and closes it once answered — but the reply now ends with `[colleague session: <id> — closed …; pass this id as `session` to continue…]`. Passing that id (or any other persisted session of the colleague) **resumes it, asks, and closes it again** — it is picked up exactly where it left off (verified: two turns → 4 messages, the colleague's model saw both). An id that exists nowhere is an error ("not found… omit `session` to start a new conversation"); it never silently becomes a fresh session. There are no `keep_session`/`close_session` switches: an active session is left open, one the tool opened is closed.
+- **The tool only closes what it opened.** Resume is idempotent, so "resume then close" used to be able to end somebody else's live session (reproduced: a user's next prompt got 404). `POST …/resume` now reports `resumed` — true when that call opened the session, false when it was already active — and the tool closes only on `true`. If a person opens the session between the tool's check and its resume, the answer says it is active and the session stays open.
+- **A busy session is refused, never queued.** The tool returns an error at once ("busy… the message was NOT sent… never queued"), so the model can pick another session or wait. Nothing is stored in the conversation and nothing reaches the model. The check is made by the colleague's server atomically with the send (`no_queue`), so a session that turned busy after you listed it is still caught.
+- **The prompt arrives marked `colleague`**, like the scheduler's. A TUI that has that session open shows it with its own icon — `⇄`, next to `◷` for scheduled and `❯` for typed — and the work it triggers, instead of passing it off as typed by the user; the origin is stored, so a reloaded history keeps the icons. Telegram and Slack treat it like a scheduled prompt (logged, typing indicator). **The model is not told who sent it** — same as with schedules.
+- The `## Colleagues` section of the system prompt now explains environments, sessions, `busy` and what to do when a session is busy.
+
+**HTTP / SDK** (additive):
+- `GET /api/sessions?active=true` lists the sessions open in the server (with `busy`); `client.ListActiveSessions(cwd)`.
+- `POST …/prompt` and `…/ask` accept `no_queue: true` — a session with a turn in flight answers **409 "session is busy"** and nothing is queued or stored. `client.WithoutQueue()`, `client.IsBusy(err)`, and `client.Error.Status` (the HTTP status) so callers can classify failures without matching text.
+- Agent SDK: `agent.PromptWithoutQueue()` (`Prompt` returns `types.PromptRejected`, `PromptAndWait` returns `ErrBusy`); the check and the enqueue are one step under the queue lock, so exactly one of N racing no-queue prompts on an idle session starts and the rest are refused.
+- `POST …/resume` returns `resumed` (additive, on that response only): `true` when the call opened the session, `false` when it was already active. `client.Session.Resumed` (`*bool`); Agent SDK: `Agent.ResumeSessionReport(id, opts…)` returns `(session, opened, err)` — `ResumeSession` is unchanged.
+- OpenAPI documents `no_queue`, `resumed`, the 409s, `ActiveSession` and the `colleague` origin.
+
+**Behaviour changes to know about**: `generic` is gone from `environment`; a new conversation's reply now carries its session id (and no longer says it "cannot be continued"); a `session` that is not active is resumed for the question and closed again instead of being refused; and a plain `/ask` without `no_queue` still queues exactly as before. Known gap: a TUI's session is `busy` only while a turn runs, not while its user is typing, so a colleague can still land a prompt in that gap.
+
 ## [0.96.4] - 2026-10-27
 
 ### Fixed — a turn that ends with reasoning only (no answer, no tool call) completed as a success

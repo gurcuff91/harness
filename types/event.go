@@ -141,4 +141,7 @@ type PromptStatus int
 const (
 	PromptStarted PromptStatus = iota // prompt was dequeued and is now processing
 	PromptQueued                      // prompt was added to the queue (session was busy)
+	// PromptRejected: the session was busy and the caller asked NOT to queue
+	// (PromptWithoutQueue) — nothing was stored, nothing will run.
+	PromptRejected
 )

@@ -13,6 +13,7 @@ import (
 	"net/http/pprof"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1007,8 +1008,49 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, liveDetail(sess))
 }
 
+// activeSession is one element of GET /api/sessions?active=true: a session that
+// is open in THIS server right now, with what a peer needs to decide whether and
+// how to talk to it. Everything listed here can be prompted (POST
+// /api/sessions/{id}/prompt|ask) without resuming anything.
+type activeSession struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	CWD   string `json:"cwd"`
+	Model string `json:"model"`
+	// Busy: a turn is in flight. A prompt sent with no_queue is refused (409)
+	// while it is true.
+	Busy bool `json:"busy"`
+}
+
+// activeSessionList returns the sessions open in this server, sorted by name then
+// id so the output is stable. cwd, when non-empty, keeps only that working
+// directory's sessions. Lock-free reads only (Meta/IsBusy): safe while turns run.
+func (s *Server) activeSessionList(cwd string) []activeSession {
+	s.mu.RLock()
+	out := make([]activeSession, 0, len(s.sessions))
+	for id, proxy := range s.sessions {
+		m := proxy.session.Meta()
+		if cwd != "" && m.CWD != cwd {
+			continue
+		}
+		out = append(out, activeSession{ID: id, Name: m.Name, CWD: m.CWD, Model: m.Model, Busy: proxy.session.IsBusy()})
+	}
+	s.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
 // handleListSessions returns all sessions, optionally filtered by ?cwd=
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("active") == "true" {
+		writeJSON(w, http.StatusOK, s.activeSessionList(r.URL.Query().Get("cwd")))
+		return
+	}
 	cwd := r.URL.Query().Get("cwd")
 	var sessions []store.SessionMeta
 	var err error
@@ -1274,7 +1316,7 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	sess, err := s.openSession(id, req.Profiles, req.Directives)
+	sess, opened, err := s.openSession(id, req.Profiles, req.Directives)
 	if err != nil {
 		status := http.StatusInternalServerError
 		switch {
@@ -1290,7 +1332,9 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	}
 	// Meta() is the lock-free public accessor — safe even if the session is
 	// mid-turn (see its doc comment).
-	writeJSON(w, http.StatusOK, liveDetail(sess))
+	detail := liveDetail(sess)
+	detail.Resumed = &opened
+	writeJSON(w, http.StatusOK, detail)
 }
 
 // openSession resumes session id in this server — idempotent and atomic, so
@@ -1301,7 +1345,13 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 // directives); if it's already active — in this server or in the agent (the
 // scheduler, a colleague, …) — and the binding changed, it's reconfigured at
 // its next turn boundary, never mid-turn.
-func (s *Server) openSession(id string, addProfiles, extraDirectives []string) (*agent.Session, error) {
+//
+// opened reports whether THIS call is what made the session active: false when it
+// was already open — in this server, or live in the agent outside it. Resuming is
+// idempotent, so the caller cannot otherwise tell "I opened it" from "somebody was
+// already using it", and a caller that closes what it resumed must close only the
+// former.
+func (s *Server) openSession(id string, addProfiles, extraDirectives []string) (sess *agent.Session, opened bool, err error) {
 	s.openMu.Lock()
 	defer s.openMu.Unlock()
 
@@ -1309,7 +1359,7 @@ func (s *Server) openSession(id string, addProfiles, extraDirectives []string) (
 	merged, changed := mergeProfiles(bound, addProfiles)
 	if changed {
 		if err := s.agent.SetSessionProfiles(id, merged); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 
@@ -1320,16 +1370,16 @@ func (s *Server) openSession(id string, addProfiles, extraDirectives []string) (
 		if changed {
 			_ = s.agent.ReconfigureSession(id, s.profileOptions(merged, nil)...)
 		}
-		return proxy.session, nil
+		return proxy.session, false, nil
 	}
 
 	// Not in this server: resume through the agent. If the agent already has
 	// it live (opened outside the server), this returns that same object and
 	// ignores the options — so reconfigure it explicitly when the binding
 	// changed.
-	sess, err := s.agent.ResumeSession(id, s.profileOptions(merged, extraDirectives)...)
+	sess, openedByAgent, err := s.agent.ResumeSessionReport(id, s.profileOptions(merged, extraDirectives)...)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if changed {
 		_ = s.agent.ReconfigureSession(id, s.profileOptions(merged, extraDirectives)...)
@@ -1337,7 +1387,7 @@ func (s *Server) openSession(id string, addProfiles, extraDirectives []string) (
 	s.mu.Lock()
 	s.sessions[id] = newSessionProxy(sess, s.logger)
 	s.mu.Unlock()
-	return sess, nil
+	return sess, openedByAgent, nil
 }
 
 // sessionDetailDTO wraps store.SessionMeta with fields that live on the runtime
@@ -1356,6 +1406,13 @@ type sessionDetailDTO struct {
 	// is then the model it runs on now (and is saved with from now on); this
 	// says what it was and why it changed. Omitted in the normal case.
 	ModelFallback *agent.ModelFallback `json:"model_fallback,omitempty"`
+	// Resumed is set only on the response of POST /api/sessions/{id}/resume: true
+	// when that call opened the session, false when it was already active and the
+	// call just returned it. Resume is idempotent, so without this a caller cannot
+	// tell the two apart — and one that closes the sessions it resumes must close
+	// only the ones it opened, or it would end somebody else's live conversation.
+	// Omitted everywhere else.
+	Resumed *bool `json:"resumed,omitempty"`
 }
 
 // liveDetail is the detail DTO of an active session.
@@ -1408,7 +1465,14 @@ type promptRequest struct {
 	// (default), "scheduled", a transport's name ("telegram", "slack",
 	// "acp"), or a caller's own. Echoed on received_prompt/follow_up_start.
 	Origin string `json:"origin,omitempty"`
+	// NoQueue, when true, makes the prompt run only if the session is idle: a
+	// session with a turn in flight answers 409 "session is busy" and the prompt
+	// is neither queued nor stored. Default false: queue behind the running turn.
+	NoQueue bool `json:"no_queue,omitempty"`
 }
+
+// errSessionBusy is the 409 a no_queue prompt gets while a turn is in flight.
+const msgSessionBusy = "session is busy"
 
 func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -1444,7 +1508,14 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		opts = append(opts, agent.PromptWithImages(req.Images...))
 	}
 	opts = append(opts, agent.PromptWithOrigin(req.Origin))
+	if req.NoQueue {
+		opts = append(opts, agent.PromptWithoutQueue())
+	}
 	ps := proxy.session.Prompt(context.Background(), req.Text, opts...)
+	if ps == types.PromptRejected {
+		writeError(w, http.StatusConflict, msgSessionBusy, nil)
+		return
+	}
 
 	status := "started"
 	if ps == types.PromptQueued {
@@ -1490,11 +1561,18 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	if len(req.Images) > 0 {
 		opts = append(opts, agent.PromptWithImages(req.Images...))
 	}
+	if req.NoQueue {
+		opts = append(opts, agent.PromptWithoutQueue())
+	}
 
 	// PromptAndWait blocks until the turn finishes — the HTTP client controls
 	// the timeout via its own request context.
 	text, err := proxy.session.PromptAndWait(r.Context(), req.Text, opts...)
 	if err != nil {
+		if errors.Is(err, agent.ErrBusy) {
+			writeError(w, http.StatusConflict, msgSessionBusy, nil)
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}

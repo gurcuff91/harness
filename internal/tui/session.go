@@ -356,7 +356,14 @@ func (t *TUI) replayMessages(messages []types.Message, hidden int) {
 			switch {
 			case part.Text != "":
 				if msg.Role == types.RoleUser {
-					t.addSection("user", ansi.Primary("❯ "+part.Text))
+					// The persisted origin picks the icon, exactly as the live echo does:
+					// a scheduled or colleague prompt must not read as typed by the user
+					// once the session is reloaded.
+					origin := ""
+					if msg.Meta != nil {
+						origin = msg.Meta.Origin
+					}
+					t.addSection("user", ansi.Primary(promptIcon(origin)+" "+part.Text))
 				} else {
 					t.mu.Lock()
 					t.beginSection("text")

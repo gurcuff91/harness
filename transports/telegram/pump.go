@@ -193,10 +193,11 @@ func (t *Transport) drain(ctx context.Context, p *chatPump, events <-chan client
 				p.buf.WriteString(evt.Delta)
 			}
 		case "received_prompt":
-			// A prompt the transport didn't send — i.e. a scheduled one fired by the
-			// engine into this session. Log it, and keep typing alive for it too.
-			if evt.Origin == "scheduled" {
-				t.logger.Info("telegram", "scheduled_prompt", "chat", p.chatID, "text", oneLine(evt.Text, 200))
+			// A prompt the transport didn't send — a scheduled one fired by the
+			// engine, or one a colleague sent into this session. Log it, and keep
+			// typing alive for it too.
+			if evt.Origin == "scheduled" || evt.Origin == "colleague" {
+				t.logger.Info("telegram", evt.Origin+"_prompt", "chat", p.chatID, "text", oneLine(evt.Text, 200))
 				p.startTyping(ctx, t.bot)
 			}
 		case "text_end":

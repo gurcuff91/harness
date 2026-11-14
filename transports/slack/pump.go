@@ -208,8 +208,8 @@ func (t *Transport) drain(ctx context.Context, p *channelPump, events <-chan cli
 		case "max_iterations_reached":
 			t.flushReason(ctx, p, "max_iterations_reached")
 		case "received_prompt":
-			if evt.Origin == "scheduled" {
-				t.logger.Info("slack", "scheduled_prompt",
+			if evt.Origin == "scheduled" || evt.Origin == "colleague" {
+				t.logger.Info("slack", evt.Origin+"_prompt",
 					"channel", p.channelID, "text", oneLine(evt.Text, 200))
 				t.startTyping(ctx, p)
 			}

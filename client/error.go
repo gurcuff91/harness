@@ -12,6 +12,10 @@ import "encoding/json"
 type Error struct {
 	Message string
 	Details map[string]any
+	// Status is the HTTP status code of the response (0 when the Error was not
+	// built from one). It lets a caller classify a failure — 404 vs 409 (busy) —
+	// without matching on the message text.
+	Status int
 }
 
 func (e *Error) Error() string {
@@ -26,7 +30,7 @@ func (e *Error) Error() string {
 // parseError parses a response body into an *Error if it matches harness's
 // standard error shape. Returns nil (not an error) for any other shape —
 // callers fall back to treating the raw body as the message.
-func parseError(body []byte) *Error {
+func parseError(body []byte, status int) *Error {
 	var env struct {
 		Error struct {
 			Message string         `json:"message"`
@@ -34,7 +38,7 @@ func parseError(body []byte) *Error {
 		} `json:"error"`
 	}
 	if json.Unmarshal(body, &env) == nil && env.Error.Message != "" {
-		return &Error{Message: env.Error.Message, Details: env.Error.Details}
+		return &Error{Message: env.Error.Message, Details: env.Error.Details, Status: status}
 	}
 	return nil
 }

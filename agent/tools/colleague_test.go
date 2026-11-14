@@ -23,22 +23,50 @@ type fakeColleagueServer struct {
 	mu       sync.Mutex
 	sessions map[string]*fakeColleagueSession
 	nextID   int
-	// askLog records every prompt text this server received, in order —
-	// used to assert a resumed conversation actually carries prior turns'
-	// awareness (a real server would; this fake just proves the SAME
-	// session id is reused across calls, which is what askColleague's
-	// contract depends on).
+	// askLog records every prompt text this server received, in order.
 	askLog []string
+	// asks records each ask in full (text, origin, no_queue) so a test can assert
+	// HOW a colleague was prompted, not just what.
+	asks []fakeAsk
+	// resumeCalls counts POST …/resume: talking to an ACTIVE session must never
+	// need one.
+	resumeCalls int
+	// createdWith records "<cwd>|<name>" of every session created over the API.
+	createdWith []string
+	// closeCalls counts POST …/close per session id.
+	closeCalls map[string]int
+	// openElsewhereOnResume, when set, makes the NEXT resume of that id find the
+	// session already active — somebody opened it between the tool's check and its
+	// resume — so the response says resumed:false.
+	openElsewhereOnResume map[string]bool
+	// persisted are sessions that exist on disk but are not active (closed).
+}
+
+type fakeAsk struct {
+	SessionID string
+	Text      string
+	Origin    string
+	NoQueue   bool
 }
 
 type fakeColleagueSession struct {
 	id     string
-	closed bool // true after /close; ResumeSession-equivalent still works (disk-backed)
+	name   string
+	cwd    string
+	closed bool // true after /close: no longer ACTIVE (still on disk)
+	busy   bool // a turn is in flight: a no_queue ask is refused with 409
 	turns  int
 }
 
 func newFakeColleagueServer() *fakeColleagueServer {
-	return &fakeColleagueServer{sessions: map[string]*fakeColleagueSession{}}
+	return &fakeColleagueServer{sessions: map[string]*fakeColleagueSession{}, closeCalls: map[string]int{}, openElsewhereOnResume: map[string]bool{}}
+}
+
+// addActive registers an already-open session (what a TUI or a transport holds).
+func (f *fakeColleagueServer) addActive(id, name, cwd string, busy bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sessions[id] = &fakeColleagueSession{id: id, name: name, cwd: cwd, busy: busy}
 }
 
 func (f *fakeColleagueServer) handler() http.Handler {
@@ -47,7 +75,7 @@ func (f *fakeColleagueServer) handler() http.Handler {
 		// askColleague's liveness probe (GetServerInfo) hits this first, on
 		// every call — must respond for any of the other endpoints below to
 		// ever be reached.
-		json.NewEncoder(w).Encode(map[string]string{"name": "harness", "version": "test"})
+		json.NewEncoder(w).Encode(map[string]string{"name": "harness", "version": "test", "cwd": "/colleague/cwd"})
 	})
 	mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"active_model": "fake/model-1", "thinking_level": "off"})
@@ -56,17 +84,35 @@ func (f *fakeColleagueServer) handler() http.Handler {
 		json.NewEncoder(w).Encode([]map[string]string{{"provider": "fake", "model": "fake/model-1"}})
 	})
 	mux.HandleFunc("/api/sessions", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Query().Get("active") == "true":
+			f.mu.Lock()
+			out := []map[string]any{}
+			for _, sess := range f.sessions {
+				if sess.closed {
+					continue
+				}
+				out = append(out, map[string]any{"id": sess.id, "name": sess.name, "cwd": sess.cwd, "model": "fake/model-1", "busy": sess.busy})
+			}
+			f.mu.Unlock()
+			json.NewEncoder(w).Encode(out)
+		case r.Method == http.MethodPost:
+			var body struct {
+				CWD  string `json:"cwd"`
+				Name string `json:"name"`
+			}
+			json.NewDecoder(r.Body).Decode(&body) //nolint:errcheck
+			f.mu.Lock()
+			f.nextID++
+			id := fmt.Sprintf("sess-%d", f.nextID)
+			f.sessions[id] = &fakeColleagueSession{id: id, name: "New Session", cwd: body.CWD}
+			f.createdWith = append(f.createdWith, body.CWD+"|"+body.Name)
+			f.mu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]string{"id": id})
+		default:
 			http.Error(w, "not found", http.StatusNotFound)
-			return
 		}
-		f.mu.Lock()
-		f.nextID++
-		id := fmt.Sprintf("sess-%d", f.nextID)
-		f.sessions[id] = &fakeColleagueSession{id: id}
-		f.mu.Unlock()
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]string{"id": id})
 	})
 	mux.HandleFunc("/api/sessions/", func(w http.ResponseWriter, r *http.Request) {
 		rest := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
@@ -79,14 +125,19 @@ func (f *fakeColleagueServer) handler() http.Handler {
 
 		switch {
 		case len(parts) == 2 && parts[1] == "resume" && r.Method == http.MethodPost:
+			f.mu.Lock()
+			f.resumeCalls++
+			f.mu.Unlock()
 			if !ok {
 				http.Error(w, `{"error":{"message":"session `+id+` not found"}}`, http.StatusNotFound)
 				return
 			}
 			f.mu.Lock()
+			// Resume is idempotent: resumed is true only if THIS call reopened it.
+			opened := sess.closed && !f.openElsewhereOnResume[id]
 			sess.closed = false
 			f.mu.Unlock()
-			json.NewEncoder(w).Encode(map[string]string{"id": id})
+			json.NewEncoder(w).Encode(map[string]any{"id": id, "resumed": opened})
 		case len(parts) == 2 && parts[1] == "close" && r.Method == http.MethodPost:
 			if !ok {
 				http.Error(w, `{"error":{"message":"session not active"}}`, http.StatusBadRequest)
@@ -94,20 +145,30 @@ func (f *fakeColleagueServer) handler() http.Handler {
 			}
 			f.mu.Lock()
 			sess.closed = true
+			f.closeCalls[id]++
 			f.mu.Unlock()
 			json.NewEncoder(w).Encode(map[string]any{"status": map[string]string{"code": "closed"}})
 		case len(parts) == 2 && parts[1] == "ask" && r.Method == http.MethodPost:
-			if !ok {
+			if !ok || sess.closed {
 				http.Error(w, `{"error":{"message":"session not found"}}`, http.StatusNotFound)
 				return
 			}
 			var body struct {
-				Text string `json:"text"`
+				Text    string `json:"text"`
+				Origin  string `json:"origin"`
+				NoQueue bool   `json:"no_queue"`
 			}
 			json.NewDecoder(r.Body).Decode(&body) //nolint:errcheck
 			f.mu.Lock()
+			if sess.busy && body.NoQueue {
+				f.mu.Unlock()
+				w.WriteHeader(http.StatusConflict)
+				w.Write([]byte(`{"error":{"message":"session is busy"}}`))
+				return
+			}
 			sess.turns++
 			f.askLog = append(f.askLog, body.Text)
+			f.asks = append(f.asks, fakeAsk{SessionID: id, Text: body.Text, Origin: body.Origin, NoQueue: body.NoQueue})
 			turns := sess.turns
 			f.mu.Unlock()
 			json.NewEncoder(w).Encode(map[string]string{"text": fmt.Sprintf("reply #%d to: %s", turns, body.Text)})
@@ -124,10 +185,9 @@ func (f *fakeColleagueServer) sessionCount() int {
 	return len(f.sessions)
 }
 
-// TestAskColleagueFreshSessionIsClosedNotDeleted confirms a first call
-// (session == "") creates a session, asks it, and closes (never deletes)
-// it — the response must also carry the session id so the caller can
-// continue the conversation.
+// TestAskColleagueFreshSessionIsClosedNotDeleted confirms a call with no session
+// creates one, asks it, and closes (never deletes) it, so the conversation is on
+// the colleague's disk.
 func TestAskColleagueFreshSessionIsClosedNotDeleted(t *testing.T) {
 	srv := newFakeColleagueServer()
 	ts := httptest.NewServer(srv.handler())
@@ -140,9 +200,6 @@ func TestAskColleagueFreshSessionIsClosedNotDeleted(t *testing.T) {
 	if !strings.Contains(text, "reply #1 to: hello") {
 		t.Errorf("response = %q, want it to contain the colleague's reply", text)
 	}
-	if !strings.Contains(text, "[colleague session:") {
-		t.Errorf("response = %q, want a trailing [colleague session: ...] note", text)
-	}
 	if srv.sessionCount() != 1 {
 		t.Fatalf("server has %d sessions, want 1 (created, never deleted)", srv.sessionCount())
 	}
@@ -153,53 +210,207 @@ func TestAskColleagueFreshSessionIsClosedNotDeleted(t *testing.T) {
 	}
 }
 
-// TestAskColleagueResumeContinuesSameSession confirms passing back the
-// session id from a first call reuses that EXACT session (no new one
-// created) and skips model resolution (GetSettings/ListModels never hit).
-func TestAskColleagueResumeContinuesSameSession(t *testing.T) {
+// A NEW conversation (no session): created on the colleague in ITS working
+// directory with the default name, asked, and closed — and the reply carries the
+// session id and says the conversation is closed but can be continued with it.
+func TestAskColleagueNewConversationReturnsItsIDAndIsClosed(t *testing.T) {
 	srv := newFakeColleagueServer()
 	ts := httptest.NewServer(srv.handler())
 	defer ts.Close()
 
-	first, err := askColleague(context.Background(), ts.URL, "first message", "", nil, 5*time.Second)
+	text, err := askColleague(context.Background(), ts.URL, "hello", "", nil, 5*time.Second)
 	if err != nil {
-		t.Fatalf("first askColleague: %v", err)
+		t.Fatal(err)
 	}
-	sessID := extractSessionID(t, first)
-
-	second, err := askColleague(context.Background(), ts.URL, "second message", sessID, nil, 5*time.Second)
-	if err != nil {
-		t.Fatalf("second askColleague: %v", err)
+	if !strings.Contains(text, "reply #1 to: hello") {
+		t.Errorf("reply = %q", text)
 	}
-	if !strings.Contains(second, "reply #2 to: second message") {
-		t.Errorf("response = %q, want turn 2 on the SAME session (proves resume, not a fresh create)", second)
+	id := extractSessionID(t, text)
+	if !strings.Contains(text, "closed now that the colleague has answered") || !strings.Contains(text, "pass this id as `session` to continue") {
+		t.Errorf("the footer must say it is closed AND how to continue it: %q", text)
 	}
-	if srv.sessionCount() != 1 {
-		t.Errorf("server has %d sessions, want 1 (resumed, not a second one created)", srv.sessionCount())
+	if strings.Contains(text, "cannot be continued") || strings.Contains(text, "New conversation —") {
+		t.Errorf("the old 'cannot be continued' note is false now: %q", text)
 	}
-	if len(srv.askLog) != 2 || srv.askLog[0] != "first message" || srv.askLog[1] != "second message" {
-		t.Errorf("askLog = %v, want both turns recorded against the same session", srv.askLog)
+	if srv.sessionCount() != 1 || !srv.sessions[id].closed || srv.closeCalls[id] != 1 {
+		t.Errorf("sessions=%d closed=%v closeCalls=%d: the new session must be created and closed exactly once", srv.sessionCount(), srv.sessions[id].closed, srv.closeCalls[id])
+	}
+	// created in the colleague's own working directory, with the default name
+	if len(srv.createdWith) != 1 || srv.createdWith[0] != "/colleague/cwd|" {
+		t.Errorf("created with %v, want the colleague's cwd and NO name (so harness picks its default)", srv.createdWith)
 	}
 }
 
-// TestAskColleagueUnknownSessionFailsClearlyNoFallback confirms an invalid/
-// unknown session id surfaces an explicit error — never a silent fallback
-// to creating a fresh session, which would misleadingly look like the
-// conversation continued when it didn't.
-func TestAskColleagueUnknownSessionFailsClearlyNoFallback(t *testing.T) {
+// With `session`, the colleague's ACTIVE session is prompted directly: no resume,
+// no new session, the session is left open and the prompt is tagged as coming from
+// a colleague and sent without queueing.
+func TestAskColleagueActiveSessionIsPromptedDirectly(t *testing.T) {
+	srv := newFakeColleagueServer()
+	srv.addActive("tui-session", "Fix the bug", "/proj/a", false)
+	ts := httptest.NewServer(srv.handler())
+	defer ts.Close()
+
+	for i, msg := range []string{"first", "second"} {
+		text, err := askColleague(context.Background(), ts.URL, msg, "tui-session", nil, 5*time.Second)
+		if err != nil {
+			t.Fatalf("ask %d: %v", i, err)
+		}
+		if want := fmt.Sprintf("reply #%d to: %s", i+1, msg); !strings.HasPrefix(text, want) {
+			t.Errorf("reply %d = %q, want it to start with the colleague's text %q", i, text, want)
+		}
+		if extractSessionID(t, text) != "tui-session" || !strings.Contains(text, "active on the colleague") {
+			t.Errorf("reply %d footer = %q, want the id and 'active on the colleague'", i, text)
+		}
+	}
+	if srv.resumeCalls != 0 {
+		t.Errorf("resume was called %d times: an active session needs none", srv.resumeCalls)
+	}
+	if srv.sessionCount() != 1 {
+		t.Errorf("sessions = %d, want 1: no new session may be created", srv.sessionCount())
+	}
+	if sess := srv.sessions["tui-session"]; sess.closed {
+		t.Error("the colleague's session was closed: it is somebody else's, ask must leave it open")
+	}
+	for _, a := range srv.asks {
+		if a.Origin != "colleague" || !a.NoQueue || a.SessionID != "tui-session" {
+			t.Errorf("ask = %+v, want origin=colleague, no_queue=true, on tui-session", a)
+		}
+	}
+}
+
+// A busy session refuses at once and the tool says so, as an error: the message
+// was not sent and nothing was created.
+func TestAskColleagueBusySessionIsAnErrorAndNothingIsSent(t *testing.T) {
+	srv := newFakeColleagueServer()
+	srv.addActive("busy-one", "Long task", "/proj/a", true)
+	ts := httptest.NewServer(srv.handler())
+	defer ts.Close()
+
+	start := time.Now()
+	text, err := askColleague(context.Background(), ts.URL, "are you free?", "busy-one", nil, 30*time.Second)
+	if err == nil {
+		t.Fatal("a busy session must be an error")
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Errorf("took %v: a busy session must be refused at once, not waited on", time.Since(start))
+	}
+	for _, want := range []string{"busy", "NOT sent", "never queued"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("message %q lacks %q", text, want)
+		}
+	}
+	if len(srv.asks) != 0 || len(srv.askLog) != 0 {
+		t.Errorf("the colleague received %v: nothing may reach a busy session", srv.askLog)
+	}
+	if srv.sessionCount() != 1 {
+		t.Errorf("sessions = %d, want 1: a busy refusal must not create a fallback session", srv.sessionCount())
+	}
+}
+
+// A session that is NOT active is resumed — a closed one from an earlier call, or
+// any persisted one — answered, and closed again because THIS call opened it. The
+// history is the same session's (no fresh one is created).
+func TestAskColleagueInactiveSessionIsResumedAnsweredAndClosedAgain(t *testing.T) {
+	srv := newFakeColleagueServer()
+	ts := httptest.NewServer(srv.handler())
+	defer ts.Close()
+
+	first, err := askColleague(context.Background(), ts.URL, "first question", "", nil, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := extractSessionID(t, first)
+	if !srv.sessions[id].closed {
+		t.Fatal("setup: the first call must leave the session closed")
+	}
+
+	second, err := askColleague(context.Background(), ts.URL, "follow-up", id, nil, 5*time.Second)
+	if err != nil {
+		t.Fatalf("continuing a closed session: %v", err)
+	}
+	if !strings.Contains(second, "reply #2 to: follow-up") {
+		t.Errorf("reply = %q, want turn 2 of the SAME conversation (it has context)", second)
+	}
+	if extractSessionID(t, second) != id {
+		t.Errorf("the footer must keep the same id, got %q", second)
+	}
+	if srv.resumeCalls != 1 {
+		t.Errorf("resume called %d times, want 1", srv.resumeCalls)
+	}
+	if srv.sessionCount() != 1 {
+		t.Errorf("sessions = %d: continuing must not create a new one", srv.sessionCount())
+	}
+	if !srv.sessions[id].closed || srv.closeCalls[id] != 2 {
+		t.Errorf("closed=%v closeCalls=%d: the resumed session must be closed again (once per call = 2 in total)", srv.sessions[id].closed, srv.closeCalls[id])
+	}
+	if len(srv.askLog) != 2 || srv.askLog[0] != "first question" || srv.askLog[1] != "follow-up" {
+		t.Errorf("askLog = %v: both turns must land in the same session", srv.askLog)
+	}
+	if !strings.Contains(second, "closed now that the colleague has answered") {
+		t.Errorf("footer = %q", second)
+	}
+}
+
+// A session id that exists nowhere is "not found" — no fresh session in its place,
+// nothing created, nothing asked.
+func TestAskColleagueUnknownSessionIsNotFoundAndCreatesNothing(t *testing.T) {
 	srv := newFakeColleagueServer()
 	ts := httptest.NewServer(srv.handler())
 	defer ts.Close()
 
 	text, err := askColleague(context.Background(), ts.URL, "hello", "does-not-exist", nil, 5*time.Second)
 	if err == nil {
-		t.Fatal("expected an error for an unknown session id, got nil")
+		t.Fatal("expected an error")
 	}
-	if !strings.Contains(text, "not found") {
-		t.Errorf("response = %q, want a clear not-found message", text)
+	if !strings.Contains(text, "not found") || !strings.Contains(text, "does-not-exist") {
+		t.Errorf("message = %q, want a clear not-found", text)
 	}
-	if srv.sessionCount() != 0 {
-		t.Errorf("server has %d sessions, want 0 (must NOT silently create a fresh one)", srv.sessionCount())
+	if srv.sessionCount() != 0 || len(srv.createdWith) != 0 {
+		t.Errorf("sessions=%d created=%v: a missing session must NOT be replaced by a fresh one", srv.sessionCount(), srv.createdWith)
+	}
+	if len(srv.asks) != 0 {
+		t.Errorf("asks = %v, want none", srv.asks)
+	}
+}
+
+// THE SAFEGUARD. Resume is idempotent, so a session somebody opened between the
+// tool's "is it active?" check and its resume comes back as already active
+// (resumed:false). It is theirs: the tool asks it and must NOT close it — closing
+// would end a person's live conversation (their next prompt would be 'not found').
+func TestAskColleagueNeverClosesASessionItDidNotOpen(t *testing.T) {
+	srv := newFakeColleagueServer()
+	srv.addActive("race", "Opened by a user meanwhile", "/p", false)
+	srv.sessions["race"].closed = true       // looked inactive when the tool checked…
+	srv.openElsewhereOnResume["race"] = true // …but somebody had opened it by the time of the resume
+	ts := httptest.NewServer(srv.handler())
+	defer ts.Close()
+
+	text, err := askColleague(context.Background(), ts.URL, "are you there?", "race", nil, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "reply #1 to: are you there?") {
+		t.Errorf("reply = %q", text)
+	}
+	if srv.closeCalls["race"] != 0 || srv.sessions["race"].closed {
+		t.Errorf("closeCalls=%d closed=%v: the tool closed a session it did not open", srv.closeCalls["race"], srv.sessions["race"].closed)
+	}
+	if !strings.Contains(text, "active on the colleague") || strings.Contains(text, "closed now that") {
+		t.Errorf("the footer must say the session is still ACTIVE: %q", text)
+	}
+}
+
+// A new conversation is tagged as coming from a colleague too (its TUI, if any,
+// shows it with the colleague icon) and sent without queueing.
+func TestAskColleagueNewConversationIsTaggedAsFromAColleague(t *testing.T) {
+	srv := newFakeColleagueServer()
+	ts := httptest.NewServer(srv.handler())
+	defer ts.Close()
+	if _, err := askColleague(context.Background(), ts.URL, "hi", "", nil, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if len(srv.asks) != 1 || srv.asks[0].Origin != "colleague" || !srv.asks[0].NoQueue {
+		t.Errorf("asks = %+v", srv.asks)
 	}
 }
 
@@ -227,8 +438,8 @@ func TestAskColleagueBackgroundPersistsSessionToo(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if !strings.Contains(content, "[colleague session:") {
-		t.Fatalf("background result = %q, want a trailing session note", content)
+	if !strings.Contains(content, "reply #1 to: hello") || !strings.Contains(content, "[colleague session: ") || !strings.Contains(content, "closed now that the colleague has answered") {
+		t.Fatalf("background result = %q, want the colleague's reply and the closed note", content)
 	}
 	if srv.sessionCount() != 1 {
 		t.Errorf("server has %d sessions, want 1", srv.sessionCount())
@@ -314,21 +525,6 @@ func TestAskColleagueRespectsCallerCancellation(t *testing.T) {
 	}
 }
 
-func extractSessionID(t *testing.T, text string) string {
-	t.Helper()
-	const marker = "[colleague session: "
-	i := strings.Index(text, marker)
-	if i < 0 {
-		t.Fatalf("no session marker found in %q", text)
-	}
-	rest := text[i+len(marker):]
-	end := strings.IndexAny(rest, " ]")
-	if end < 0 {
-		t.Fatalf("malformed session marker in %q", text)
-	}
-	return rest[:end]
-}
-
 func extractResultPath(t *testing.T, msg string) string {
 	t.Helper()
 	const marker = "Result will be written to: "
@@ -340,6 +536,21 @@ func extractResultPath(t *testing.T, msg string) string {
 	end := strings.IndexByte(rest, '\n')
 	if end < 0 {
 		end = len(rest)
+	}
+	return rest[:end]
+}
+
+func extractSessionID(t *testing.T, text string) string {
+	t.Helper()
+	const marker = "[colleague session: "
+	i := strings.Index(text, marker)
+	if i < 0 {
+		t.Fatalf("no session footer in %q", text)
+	}
+	rest := text[i+len(marker):]
+	end := strings.IndexAny(rest, " ]")
+	if end < 0 {
+		t.Fatalf("malformed session footer in %q", text)
 	}
 	return rest[:end]
 }

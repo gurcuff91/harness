@@ -241,6 +241,9 @@ type promptConfig struct {
 	images      []types.ImageData
 	origin      string
 	displayText string
+	// noQueue: reject instead of queueing when a turn is in flight
+	// (PromptWithoutQueue).
+	noQueue bool
 }
 
 // PromptWithImages attaches images to the prompt (vision requests).
@@ -271,6 +274,16 @@ func PromptWithOriginUser() PromptOption {
 // transports can render it with a scheduled indicator.
 func PromptWithOriginScheduled() PromptOption {
 	return func(c *promptConfig) { c.origin = OriginScheduled }
+}
+
+// PromptWithoutQueue makes the prompt run only if the session is idle: when a turn
+// is already in flight it is REJECTED (Prompt returns types.PromptRejected,
+// PromptAndWait returns ErrBusy) instead of being queued behind it. The check and
+// the enqueue are one step under the queue lock, so there is no window between
+// "idle" and "started" for another prompt to slip into. A rejected prompt is never
+// stored, so it cannot end up in a conversation someone else is having.
+func PromptWithoutQueue() PromptOption {
+	return func(c *promptConfig) { c.noQueue = true }
 }
 
 // PromptWithOrigin tags the prompt with any short origin string — a
@@ -411,6 +424,10 @@ func (s *Session) loadModelMeta(modelID string) {
 func (s *Session) Prompt(ctx context.Context, text string, opts ...PromptOption) types.PromptStatus {
 	c := buildPromptConfig(opts)
 	s.followMu.Lock()
+	if c.noQueue && s.busy {
+		s.followMu.Unlock()
+		return types.PromptRejected // PromptWithoutQueue: busy → nothing is queued or stored
+	}
 	s.followUps = append(s.followUps, followUp{text: text, images: c.images, origin: c.origin, displayText: c.displayText})
 	if !s.busy {
 		s.busy = true
@@ -447,7 +464,9 @@ func (s *Session) IsBusy() bool {
 	return s.busy
 }
 
-// ErrBusy is returned by Compact when a turn is in flight.
+// ErrBusy is returned when a turn is in flight and the operation can't wait for
+// it: by Compact, and by PromptAndWait when the prompt was sent
+// PromptWithoutQueue.
 var ErrBusy = errors.New("session is busy; try again when the current turn finishes")
 
 // reportedErr wraps an error that has ALREADY been emitted as an EventError at
@@ -568,6 +587,10 @@ func (s *Session) PromptAndWait(ctx context.Context, text string, opts ...Prompt
 	c := buildPromptConfig(opts)
 	done := make(chan promptResult, 1)
 	s.followMu.Lock()
+	if c.noQueue && s.busy {
+		s.followMu.Unlock()
+		return "", ErrBusy // PromptWithoutQueue: busy → nothing is queued or stored
+	}
 	s.followUps = append(s.followUps, followUp{text: text, images: c.images, origin: c.origin, displayText: c.displayText, done: done})
 	if !s.busy {
 		s.busy = true

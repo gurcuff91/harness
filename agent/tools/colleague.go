@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gurcuff91/harness/client"
@@ -37,66 +38,134 @@ type ColleagueDirectory func() map[string]Colleague
 
 // ── ColleagueList ──────────────────────────────────────────────────────────
 
-// chatPlatformEnvironments are the on-disk transport values that grant a
-// colleague a genuinely distinct capability — posting/replying on an external
-// chat platform. Everything else (tui, server, cli, and any transport not
-// listed here) collapses to "generic": from the model's perspective they're
-// all "an agent with tools and a working directory, no special messaging
-// capability" — there is nothing operationally different between them worth
-// naming individually. Adding a new chat-platform transport (e.g. discord)
-// later only means adding one entry here, no system-prompt change needed.
-var chatPlatformEnvironments = map[string]bool{
+// colleagueEnvironments are the on-disk transport values a colleague is shown
+// under by name: each one is a genuinely different place the colleague lives, and
+// so a different thing it can do — a person at a terminal (tui), a Slack channel
+// or a Telegram chat to post and reply in. Everything else — a headless `harness
+// serve`, the CLI's own commands, an ACP bridge, any transport added later — is
+// "server": an agent with tools and a working directory and nobody watching.
+// Adding a new frontend that deserves its own name means one entry here.
+var colleagueEnvironments = map[string]bool{
+	"tui":      true,
 	"slack":    true,
 	"telegram": true,
 }
 
 // environmentLabel maps an on-disk transport value to what the model sees in
-// ColleagueList. Chat platforms keep their name (it's the whole point — the
-// model reasons about "a colleague in slack can post to Slack"); anything
-// else collapses to "generic".
+// ColleagueList: tui, slack and telegram keep their name, everything else is
+// "server".
 func environmentLabel(transport string) string {
-	if chatPlatformEnvironments[transport] {
+	if colleagueEnvironments[transport] {
 		return transport
 	}
-	return "generic"
+	return "server"
 }
 
 // colleagueListEntry is what ColleagueList shows the model — just enough to
-// pick a name for ColleagueAsk and understand what that colleague can offer.
-// JSON key "environment" (not the on-disk field name "transport") is what the
-// model reasons over — see the "## Colleagues" system prompt section for why
-// this field matters as much as cwd when picking who to delegate to.
+// pick a colleague and a session of it for ColleagueAsk. JSON key "environment"
+// (not the on-disk field name "transport") is what the model reasons over — see
+// the "## Colleagues" system prompt section.
+//
+// There is deliberately no instance-level working directory: it belongs to each
+// session (they normally all share the instance's, but a session may have been
+// opened elsewhere), so it lives on colleagueSession and is never duplicated here.
 type colleagueListEntry struct {
 	Name        string `json:"name"`
 	Environment string `json:"environment"`
-	CWD         string `json:"cwd"`
 	Version     string `json:"version"`
+	// Sessions are the colleague's ACTIVE sessions — open right now, so they can be
+	// prompted directly with ColleagueAsk's `session`, no resume. Empty when it has
+	// none open (it can still be asked without `session`, which starts a new one).
+	Sessions []colleagueSession `json:"sessions"`
 }
 
-// ColleagueList returns a Tool that lists other reachable colleague
-// instances, excluding the caller itself (matched by PID — the one field
-// every registry entry carries that reliably identifies "not me" without any
-// extra plumbing).
+// colleagueSession is one active session of a colleague.
+type colleagueSession struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	CWD   string `json:"cwd"`
+	Model string `json:"model"`
+	// Busy: a turn is running in it right now. A ColleagueAsk to a busy session is
+	// refused at once (it is never queued behind the running turn).
+	Busy bool `json:"busy"`
+}
+
+// colleagueListTimeout bounds how long ColleagueList waits for any one colleague.
+// One concurrent round, so the whole call costs about the slowest colleague, never
+// the sum — a suspended or dead instance simply misses the deadline and is left out.
+var colleagueListTimeout = 2 * time.Second
+
+// queryColleague asks one colleague for its active sessions. The same request is
+// the liveness probe: a colleague that cannot list its sessions in time is not one
+// a ColleagueAsk would get an answer from either. ok is false for such a colleague.
+func queryColleague(ctx context.Context, url string) (sessions []colleagueSession, ok bool) {
+	ctx, cancel := context.WithTimeout(ctx, colleagueListTimeout)
+	defer cancel()
+	active, err := client.New(url, client.WithContext(ctx)).ListActiveSessions("")
+	if err != nil {
+		return nil, false
+	}
+	sessions = make([]colleagueSession, 0, len(active))
+	for _, a := range active {
+		sessions = append(sessions, colleagueSession{ID: a.ID, Name: a.Name, CWD: a.CWD, Model: a.Model, Busy: a.Busy})
+	}
+	return sessions, true
+}
+
+// ColleagueList returns a Tool that lists other REACHABLE colleague instances,
+// each with its active sessions. The caller itself is excluded (matched by PID —
+// the one field every registry entry carries that reliably identifies "not me").
+//
+// Every registered colleague is queried concurrently; the ones that don't answer
+// within colleagueListTimeout — crashed without unregistering, or a process
+// suspended with Ctrl+Z whose socket still accepts connections — are omitted, so
+// the list only offers colleagues that were just seen alive.
 func ColleagueList(directory ColleagueDirectory) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolColleagueList,
-			Description: "List other colleague instances currently reachable — each is a live agent you can delegate to via ColleagueAsk. Returns each colleague's name (use it with ColleagueAsk), environment, working directory, and version. Returns an empty list if no colleagues are reachable — that's normal, not an error.",
+			Description: "List the other colleague instances currently reachable — each is a live agent you can delegate to via ColleagueAsk. Returns each colleague's name (use it with ColleagueAsk), its environment (tui, slack, telegram or server), its version, and its ACTIVE sessions: for each one its id, name, working directory, model and whether it is busy right now. Pass a session id to ColleagueAsk to talk to that session directly. Returns an empty list if no colleagues are reachable — that's normal, not an error.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 		},
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
 			self := os.Getpid()
-			var out []colleagueListEntry
+			type candidate struct {
+				name string
+				info Colleague
+			}
+			var cands []candidate
 			for name, info := range directory() {
-				if info.PID == self {
+				if info.PID == self || info.URL == "" {
 					continue
 				}
-				out = append(out, colleagueListEntry{
-					Name:        name,
-					Environment: environmentLabel(info.Transport),
-					CWD:         info.CWD,
-					Version:     info.Version,
-				})
+				cands = append(cands, candidate{name, info})
+			}
+
+			results := make([]*colleagueListEntry, len(cands))
+			var wg sync.WaitGroup
+			for i, c := range cands {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					sessions, ok := queryColleague(ctx, c.info.URL)
+					if !ok {
+						return
+					}
+					results[i] = &colleagueListEntry{
+						Name:        c.name,
+						Environment: environmentLabel(c.info.Transport),
+						Version:     c.info.Version,
+						Sessions:    sessions,
+					}
+				}()
+			}
+			wg.Wait()
+
+			var out []colleagueListEntry
+			for _, r := range results {
+				if r != nil {
+					out = append(out, *r)
+				}
 			}
 			if len(out) == 0 {
 				return "No other colleagues are currently reachable.", nil
@@ -162,7 +231,7 @@ func ColleagueAsk(directory ColleagueDirectory) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolColleagueAsk,
-			Description: "Delegate a prompt to a specific colleague by name (see ColleagueList). The colleague answers using ITS OWN model, tools, and project context — not yours; this is real delegation, not a call back to yourself. Attach local image paths via `images` if relevant. Blocks until the colleague finishes and returns its final text — set `background: true` to get a result-file path immediately instead of waiting, if the task might take a while (background has no timeout: use it for genuinely slow tasks instead of passing a large `timeout`). Conversations persist: omit `session` to start a new one (the response includes a session id), then pass that id as `session` on later calls to continue the SAME conversation — the colleague keeps full context/history, no need to resend it.",
+			Description: "Delegate a prompt to a specific colleague by name (see ColleagueList). The colleague answers using ITS OWN model, tools, and project context — not yours; this is real delegation, not a call back to yourself. Attach local image paths via `images` if relevant. Blocks until the colleague finishes and returns its final text — set `background: true` to get a result-file path immediately instead of waiting, if the task might take a while (background has no timeout: use it for genuinely slow tasks instead of passing a large `timeout`). Sessions: omit `session` to start a NEW conversation with the colleague; the reply ends with its session id. The conversation is closed when the colleague answers, but you can pick it up later — pass that id as `session` and it continues where it left off, with its full history. `session` also accepts the id of one of the colleague's ACTIVE sessions (from ColleagueList's `sessions`), which is then messaged directly and stays as it was; if that session is busy the message is NOT sent and you get an error, so try later or pick another. A `session` id that no longer exists on the colleague is a 'not found' error.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -171,7 +240,7 @@ func ColleagueAsk(directory ColleagueDirectory) Tool {
 					"images": {"type": "array", "items": {"type": "string"}, "description": "Local file paths of images to attach (png, jpg, jpeg, gif, webp)"},
 					"timeout": {"type": "integer", "description": "Seconds to wait for a response (default: 120). Ignored when background is true — background waits as long as needed."},
 					"background": {"type": "boolean", "description": "If true, return immediately with a path to a result file instead of blocking, and wait as long as needed (no timeout). Default false."},
-					"session": {"type": "string", "description": "Session id from a previous ColleagueAsk response, to continue that conversation with full prior context. Omit to start a new conversation."}
+					"session": {"type": "string", "description": "A session id to continue: the id at the end of a previous ColleagueAsk reply (a closed conversation is picked up where it left off), or one of the colleague's ACTIVE sessions from ColleagueList's 'sessions'. An error if the session no longer exists, or if it is busy (the message is never queued). Omit to start a new conversation with the colleague."}
 				},
 				"required": ["colleague", "prompt"]
 			}`),
@@ -247,106 +316,160 @@ func resolveColleagueURL(directory ColleagueDirectory, name string) (string, boo
 // long — it only reads a couple of static fields under a brief RLock.
 const colleagueLivenessTimeout = 5 * time.Second
 
-// askColleague creates a session on the colleague (using ITS OWN default
-// model — never overridden by the caller, so delegation respects the
-// colleague's autonomy) or resumes an existing one when session is
-// non-empty, asks synchronously, and closes the session (flushing it to
-// the colleague's disk) before returning.
+// colleagueOrigin tags every prompt a colleague sends. It is for the colleague's
+// FRONTENDS only — a TUI shows the prompt with its own icon, like a scheduled one
+// — and the model never sees it (the text is delivered unchanged), exactly as with
+// the scheduler's origin.
+const colleagueOrigin = "colleague"
+
+// colleagueBusyMessage is what the model is told when it asks a busy session.
+const colleagueBusyMessage = "That session is busy — a turn is running in it right now, so the message was NOT sent (it is never queued behind the running turn). Try again later, ask a different session, or omit `session` to start a new conversation with this colleague."
+
+// askColleague talks to a colleague. A conversation is either NEW (no `session`) or
+// an existing one (`session` = its id), and it is never left open behind the caller:
+// a session this call opened is closed again before returning, so a caller that
+// doesn't come back cannot leave orphan sessions piling up on the colleague. What
+// makes a conversation continuable is not keeping it open but its id, which every
+// reply carries: pass it back as `session` and the conversation is picked up where
+// it was, with its full history.
 //
-// ctx is the CALLING TURN's own context (cancelled by Session.Stop()) —
-// every request this function makes, including the liveness probe below,
-// derives from it via client.WithContext, so Stop()/Esc genuinely
-// interrupts a hung call at any point in the chain, not just the final
-// Ask/AskWithImages step. See ColleagueAsk's doc comment for the full
-// incident this closes. askColleagueBackground deliberately does NOT pass
-// the turn's ctx here — see its own doc comment.
+//   - No `session`: a NEW session is created on the colleague — default name, the
+//     colleague's own working directory, its own default model (never overridden,
+//     so delegation respects its autonomy) — asked, and closed. The reply carries
+//     its id.
+//   - `session` ACTIVE on the colleague (open in a TUI, a transport, …): prompted
+//     directly. It is left exactly as found — it is somebody's, not ours to close.
+//   - `session` NOT active: it is resumed — it may be one of ours from an earlier
+//     call, or any persisted session — then asked, and closed again if (and only
+//     if) THIS call opened it. If it turns out to have been opened by someone else
+//     in the meantime, it is treated as active: asked and left alone. Resume is
+//     idempotent, so the colleague itself reports which case it was
+//     (client.Session.Resumed); closing on a guess would end a live conversation
+//     under the person using it.
+//   - `session` that does not exist anywhere: "session not found", no fresh session
+//     in its place.
 //
-// Conversations persist across calls: unlike the old always-ephemeral
-// behavior, the session is never deleted — only closed (deactivated,
-// flushed to ~/.harness/agent/sessions/ on the colleague, matching every
-// other harness session's lifecycle). A later call passing the same
-// session id back reopens it via ResumeSession, which reloads the full
-// prior history from disk, so the colleague genuinely remembers the
-// conversation instead of starting fresh every time. Closing (not
-// deleting) is required for that resume to have anything to reload — the
-// defer below MUST keep the Close call even though nothing consumes its
-// result immediately. No automatic cleanup of abandoned conversations
-// exists yet (same trade-off harness already accepts for its own
-// sessions) — accepted for now, revisit if it becomes a real problem.
+// Every prompt is sent without queueing: a session with a turn running refuses it
+// at once, and the tool reports that as an error rather than parking the message
+// behind the turn (which would stall this call and put it into somebody else's
+// conversation). The refusal is decided by the colleague, atomically with the send,
+// so a session that turned busy after ColleagueList was read is still caught.
 //
-// The response text always carries a trailing "[colleague session: <id>
-// — ...]" note (both the fresh-session and resumed-session paths) so the
-// calling model can pass that id as `session` on its next ColleagueAsk
-// call to continue this exact conversation.
+// ctx is the CALLING TURN's own context (cancelled by Session.Stop()) — every
+// request this function makes, including the liveness probe, derives from it via
+// client.WithContext, so Stop()/Esc genuinely interrupts a hung call at any point
+// in the chain. askColleagueBackground deliberately does NOT pass the turn's ctx
+// here — see its own doc comment.
 func askColleague(ctx context.Context, url, prompt, session string, images []types.ImageData, timeout time.Duration) (string, error) {
-	// Liveness probe FIRST, before creating/resuming anything — a colleague
-	// that can't even answer GET /api/server (a couple of static fields,
-	// no session/agent work at all) is not going to complete anything
-	// heavier either. Bounded by BOTH its own short timeout AND the turn's
-	// ctx (whichever fires first) — this does NOT touch the colleague registry;
-	// that cleanup only happens in RegisterInstance (see server/instances.go).
+	// Liveness probe FIRST, before touching anything — a colleague that can't even
+	// answer GET /api/server (a couple of static fields, no session/agent work at
+	// all) is not going to complete anything heavier either. Bounded by BOTH its
+	// own short timeout AND the turn's ctx (whichever fires first) — this does NOT
+	// touch the colleague registry; that cleanup only happens in RegisterInstance
+	// (see server/instances.go). The same reply carries the colleague's working
+	// directory, which a new session is created in.
 	pingCtx, cancel := context.WithTimeout(ctx, colleagueLivenessTimeout)
 	defer cancel()
-	if _, err := client.New(url, client.WithContext(pingCtx)).GetServerInfo(); err != nil {
+	info, err := client.New(url, client.WithContext(pingCtx)).GetServerInfo()
+	if err != nil {
 		err := fmt.Errorf("colleague at %s is not responding: %w", url, err)
 		return "Colleague is not responding (may have crashed or been suspended) — use ColleagueList to pick a different one.", err
 	}
 
 	c := client.New(url, client.WithContext(ctx))
 
-	var sessID string
+	// An existing conversation.
 	if session != "" {
-		sess, err := c.ResumeSession(session)
-		if err != nil {
-			// No silent fallback to a fresh session — a resume failure (the
-			// session id is unknown, was hand-edited, or no longer exists on
-			// this colleague) must surface clearly so the caller can decide
-			// whether to retry with session omitted, rather than silently
-			// losing the thread and having the colleague answer as if it
-			// remembered when it doesn't.
-			err := fmt.Errorf("colleague session %q not found: %w", session, err)
-			return fmt.Sprintf("Colleague session %q not found or no longer available. Omit `session` to start a new conversation.", session), err
-		}
-		sessID = sess.ID
-	} else {
-		settings, err := c.GetSettings()
+		active, err := c.ListActiveSessions("")
 		if err != nil {
 			return fmt.Sprintf("Error reaching colleague: %v", err), err
 		}
-		model := settings.ActiveModel
-		if model == "" {
-			models, err := c.ListModels()
-			if err != nil || len(models) == 0 {
-				err := fmt.Errorf("colleague has no active model configured")
-				return err.Error(), err
+		for _, a := range active {
+			if a.ID == session {
+				// Somebody's open session: prompt it directly and leave it open.
+				return sendToColleagueSession(c, session, prompt, images, timeout, noteActive)
 			}
-			model = models[0].Model
 		}
 
-		sess, err := c.CreateSession(model, "", "")
+		// Not active: resume it, and close it again only if this call opened it.
+		sess, err := c.ResumeSession(session)
 		if err != nil {
-			return fmt.Sprintf("Error creating session on colleague: %v", err), err
+			err := fmt.Errorf("colleague session %q not found: %w", session, err)
+			return fmt.Sprintf("Colleague session %q not found on that colleague (it may have been deleted). Omit `session` to start a new conversation.", session), err
 		}
-		sessID = sess.ID
+		if sess.Resumed != nil && *sess.Resumed {
+			defer c.CloseSession(session) //nolint:errcheck
+			return sendToColleagueSession(c, session, prompt, images, timeout, noteClosed)
+		}
+		// Opened by someone else between the check above and the resume: it is theirs.
+		return sendToColleagueSession(c, session, prompt, images, timeout, noteActive)
 	}
 
-	// Close (never delete) so a later call can ResumeSession this same id —
-	// see this function's doc comment. Runs even if Ask/AskWithImages below
-	// errors (timeout, colleague crash, etc.) — defer always fires.
+	// A new conversation, on the colleague's default model, in its working directory.
+	settings, err := c.GetSettings()
+	if err != nil {
+		return fmt.Sprintf("Error reaching colleague: %v", err), err
+	}
+	model := settings.ActiveModel
+	if model == "" {
+		models, err := c.ListModels()
+		if err != nil || len(models) == 0 {
+			err := fmt.Errorf("colleague has no active model configured")
+			return err.Error(), err
+		}
+		model = models[0].Model
+	}
+	sess, err := c.CreateSession(model, info.CWD, "")
+	if err != nil {
+		return fmt.Sprintf("Error creating session on colleague: %v", err), err
+	}
+	// Close (never delete), even if the ask below fails (timeout, colleague crash,
+	// …) — defer always fires — so the conversation is on the colleague's disk and
+	// can be picked up by its id.
 	defer func() {
-		c.CloseSession(sessID) //nolint:errcheck
+		c.CloseSession(sess.ID) //nolint:errcheck
 	}()
+	return sendToColleagueSession(c, sess.ID, prompt, images, timeout, noteClosed)
+}
 
+// What the reply tells the model about the session it just used, so it knows both
+// the id to continue with and whether the session is still open on the colleague.
+type sessionNote int
+
+const (
+	// noteClosed: the session was opened for this call and closed again; its id is
+	// how to continue the conversation.
+	noteClosed sessionNote = iota
+	// noteActive: the session was already open on the colleague and still is.
+	noteActive
+)
+
+// colleagueSessionFooter ends every reply that reaches the colleague's model: the
+// session id (traceable, and the handle to continue with) and what state it is in.
+func colleagueSessionFooter(sessID string, n sessionNote) string {
+	if n == noteActive {
+		return fmt.Sprintf("\n\n[colleague session: %s — active on the colleague; pass this id as `session` to keep talking to it]", sessID)
+	}
+	return fmt.Sprintf("\n\n[colleague session: %s — closed now that the colleague has answered; pass this id as `session` to continue this conversation, it is picked up where it left off]", sessID)
+}
+
+// sendToColleagueSession asks one session synchronously — never queued, marked as
+// coming from a colleague — and shapes the reply. A busy session is an error.
+func sendToColleagueSession(c *client.Client, sessID, prompt string, images []types.ImageData, timeout time.Duration, n sessionNote) (string, error) {
+	opts := []client.PromptOption{client.WithOrigin(colleagueOrigin), client.WithoutQueue()}
 	var (
 		text string
 		ask  error
 	)
 	if len(images) > 0 {
-		text, ask = c.AskWithImages(sessID, prompt, images, timeout)
+		text, ask = c.AskWithImages(sessID, prompt, images, timeout, opts...)
 	} else {
-		text, ask = c.Ask(sessID, prompt, timeout)
+		text, ask = c.Ask(sessID, prompt, timeout, opts...)
 	}
 	if ask != nil {
+		if client.IsBusy(ask) {
+			return colleagueBusyMessage, ask
+		}
 		// A timeout gets a clean, actionable message (no partial exists anyway —
 		// the colleague runs in a separate process, nothing streamed back here).
 		if isTimeout(ask) {
@@ -355,16 +478,16 @@ func askColleague(ctx context.Context, url, prompt, session string, images []typ
 		}
 		return fmt.Sprintf("Colleague error: %v", ask), ask
 	}
-	return fmt.Sprintf("%s\n\n[colleague session: %s — pass this as `session` to continue this conversation]", text, sessID), nil
+	return text + colleagueSessionFooter(sessID, n), nil
 }
 
 // askColleagueBackground runs askColleague in a goroutine and writes the
-// result (including the trailing "[colleague session: ...]" note — see
-// askColleague's doc comment) to a temp file, returning immediately with
-// that path. No timeout — see the comment at the ColleagueAsk call site
-// for why: nothing is blocked waiting on this goroutine, so there is
-// nothing to protect by cutting it off. session behaves identically to the
-// synchronous path (create-or-resume, close-never-delete when done).
+// result to a temp file, returning immediately with that path. No timeout — see
+// the comment at the ColleagueAsk call site for why: nothing is blocked waiting
+// on this goroutine, so there is nothing to protect by cutting it off. session
+// behaves identically to the synchronous path (an active session is prompted
+// directly and refused if busy; without it, a new conversation is started and
+// closed when answered) — a busy session is reported in the file as an error.
 //
 // Uses context.Background() for the goroutine, NEVER the calling turn's
 // ctx — see ColleagueAsk's doc comment (mirrors runSubagentBackground's
