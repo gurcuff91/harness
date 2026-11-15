@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/gurcuff91/harness/types"
 )
@@ -167,6 +169,42 @@ func defaultAnthropicTools(defs []types.ToolDef) []AnthropicTool {
 	return tools
 }
 
+// ErrRefused is the sentinel for a request the model REFUSED to process: the
+// stream completed cleanly but with stop_reason "refusal" (Anthropic's safety
+// classifiers — today the "cyber" category — flag the conversation and the model
+// produces nothing). It is deterministic for a given history, so it is neither
+// transient (never retried) nor a normal answer (never persisted).
+var ErrRefused = errors.New("model refused the request")
+
+// RefusalError carries what Anthropic reported about a refusal. It wraps
+// ErrRefused (errors.Is) and reads as the message the user is shown, ending with
+// a hint: the refusal is a property of the provider's filters, and harness is
+// multi-provider, so switching model is the way out of a session that keeps
+// being refused (verified: the same history that Claude refuses is answered by
+// MiniMax and Codex).
+type RefusalError struct {
+	Category    string // e.g. "cyber"; empty if Anthropic gave none
+	Explanation string // Anthropic's own wording, verbatim; may be empty
+}
+
+// RefusalHint is the closing line of every refusal error.
+const RefusalHint = "Hint: try another provider — /model, or --model provider/model."
+
+func (e *RefusalError) Error() string {
+	var b strings.Builder
+	b.WriteString(ErrRefused.Error())
+	if e.Category != "" {
+		b.WriteString(" (" + e.Category + ")")
+	}
+	if e.Explanation != "" {
+		b.WriteString(": " + e.Explanation)
+	}
+	b.WriteString("\n" + RefusalHint)
+	return b.String()
+}
+
+func (e *RefusalError) Unwrap() error { return ErrRefused }
+
 func ParseAnthropicStream(ctx context.Context, body io.Reader, cb types.StreamCallback, unmapTool func(string) string) (*types.Response, error) {
 	emit := func(e types.StreamEvent) {
 		if cb != nil {
@@ -190,6 +228,7 @@ func ParseAnthropicStream(ctx context.Context, body io.Reader, cb types.StreamCa
 	blocks := make(map[int]*blockState)
 
 	var sawMessageStop bool
+	var refusal *RefusalError // set by a message_delta with stop_reason "refusal"
 	sseCh, sseErr := ParseSSE(ctx, body)
 	for sse := range sseCh {
 		if sse.Event == "error" {
@@ -311,6 +350,13 @@ func ParseAnthropicStream(ctx context.Context, body io.Reader, cb types.StreamCa
 			}
 			delete(blocks, idx)
 		case "message_delta":
+			if d, ok := event["delta"].(map[string]any); ok && jsonStr(d, "stop_reason") == "refusal" {
+				refusal = &RefusalError{}
+				if sd, ok := d["stop_details"].(map[string]any); ok {
+					refusal.Category = jsonStr(sd, "category")
+					refusal.Explanation = jsonStr(sd, "explanation")
+				}
+			}
 			if u, ok := event["usage"].(map[string]any); ok {
 				resp.Usage.OutputTokens = jsonInt(u, "output_tokens")
 				resp.Usage.CacheRead = jsonInt(u, "cache_read_input_tokens")
@@ -344,6 +390,13 @@ func ParseAnthropicStream(ctx context.Context, body io.Reader, cb types.StreamCa
 	}
 	if !sawMessageStop {
 		return nil, fmt.Errorf("stream ended unexpectedly before completion (no message_stop received) — the connection likely dropped mid-response")
+	}
+
+	// A refusal is a complete, well-formed stream — so it is only recognised here,
+	// once the stream is known to have ended properly. It is returned as an error,
+	// never as an (empty) assistant message: nothing is retried or stored.
+	if refusal != nil {
+		return nil, refusal
 	}
 
 	resp.Message = types.NewAssistantToolCallMessage(resp.Text, thinkingBuf, lastThinkingSig, resp.ToolCalls)

@@ -20,6 +20,7 @@ type reply struct {
 	text     string
 	tool     string // a tool call to this tool, when non-empty
 	empty    bool   // a clean completion carrying nothing at all
+	err      error  // the provider fails with this error (nothing is streamed)
 }
 
 // scriptProvider answers call n with script[n] (the last entry repeats).
@@ -36,6 +37,9 @@ func (p *scriptProvider) CompleteStream(_ context.Context, _ *types.Request, cb 
 	p.calls++
 	p.mu.Unlock()
 
+	if r.err != nil {
+		return nil, r.err
+	}
 	var calls []types.ToolCall
 	if r.thinking != "" {
 		cb(types.StreamEvent{Type: types.StreamThinkingDelta, Delta: r.thinking})

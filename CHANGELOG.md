@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.97.3] - 2026-11-15
+
+### Fixed — an Anthropic "refusal" read as "model returned an empty response" and was retried three times
+Seen in production: a session that kept answering `model returned an empty response` — closing and resuming it changed nothing. Reproduced against the real API on a copy of the session: Anthropic's stream completes cleanly but carries **no content and `stop_reason: "refusal"`** (`stop_details`: category `cyber`, "Cyber safeguards flagged this message…"). The safety classifier looks at the whole conversation, so once a message that trips it is in the history every later request is refused — which is why the session looked permanently broken (the same history, bisected: refused with that message, answered without it). Harness did not look at `stop_reason`, saw an empty message, treated it as a transient empty response, retried three times (2 s + 4 s of backoff, "connection problem" notices) and finally reported the misleading text.
+
+- **A refusal is now its own error**, immediately: `model refused the request (cyber): <Anthropic's explanation>` followed by `Hint: try another provider — /model, or --model provider/model.` The category and the explanation (including the link to Anthropic's Cyber Verification Program) are passed through verbatim. Verified on the real session: 1 request, ~0 s of backoff instead of ~9 s, no retry events.
+- **The hint is evidence-based**: the very history Claude refuses was answered by MiniMax-M3 and Codex (`gpt-5.6-luna`) — switching the session's model unblocks it, and a test now does exactly that (refused on one provider, same session moved to another, conversation continues with the refused message in its history).
+- **Never retried** (the same history gets the same refusal) and **never stored**: the model's side leaves no message — nothing empty is replayed later. The user's own message stays in the history, exactly as with any other provider error; so a refused session stays refused until the model is changed (or the history trimmed/forked), now with a message that says so.
+- **Scope: the Anthropic dialect only** — `claude-oauth`, the API-key `anthropic` provider and custom `type: "anthropic"` providers (`ParseAnthropicStream`). No other provider is touched (there is no evidence the others do this). A refusal that arrives after some content was produced is still a refusal (the partial message is not kept); a stream cut off before `message_stop` is still a dropped connection, not a refusal; the billed token usage of a refused request is still counted.
+- **SDK**: `llm.ErrRefused` / `llm.RefusalError{Category, Explanation}` (internal package; `errors.Is(err, …)` works on the turn's error through the agent). The text starts with the stable words `model refused the request`, like `ErrReasoningOnly`'s contract.
+- Tests: parser (the exact stream captured live, no details, every other `stop_reason`, partial content, truncated), agent (error + hint, one call, no retry events, nothing stored but the user's message, the session answers after a switch, not classified transient), and an end-to-end test over HTTP against a fake Anthropic. 11 mutants (never detected, always a refusal, partial message returned, error ignored, `Unwrap` broken, hint/category/explanation dropped, wrong field, truncated accepted, classified transient) all fail a test.
+
 ## [0.97.2] - 2026-11-15
 
 ### Changed — Slack and Telegram: a colleague's prompt is answered to the colleague, not posted in the chat
