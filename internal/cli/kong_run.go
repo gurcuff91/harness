@@ -102,6 +102,9 @@ func (c *mcpAddCmd) Run() error {
 		Env:      env,
 		Headers:  headers,
 		Disabled: c.Disabled,
+
+		Timeout:     c.Timeout,
+		CallTimeout: c.CallTimeout,
 	}
 	return RunMCPAdd(ctx, a, c.Name, opts, "text")
 }

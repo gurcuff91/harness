@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.98.0] - 2026-11-16
+
+### Fixed — a remote MCP tool slower than the connect timeout was cut off (and a way to bound calls properly)
+`timeout` in an MCP server's config is documented as the **connect** budget (initialize + tools/list, default 5 s), but for a remote (HTTP) server the same value was also handed to the HTTP client, whose timeout covers *every* later request. So any remote tool call that took more than 5 seconds — a wiki query, a long-running remote agent — failed with a client timeout, and the only workaround was to raise `timeout` to something absurd for connecting. Stdio servers never had this limit, so the same server behaved differently over the two transports. Found while connecting harness to a remote MCP server whose tools take minutes.
+
+- **`call_timeout`** (new, ms, per server): bounds ONE tool call. Default **1 800 000 (30 minutes)** — a ceiling for a call that hung, not a budget. It is enforced the same way for both transports (a deadline on the call, on top of the caller's own cancellation: Stop still ends a call at once).
+- **`timeout` is connect-only again**, exactly as documented. The HTTP client's own timeout is now `call_timeout` plus a one-minute margin: a backstop that can't fire before the call's deadline, so the error is always the one below.
+- **A call that exceeds `call_timeout` says so and says what to change**: `mcp server "wiki": "WikiQuery" did not answer within 30m0s — raise "call_timeout" (ms) for this server if the tool is meant to run that long`. A call the *caller* ended (Stop, or its own shorter deadline) keeps its own error; it is never blamed on `call_timeout`.
+- **`harness mcp add --timeout <ms> --call-timeout <ms>`** (neither existed). Negative values are refused.
+- **Compatibility**: nobody who set `"timeout": 600000` as a workaround breaks — it only gives connecting more room. Someone who set a *small* `timeout` hoping to bound remote calls loses that side effect; use `call_timeout` for it.
+- Tests: a call slower than the connect timeout succeeds and a call past `call_timeout` fails with the hint — each over both HTTP and stdio servers; a caller's cancellation or shorter deadline keeps its own error; the connect timeout still bounds connecting; defaults/overrides/negatives; the HTTP backstop is longer than the deadline but tight; JSON shape (`call_timeout`, omitted when unset); and `harness mcp add --timeout --call-timeout` end to end through the real command line. 18 mutants (including re-introducing the original bug: the connect timeout as the HTTP client's timeout) all fail a test.
+
 ## [0.97.3] - 2026-11-15
 
 ### Fixed — an Anthropic "refusal" read as "model returned an empty response" and was retried three times

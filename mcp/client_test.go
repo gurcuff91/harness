@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -49,6 +50,10 @@ func runFakeServer() {
 		case "tools/call":
 			var p callToolParams
 			json.Unmarshal(req.Params, &p)
+			// MCP_FAKE_DELAY_MS makes a tool call slow, to test per-call timeouts.
+			if ms, _ := strconv.Atoi(os.Getenv("MCP_FAKE_DELAY_MS")); ms > 0 {
+				time.Sleep(time.Duration(ms) * time.Millisecond)
+			}
 			resp.Result, _ = json.Marshal(CallResult{
 				Content: []contentBlock{{Type: "text", Text: "called:" + p.Name}},
 			})

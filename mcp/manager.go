@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -15,6 +16,36 @@ import (
 
 // defaultConnectTimeout bounds the initialize + tools/list phase per server.
 const defaultConnectTimeout = 5 * time.Second
+
+// defaultCallTimeout bounds one tool call. It is deliberately far larger than the connect timeout:
+// connecting is quick, but a tool may legitimately run for minutes (a remote agent answering a
+// question, a build), and 30 minutes is a ceiling for a call that has hung, not a budget.
+const defaultCallTimeout = 30 * time.Minute
+
+// httpTimeoutMargin is how much longer the HTTP client's own timeout is than a call's deadline. The
+// call's context is what ends a call (and produces the error that says which setting to raise); the
+// client's timeout is only a backstop behind it, so it must never fire first.
+const httpTimeoutMargin = time.Minute
+
+// newHTTPTransport is NewHTTPTransport, replaceable by a test that wants to see how connectServer
+// configures it.
+var newHTTPTransport = NewHTTPTransport
+
+// connectTimeout is the server's connect timeout (initialize + tools/list), or the default.
+func connectTimeout(cfg types.MCPServer) time.Duration {
+	if cfg.Timeout > 0 {
+		return time.Duration(cfg.Timeout) * time.Millisecond
+	}
+	return defaultConnectTimeout
+}
+
+// callTimeout is the server's per-call timeout, or the default.
+func callTimeout(cfg types.MCPServer) time.Duration {
+	if cfg.CallTimeout > 0 {
+		return time.Duration(cfg.CallTimeout) * time.Millisecond
+	}
+	return defaultCallTimeout
+}
 
 // Status reports the connection outcome of one configured MCP server. It is
 // surfaced (e.g. via the HTTP API) so clients can render connection state
@@ -90,7 +121,7 @@ func (m *Manager) Start(ctx context.Context, servers map[string]types.MCPServer)
 		}
 		m.clients = append(m.clients, client)
 		for _, t := range toolDefs {
-			m.toolList = append(m.toolList, wrapTool(name, t, client))
+			m.toolList = append(m.toolList, wrapTool(name, t, client, callTimeout(cfg)))
 		}
 		m.statuses = append(m.statuses, Status{Name: name, Connected: true, ToolCount: len(toolDefs)})
 	}
@@ -99,19 +130,18 @@ func (m *Manager) Start(ctx context.Context, servers map[string]types.MCPServer)
 
 // connectServer builds the right transport for the server's type (local=stdio,
 // remote=HTTP), initializes it, and lists its tools — bounded by the server's
-// timeout (or the default).
+// connect timeout (or the default). The connect timeout bounds ONLY this phase, through
+// connectCtx; what bounds a later tool call is the call timeout (see wrapTool), which is also the
+// HTTP client's own ceiling — the connect timeout must never become one, or a slow tool would be
+// cut off at the few seconds that are right for connecting.
 func connectServer(ctx context.Context, cfg types.MCPServer) (*Client, []Tool, error) {
-	timeout := defaultConnectTimeout
-	if cfg.Timeout > 0 {
-		timeout = time.Duration(cfg.Timeout) * time.Millisecond
-	}
-	connectCtx, cancel := context.WithTimeout(ctx, timeout)
+	connectCtx, cancel := context.WithTimeout(ctx, connectTimeout(cfg))
 	defer cancel()
 
 	var tr Transport
 	var err error
 	if cfg.IsRemote() {
-		tr, err = NewHTTPTransport(HTTPConfig{URL: cfg.URL, Headers: cfg.Headers, Timeout: timeout})
+		tr, err = newHTTPTransport(HTTPConfig{URL: cfg.URL, Headers: cfg.Headers, Timeout: callTimeout(cfg) + httpTimeoutMargin})
 	} else {
 		tr, err = NewStdioTransport(StdioConfig{Command: cfg.Argv(), Env: cfg.Env, Cwd: cfg.Cwd})
 	}
@@ -134,8 +164,9 @@ func connectServer(ctx context.Context, cfg types.MCPServer) (*Client, []Tool, e
 // wrapTool adapts an MCP tool into a harness tool. The name is namespaced
 // mcp__<server>__<tool> (Claude Code style) to avoid collisions; Execute routes
 // the call to the owning server's client — so subagents that inherit this tool
-// reuse the parent's process rather than spawning their own.
-func wrapTool(server string, t Tool, client *Client) tools.Tool {
+// reuse the parent's process rather than spawning their own. Every call is bounded by timeout (the
+// server's call_timeout), on top of the caller's own cancellation (Stop still ends it at once).
+func wrapTool(server string, t Tool, client *Client, timeout time.Duration) tools.Tool {
 	name := fmt.Sprintf("mcp__%s__%s", server, t.Name)
 	schema := t.InputSchema
 	if len(schema) == 0 {
@@ -148,8 +179,15 @@ func wrapTool(server string, t Tool, client *Client) tools.Tool {
 	return tools.Tool{
 		Def: types.ToolDef{Name: name, Description: desc, InputSchema: schema},
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
-			res, err := client.CallTool(ctx, t.Name, input)
+			callCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			res, err := client.CallTool(callCtx, t.Name, input)
 			if err != nil {
+				// Our deadline, not the caller's: say so, and say what to change. A caller that
+				// stopped the turn keeps its own error.
+				if ctx.Err() == nil && errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+					return "", fmt.Errorf("mcp server %q: %q did not answer within %v — raise \"call_timeout\" (ms) for this server if the tool is meant to run that long: %w", server, t.Name, timeout, err)
+				}
 				return "", err
 			}
 			text := res.Text()

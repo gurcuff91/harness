@@ -425,7 +425,11 @@ neither manages nor executes schedules;
 per agent via `AgentWithMCPs(servers)` (`mcp.ServersFromSettings()` returns the
 configured ones, to use as-is or merge with your own). An invalid or
 unreachable server is skipped and reported in `Agent.MCPStatuses()`, never
-fatal.
+fatal. Two separate timeouts per server (ms, in `settings.json` or as
+`harness mcp add --timeout/--call-timeout`): `timeout` bounds connecting
+(initialize + tools/list, default 5000) and `call_timeout` bounds ONE tool call
+(default 1800000 = 30 min, both transports) — raise it only for a tool meant to
+run longer.
 
 ## License
 
