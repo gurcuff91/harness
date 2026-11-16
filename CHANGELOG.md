@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.103.0] - 2026-11-17
+
+### Added — inside Herdr, the interactive TUI tells the model where it is and what the `<hc>` envelope means
+Herdr wraps what one agent sends another: a prompt that `hc send` delivers to a harness TUI arrives as `<hc from="ADDRESS name">...</hc>`, and a fresh session had no way to know that was another agent and not the person at the keyboard. When `HC_TERMINAL_ID` is set (herdr-core puts it in every terminal it runs), the TUI now adds a short `## Herdr` section to its sessions' system prompt. It orients and does not teach: where the model is, what the two envelope shapes are, and where to read the rest. The model discovers Herdr's capabilities from the manuals Herdr prints itself.
+
+```
+## Herdr
+
+You are running inside Herdr, a workspace that hosts terminals, agents and programs. Your own terminal address is the value of $HC_TERMINAL_ID (read it with a shell): that is how other agents find you.
+
+A prompt wrapped in <hc from="ADDRESS name">...</hc> was sent by ANOTHER agent, the one at that address, not by the human and not by you; if it carries reach="hc send ADDRESS ...", report back that way. A bare <hc>...</hc> is a note from Herdr about one of your own terminals.
+
+Everything else is yours to discover. Run `hc --skill` (programs and agents: start, read, wait, message them) and `herdr-app --skill` (the person's window: spaces, tabs, panes); the app's full reference is in <the app's AGENTS.md>.
+```
+
+About 105 words. **Verified against Herdr itself before writing a line:** the wrapper is added by herdr-core, not by the sender, and only when both ends are agents (an agent reports its status with OSC 7501, which the harness TUI has done since 0.99.0): an agent to a plain program arrives bare, a plain program to an agent arrives bare, an agent to an agent arrives as `<hc from="ID name">`. There is a second shape, with no `from`: a note from the core about one of the receiver's own terminals (`<hc>t12g sender exited (exit 0)...</hc>`), which is not a message to answer. The section covers both.
+
+- **Only the interactive TUI gets it.** Herdr wraps a message only for a terminal that reports OSC 7501 and only the TUI does, so serve, telegram, slack, acp and `-p` never receive an envelope, and telling them about one would be false. The text is built in `internal/tui` and added in `tuiCmd.Run` through `newTUIAgent`; the shared `newInteractiveAgent`, `newAgent`, `newOneShotAgent` and `newConfigAgent` do not carry it, even inside Herdr (tests build each one with `HC_TERMINAL_ID` set and check).
+- **No SDK API, and not built into `buildSystemPrompt`.** It is an agent-wide directive, so it survives `/resume`, `/fork` and `/new` (tested). A sub-agent (the `Subagent` tool, `Fetch`'s summariser) and a headless SDK consumer such as harness-wiki's maintainer do not inherit directives, and they inherit `HC_TERMINAL_ID` from the process: detecting Herdr inside `buildSystemPrompt` would have told each of them "your terminal address is that of your parent", with nobody able to write to them. A test pins that the `agent` package never mentions Herdr and that nothing but the TUI can import the text.
+- **The app's reference is named only if it exists**, resolved at startup: `$HERDR_APP_HOME/AGENTS.md`, else `~/.config/herdr-app/AGENTS.md`. On a machine with only herdr-core (no window) the file is not there, and pointing the model at it would only send it looking. `herdr-app --skill` is named only if `herdr-app` is on the `PATH`; `hc --skill` always, because herdr-core is what set the variable. Every combination reads as one sentence.
+- **No example address anywhere in the text.** The first draft said "for example t16"; a fresh session on a real Herdr answered "my terminal address is t16", which was the address of the terminal that had messaged it. A test fails on anything shaped like an address (`t7`, `t3b`) in the section.
+- **Not in the prompt on purpose:** the 72 KB `AGENTS.md` Herdr writes (the app rewrites it, so it is pointed at, not copied), and the output of `hc --skill` (540 lines in every prompt).
+
+**Verified live, on a real Herdr, with the binary built from this tree:** a fresh harness session launched with `hc run --bg`, then messaged from this terminal. (1) Asked who sent a message: "t16, another agent instance, not the human". (2) Asked its own address: it ran `echo "$HC_TERMINAL_ID"` and answered its own `t12q`, not the sender's `t16`. (3) Asked to start a child and report the exit note: it said the note `<hc>t12s kid exited (exit 3). Last lines: hi</hc>` was "a Herdr system note about my own background child finishing, not an inter-agent message". Before the example address was removed, (2) answered `t16`.
+
+**Tests:** the section's presence only with `HC_TERMINAL_ID` (blank, whitespace, absent, and the app merely installed), what it says, that it stays short and teaches no command, that it leaks nothing about the machine, the app-reference resolution (default, `HERDR_APP_HOME`, blank, no file, a directory called `AGENTS.md`, no home directory), `herdr-app` named only when installed, every combination well-formed, the wiring end to end through the agent the TUI builds (real session, real system prompt), no other constructor carries it, it survives resume and fork, `tuiCmd.Run` builds its agent through `newTUIAgent`, and the import-graph guarantee. **Mutation testing: 25 mutants, all killed** after three real gaps were closed (the TUI not adding the section at all, a missing home directory, and an empty home).
+
+**Not covered:** `harness -p "task"` launched by an orchestrator gets no section, although it could use `hc` (it never receives an envelope, so the central value does not apply; easy to widen). The TUI still shows the raw `<hc from=...>` text to the person, unchanged.
+
 ## [0.102.0] - 2026-11-17
 
 ### Changed — the MCP timeouts are renamed: `timeout` is the tool call, `connection_timeout` is the connection

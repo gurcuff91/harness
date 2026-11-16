@@ -318,6 +318,12 @@ the agent byte for byte (newlines, accents, emoji). If there is no provider at a
 and the message is left in the editor so it is not lost. `-p` is the one-shot mode with no TUI; it
 cannot be combined with a message (`use either -p (one-shot) or a positional prompt (interactive)`).
 
+**Inside Herdr.** When the TUI runs in a [Herdr](https://herdr.dev) terminal (herdr-core sets
+`HC_TERMINAL_ID`), its system prompt gets a short `## Herdr` section: where the model is, that a prompt
+wrapped in `<hc from="…">…</hc>` was sent by another agent and not by you, and where to read the rest
+(`hc --skill`, `herdr-app --skill`). Only the interactive TUI gets it (it is the only frontend Herdr wraps
+messages for); outside Herdr there is no change.
+
 **`--model`, `--thinking` and `--resume` are requirements, not hints.** Either the session runs
 exactly as asked, or `harness` prints `error: …` and exits 1 *before* the TUI opens — it never falls
 back to another model or conversation and never ignores the flag, so a task cannot run on a model or
