@@ -98,7 +98,11 @@ func (t *TUI) AddInputListener(fn func(string) bool) func() {
 
 // Start enters raw mode, hides the cursor, and triggers the first render.
 func (t *TUI) Start() error {
+	// Under the lock: a render may already be scheduled (adding a block before Start requests one),
+	// and its timer goroutine reads `stopped` under t.mu.
+	t.mu.Lock()
 	t.stopped = false
+	t.mu.Unlock()
 	onResize := func() {
 		// On resize, invalidate every component so source-backed blocks (e.g.
 		// markdown tables) re-lay-out to the new width, then force a full redraw.

@@ -172,14 +172,18 @@ func breakLongWordFrom(word string, width, startWidth int, tracker *codeTracker)
 // Port of PI's splitIntoTokensWithAnsi.
 func splitTokens(text string) []string {
 	var tokens []string
-	current := ""
+	// current is a Builder, not a string: appending a grapheme to a string copies all of it, so a
+	// single long token (a pasted base64 blob, a minified JSON line) cost O(n²) — 100 000 characters
+	// took 0.4 s and 1 000 000 took 80 s, all of it inside the render, which holds the renderer's
+	// lock and therefore froze the keyboard as well.
+	var current strings.Builder
 	pendingAnsi := ""
 	currentKind := "" // "word" | "space"
 
 	flush := func() {
-		if current != "" {
-			tokens = append(tokens, current)
-			current = ""
+		if current.Len() > 0 {
+			tokens = append(tokens, current.String())
+			current.Reset()
 			currentKind = ""
 		}
 	}
@@ -212,15 +216,15 @@ func splitTokens(text string) []string {
 			if isSpace {
 				kind = "space"
 			}
-			if current != "" && currentKind != kind {
+			if current.Len() > 0 && currentKind != kind {
 				flush()
 			}
 			if pendingAnsi != "" {
-				current += pendingAnsi
+				current.WriteString(pendingAnsi)
 				pendingAnsi = ""
 			}
 			currentKind = kind
-			current += g
+			current.WriteString(g)
 			// A comma is a natural break point: end the token AFTER it so long,
 			// comma-separated values (e.g. JSON field lists in tool args) can wrap
 			// across lines and fill the available width, instead of staying one
@@ -233,16 +237,16 @@ func splitTokens(text string) []string {
 	}
 
 	if pendingAnsi != "" {
-		if current != "" {
-			current += pendingAnsi
+		if current.Len() > 0 {
+			current.WriteString(pendingAnsi)
 		} else if len(tokens) > 0 {
 			tokens[len(tokens)-1] += pendingAnsi
 		} else {
-			current = pendingAnsi
+			current.WriteString(pendingAnsi)
 		}
 	}
-	if current != "" {
-		tokens = append(tokens, current)
+	if current.Len() > 0 {
+		tokens = append(tokens, current.String())
 	}
 	return tokens
 }

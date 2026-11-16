@@ -15,6 +15,7 @@ package ansi
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/rivo/uniseg"
 )
@@ -27,9 +28,19 @@ const (
 )
 
 // widthCache mirrors PI's bounded width cache for non-ASCII strings.
+//
+// VisibleWidth is called from every goroutine that draws or measures text — the render timer, the
+// spinner's ticker, the event stream, the input goroutine — so the map is guarded by widthMu. An
+// unguarded map is not merely a data race here: the Go runtime detects two concurrent writes and
+// throws "fatal error: concurrent map writes", which no recover() can catch and which ends the
+// whole process. The width itself is computed OUTSIDE the lock (it is the expensive part); only the
+// lookup and the store hold it.
 const widthCacheSize = 512
 
-var widthCache = make(map[string]int, widthCacheSize)
+var (
+	widthMu    sync.Mutex
+	widthCache = make(map[string]int, widthCacheSize)
+)
 
 // grapheme is a single cluster paired with its terminal column width.
 type grapheme struct {
@@ -47,7 +58,10 @@ func VisibleWidth(str string) int {
 	if isPrintableASCII(str) {
 		return len(str)
 	}
-	if w, ok := widthCache[str]; ok {
+	widthMu.Lock()
+	w, ok := widthCache[str]
+	widthMu.Unlock()
+	if ok {
 		return w
 	}
 
@@ -62,7 +76,7 @@ func VisibleWidth(str string) int {
 	// Sum per-cluster widths so the pictograph override (clusterWidth) applies
 	// consistently with graphemes(). uniseg.StringWidth alone would under-count
 	// text-presentation pictographs that terminals render double-width.
-	w := 0
+	w = 0
 	state := -1
 	rest := clean
 	for len(rest) > 0 {
@@ -72,6 +86,7 @@ func VisibleWidth(str string) int {
 		w += clusterWidth(cluster, cw)
 	}
 
+	widthMu.Lock()
 	if len(widthCache) >= widthCacheSize {
 		// Evict an arbitrary entry to bound memory (Go map order is random).
 		for k := range widthCache {
@@ -80,6 +95,7 @@ func VisibleWidth(str string) int {
 		}
 	}
 	widthCache[str] = w
+	widthMu.Unlock()
 	return w
 }
 

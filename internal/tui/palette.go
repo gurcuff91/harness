@@ -3,6 +3,8 @@ package tui
 import (
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/gurcuff91/harness/internal/tui/components"
 )
@@ -18,11 +20,20 @@ import (
 //     on a free/value command → prefill the editor.
 //   - Tab → autocomplete into the editor without executing.
 //   - Esc / Backspace-to-empty → pop one level, or close at the root.
+//
+// Concurrency: the render timer's goroutine calls Render (it reads open) while the input goroutine
+// — and, for a clipboard image paste, a helper goroutine, through the editor's OnChange — drive the
+// rest. So `open` is atomic, and `levels` is only ever touched through the small accessors below,
+// which hold mu for the one read or write and nothing else: no callback and no call into the list
+// or the editor ever runs under it. The list and the editor guard their own state (see SelectList
+// and Editor).
 type paletteController struct {
 	tui  *TUI
 	list *components.SelectList
-	open bool
+	open atomic.Bool
 
+	// mu guards levels.
+	mu sync.Mutex
 	// levels is the navigation stack. levels[0] is the root; pushing a
 	// sub-palette appends. Each level remembers the command that opened it.
 	levels []paletteLevel
@@ -43,14 +54,18 @@ func newPaletteController(t *TUI) *paletteController {
 }
 
 // IsOpen reports whether the palette is currently showing.
-func (p *paletteController) IsOpen() bool { return p.open }
+func (p *paletteController) IsOpen() bool { return p.open.Load() }
 
 // depth returns the number of stacked levels.
-func (p *paletteController) depth() int { return len(p.levels) }
+func (p *paletteController) depth() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.levels)
+}
 
 // Render shows the list when open, nothing otherwise.
 func (p *paletteController) Render(width int) []string {
-	if !p.open {
+	if !p.open.Load() {
 		return nil
 	}
 	return p.list.Render(width)
@@ -60,7 +75,7 @@ func (p *paletteController) Render(width int) []string {
 // while open. Printable characters fall through to the editor so the user keeps
 // typing the filter. Returns true to consume the input.
 func (p *paletteController) HandleInputConsumed(data string) bool {
-	if !p.open {
+	if !p.open.Load() {
 		return false
 	}
 	switch data {
@@ -95,7 +110,7 @@ func (p *paletteController) onEditorChange(text string) {
 	}
 	// Root level: open + filter while typing "/word" (no space yet).
 	if strings.HasPrefix(text, "/") && !strings.Contains(text, " ") {
-		if !p.open {
+		if !p.open.Load() {
 			p.openRoot()
 		}
 		if p.depth() == 1 {
@@ -106,37 +121,43 @@ func (p *paletteController) onEditorChange(text string) {
 	}
 	// Sub-level: the editor was cleared on push, so any typed text here is the
 	// sub-palette filter (e.g. narrowing a provider/session list).
-	if p.open && p.depth() > 1 {
+	if p.open.Load() && p.depth() > 1 {
 		p.list.SetFilter(text)
 		p.tui.tui.RequestRender(false)
 		return
 	}
 	// Root level with a space / non-slash text → close so the user can type
 	// free-form arguments.
-	if p.open && p.depth() == 1 {
+	if p.open.Load() && p.depth() == 1 {
 		p.close()
 	}
 }
 
 func (p *paletteController) openRoot() {
-	p.open = true
-	p.levels = []paletteLevel{{items: p.tui.rootCommandItems()}}
-	p.list.SetItems(p.levels[0].items)
+	items := p.tui.rootCommandItems()
+	p.mu.Lock()
+	p.levels = []paletteLevel{{items: items}}
+	p.mu.Unlock()
+	p.list.SetItems(items)
+	p.open.Store(true) // after the list holds the items, so a render never shows a stale list
 	p.tui.tui.RequestRender(false)
 }
 
 func (p *paletteController) close() {
-	if !p.open {
+	if !p.open.Swap(false) {
 		return
 	}
-	p.open = false
+	p.mu.Lock()
 	p.levels = nil
+	p.mu.Unlock()
 	p.tui.tui.RequestRender(false)
 }
 
 // pushSub opens a level-2 palette for parentCmd with the given items.
 func (p *paletteController) pushSub(parentCmd string, items []components.SelectItem) {
+	p.mu.Lock()
 	p.levels = append(p.levels, paletteLevel{items: items, parentCmd: parentCmd})
+	p.mu.Unlock()
 	p.list.SetItems(items)
 	p.tui.editor.Clear()
 	p.tui.tui.RequestRender(false)
@@ -144,16 +165,22 @@ func (p *paletteController) pushSub(parentCmd string, items []components.SelectI
 
 // popLevel removes the top level; returns false if already at the root.
 func (p *paletteController) popLevel() bool {
+	p.mu.Lock()
 	if len(p.levels) <= 1 {
+		p.mu.Unlock()
 		return false
 	}
 	p.levels = p.levels[:len(p.levels)-1]
-	p.list.SetItems(p.levels[len(p.levels)-1].items)
+	items := p.levels[len(p.levels)-1].items
+	p.mu.Unlock()
+	p.list.SetItems(items)
 	return true
 }
 
 // curParent returns the parentCmd of the current (top) level.
 func (p *paletteController) curParent() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if len(p.levels) == 0 {
 		return ""
 	}

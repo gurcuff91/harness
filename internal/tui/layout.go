@@ -48,9 +48,8 @@ func (t *TUI) buildUI() {
 	}
 	t.editor.OnChange = func(text string) {
 		t.palette.onEditorChange(text)
-		wasBash := t.bashMode
-		t.bashMode = strings.HasPrefix(text, "!")
-		if t.bashMode != wasBash {
+		isBash := strings.HasPrefix(text, "!")
+		if t.bashMode.Swap(isBash) != isBash {
 			t.tui.RequestRender(false)
 		}
 	}
@@ -73,7 +72,7 @@ func (t *TUI) buildUI() {
 	// Both separators share the same colorFn so they flip together when the
 	// user enters bash mode (input starts with "!").
 	sepColor := func() string {
-		if t.bashMode {
+		if t.bashMode.Load() {
 			return ansi.HexWarn // amber — signals bash execution mode
 		}
 		return ansi.HexPrimary

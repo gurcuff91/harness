@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -119,8 +120,9 @@ type TUI struct {
 	lastTurnText strings.Builder
 
 	// bashMode is true while the editor text starts with "!" — both separators
-	// switch to rose to signal direct bash execution mode.
-	bashMode bool
+	// switch to rose to signal direct bash execution mode. Atomic: the input goroutine writes it
+	// (editor OnChange, submit) while the render timer's goroutine reads it (the separators).
+	bashMode atomic.Bool
 
 	// pending is set when a command needs a required value typed into a clean
 	// editor (e.g. /connect <provider> waiting for the API key). While active,

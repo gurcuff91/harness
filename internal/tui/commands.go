@@ -34,7 +34,7 @@ func (t *TUI) handleSubmit(text string) {
 		return
 	}
 	t.editor.Clear()
-	t.bashMode = false // reset on any submit
+	t.bashMode.Store(false) // reset on any submit
 
 	if strings.HasPrefix(text, "/") {
 		fields := strings.Fields(text)

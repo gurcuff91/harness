@@ -67,26 +67,43 @@ func (s *SelectList) SetItems(items []SelectItem) {
 	s.selected = 0
 }
 
-// SetFilter filters items whose Label/Value contain the (lowercased) filter.
+// SetFilter keeps the items that contain the (case-insensitive) filter in their Label, Value or
+// Description, and ORDERS them by how good the match is:
+//
+//  1. the name (Label or Value) STARTS with the filter,
+//  2. the name contains it somewhere,
+//  3. only the description contains it.
+//
+// The first entry is what Tab completes and what Enter runs, so a command must outrank an unrelated
+// one whose description merely mentions the typed letters: "/thi" must offer "thinking", not "fork"
+// ("Fork this session…"). Within a rank the original order is kept (the sort is stable by
+// construction: three buckets filled in one pass). An empty filter shows everything in its own order.
 func (s *SelectList) SetFilter(filter string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.selected = 0
 	if filter == "" {
 		s.filtered = s.items
-		s.selected = 0
 		return
 	}
 	f := strings.ToLower(filter)
-	var out []SelectItem
+	var prefix, name, desc []SelectItem
 	for _, it := range s.items {
-		if strings.Contains(strings.ToLower(it.Label), f) ||
-			strings.Contains(strings.ToLower(it.Value), f) ||
-			strings.Contains(strings.ToLower(it.Description), f) {
-			out = append(out, it)
+		label, value := strings.ToLower(it.Label), strings.ToLower(it.Value)
+		switch {
+		case strings.HasPrefix(label, f) || strings.HasPrefix(value, f):
+			prefix = append(prefix, it)
+		case strings.Contains(label, f) || strings.Contains(value, f):
+			name = append(name, it)
+		case strings.Contains(strings.ToLower(it.Description), f):
+			desc = append(desc, it)
 		}
 	}
+	// A nil result stays nil when nothing matched (Render and Count only look at its length).
+	out := prefix
+	out = append(out, name...)
+	out = append(out, desc...)
 	s.filtered = out
-	s.selected = 0
 }
 
 // Selected returns the highlighted item and true, or zero/false if empty.

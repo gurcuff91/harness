@@ -2,6 +2,7 @@ package components
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/gurcuff91/harness/internal/tui/ansi"
 	"github.com/gurcuff91/harness/internal/tui/keys"
@@ -16,10 +17,28 @@ const maxEditorRows = 5
 //
 // Newline insertion uses Ctrl+J (LF) or Alt+Enter (both reliable without the
 // Kitty protocol — see the TODO in term/terminal.go). Enter (\r) submits.
+//
+// It is safe for concurrent use, because it IS used from several goroutines: the input goroutine
+// (every key), the render timer's goroutine (Render, and HiddenAbove through the separator above
+// it) and, now and then, a helper goroutine (a clipboard image paste inserting a path). The rules
+// are the same as SelectList's:
+//
+//   - buf, cursor and placeholder are guarded by mu;
+//   - Render/HiddenAbove take ONE snapshot under the lock and lay out outside it, so they never
+//     see a buffer and a cursor from two different moments;
+//   - no callback runs while mu is held. OnChange re-enters the editor (the palette's push calls
+//     Clear, its Tab calls SetValue, and it reads Value), and OnSubmit/OnEscape run whole commands.
+//     Everything an edit wants to tell the outside world is collected in act while the lock is
+//     held and delivered by deliver after it is released.
 type Editor struct {
+	mu          sync.Mutex
 	buf         []rune
 	cursor      int // rune index into buf
 	placeholder string
+
+	// act is what the edit in progress wants delivered once mu is released (guarded by mu; taken
+	// and reset by take).
+	act editorAct
 
 	// Callbacks.
 	OnSubmit func(text string)
@@ -37,49 +56,130 @@ type Editor struct {
 	renderer Renderer
 }
 
+// editorAct is the deferred outside-world effects of one edit: callbacks and repaints.
+type editorAct struct {
+	changed bool   // OnChange(text) is due
+	repaint bool   // a repaint is due (implied by changed)
+	submit  bool   // OnSubmit(text) is due
+	escape  bool   // OnEscape() is due
+	text    string // the buffer as it was when the edit finished
+}
+
+// take returns the pending effects with the text they refer to, and resets them. Caller holds mu.
+func (e *Editor) take() editorAct {
+	a := e.act
+	e.act = editorAct{}
+	if a.changed || a.submit {
+		a.text = string(e.buf)
+	}
+	return a
+}
+
+// deliver runs the effects of one edit, in the order the editor always used: OnSubmit or
+// OnEscape, else OnChange then the repaint. Never call it with mu held.
+func (e *Editor) deliver(a editorAct) {
+	switch {
+	case a.submit:
+		if e.OnSubmit != nil {
+			e.OnSubmit(a.text)
+		}
+		return
+	case a.escape:
+		if e.OnEscape != nil {
+			e.OnEscape()
+		}
+		return
+	}
+	if a.changed && e.OnChange != nil {
+		e.OnChange(a.text)
+	}
+	if (a.changed || a.repaint) && e.renderer != nil {
+		e.renderer.RequestRender(false)
+	}
+}
+
 // NewEditor creates an editor bound to a renderer (for repaint on edits).
 func NewEditor(r Renderer, placeholder string) *Editor {
 	return &Editor{renderer: r, placeholder: placeholder}
 }
 
 // Value returns the current text.
-func (e *Editor) Value() string { return string(e.buf) }
+func (e *Editor) Value() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return string(e.buf)
+}
 
 // SetValue replaces the text and moves the cursor to the end.
 func (e *Editor) SetValue(s string) {
+	e.mu.Lock()
 	e.buf = []rune(s)
 	e.cursor = len(e.buf)
-	e.changed()
+	e.act.changed = true
+	a := e.take()
+	e.mu.Unlock()
+	e.deliver(a)
 }
 
 // InsertText inserts s at the cursor position (e.g. a pasted image path). When
 // text already precedes the cursor, a separating space is added so the inserted
 // token doesn't fuse with the previous word.
 func (e *Editor) InsertText(s string) {
+	e.mu.Lock()
 	if e.cursor > 0 && e.buf[e.cursor-1] != ' ' && e.buf[e.cursor-1] != '\n' {
 		s = " " + s
 	}
 	e.insert(s)
+	a := e.take()
+	e.mu.Unlock()
+	e.deliver(a)
 }
 
 // Clear empties the editor.
 func (e *Editor) Clear() {
+	e.mu.Lock()
 	e.buf = nil
 	e.cursor = 0
-	e.changed()
+	e.act.changed = true
+	a := e.take()
+	e.mu.Unlock()
+	e.deliver(a)
 }
 
 // SetPlaceholder changes the dim hint shown when the editor is empty.
-func (e *Editor) SetPlaceholder(s string) { e.placeholder = s }
+func (e *Editor) SetPlaceholder(s string) {
+	e.mu.Lock()
+	e.placeholder = s
+	e.mu.Unlock()
+}
 
 // Placeholder returns the current placeholder text.
-func (e *Editor) Placeholder() string { return e.placeholder }
+func (e *Editor) Placeholder() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.placeholder
+}
 
 // CursorPos returns the rune index of the cursor.
-func (e *Editor) CursorPos() int { return e.cursor }
+func (e *Editor) CursorPos() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.cursor
+}
 
-// HandleInput processes a single input sequence.
+// HandleInput processes a single input sequence. The edit happens under the lock; the callbacks
+// it caused run after it is released (see Editor).
 func (e *Editor) HandleInput(data string) {
+	e.mu.Lock()
+	e.handle(data)
+	a := e.take()
+	e.mu.Unlock()
+	e.deliver(a)
+}
+
+// handle applies one input sequence to the buffer. Caller holds mu; nothing here may call a
+// callback or a public method — it records what is due in e.act instead.
+func (e *Editor) handle(data string) {
 	// Bracketed paste arrives wrapped in markers.
 	if strings.HasPrefix(data, ansi.PasteStart) {
 		content := strings.TrimPrefix(data, ansi.PasteStart)
@@ -101,9 +201,7 @@ func (e *Editor) HandleInput(data string) {
 				e.insert("\n")
 				return
 			}
-			if e.OnSubmit != nil {
-				e.OnSubmit(string(e.buf))
-			}
+			e.act.submit = true
 			return
 		case keys.AltEnter, keys.CtrlJ:
 			// Insert a newline. Ctrl+J (LF) is the reliable terminal newline;
@@ -112,9 +210,7 @@ func (e *Editor) HandleInput(data string) {
 			e.insert("\n")
 			return
 		case keys.Escape:
-			if e.OnEscape != nil {
-				e.OnEscape()
-			}
+			e.act.escape = true
 			return
 		case keys.Backspace:
 			e.backspace()
@@ -308,9 +404,6 @@ func (e *Editor) wordRight(pos int) int {
 // with a fake block cursor. Output is capped to maxEditorRows visible lines,
 // scrolled to keep the cursor in view.
 func (e *Editor) Render(width int) []string {
-	if len(e.buf) == 0 {
-		return []string{ansi.Dimmed(e.placeholder)}
-	}
 	visible, _ := e.layout(width)
 	return visible
 }
@@ -320,16 +413,22 @@ func (e *Editor) Render(width int) []string {
 // — including the separator above the editor — always get a value consistent
 // with the CURRENT buffer, independent of child render order.
 func (e *Editor) layout(width int) (visible []string, hiddenAbove int) {
-	if len(e.buf) == 0 {
-		return []string{ansi.Dimmed(e.placeholder)}, 0
+	// ONE snapshot under the lock; everything below works on the copy, never on e.buf/e.cursor.
+	e.mu.Lock()
+	buf := append([]rune(nil), e.buf...)
+	cursor := e.cursor
+	placeholder := e.placeholder
+	e.mu.Unlock()
+
+	if len(buf) == 0 {
+		return []string{ansi.Dimmed(placeholder)}, 0
 	}
 
-	cursor := e.cursor
 	if cursor < 0 {
 		cursor = 0
 	}
-	if cursor > len(e.buf) {
-		cursor = len(e.buf)
+	if cursor > len(buf) {
+		cursor = len(buf)
 	}
 
 	// Resolve active color (default = primary teal).
@@ -338,19 +437,19 @@ func (e *Editor) layout(width int) (visible []string, hiddenAbove int) {
 		hexColor = e.ColorFn()
 	}
 
-	before := string(e.buf[:cursor])
+	before := string(buf[:cursor])
 	if hexColor != ansi.HexPrimary {
 		before = ansi.FG(hexColor, before)
 	}
 	atCursor := " "
 	after := ""
-	if cursor < len(e.buf) {
-		if e.buf[cursor] == '\n' {
+	if cursor < len(buf) {
+		if buf[cursor] == '\n' {
 			atCursor = " "
-			after = string(e.buf[cursor:])
+			after = string(buf[cursor:])
 		} else {
-			atCursor = string(e.buf[cursor])
-			after = string(e.buf[cursor+1:])
+			atCursor = string(buf[cursor])
+			after = string(buf[cursor+1:])
 		}
 	}
 	if hexColor != ansi.HexPrimary && after != "" {
@@ -419,15 +518,8 @@ func scrollToCursor(lines []string, cursorRow, maxRows int) (visible []string, h
 	return lines[start : start+maxRows], start
 }
 
-func (e *Editor) changed() {
-	if e.OnChange != nil {
-		e.OnChange(string(e.buf))
-	}
-	e.repaint()
-}
+// changed records that the text changed: OnChange and a repaint are due once mu is released.
+func (e *Editor) changed() { e.act.changed = true }
 
-func (e *Editor) repaint() {
-	if e.renderer != nil {
-		e.renderer.RequestRender(false)
-	}
-}
+// repaint records that only the cursor moved: a repaint is due once mu is released.
+func (e *Editor) repaint() { e.act.repaint = true }

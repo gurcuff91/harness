@@ -98,21 +98,33 @@ type Block interface {
 func NewHistory() *History { return &History{} }
 
 // Add appends a block.
-func (h *History) Add(b Block) { h.blocks = append(h.blocks, b) }
+func (h *History) Add(b Block) {
+	h.mu.Lock()
+	h.blocks = append(h.blocks, b)
+	h.mu.Unlock()
+}
 
 // Blocks returns a snapshot of the current block list. The slice is a copy;
 // callers can iterate without locking concerns.
 func (h *History) Blocks() []Block {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	out := make([]Block, len(h.blocks))
 	copy(out, h.blocks)
 	return out
 }
 
 // Len returns the number of blocks.
-func (h *History) Len() int { return len(h.blocks) }
+func (h *History) Len() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.blocks)
+}
 
 // Last returns the most recently added block, or nil.
 func (h *History) Last() Block {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if len(h.blocks) == 0 {
 		return nil
 	}
@@ -120,19 +132,26 @@ func (h *History) Last() Block {
 }
 
 // Clear removes all blocks.
-func (h *History) Clear() { h.blocks = nil }
+func (h *History) Clear() {
+	h.mu.Lock()
+	h.blocks = nil
+	h.mu.Unlock()
+}
 
-// Invalidate clears every block's cache (on resize).
+// Invalidate clears every block's cache (on resize). The blocks are invalidated from a snapshot,
+// outside the lock: a block takes its own lock and must never be called with this one held.
 func (h *History) Invalidate() {
-	for _, b := range h.blocks {
+	for _, b := range h.Blocks() {
 		b.Invalidate()
 	}
 }
 
-// Render composes all blocks top-to-bottom.
+// Render composes all blocks top-to-bottom. It renders from a snapshot taken under the lock and
+// releases the lock before drawing, so a long render never holds up an Add from the event stream,
+// and a block added meanwhile simply appears in the next frame.
 func (h *History) Render(width int) []string {
 	var lines []string
-	for _, b := range h.blocks {
+	for _, b := range h.Blocks() {
 		lines = append(lines, b.Render(width)...)
 	}
 	return lines
