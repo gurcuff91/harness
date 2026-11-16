@@ -15,21 +15,21 @@ import (
 //
 //	local:  { "command": "npx", "args": ["-y", "@mcp/fs"], "env": {...} }
 //	remote: { "url": "https://…/mcp", "headers": {...} }
-//	timing: "timeout" (ms, connect, default 5000) and "call_timeout" (ms, per tool call, default 1800000)
+//	timing: "timeout" (ms, ONE tool call, default 300000 = 5 min) and "connection_timeout" (ms, connect, default 30000 = 30 s)
 //	off:    add "disabled": true to either
 //
 // Lives in types (not internal/config) because it's part of the public HTTP
 // API contract — the client SDK needs it without pulling in the config package.
 type MCPServer struct {
-	Command     string            `json:"command,omitempty"`      // local: executable
-	Args        []string          `json:"args,omitempty"`         // local: arguments
-	URL         string            `json:"url,omitempty"`          // remote: server URL
-	Env         map[string]string `json:"env,omitempty"`          // local: process env vars
-	Headers     map[string]string `json:"headers,omitempty"`      // remote: custom HTTP headers
-	Cwd         string            `json:"cwd,omitempty"`          // local: working directory (optional)
-	Timeout     int               `json:"timeout,omitempty"`      // ms for connect (initialize+tools/list); 0 = default 5000
-	CallTimeout int               `json:"call_timeout,omitempty"` // ms for ONE tool call, either transport; 0 = default 1800000 (30 min)
-	Disabled    bool              `json:"disabled,omitempty"`     // enabled by default; set true to skip
+	Command           string            `json:"command,omitempty"`            // local: executable
+	Args              []string          `json:"args,omitempty"`               // local: arguments
+	URL               string            `json:"url,omitempty"`                // remote: server URL
+	Env               map[string]string `json:"env,omitempty"`                // local: process env vars
+	Headers           map[string]string `json:"headers,omitempty"`            // remote: custom HTTP headers
+	Cwd               string            `json:"cwd,omitempty"`                // local: working directory (optional)
+	Timeout           int               `json:"timeout,omitempty"`            // ms for ONE tool call, either transport; 0 = default 300000 (5 min)
+	ConnectionTimeout int               `json:"connection_timeout,omitempty"` // ms for connect (initialize+tools/list); 0 = default 30000 (30 s)
+	Disabled          bool              `json:"disabled,omitempty"`           // enabled by default; set true to skip
 }
 
 // IsRemote reports whether the server is a remote (HTTP) transport. A server is

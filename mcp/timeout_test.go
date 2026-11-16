@@ -83,10 +83,10 @@ func transports(t *testing.T, delay time.Duration, body func(t *testing.T, cfg t
 
 // The bug this guards: the connect timeout (a few seconds, right for connecting) was also the HTTP
 // client's timeout for every later call, so any remote tool slower than that was cut off. A call
-// slower than "timeout" but within "call_timeout" must succeed, on both transports.
+// slower than "connection_timeout" but within "timeout" must succeed, on both transports.
 func TestACallMayTakeLongerThanTheConnectTimeout(t *testing.T) {
 	transports(t, 900*time.Millisecond, func(t *testing.T, cfg types.MCPServer) {
-		cfg.Timeout = 300 // connect budget: far shorter than the call
+		cfg.ConnectionTimeout = 300 // connect budget: far shorter than the call
 		tool := start(t, cfg)
 		start := time.Now()
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
@@ -99,21 +99,21 @@ func TestACallMayTakeLongerThanTheConnectTimeout(t *testing.T) {
 	})
 }
 
-func TestACallThatOutlastsCallTimeoutFailsAndSaysWhatToRaise(t *testing.T) {
+func TestACallThatOutlastsTimeoutFailsAndSaysWhatToRaise(t *testing.T) {
 	transports(t, 5*time.Second, func(t *testing.T, cfg types.MCPServer) {
-		cfg.CallTimeout = 300
+		cfg.Timeout = 300
 		tool := start(t, cfg)
 		begin := time.Now()
 		_, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 		took := time.Since(begin)
 		if err == nil {
-			t.Fatal("a call past call_timeout succeeded")
+			t.Fatal("a call past the timeout succeeded")
 		}
 		if took < 250*time.Millisecond || took > 3*time.Second {
-			t.Errorf("failed after %v, want about the 300 ms call_timeout", took)
+			t.Errorf("failed after %v, want about the 300 ms timeout", took)
 		}
 		name := strings.TrimPrefix(tool.Def.Name, "mcp__s__")
-		for _, want := range []string{`mcp server "s"`, `"` + name + `"`, "did not answer within 300ms", "call_timeout"} {
+		for _, want := range []string{`mcp server "s"`, `"` + name + `"`, "did not answer within 300ms", `raise "timeout"`} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("error %q does not mention %q", err, want)
 			}
@@ -136,8 +136,8 @@ func TestACallerCancellingKeepsItsOwnError(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v, want context.Canceled", err)
 		}
-		if strings.Contains(err.Error(), "call_timeout") {
-			t.Errorf("a cancellation was blamed on call_timeout: %v", err)
+		if strings.Contains(err.Error(), "did not answer within") {
+			t.Errorf("a cancellation was blamed on the timeout: %v", err)
 		}
 		if time.Since(begin) > 3*time.Second {
 			t.Errorf("cancel took %v to end the call", time.Since(begin))
@@ -145,15 +145,15 @@ func TestACallerCancellingKeepsItsOwnError(t *testing.T) {
 	})
 }
 
-// A caller whose own deadline is shorter than call_timeout keeps ITS error, not ours.
-func TestACallersOwnShorterDeadlineIsNotBlamedOnCallTimeout(t *testing.T) {
+// A caller whose own deadline is shorter than the server's timeout keeps ITS error, not ours.
+func TestACallersOwnShorterDeadlineIsNotBlamedOnTheTimeout(t *testing.T) {
 	transports(t, 5*time.Second, func(t *testing.T, cfg types.MCPServer) {
-		tool := start(t, cfg) // default call_timeout: 30 min
+		tool := start(t, cfg) // default timeout: 5 min
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
 		_, err := tool.Execute(ctx, json.RawMessage(`{}`))
-		if !errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "call_timeout") {
-			t.Fatalf("err = %v, want the caller's own deadline, with no call_timeout hint", err)
+		if !errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "did not answer within") {
+			t.Fatalf("err = %v, want the caller's own deadline, with no timeout hint", err)
 		}
 	})
 }
@@ -164,7 +164,7 @@ func TestTheConnectTimeoutStillBoundsConnecting(t *testing.T) {
 	defer m.Close()
 	begin := time.Now()
 	got := m.Start(context.Background(), map[string]types.MCPServer{
-		"hung": {URL: slowHTTPServer(t, 0, true), Timeout: 300},
+		"hung": {URL: slowHTTPServer(t, 0, true), ConnectionTimeout: 300},
 	})
 	if len(got) != 0 {
 		t.Fatalf("a server that never answers initialize connected: %v", got)
@@ -184,11 +184,11 @@ func TestTimeoutDefaultsAndOverrides(t *testing.T) {
 		conn time.Duration
 		call time.Duration
 	}{
-		{"defaults", types.MCPServer{}, 5 * time.Second, 30 * time.Minute},
-		{"connect only", types.MCPServer{Timeout: 700}, 700 * time.Millisecond, 30 * time.Minute},
-		{"call only", types.MCPServer{CallTimeout: 45000}, 5 * time.Second, 45 * time.Second},
-		{"both", types.MCPServer{Timeout: 1000, CallTimeout: 2000}, time.Second, 2 * time.Second},
-		{"negative is the default", types.MCPServer{Timeout: -1, CallTimeout: -1}, 5 * time.Second, 30 * time.Minute},
+		{"defaults", types.MCPServer{}, 30 * time.Second, 5 * time.Minute},
+		{"connect only", types.MCPServer{ConnectionTimeout: 700}, 700 * time.Millisecond, 5 * time.Minute},
+		{"call only", types.MCPServer{Timeout: 45000}, 30 * time.Second, 45 * time.Second},
+		{"both", types.MCPServer{ConnectionTimeout: 1000, Timeout: 2000}, time.Second, 2 * time.Second},
+		{"negative is the default", types.MCPServer{ConnectionTimeout: -1, Timeout: -1}, 30 * time.Second, 5 * time.Minute},
 	} {
 		if got := connectTimeout(c.cfg); got != c.conn {
 			t.Errorf("%s: connectTimeout = %v, want %v", c.name, got, c.conn)
@@ -206,30 +206,54 @@ func TestTheHTTPClientTimeoutOutlastsTheCallDeadline(t *testing.T) {
 	orig := newHTTPTransport
 	newHTTPTransport = func(cfg HTTPConfig) (*HTTPTransport, error) { captured = cfg.Timeout; return orig(cfg) }
 	defer func() { newHTTPTransport = orig }()
-	cfg := types.MCPServer{URL: slowHTTPServer(t, 0, false), CallTimeout: 4000}
+	cfg := types.MCPServer{URL: slowHTTPServer(t, 0, false), Timeout: 4000}
 	start(t, cfg)
+	// EXACTLY the call deadline plus the margin: a backstop built from the CONNECT timeout would be
+	// a different number (and a wrong one), and a loose "longer than the call" bound would not see
+	// it.
+	if want := callTimeout(cfg) + httpTimeoutMargin; captured != want {
+		t.Errorf("HTTP client timeout %v, want %v (the call deadline %v plus the %v margin)", captured, want, callTimeout(cfg), httpTimeoutMargin)
+	}
 	if captured <= callTimeout(cfg) {
 		t.Errorf("HTTP client timeout %v must be longer than the call deadline %v", captured, callTimeout(cfg))
 	}
-	if captured > callTimeout(cfg)+5*time.Minute {
-		t.Errorf("HTTP client timeout %v is not a tight backstop for %v", captured, callTimeout(cfg))
-	}
 }
 
-func TestCallTimeoutIsPartOfTheSettingsShape(t *testing.T) {
+func TestTheTimeoutsArePartOfTheSettingsShape(t *testing.T) {
 	var s types.MCPServer
-	if err := json.Unmarshal([]byte(`{"url":"http://x/mcp","timeout":1000,"call_timeout":600000}`), &s); err != nil {
+	if err := json.Unmarshal([]byte(`{"url":"http://x/mcp","timeout":600000,"connection_timeout":30000}`), &s); err != nil {
 		t.Fatal(err)
 	}
-	if s.Timeout != 1000 || s.CallTimeout != 600000 {
+	if s.Timeout != 600000 || s.ConnectionTimeout != 30000 {
 		t.Fatalf("decoded %+v", s)
 	}
 	b, _ := json.Marshal(types.MCPServer{URL: "http://x/mcp"})
-	if strings.Contains(string(b), "call_timeout") {
-		t.Errorf("an unset call_timeout is written out: %s", b)
+	if strings.Contains(string(b), "timeout") {
+		t.Errorf("an unset timeout is written out: %s", b)
 	}
 	b, _ = json.Marshal(s)
-	if !strings.Contains(string(b), `"call_timeout":600000`) {
-		t.Errorf("call_timeout lost on the way out: %s", b)
+	if !strings.Contains(string(b), `"timeout":600000`) || !strings.Contains(string(b), `"connection_timeout":30000`) {
+		t.Errorf("a timeout lost on the way out: %s", b)
+	}
+}
+
+// The clean cut: "call_timeout" was the name of the per-call timeout until 0.101.3, and it now means
+// nothing. It is NOT read as the new "timeout" (that would silently give a stale value a different
+// meaning), and it is not written out either.
+func TestTheOldCallTimeoutKeyIsIgnored(t *testing.T) {
+	var s types.MCPServer
+	if err := json.Unmarshal([]byte(`{"url":"http://x/mcp","call_timeout":600000}`), &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.Timeout != 0 || s.ConnectionTimeout != 0 {
+		t.Fatalf("the legacy key was read: %+v", s)
+	}
+	b, _ := json.Marshal(s)
+	if strings.Contains(string(b), "call_timeout") {
+		t.Errorf("the legacy key is written out: %s", b)
+	}
+	// and it means what it says: a per-call timeout of 0 is the DEFAULT (5 min), not 600 s
+	if got := callTimeout(s); got != 5*time.Minute {
+		t.Errorf("callTimeout = %v, want the 5 min default", got)
 	}
 }

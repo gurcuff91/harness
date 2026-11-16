@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.102.0] - 2026-11-17
+
+### Changed — the MCP timeouts are renamed: `timeout` is the tool call, `connection_timeout` is the connection
+
+The two per-server MCP timeouts were named the wrong way round for what they are. `call_timeout` (one tool call) was the one an MCP author actually wants to configure, and it carried the longer, more interesting name; `timeout` (connecting) was the one nobody touches and it took the generic name. Now:
+
+| | Before (0.98.0 - 0.101.3) | Now | Default |
+|---|---|---|---|
+| ONE tool call | `call_timeout` | **`timeout`** | **300000 ms (5 min)** |
+| Connecting (initialize + tools/list) | `timeout` | **`connection_timeout`** | **30000 ms (30 s)** |
+
+Both defaults move: the per-call ceiling was 30 minutes and is now 5, and the connect budget was 5 seconds and is now 30 (a remote server may be slow to boot — a container, a cold `npx install` — and a connection cut off early is a server that never gets a chance to answer).
+
+**Breaking, on purpose, and not papered over:** there is **no alias**. The old `call_timeout` key is ignored — it is not read as the new `timeout`, because that would silently give a stale value a different meaning. And the old `timeout` (connecting) now means the call, so a config that still carries a small connect timeout (`"timeout": 5000`) would cut its tool calls off at 5 seconds — the exact bug 0.98.0 fixed. **Check your `settings.json` before upgrading**: a server entry with a `timeout` under 300000 is almost certainly the old connect timeout, and should become `connection_timeout`. `harness mcp add` no longer accepts `--call-timeout` (it is rejected, not ignored) and takes `--timeout` (one call) and `--connection-timeout` (connecting).
+
+The error a slow call produces now says what to raise: `mcp server "wiki": "WikiQuery" did not answer within 5m0s — raise "timeout" (ms) for this server if the tool is meant to run that long`.
+
+**Everything else is unchanged:** the connect timeout still bounds ONLY connecting, the per-call deadline still applies to both transports, the HTTP client's own timeout is still a backstop behind the call deadline (never first), and a caller that stops the turn still gets its own error rather than a timeout.
+
+- `types.MCPServer` (public SDK): `Timeout` is the per-call budget, `ConnectionTimeout` the connect one; the JSON keys are `timeout` and `connection_timeout`.
+- CLI: `harness mcp add --timeout <ms> --connection-timeout <ms>`; both refuse negatives.
+- Tests: the MCP timeout suite (both transports: a call slower than the connect budget succeeds, a call past the timeout fails and names the setting to raise, a caller's own cancellation and its own shorter deadline keep their own errors, the connect timeout still bounds connecting, the defaults and overrides, the HTTP backstop) plus the settings-shape tests, including one that pins the clean cut: the legacy `call_timeout` key is ignored and never written back. The CLI test also pins that the old flag names are refused.
+
 ## [0.101.3] - 2026-11-17
 
 This release is the sum of five working steps that were built and tested one after another and were numbered 0.100.1, 0.101.0, 0.101.1, 0.101.2 and 0.101.3 while in progress. Only 0.101.3 is tagged and published: the earlier numbers never had a tag or a release of their own, which is why the release list jumps from v0.100.0 to v0.101.3. Below are the five entries as they were written, oldest first, each under its step label; a mention of one of those numbers inside the text refers to that step, not to a published version.

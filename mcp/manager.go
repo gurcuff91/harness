@@ -14,13 +14,15 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
-// defaultConnectTimeout bounds the initialize + tools/list phase per server.
-const defaultConnectTimeout = 5 * time.Second
+// defaultConnectTimeout bounds the initialize + tools/list phase per server. It is generous on
+// purpose: a remote server may be slow to boot (a container, a cold npx install), and a connection
+// that is cut off early is a server that never gets a chance to answer.
+const defaultConnectTimeout = 30 * time.Second
 
-// defaultCallTimeout bounds one tool call. It is deliberately far larger than the connect timeout:
+// defaultCallTimeout bounds one tool call. It is deliberately larger than the connect timeout:
 // connecting is quick, but a tool may legitimately run for minutes (a remote agent answering a
-// question, a build), and 30 minutes is a ceiling for a call that has hung, not a budget.
-const defaultCallTimeout = 30 * time.Minute
+// question, a build), and 5 minutes is a ceiling for a call that has hung, not a budget.
+const defaultCallTimeout = 5 * time.Minute
 
 // httpTimeoutMargin is how much longer the HTTP client's own timeout is than a call's deadline. The
 // call's context is what ends a call (and produces the error that says which setting to raise); the
@@ -33,16 +35,16 @@ var newHTTPTransport = NewHTTPTransport
 
 // connectTimeout is the server's connect timeout (initialize + tools/list), or the default.
 func connectTimeout(cfg types.MCPServer) time.Duration {
-	if cfg.Timeout > 0 {
-		return time.Duration(cfg.Timeout) * time.Millisecond
+	if cfg.ConnectionTimeout > 0 {
+		return time.Duration(cfg.ConnectionTimeout) * time.Millisecond
 	}
 	return defaultConnectTimeout
 }
 
 // callTimeout is the server's per-call timeout, or the default.
 func callTimeout(cfg types.MCPServer) time.Duration {
-	if cfg.CallTimeout > 0 {
-		return time.Duration(cfg.CallTimeout) * time.Millisecond
+	if cfg.Timeout > 0 {
+		return time.Duration(cfg.Timeout) * time.Millisecond
 	}
 	return defaultCallTimeout
 }
@@ -133,7 +135,7 @@ func (m *Manager) Start(ctx context.Context, servers map[string]types.MCPServer)
 // connect timeout (or the default). The connect timeout bounds ONLY this phase, through
 // connectCtx; what bounds a later tool call is the call timeout (see wrapTool), which is also the
 // HTTP client's own ceiling — the connect timeout must never become one, or a slow tool would be
-// cut off at the few seconds that are right for connecting.
+// cut off at the seconds that are right for connecting.
 func connectServer(ctx context.Context, cfg types.MCPServer) (*Client, []Tool, error) {
 	connectCtx, cancel := context.WithTimeout(ctx, connectTimeout(cfg))
 	defer cancel()
@@ -165,7 +167,7 @@ func connectServer(ctx context.Context, cfg types.MCPServer) (*Client, []Tool, e
 // mcp__<server>__<tool> (Claude Code style) to avoid collisions; Execute routes
 // the call to the owning server's client — so subagents that inherit this tool
 // reuse the parent's process rather than spawning their own. Every call is bounded by timeout (the
-// server's call_timeout), on top of the caller's own cancellation (Stop still ends it at once).
+// server's "timeout"), on top of the caller's own cancellation (Stop still ends it at once).
 func wrapTool(server string, t Tool, client *Client, timeout time.Duration) tools.Tool {
 	name := fmt.Sprintf("mcp__%s__%s", server, t.Name)
 	schema := t.InputSchema
@@ -186,7 +188,7 @@ func wrapTool(server string, t Tool, client *Client, timeout time.Duration) tool
 				// Our deadline, not the caller's: say so, and say what to change. A caller that
 				// stopped the turn keeps its own error.
 				if ctx.Err() == nil && errors.Is(callCtx.Err(), context.DeadlineExceeded) {
-					return "", fmt.Errorf("mcp server %q: %q did not answer within %v — raise \"call_timeout\" (ms) for this server if the tool is meant to run that long: %w", server, t.Name, timeout, err)
+					return "", fmt.Errorf("mcp server %q: %q did not answer within %v — raise \"timeout\" (ms) for this server if the tool is meant to run that long: %w", server, t.Name, timeout, err)
 				}
 				return "", err
 			}

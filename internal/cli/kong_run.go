@@ -103,8 +103,8 @@ func (c *mcpAddCmd) Run() error {
 		Headers:  headers,
 		Disabled: c.Disabled,
 
-		Timeout:     c.Timeout,
-		CallTimeout: c.CallTimeout,
+		Timeout:           c.Timeout,
+		ConnectionTimeout: c.ConnectionTimeout,
 	}
 	return RunMCPAdd(ctx, a, c.Name, opts, "text")
 }

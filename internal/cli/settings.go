@@ -166,8 +166,8 @@ type MCPAddOpts struct {
 	Bearer   string            // remote: sugar — expands to Authorization: Bearer <token>
 	Disabled bool              // default enabled; --disabled turns it off
 
-	Timeout     int // ms to connect (initialize + tools/list); 0 = the default (5000)
-	CallTimeout int // ms for one tool call; 0 = the default (1800000)
+	Timeout           int // ms for one tool call; 0 = the default (300000 = 5 min)
+	ConnectionTimeout int // ms to connect (initialize + tools/list); 0 = the default (30000 = 30 s)
 }
 
 // RunMCPAdd creates (or replaces) an MCP server. The name is positional; the
@@ -183,14 +183,14 @@ func RunMCPAdd(ctx context.Context, a *agent.Agent, name string, opts MCPAddOpts
 		return fmt.Errorf("specify exactly one of --command (local) or --url (remote)")
 	}
 
-	if opts.Timeout < 0 || opts.CallTimeout < 0 {
-		return fmt.Errorf("--timeout and --call-timeout are milliseconds and cannot be negative")
+	if opts.Timeout < 0 || opts.ConnectionTimeout < 0 {
+		return fmt.Errorf("--timeout and --connection-timeout are milliseconds and cannot be negative")
 	}
 
 	var srv client.MCPServer
 	srv.Disabled = opts.Disabled
 	srv.Timeout = opts.Timeout
-	srv.CallTimeout = opts.CallTimeout
+	srv.ConnectionTimeout = opts.ConnectionTimeout
 	if hasCmd {
 		// Split the command string into executable + args (canonical shape).
 		fields := strings.Fields(opts.Command)

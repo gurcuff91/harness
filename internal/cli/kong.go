@@ -266,11 +266,11 @@ type mcpAddCmd struct {
 	// --env KEY=VAL --env KEY2=VAL2, parsed as "KEY=VAL"/"KEY:VAL" pairs in
 	// Run() (see parseKV in kong_run.go). map[string]string would instead
 	// require a single --env=KEY=VAL;KEY2=VAL2 with mapsep, a clunkier UX.
-	Env         []string `help:"Local: env var KEY=VAL (repeatable)"`
-	Header      []string `help:"Remote: HTTP header KEY:VAL (repeatable)"`
-	Timeout     int      `help:"Connect timeout in ms (initialize + tools/list; default 5000)"`
-	CallTimeout int      `help:"Timeout of ONE tool call in ms (default 1800000 = 30 min); raise it for tools that run longer"`
-	Disabled    bool     `help:"Add the server disabled (default: enabled)"`
+	Env               []string `help:"Local: env var KEY=VAL (repeatable)"`
+	Header            []string `help:"Remote: HTTP header KEY:VAL (repeatable)"`
+	Timeout           int      `help:"Timeout of ONE tool call in ms (default 300000 = 5 min); raise it for tools that run longer"`
+	ConnectionTimeout int      `help:"Connect timeout in ms (initialize + tools/list; default 30000 = 30 s)"`
+	Disabled          bool     `help:"Add the server disabled (default: enabled)"`
 }
 
 type mcpRmCmd struct {
