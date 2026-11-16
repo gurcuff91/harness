@@ -3,6 +3,7 @@ package cli
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -654,7 +655,14 @@ type exitCode int
 // runMain runs cli.Main with the process's stdout/stderr redirected, and returns what it wrote.
 func runMain(t *testing.T, args ...string) (stderr, stdout string, code int) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	return runMainIn(t, t.TempDir(), args...)
+}
+
+// runMainIn is runMain with HOME set to home, so a test can look at what the run left there (or
+// check that its text does not mention it).
+func runMainIn(t *testing.T, home string, args ...string) (stderr, stdout string, code int) {
+	t.Helper()
+	t.Setenv("HOME", home)
 	oldExit := osExit
 	osExit = func(c int) { panic(exitCode(c)) } // Kong ends the process after a usage error; do not die with it
 	defer func() { osExit = oldExit }()
@@ -685,4 +693,121 @@ func runMain(t *testing.T, args ...string) (stderr, stdout string, code int) {
 	}()
 	got := <-done
 	return got[1], got[0], code
+}
+
+// ── explicit flags are requirements (the CLI side) ──────────────────────────
+
+// -p is a one-shot on an EPHEMERAL session: there is nothing to resume, so the flag is rejected —
+// before any agent, session or model exists. It used to be dropped silently: the run answered on a
+// brand new session and exited 0.
+func TestOneShotRejectsResume(t *testing.T) {
+	for name, args := range map[string][]string{
+		"-p then --resume": {"-p", "x", "--resume", "abc"},
+		"--resume then -p": {"--resume", "abc", "-p", "x"},
+		"with --model too": {"--model", "a/b", "-p", "x", "--resume", "abc"},
+		"long form":        {"--prompt", "x", "--resume=abc"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := parse(args...)
+			if got.err != "--resume is not supported with -p" {
+				t.Errorf("harness %q: err = %q, want %q", args, got.err, "--resume is not supported with -p")
+			}
+		})
+	}
+	home := t.TempDir()
+	stderr, stdout, code := runMainIn(t, home, "-p", "x", "--resume", "abc")
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "--resume is not supported with -p") {
+		t.Errorf("through Main: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	// and nothing was created: Main returned before any agent existed, so nothing is on disk at all
+	if entries, _ := os.ReadDir(filepath.Join(home, ".harness")); len(entries) != 0 {
+		t.Errorf("the rejected run touched ~/.harness: %v", entries)
+	}
+}
+
+// What is NOT rejected: --resume alone (the TUI), and -p with the flags that make sense.
+func TestResumeAndOneShotStillWorkApart(t *testing.T) {
+	if got := parse("--resume", "abc"); got.err != "" || got.resume != "abc" || got.cmd != "tui" {
+		t.Errorf("--resume alone: %+v", got)
+	}
+	if got := parse("--resume", "abc", "task"); got.err != "" || got.resume != "abc" || got.prompt != "task" {
+		t.Errorf("--resume with a prompt: %+v", got)
+	}
+	if got := parse("-p", "x", "--model", "a/b", "--thinking", "high"); got.err != "" || got.oneShot != "x" || got.model != "a/b" {
+		t.Errorf("-p with --model and --thinking: %+v", got)
+	}
+	// an empty --resume is no --resume
+	if got := parse("-p", "x", "--resume", ""); got.err != "" {
+		t.Errorf("-p with an empty --resume: %+v", got)
+	}
+}
+
+// A startup that cannot honor an explicit flag exits 1 BEFORE the TUI: the error goes to stderr as
+// "error: …", stdout is empty (no banner, no escape sequence), and no model is ever called. This is
+// the process-level contract; internal/tui proves the pieces.
+func TestAnExplicitModelThatCannotBeUsedExitsOneWithNothingOnStdout(t *testing.T) {
+	for name, args := range map[string][]string{
+		"unknown provider": {"--model", "zzz/no-existe", "the task"},
+		"a bare word":      {"--model", "basura", "the task"},
+		"no prompt":        {"--model", "zzz/no-existe"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stderr, stdout, code := runMain(t, args...)
+			if code != 1 {
+				t.Errorf("exit code %d, want 1", code)
+			}
+			if stdout != "" {
+				t.Errorf("stdout is not empty: %q (a failed start must write nothing)", stdout)
+			}
+			if !strings.HasPrefix(stderr, "error: ") || !strings.Contains(stderr, "provider not found") {
+				t.Errorf("stderr = %q, want `error: …provider not found…` (the text -p prints)", stderr)
+			}
+			if strings.Contains(stderr, "\x1b") {
+				t.Errorf("an escape sequence on stderr: %q", stderr)
+			}
+		})
+	}
+}
+
+func TestAMissingResumeIdExitsOneWithTheServersMessage(t *testing.T) {
+	home := t.TempDir()
+	for name, args := range map[string][]string{
+		"with a prompt": {"--resume", "no-such-id", "the task"},
+		"alone":         {"--resume", "no-such-id"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stderr, stdout, code := runMainIn(t, home, args...)
+			if code != 1 || stdout != "" {
+				t.Errorf("code=%d stdout=%q", code, stdout)
+			}
+			if !strings.HasPrefix(stderr, "error: resume session no-such-id: ") || !strings.Contains(stderr, "not found") {
+				t.Errorf("stderr = %q", stderr)
+			}
+		})
+	}
+	// no session file was created, whichever the run (searched under the real HOME it used)
+	var files []string
+	filepath.Walk(filepath.Join(home, ".harness", "agent", "sessions"), func(p string, fi os.FileInfo, err error) error { //nolint:errcheck
+		if err == nil && !fi.IsDir() {
+			files = append(files, p)
+		}
+		return nil
+	})
+	if len(files) != 0 {
+		t.Errorf("a failed --resume left session files behind: %v", files)
+	}
+}
+
+// The error text must carry no credentials or settings paths: it is the server's own message and
+// names only what the person typed.
+func TestTheFailureTextCarriesNoCredentialsOrSettingsPaths(t *testing.T) {
+	home := t.TempDir()
+	for _, args := range [][]string{{"--model", "zzz/x", "t"}, {"--resume", "nope", "t"}} {
+		stderr, _, _ := runMainIn(t, home, args...)
+		for _, bad := range []string{home, "settings.json", "credentials", "api_key", "apikey", "Bearer", "sk-"} {
+			if strings.Contains(strings.ToLower(stderr), strings.ToLower(bad)) {
+				t.Errorf("harness %v: the error mentions %q: %q", args, bad, stderr)
+			}
+		}
+	}
 }

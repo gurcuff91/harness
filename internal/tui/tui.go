@@ -212,7 +212,17 @@ func (t *TUI) Run(ctx context.Context) error {
 	// server is guaranteed ready (startInternalServer waits for the listener),
 	// so no artificial sleep is needed; the startup just takes as long as the
 	// initial API calls, then paints everything at once.
-	t.autoConnect(ctx)
+	//
+	// An explicit --model/--thinking/--resume that cannot be honored fails HERE, before the TUI
+	// starts: raw mode is never entered, nothing is drawn, no OSC is written (the status reporter
+	// stays silent until a usable session exists, and there is no record to clear), and Main prints
+	// the error and exits 1.
+	if err := t.autoConnect(ctx); err != nil {
+		if t.sseCancel != nil {
+			t.sseCancel()
+		}
+		return err
+	}
 
 	if err := t.tui.Start(); err != nil {
 		return fmt.Errorf("start tui: %w", err)

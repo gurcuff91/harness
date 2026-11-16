@@ -309,34 +309,49 @@ func TestWithNoUsableSessionThePromptIsKeptInTheEditorNotSent(t *testing.T) {
 	}
 }
 
-func TestAFailedResumeKeepsThePromptInsteadOfSendingItToAFreshSession(t *testing.T) {
+// A failed --resume is a HARD error (it used to be a warning plus a fresh session with the prompt
+// kept in the editor): the task was meant for THAT conversation, so nothing runs and nothing is
+// created. The prompt is safe because nothing ran, not because it was parked in an editor.
+func TestAFailedResumeFailsAndNeverStartsAFreshSessionForThePrompt(t *testing.T) {
 	f := newFallbackFixture(t)
 	log := watchPrompts(t, f.c, f.sessionID)
+	before := countSessions(t, f)
 	tu := f.tui("no-such-session-id")
 	tu.editor = components.NewEditor(tu.tui, "ph")
 	tu.SetInitialPrompt("meant for the old conversation")
-	tu.autoConnect(context.Background())
+	err := tu.autoConnect(context.Background())
 	t.Cleanup(func() {
 		if tu.sseCancel != nil {
 			tu.sseCancel()
 		}
 	})
-	if !strings.Contains(screenText(tu), "Failed to resume") {
-		t.Fatalf("setup: the resume did not fail:\n%s", screenText(tu))
+	if err == nil || !strings.Contains(err.Error(), "no-such-session-id") {
+		t.Fatalf("autoConnect returned %v, want an error that names the session that could not be resumed", err)
+	}
+	if tu.sessionID != "" {
+		t.Errorf("a session was opened (%q) after the resume failed: the task would run in a conversation nobody asked for", tu.sessionID)
+	}
+	if n := countSessions(t, f); n != before {
+		t.Errorf("%d sessions after the failed resume, %d before: a fresh one was created", n, before)
 	}
 	time.Sleep(300 * time.Millisecond)
-	if tu.editor.Value() != "meant for the old conversation" {
-		t.Errorf("the prompt was not kept in the editor: %q", tu.editor.Value())
-	}
-	// and no turn started on the fresh fallback session
-	if tu.sessionID != "" {
-		if info, err := f.c.GetSessionInfo(tu.sessionID); err == nil && info.Busy {
-			t.Errorf("a turn is running on the fallback session: the prompt was sent")
-		}
-	}
 	if n := log.count(); n != 0 {
 		t.Errorf("the original session received %q", log.all())
 	}
+	if got := tu.editor.Value(); got != "" {
+		t.Errorf("the editor holds %q: nothing ran, so there is nothing to park there", got)
+	}
+}
+
+// countSessions is how many sessions the server has persisted, active or not — the number a failed
+// startup must leave unchanged.
+func countSessions(t *testing.T, f *fallbackFixture) int {
+	t.Helper()
+	list, err := f.c.ListSessions("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(list)
 }
 
 // A session that cannot be created (server error) is the same case.
@@ -379,13 +394,18 @@ func TestTheInitialPromptUsesTheNormalSubmitPath(t *testing.T) {
 // arrived — and it can hold the stream's headers back. That is what lets a test pin the ORDER the
 // story demands (subscribe, then send) deterministically, instead of hoping a race goes the wrong way.
 type wireProxy struct {
-	mu          sync.Mutex
-	addr        string
-	holdEvents  time.Duration // how long to delay the stream's response headers
-	failCreate  bool          // answer POST /api/sessions with a 500
-	eventsOpen  time.Time     // when the stream's headers reached the client
-	prompts     []wirePrompt
-	createCalls int
+	mu           sync.Mutex
+	addr         string
+	holdEvents   time.Duration   // how long to delay the stream's response headers
+	failCreate   bool            // answer POST /api/sessions with a 500
+	subscription map[string]bool // model id -> report it as a flat-fee (subscription) model in GET /api/models
+	failCommand  map[string]int  // session command name ("model", "thinking") -> HTTP status to answer with, instead of running it
+	requests     []string        // "METHOD path" of every request, in order
+	commands     []string        // the command names POSTed to /commands, in order
+	closes       int             // POST …/close calls
+	eventsOpen   time.Time       // when the stream's headers reached the client
+	prompts      []wirePrompt
+	createCalls  int
 }
 
 type wirePrompt struct {
@@ -425,7 +445,49 @@ func newWireProxy(t *testing.T, upstream string) *wireProxy {
 		return nil
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		w.mu.Lock()
+		w.requests = append(w.requests, r.Method+" "+r.URL.Path)
+		w.mu.Unlock()
 		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/models" && len(w.subscription) > 0:
+			// rewrite the model list: mark the chosen models as subscription ones
+			up, err := http.Get("http://" + upstream + "/api/models")
+			if err != nil {
+				http.Error(rw, err.Error(), http.StatusBadGateway)
+				return
+			}
+			defer up.Body.Close()
+			var list []map[string]any
+			json.NewDecoder(up.Body).Decode(&list) //nolint:errcheck
+			w.mu.Lock()
+			for _, m := range list {
+				if id, _ := m["model"].(string); w.subscription[id] {
+					m["is_subscription"] = true
+				}
+			}
+			w.mu.Unlock()
+			rw.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(rw).Encode(list) //nolint:errcheck
+			return
+		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/commands"):
+			b, _ := io.ReadAll(r.Body)
+			r.Body = io.NopCloser(strings.NewReader(string(b)))
+			var body struct {
+				Command string `json:"command"`
+			}
+			json.Unmarshal(b, &body) //nolint:errcheck
+			w.mu.Lock()
+			w.commands = append(w.commands, body.Command)
+			status := w.failCommand[body.Command]
+			w.mu.Unlock()
+			if status != 0 {
+				http.Error(rw, `{"error":{"message":"refused by the test: `+body.Command+`"}}`, status)
+				return
+			}
+		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/close"):
+			w.mu.Lock()
+			w.closes++
+			w.mu.Unlock()
 		case r.Method == "POST" && r.URL.Path == "/api/sessions":
 			w.mu.Lock()
 			w.createCalls++
@@ -556,5 +618,340 @@ func TestWhenTheServerRefusesToCreateTheSessionThePromptIsKeptAndNotSent(t *test
 func TestTheStreamWaitBackstopIsSane(t *testing.T) {
 	if streamReadyTimeout < time.Second || streamReadyTimeout > 30*time.Second {
 		t.Errorf("streamReadyTimeout = %v, want between 1s and 30s", streamReadyTimeout)
+	}
+}
+
+// ── explicit --model / --thinking / --resume are requirements, not hints ────
+
+// startErr is autoConnect through a wire proxy, with the flags a command line would set, returning
+// the error (what Run turns into "error: …" and exit 1) and the recorded wire traffic.
+func startErr(t *testing.T, f *fallbackFixture, proxy *wireProxy, model, thinking, resume, prompt string) (*TUI, *recTerminal, error) {
+	t.Helper()
+	rec := newRecTerminal()
+	tu := New(nil)
+	tu.attachTerminal(rec)
+	t2 := newTestTUIForEvents()
+	tu.history, tu.spinner, tu.info, tu.footer = t2.history, t2.spinner, t2.info, t2.footer
+	tu.editor = components.NewEditor(tu.tui, "ph")
+	tu.client = client.New(proxy.addr)
+	tu.baseCtx = context.Background()
+	tu.SetFlags(model, thinking, resume)
+	tu.SetInitialPrompt(prompt)
+	err := tu.autoConnect(context.Background())
+	t.Cleanup(func() {
+		if tu.sseCancel != nil {
+			tu.sseCancel()
+		}
+	})
+	time.Sleep(150 * time.Millisecond) // anything a failed start wrongly scheduled would have been drawn by now
+	return tu, rec, err
+}
+
+func (w *wireProxy) sawCreate() int { w.mu.Lock(); defer w.mu.Unlock(); return w.createCalls }
+func (w *wireProxy) sawCommands() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]string(nil), w.commands...)
+}
+func (w *wireProxy) sawCloses() int { w.mu.Lock(); defer w.mu.Unlock(); return w.closes }
+
+// A model the person named that cannot be used is an error — never the default model, never a
+// warning. The wording is the server's own, the one -p prints.
+func TestAnUnavailableExplicitModelFailsAndNothingIsDone(t *testing.T) {
+	for name, c := range map[string]struct{ model, want string }{
+		"unknown provider": {"zzz/no-existe", `provider not found: "zzz"`},
+		"a bare word":      {"basura", `provider not found: "basura"`},
+		"unknown model":    {"{FIRST}/no-existe", `model "no-existe" not found in provider`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFallbackFixture(t)
+			model := strings.ReplaceAll(c.model, "{FIRST}", f.first)
+			proxy := newWireProxy(t, f.addr)
+			before := countSessions(t, f)
+			tu, rec, err := startErr(t, f, proxy, model, "", "", "the task")
+			if err == nil || !strings.Contains(err.Error(), c.want) || !strings.HasPrefix(err.Error(), "create session: ") {
+				t.Fatalf("autoConnect returned %v, want create session: …%s", err, c.want)
+			}
+			if tu.sessionID != "" {
+				t.Errorf("a session was opened: %q", tu.sessionID)
+			}
+			if n := countSessions(t, f); n != before {
+				t.Errorf("%d sessions, %d before: a session was created", n, before)
+			}
+			if got := proxy.promptTexts(); len(got) != 0 {
+				t.Errorf("a prompt was sent: %q", got)
+			}
+			if tu.editor.Value() != "" {
+				t.Errorf("the editor holds %q: nothing ran, nothing to park", tu.editor.Value())
+			}
+			// nothing at all reaches the terminal: no banner frame, no idle, no title, no clear
+			for _, w := range rec.all() {
+				t.Errorf("a failed start wrote to the terminal: %q", w)
+			}
+			if len(rec.reports()) != 0 || len(rec.titles()) != 0 {
+				t.Errorf("status %v / titles %v were reported for a session that never existed", rec.reports(), rec.titles())
+			}
+		})
+	}
+}
+
+// An explicit model with NO provider at all is the same error, not the "No active providers" banner.
+func TestAnExplicitModelWithNoProvidersAtAllStillFails(t *testing.T) {
+	f := newFallbackFixture(t)
+	f.disconnect(f.first)
+	f.disconnect(f.second)
+	proxy := newWireProxy(t, f.addr)
+	tu, rec, err := startErr(t, f, proxy, "zzz/x", "", "", "the task")
+	if err == nil || !strings.Contains(err.Error(), "provider not found") {
+		t.Fatalf("autoConnect returned %v, want the server's provider-not-found error", err)
+	}
+	if tu.sessionID != "" || len(rec.all()) != 0 {
+		t.Errorf("session %q, writes %q", tu.sessionID, rec.all())
+	}
+}
+
+func TestAValidExplicitModelIsUsedAsGiven(t *testing.T) {
+	f := newFallbackFixture(t)
+	proxy := newWireProxy(t, f.addr)
+	tu, _, err := startErr(t, f, proxy, f.first+"/m", "", "", "the task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tu.sessionID == "" || tu.model != f.first+"/m" {
+		t.Fatalf("session %q on model %q, want a session on %s/m (not the default %s/m)", tu.sessionID, tu.model, f.first, f.second)
+	}
+	sess, err := f.c.GetSession(tu.sessionID)
+	if err != nil || sess.Model != f.first+"/m" {
+		t.Errorf("the SESSION runs on %v (%v), want %s/m", sess, err, f.first)
+	}
+	waitFor(t, "the prompt", func() bool { return len(proxy.promptTexts()) == 1 })
+}
+
+// No flag, or an empty one: the settings model, then the first active — and the existing warning
+// for a settings model that is gone. (The fixture's settings model is second/m.)
+func TestWithoutAnExplicitModelTheFallbacksStillApply(t *testing.T) {
+	for name, model := range map[string]string{"no flag": "", "an empty --model": ""} {
+		t.Run(name, func(t *testing.T) {
+			f := newFallbackFixture(t)
+			proxy := newWireProxy(t, f.addr)
+			tu, _, err := startErr(t, f, proxy, model, "", "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tu.model != f.second+"/m" {
+				t.Errorf("model %q, want the settings model %s/m", tu.model, f.second)
+			}
+		})
+	}
+	// a settings model that is gone: the first active model and the existing warning
+	f := newFallbackFixture(t)
+	f.disconnect(f.second) // the settings model's provider is gone; first/m remains
+	proxy := newWireProxy(t, f.addr)
+	tu, _, err := startErr(t, f, proxy, "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tu.model != f.first+"/m" || !strings.Contains(screenText(tu), "not available. Using first active model") {
+		t.Errorf("model %q, screen:\n%s", tu.model, screenText(tu))
+	}
+}
+
+// --resume: a failure is the server's own message and nothing else happens.
+func TestAFailingResumeReturnsTheServersMessageAndCreatesNothing(t *testing.T) {
+	f := newFallbackFixture(t)
+	proxy := newWireProxy(t, f.addr)
+	before := countSessions(t, f)
+	tu, rec, err := startErr(t, f, proxy, "", "", "missing-id", "x")
+	if err == nil || !strings.Contains(err.Error(), "missing-id") || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("autoConnect returned %v", err)
+	}
+	if proxy.sawCreate() != 0 {
+		t.Errorf("CreateSession was called %d times after a failed resume", proxy.sawCreate())
+	}
+	if n := countSessions(t, f); n != before || tu.sessionID != "" {
+		t.Errorf("sessions %d (was %d), open session %q", n, before, tu.sessionID)
+	}
+	if len(rec.all()) != 0 {
+		t.Errorf("a failed start wrote to the terminal: %q", rec.all())
+	}
+}
+
+// --resume + --model whose command FAILS: the session is closed untouched, t.model is never set to
+// a model that was not applied, nothing is sent.
+func TestResumeWithAFailingModelSwitchClosesTheSessionAndFails(t *testing.T) {
+	f := newFallbackFixture(t)
+	proxy := newWireProxy(t, f.addr)
+	proxy.failCommand = map[string]int{"model": http.StatusInternalServerError}
+	tu, rec, err := startErr(t, f, proxy, f.second+"/m", "", f.sessionID, "the task")
+	if err == nil || !strings.Contains(err.Error(), "switch session") || !strings.Contains(err.Error(), f.second+"/m") {
+		t.Fatalf("autoConnect returned %v", err)
+	}
+	if proxy.sawCloses() != 1 {
+		t.Errorf("the resumed session was closed %d times, want 1: it must not be left half-applied", proxy.sawCloses())
+	}
+	if tu.model != "" || tu.sessionID != "" {
+		t.Errorf("model %q session %q: nothing may be set before the switch is confirmed", tu.model, tu.sessionID)
+	}
+	if got := proxy.promptTexts(); len(got) != 0 {
+		t.Errorf("a prompt was sent: %q", got)
+	}
+	if len(rec.all()) != 0 {
+		t.Errorf("wrote to the terminal: %q", rec.all())
+	}
+	// and the saved model is exactly what it was
+	if sess, _ := f.c.GetSession(f.sessionID); sess != nil && sess.Model != f.first+"/m" {
+		t.Errorf("the saved model changed to %s", sess.Model)
+	}
+}
+
+// the same pair, for thinking
+func TestResumeWithAFailingThinkingChangeClosesTheSessionAndFails(t *testing.T) {
+	f := newFallbackFixture(t)
+	proxy := newWireProxy(t, f.addr)
+	proxy.failCommand = map[string]int{"thinking": http.StatusInternalServerError}
+	tu, rec, err := startErr(t, f, proxy, "", "high", f.sessionID, "the task")
+	if err == nil || !strings.Contains(err.Error(), "set thinking high") {
+		t.Fatalf("autoConnect returned %v", err)
+	}
+	if proxy.sawCloses() != 1 || tu.thinking != "" || tu.sessionID != "" {
+		t.Errorf("closes=%d thinking=%q session=%q", proxy.sawCloses(), tu.thinking, tu.sessionID)
+	}
+	if len(proxy.promptTexts()) != 0 || len(rec.all()) != 0 {
+		t.Errorf("prompts %q, writes %q", proxy.promptTexts(), rec.all())
+	}
+}
+
+func TestResumeWithASucceedingOverrideAppliesItAndSendsThePrompt(t *testing.T) {
+	f := newFallbackFixture(t)
+	proxy := newWireProxy(t, f.addr)
+	tu, _, err := startErr(t, f, proxy, f.second+"/m", "high", f.sessionID, "the task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tu.sessionID != f.sessionID || tu.model != f.second+"/m" || tu.thinking != "high" {
+		t.Fatalf("session %q model %q thinking %q", tu.sessionID, tu.model, tu.thinking)
+	}
+	sess, _ := f.c.GetSession(f.sessionID)
+	if sess == nil || sess.Model != f.second+"/m" || sess.Thinking != "high" {
+		t.Errorf("the SESSION itself is %+v, want model %s/m, thinking high", sess, f.second)
+	}
+	if got := proxy.sawCommands(); strings.Join(got, ",") != "model,thinking" {
+		t.Errorf("commands sent: %v", got)
+	}
+	waitFor(t, "the prompt", func() bool { return len(proxy.promptTexts()) == 1 })
+}
+
+// A command the resumed session already satisfies is not re-sent.
+func TestResumeDoesNotReapplyWhatTheSessionAlreadyHas(t *testing.T) {
+	f := newFallbackFixture(t)
+	proxy := newWireProxy(t, f.addr)
+	if _, _, err := startErr(t, f, proxy, f.first+"/m", "", f.sessionID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := proxy.sawCommands(); len(got) != 0 {
+		t.Errorf("commands %v sent for a model the session already runs on", got)
+	}
+}
+
+// A fresh session with an explicit --thinking: applied and CHECKED (the new session starts on the
+// settings level, so ignoring the flag would run the task at a level that was not chosen).
+func TestAFreshSessionAppliesAnExplicitThinkingAndFailsIfItCannot(t *testing.T) {
+	f := newFallbackFixture(t)
+	proxy := newWireProxy(t, f.addr)
+	tu, _, err := startErr(t, f, proxy, "", "high", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, _ := f.c.GetSession(tu.sessionID)
+	if sess == nil || sess.Thinking != "high" || tu.thinking != "high" {
+		t.Errorf("the new SESSION has %+v, TUI says %q: --thinking high was ignored", sess, tu.thinking)
+	}
+
+	f2 := newFallbackFixture(t)
+	p2 := newWireProxy(t, f2.addr)
+	p2.failCommand = map[string]int{"thinking": http.StatusInternalServerError}
+	before := countSessions(t, f2)
+	tu2, rec, err := startErr(t, f2, p2, "", "high", "", "the task")
+	if err == nil || !strings.Contains(err.Error(), "set thinking high") {
+		t.Fatalf("autoConnect returned %v", err)
+	}
+	if p2.sawCloses() != 1 || tu2.sessionID != "" || len(p2.promptTexts()) != 0 || len(rec.all()) != 0 {
+		t.Errorf("closes=%d session=%q prompts=%q writes=%q", p2.sawCloses(), tu2.sessionID, p2.promptTexts(), rec.all())
+	}
+	_ = before
+}
+
+// Regression guards for what does NOT change: with no explicit flag violated, the soft paths keep
+// their warning and the prompt in the editor.
+func TestNoFlagsAndNoProvidersKeepsTheBannerAndThePrompt(t *testing.T) {
+	f := newFallbackFixture(t)
+	f.disconnect(f.first)
+	f.disconnect(f.second)
+	proxy := newWireProxy(t, f.addr)
+	tu, _, err := startErr(t, f, proxy, "", "", "", "do not lose me")
+	if err != nil {
+		t.Fatalf("no flag was violated, so this is not an error: %v", err)
+	}
+	if tu.editor.Value() != "do not lose me" || !strings.Contains(screenText(tu), "No active providers") {
+		t.Errorf("editor %q, screen:\n%s", tu.editor.Value(), screenText(tu))
+	}
+}
+
+func TestTheServerRefusingASessionWithoutAFlagKeepsTheWarningAndThePrompt(t *testing.T) {
+	f := newFallbackFixture(t)
+	proxy := newWireProxy(t, f.addr)
+	proxy.failCreate = true
+	tu, _, err := startErr(t, f, proxy, "", "", "", "keep me")
+	if err != nil {
+		t.Fatalf("no flag was violated: %v", err)
+	}
+	if tu.editor.Value() != "keep me" || !strings.Contains(screenText(tu), "Failed to create session") {
+		t.Errorf("editor %q, screen:\n%s", tu.editor.Value(), screenText(tu))
+	}
+	// ...but WITH an explicit --model the same refusal is the process failing
+	f2 := newFallbackFixture(t)
+	p2 := newWireProxy(t, f2.addr)
+	p2.failCreate = true
+	_, rec, err := startErr(t, f2, p2, f2.first+"/m", "", "", "x")
+	if err == nil || !strings.Contains(err.Error(), "create session") || len(rec.all()) != 0 {
+		t.Errorf("err=%v writes=%q: an explicit model whose session cannot be created must fail", err, rec.all())
+	}
+}
+
+// A session whose SAVED model is gone is moved by the automatic fallback (it concerns the session's
+// own model, not a flag the person passed) and says so — and an explicit --model applies on top.
+func TestTheAutomaticFallbackOfASavedModelIsUnaffected(t *testing.T) {
+	f := newFallbackFixture(t)
+	f.disconnect(f.first)
+	proxy := newWireProxy(t, f.addr)
+	tu, _, err := startErr(t, f, proxy, "", "", f.sessionID, "")
+	if err != nil {
+		t.Fatalf("no --model passed, so the fallback applies and it is not an error: %v", err)
+	}
+	if tu.model != f.second+"/m" || !strings.Contains(screenText(tu), "not available") {
+		t.Errorf("model %q, screen:\n%s", tu.model, screenText(tu))
+	}
+}
+
+// The "(sub)" mark in the footer belongs to the model the session ACTUALLY runs on: with an explicit
+// --model the flag is decided after the explicit model is chosen, not before.
+func TestTheSubscriptionMarkFollowsTheExplicitModel(t *testing.T) {
+	f := newFallbackFixture(t)
+	proxy := newWireProxy(t, f.addr)
+	proxy.subscription = map[string]bool{f.first + "/m": true} // only the NON-default model is a subscription one
+	tu, _, err := startErr(t, f, proxy, f.first+"/m", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tu.isSubscription {
+		t.Errorf("--model %s/m is a subscription model but the TUI does not know (it would price it as pay-per-use)", f.first)
+	}
+	// and without the flag, the default model is not one
+	tu2, _, err := startErr(t, f, proxy, "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tu2.isSubscription {
+		t.Errorf("the default model %s/m is not a subscription model", f.second)
 	}
 }

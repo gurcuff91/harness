@@ -21,8 +21,22 @@ import (
 // is collected into `warnings` and surfaces INSIDE the single banner block
 // (see welcomeBanner) instead of a bare warning printed on its own with no
 // banner above it, or the banner being skipped entirely.
-func (t *TUI) autoConnect(ctx context.Context) {
+//
+// An explicit --model, --thinking or --resume is a REQUIREMENT, not a hint. Either the session runs
+// exactly as asked, or autoConnect returns an error and Run exits 1 before the TUI opens (never a
+// fallback, never ignored): a task must not run on a model that was not chosen, nor in a
+// conversation that was not asked for. Fallbacks apply only to what the person did not pass — the
+// settings model, then the first active one. A startup that fails WITHOUT any flag being violated
+// (no providers, the server refuses to create a session) is not an error: the banner or a warning
+// explains it and the prompt stays in the editor.
+func (t *TUI) autoConnect(ctx context.Context) error {
 	var warnings []string
+
+	// What was CHOSEN. Nothing is stored on the TUI (t.model, t.thinking…) until the server has
+	// confirmed it: on a failure the TUI must not look as if it had applied a model or a thinking
+	// level that never took effect (the footer reads these fields).
+	var model, thinking string
+	var subscription bool
 
 	models, err := t.client.ListModels()
 	switch {
@@ -45,104 +59,130 @@ func (t *TUI) autoConnect(ctx context.Context) {
 		}
 
 		switch {
-		case t.overrideModel != "" && available[t.overrideModel]:
-			t.model = t.overrideModel
 		case settingsModel != "" && available[settingsModel]:
-			t.model = settingsModel
+			model = settingsModel
 		default:
 			if settingsModel != "" {
 				warnings = append(warnings, fmt.Sprintf("Model '%s' not available. Using first active model.", settingsModel))
 			}
-			t.model = models[0].Model
+			model = models[0].Model
 		}
-		t.thinking = settingsThinking
-		if t.overrideThinking != "" {
-			t.thinking = t.overrideThinking
-		}
+		thinking = settingsThinking
 
-		for _, m := range models {
-			if m.Model == t.model {
-				t.isSubscription = m.IsSubscription
-				break
-			}
+	}
+
+	// An explicit --model is THE model, used exactly as given and decided in exactly one place —
+	// here, after the settings/first-active choice above, so nothing above can ever win over it, and
+	// also when the models list was empty or could not be read. It is deliberately not checked against
+	// that list: the server is the one source of truth for whether it exists, and the error it returns
+	// when creating the session is the very text -p prints (provider not found / model not found in
+	// provider). Falling back to another model is not an option.
+	if t.overrideModel != "" {
+		model = t.overrideModel
+	}
+
+	for _, m := range models {
+		if m.Model == model {
+			subscription = m.IsSubscription
+			break
 		}
 	}
 
 	cwd, _ := os.Getwd()
 
-	// Resume path — only attempted when a model was actually resolved above
-	// (t.model != "" implies the "no providers"/"server unreachable" cases
-	// didn't happen, since those never assign it).
-	resumeFailed := false
-	if t.resumeID != "" && t.model != "" {
-		if sess, err := t.client.ResumeSession(t.resumeID); err != nil {
-			warnings = append(warnings, fmt.Sprintf("Failed to resume: %s", err.Error()))
-			resumeFailed = true
-		} else {
-			t.sessionID = sess.ID
-			t.setSessionName(sess.Name)
-			t.model = sess.Model
-			t.thinking = sess.Thinking
-			t.maxIterations = sess.MaxIterations
-			t.refreshSubscriptionFlag() // sess.Model may differ from the model resolved above (fallback)
-			if t.overrideModel != "" && t.overrideModel != t.model {
-				t.client.ExecCommand(t.sessionID, "model", map[string]any{"model": t.overrideModel}) //nolint:errcheck
-				t.model = t.overrideModel
-			}
-			if t.overrideThinking != "" && t.overrideThinking != t.thinking {
-				t.client.ExecCommand(t.sessionID, "thinking", map[string]any{"level": t.overrideThinking}) //nolint:errcheck
-				t.thinking = t.overrideThinking
-			}
-			t.loadStatsFromSession(sess)
-			t.loadSessionCommands()
-			t.addRaw(ansi.Dimmed(fmt.Sprintf("── resumed: %s ──", t.sessionName)))
-			t.noteModelFallback(sess)
-			t.renderHistory()
-			t.updateInfo()
-			t.startSSE(ctx)
-			t.sendInitialPrompt()
-			return
+	// Resume path. A --resume is explicit, so it is attempted whenever it was asked for — and when it
+	// cannot be honored the process fails (see above): a task meant for THAT conversation must not
+	// run in a fresh one.
+	if t.resumeID != "" {
+		sess, err := t.client.ResumeSession(t.resumeID)
+		if err != nil {
+			return fmt.Errorf("resume session %s: %w", t.resumeID, err)
 		}
+		// What the session really runs on, never what was asked: nothing below is assumed to have
+		// worked until the server said so.
+		model, thinking = sess.Model, sess.Thinking
+		if t.overrideModel != "" && t.overrideModel != model {
+			if _, err := t.client.ExecCommand(sess.ID, "model", map[string]any{"model": t.overrideModel}); err != nil {
+				t.client.CloseSession(sess.ID) //nolint:errcheck — release it untouched; the error below is the point
+				return fmt.Errorf("switch session %s to model %s: %w", sess.ID, t.overrideModel, err)
+			}
+			model = t.overrideModel
+		}
+		if t.overrideThinking != "" && t.overrideThinking != thinking {
+			if _, err := t.client.ExecCommand(sess.ID, "thinking", map[string]any{"level": t.overrideThinking}); err != nil {
+				t.client.CloseSession(sess.ID) //nolint:errcheck
+				return fmt.Errorf("set thinking %s on session %s: %w", t.overrideThinking, sess.ID, err)
+			}
+			thinking = t.overrideThinking
+		}
+		t.sessionID = sess.ID
+		t.setSessionName(sess.Name)
+		t.model = model
+		t.thinking = thinking
+		t.maxIterations = sess.MaxIterations
+		t.refreshSubscriptionFlag() // the model may differ from the one resolved above (fallback or --model)
+		t.loadStatsFromSession(sess)
+		t.loadSessionCommands()
+		t.addRaw(ansi.Dimmed(fmt.Sprintf("── resumed: %s ──", t.sessionName)))
+		t.noteModelFallback(sess)
+		t.renderHistory()
+		t.updateInfo()
+		t.startSSE(ctx)
+		t.sendInitialPrompt()
+		return nil
 	}
 
-	// The banner — shown exactly once here, whether or not everything above
-	// succeeded. Never shown on a successful resume (which already replayed
-	// history above and returned) — only on a fresh session, or when startup
-	// couldn't get far enough to create one at all.
-	t.addRaw(t.welcomeBanner(warnings...))
-
-	if t.model == "" {
-		// No model could be resolved (server unreachable / no active
-		// providers) — the banner above already explains why; nothing left
-		// to do without one.
+	// Nothing may reach the terminal until we know startup succeeds or fails SOFTLY: adding a block
+	// to the history schedules a render, and a render writes to the terminal before the TUI has
+	// even started. So the banner is added only after the outcome of creating the session — a hard
+	// failure (an explicit flag that cannot be honored) leaves stdout and stderr untouched.
+	if model == "" {
+		// No model could be resolved (server unreachable / no active providers) — the banner
+		// explains why; nothing left to do without one.
+		t.thinking = thinking
+		t.addRaw(t.welcomeBanner(warnings...))
 		t.keepInitialPrompt()
-		return
+		return nil
 	}
 
 	// Create new session.
-	sess, err := t.client.CreateSession(t.model, cwd, "")
+	sess, err := t.client.CreateSession(model, cwd, "")
 	if err != nil {
+		if t.overrideModel != "" {
+			// The person chose this model and it cannot be used: not a warning, not a different
+			// model. The wording is the server's, the same as `-p` prints.
+			return fmt.Errorf("create session: %w", err)
+		}
+		t.model, t.thinking, t.isSubscription = model, thinking, subscription
+		t.addRaw(t.welcomeBanner(warnings...))
 		t.showWarn(fmt.Sprintf("Failed to create session: %s", err.Error()))
 		t.keepInitialPrompt()
-		return
+		return nil
 	}
+	// An explicit --thinking is applied to the new session and checked, like --model: a fresh
+	// session starts on the settings level, and ignoring the flag would run the task at a level
+	// that was not chosen.
+	if sess.Thinking != "" {
+		thinking = sess.Thinking
+	}
+	if t.overrideThinking != "" && t.overrideThinking != thinking {
+		if _, err := t.client.ExecCommand(sess.ID, "thinking", map[string]any{"level": t.overrideThinking}); err != nil {
+			t.client.CloseSession(sess.ID) //nolint:errcheck
+			return fmt.Errorf("set thinking %s on session %s: %w", t.overrideThinking, sess.ID, err)
+		}
+		thinking = t.overrideThinking
+	}
+	t.model, t.thinking, t.isSubscription = model, thinking, subscription
+	t.addRaw(t.welcomeBanner(warnings...))
 	t.sessionID = sess.ID
 	t.setSessionName(sess.Name)
-	if sess.Thinking != "" {
-		t.thinking = sess.Thinking
-	}
 	t.maxIterations = sess.MaxIterations
 	t.loadStatsFromSession(sess)
 	t.loadSessionCommands()
 	t.updateInfo()
 	t.startSSE(ctx)
-	if resumeFailed {
-		// The user asked to continue a specific session and that failed: the fresh session below is a
-		// fallback, not the conversation the first message was meant for.
-		t.keepInitialPrompt()
-		return
-	}
 	t.sendInitialPrompt()
+	return nil
 }
 
 // sendInitialPrompt submits the command-line prompt (`harness "task"`) through the normal submit

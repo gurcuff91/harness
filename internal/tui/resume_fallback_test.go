@@ -187,15 +187,29 @@ func TestResumeInPlaceRefusalIsReported(t *testing.T) {
 	}
 }
 
-// The same refusal at startup (--resume): reported as a warning, never a crash and
-// never a resumed half-session.
-func TestAutoConnectResumeRefusalFallsThroughToAFreshSession(t *testing.T) {
+// The same refusal at startup (--resume): an error, never a crash, never a resumed half-session and
+// — since --resume is explicit — never a fresh session in its place.
+func TestAutoConnectResumeRefusalFailsAndOpensNoFreshSession(t *testing.T) {
 	f := newFallbackFixture(t)
 	f.disconnect(f.first)
 	f.disconnect(f.second)
+	before, err := f.c.ListSessions("")
+	if err != nil {
+		t.Fatal(err)
+	}
 	tu := f.tui(f.sessionID)
-	tu.autoConnect(context.Background())
-	if tu.sessionID == f.sessionID {
-		t.Errorf("resumed %q with nothing to run it on", f.sessionID)
+	err = tu.autoConnect(context.Background())
+	if err == nil {
+		t.Fatal("autoConnect succeeded: it resumed (or replaced) a session with nothing to run it on")
+	}
+	if tu.sessionID != "" {
+		t.Errorf("a session is open (%q) after the refusal", tu.sessionID)
+	}
+	after, _ := f.c.ListSessions("")
+	if len(after) != len(before) {
+		t.Errorf("%d sessions after, %d before: a fresh session was created", len(after), len(before))
+	}
+	if !strings.Contains(err.Error(), "no model available") {
+		t.Errorf("the error does not carry the server's own message: %v", err)
 	}
 }

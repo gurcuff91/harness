@@ -96,6 +96,13 @@ func parseArgs(parser *kong.Kong, args []string) (*kong.Context, error) {
 	if CLI.TUI.Prompt != "" && CLI.TUI.initialPrompt() != "" {
 		return nil, errors.New(`use either -p (one-shot) or a positional prompt (interactive)`)
 	}
+	// -p is a quick one-shot on an EPHEMERAL session (an in-memory store: it leaves nothing on disk),
+	// so there is nothing to resume. Silently dropping the flag was the bug — it answered on a brand
+	// new session and exited 0. This is a contradiction to reject, not a feature to support, and it
+	// is rejected here, before any agent, session or model exists.
+	if CLI.TUI.Prompt != "" && CLI.TUI.Resume != "" {
+		return nil, errors.New(`--resume is not supported with -p`)
+	}
 	// A message whose FIRST word is one edit away from a command name is far more likely a mistyped
 	// command than a message — and a message costs tokens. Same rule Claude Code applies; see
 	// suggestCommand. Words after `--` are an explicit message and are never checked.

@@ -314,10 +314,19 @@ it, so the session stays watchable, steerable and open for follow-up turns. This
 orchestrators pass (Herdr's `tab.new --task`, `hc run … "task"`). It combines with the other flags
 (`--model`, `--thinking`, `--resume <id>`: the message becomes that session's next turn). A message
 that starts with `/` or `!` is sent to the agent as text, never run as a command, and it reaches
-the agent byte for byte (newlines, accents, emoji). If startup ends without a usable session — no
-provider, a failed `--resume` — nothing is sent and the message is left in the editor so it is not
-lost. `-p` is the one-shot mode with no TUI; it cannot be combined with a message
-(`use either -p (one-shot) or a positional prompt (interactive)`).
+the agent byte for byte (newlines, accents, emoji). If there is no provider at all, nothing is sent
+and the message is left in the editor so it is not lost. `-p` is the one-shot mode with no TUI; it
+cannot be combined with a message (`use either -p (one-shot) or a positional prompt (interactive)`).
+
+**`--model`, `--thinking` and `--resume` are requirements, not hints.** Either the session runs
+exactly as asked, or `harness` prints `error: …` and exits 1 *before* the TUI opens — it never falls
+back to another model or conversation and never ignores the flag, so a task cannot run on a model or
+in a session you did not choose. `harness --model zzz/x "task"` and `harness --resume <missing id>
+"task"` exit 1 and run nothing; `harness --resume <id> --model X` switches the session or fails and
+leaves it untouched. Fallbacks apply only to what you did not pass (your settings model, then the
+first active one). `-p` rejects `--resume` (`--resume is not supported with -p`): a one-shot runs on
+a throwaway session, so there is nothing to resume. Inside the running TUI, `/model`, `/resume`,
+`/new` and `/fork` still warn instead of failing.
 
 A command name wins over a message: `harness sessions` lists sessions. To send a message that is
 exactly a command name, put it after `--`: `harness -- serve`.
