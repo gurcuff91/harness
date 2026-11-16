@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.101.2] - 2026-11-17
+
+### Fixed — typing `/thinking` (or any slash command) could kill the TUI with `index out of range` on the render timer goroutine
+Reported: typing `/thinking` in the TUI intermittently crashed it with `panic: runtime error: index out of range [5] with length 2`, raised on the render timer's goroutine (`time.goFunc` → `TUI.scheduleRender.func1` → … → `SelectList.Render`), so nothing could recover it and the whole process died.
+
+**Cause.** `components.SelectList` had no synchronization and is touched by two goroutines: the input goroutine calls `SetFilter`/`SetItems`/`HandleInput` (through `paletteController.onEditorChange`, once per keystroke) while the render timer goroutine calls `Render`. `Render` read `len(s.filtered)` and only then indexed `s.filtered[i]`; a keystroke that narrowed the filter in between left it indexing past the new, shorter slice. Typing `/thinking` narrows the list on every character, which is why it showed up there.
+
+**Fix (`internal/tui/components/selectlist.go`).** Three rules, documented on the type:
+- A mutex guards `items`, `filtered` and `selected`; every entry point (`SetItems`, `SetFilter`, `HandleInput`, `Selected`, `Count`, `Render`) takes it.
+- `Render` takes ONE snapshot (`filtered`, `selected`) under the lock, releases it, and draws only from the copy — the lock is never held while drawing, so a slow render cannot stall typing.
+- `OnSelect`, `OnCancel` and `OnSelectionChange` run with the lock **released**, so a callback may call back into the list (`SetFilter`, `Selected`, …) without deadlocking. `notifyChange` was replaced by a `move(delta)` helper that changes the selection under the lock and notifies after releasing it. Behavior is unchanged.
+
+**Verified.**
+- The race reproduces without the fix. With `-race`, `TestSelectListFilterVsRender` reports `DATA RACE` at `selectlist.go` (reads of `filtered`/`selected` in `Render` against the writes in `SetFilter`). Without `-race` the same test **panics in 6 of 6 runs** on the original code (`index out of range [5] with length 1`, and a nil pointer dereference); with the fix it is clean (`go test -race -count=3 ./internal/tui/components/`).
+- Tests added: `selectlist_race_test.go` (`SetFilter`/`SetItems`/`HandleInput`/`Selected`/`Count` against `Render`; callbacks re-entering the list, with a 10 s deadlock guard) and `selectlist_behaviour_test.go` (wrapping, SS3 arrows, the `(n/total)` indicator, "No matches", selection reset when the filter changes or is cleared, Enter/Escape/Ctrl+C on an empty list, callback counts, the primary-column width, and that `Render` does not hold the lock while drawing).
+- **Behavior unchanged, checked differentially:** the original `SelectList` was vendored temporarily next to the new one and driven through 400 random sessions of 60 operations; every render, selection, count and callback sequence was identical. That test was removed afterwards.
+- **Mutation testing:** 25 mutants of `selectlist.go`; 24 are killed. The one survivor is provably equivalent (the first `if start < 0` clamp in `Render`: 1,206,000 input combinations exhaustively compared, 0 differ). Two mutants survived at first and were real test gaps, now closed: "`Render` holds the lock while drawing" (killed by measuring `Count()` latency against a slow `Render`: ~912 ms against a 250 ns floor, stable in 12 runs, 8 of them with 16 CPU-burning threads) and "an empty filter does not reset the selection".
+
+**Not verified live — stated plainly.** The acceptance criterion "20 tabs typing `/thinking` give 0 panics, where before the fix 2 of 10 crashed" could not be demonstrated end to end: a scripted storm against a binary built from the unfixed HEAD gave 0 panics in 60 tabs (with paste) and 0 in 90 (40 paste/backspace cycles at 20 ms), and builds with a 300 µs sleep inserted in the render loop gave 0 of 20, three times. The window is simply narrow on this machine. The fix is proven by the unit tests, the race detector and the panic reproduced in the unit test — not by a live before/after comparison.
+
+**Open point (not touched, by design).** A whole-TUI test under `-race` (typing through the real input callback while the render timer draws) reports further data races **outside** `SelectList`: `Editor.insert`/`layout`/`HiddenAbove` and `paletteController.openRoot`/`Render` share the same two-goroutine shape with no synchronization. They were out of scope of this report and no global render lock was added. They are the likeliest candidates for any other intermittent crash on the render timer, and a scripted end-to-end TUI scenario under `-race` is the proposed first task to chase them (it was not kept in the repo because it fails today for those reasons).
+
 ## [0.101.1] - 2026-11-16
 
 ### Fixed — an explicit `--model`, `--thinking` or `--resume` is a requirement, not a hint: it is honored exactly or the process exits 1 before the TUI opens
