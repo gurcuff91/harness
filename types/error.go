@@ -3,6 +3,9 @@ package types
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // ProviderAPIError is a structured error from an LLM provider's HTTP API (as
@@ -25,7 +28,9 @@ func (e *ProviderAPIError) Error() string {
 		return e.Message
 	}
 	if b, err := json.Marshal(e.Details); err == nil {
-		return e.Message + ": " + string(b)
+		// json.Marshal escapes ESC and the other C0 controls but passes U+0080–U+009F through, and
+		// those are the 8-bit forms of CSI/OSC/DCS: they are dropped here too.
+		return e.Message + ": " + stripControl(string(b))
 	}
 	return e.Message
 }
@@ -39,7 +44,42 @@ func NewProviderAPIError(provider string, status int, body []byte) *ProviderAPIE
 	if len(body) > 0 && json.Unmarshal(body, &obj) == nil {
 		e.Details = obj
 	} else if len(body) > 0 {
-		e.Message += ": " + string(body)
+		// The body is text a gateway or proxy wrote, not harness's: it ends up in a message every
+		// transport prints (a terminal, a chat), so control characters — ESC above all, which would
+		// make a terminal INTERPRET what follows — are removed at the source.
+		e.Message += ": " + stripControl(string(body))
 	}
 	return e
+}
+
+// stripControl drops the control characters of s that act on a terminal or hide text — C0 (ESC, BEL,
+// BS, CR, NUL…), DEL and the C1 range, whose single characters are the 8-bit forms of CSI/OSC/DCS —
+// plus invalid UTF-8. Line feed and TAB are kept: they are layout, not control. What follows an ESC
+// stays, as plain text ("]0;title"), so nothing the provider said is lost, only made inert.
+func stripControl(s string) string {
+	clean := true
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 && c != '\n' && c != '\t' || c == 0x7f || c >= 0x80 {
+			clean = false
+			break
+		}
+	}
+	if clean {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && size == 1:
+		case r == '\n' || r == '\t':
+			b.WriteRune(r)
+		case unicode.IsControl(r):
+		default:
+			b.WriteString(s[i : i+size])
+		}
+		i += size
+	}
+	return b.String()
 }

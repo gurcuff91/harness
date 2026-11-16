@@ -242,20 +242,11 @@ func mcpDisplayName(name string) string {
 	return rest // "mcp__orphan" — no second __ — just drop the prefix
 }
 
-func stripANSI(s string) string {
-	var b strings.Builder
-	i := 0
-	for i < len(s) {
-		if code, length := ansi.ExtractAnsiCode(s, i); length > 0 {
-			_ = code
-			i += length
-			continue
-		}
-		b.WriteByte(s[i])
-		i++
-	}
-	return b.String()
-}
+// stripANSI removes every escape sequence from s, for text that is summarized on one line (a tool's
+// result). It delegates to ansi.StripEscapes, which knows the whole shape of an escape sequence: the
+// recognizer this used to run (ansi.ExtractAnsiCode) only knows the few the TUI itself emits, so a
+// tool output carrying CSI 6n or a DCS string went through it untouched.
+func stripANSI(s string) string { return ansi.StripEscapes(s) }
 
 // collapseWhitespace flattens a multi-line string into a single line: runs of
 // whitespace (including newlines and tabs) become a single space, trimmed. Used

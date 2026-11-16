@@ -333,14 +333,23 @@ func diffRange(old, new []string) (first, last int) {
 	return first, last
 }
 
-// sanitizeLines clips any line wider than width to protect the diff state.
-// Stateless: measures every line. doRender uses lineSanitizer instead, which
-// only measures what changed since the previous frame.
+// sanitizeLines makes every line safe to hand to the terminal, in two steps. First the barrier
+// (ansi.SafeLine): anything in a line that the terminal would INTERPRET rather than show — an
+// OSC 52 clipboard write, a retitle, a query that makes the terminal answer on stdin, a screen
+// switch… — is neutralized, because a line's text is not ours (the user's prompt, the model's
+// reply, a tool's output, a provider's error). Then width: a line wider than width is clipped to
+// protect the diff state. The order matters: neutralizing makes text VISIBLE ("␛" takes a column),
+// so a line can only be measured and clipped once it is in the form that will be written.
+//
+// Stateless: it processes every line. doRender uses lineSanitizer instead, which only processes
+// what changed since the previous frame. Both must give the same result.
 func sanitizeLines(lines []string, width int) []string {
 	for i, line := range lines {
+		line = ansi.SafeLine(line)
 		if ansi.VisibleWidth(line) > width {
-			lines[i] = ansi.TruncateToWidth(line, width, "", false)
+			line = ansi.TruncateToWidth(line, width, "", false)
 		}
+		lines[i] = line
 	}
 	return lines
 }
@@ -381,10 +390,14 @@ func (s *lineSanitizer) sanitize(lines []string, width int) []string {
 			continue
 		}
 		s.raw[i] = line
+		// The barrier runs on the raw line, before measuring: what is measured and clipped is
+		// what will be written. It is part of the cached work, so an unchanged line costs nothing.
+		line = ansi.SafeLine(line)
 		if ansi.VisibleWidth(line) > width {
-			lines[i] = ansi.TruncateToWidth(line, width, "", false)
+			line = ansi.TruncateToWidth(line, width, "", false)
 		}
-		s.out[i] = lines[i]
+		lines[i] = line
+		s.out[i] = line
 	}
 	s.valid = len(lines)
 	return lines
