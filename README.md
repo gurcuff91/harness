@@ -302,10 +302,28 @@ Run `harness` for the interactive TUI, or use subcommands directly:
 
 ```
 harness                       — Interactive TUI (default)
+harness "<task>"              — Interactive TUI with that first message already submitted
 harness -p <prompt>           — Single-turn CLI (--model, --thinking, --output)
 harness --resume <id>         — Resume a session in the TUI
 harness --scheduler           — Run the TUI with the cron scheduler engine
+```
 
+**A first message.** `harness "fix the login bug"` (or `harness fix the login bug` — the words are
+joined with a space) opens the normal interactive TUI and submits that message as if you had typed
+it, so the session stays watchable, steerable and open for follow-up turns. This is what
+orchestrators pass (Herdr's `tab.new --task`, `hc run … "task"`). It combines with the other flags
+(`--model`, `--thinking`, `--resume <id>`: the message becomes that session's next turn). A message
+that starts with `/` or `!` is sent to the agent as text, never run as a command, and it reaches
+the agent byte for byte (newlines, accents, emoji). If startup ends without a usable session — no
+provider, a failed `--resume` — nothing is sent and the message is left in the editor so it is not
+lost. `-p` is the one-shot mode with no TUI; it cannot be combined with a message
+(`use either -p (one-shot) or a positional prompt (interactive)`).
+
+A command name wins over a message: `harness sessions` lists sessions. To send a message that is
+exactly a command name, put it after `--`: `harness -- serve`. Note that a mistyped command
+(`harness sesions`) is now a message, not an error.
+
+```
 harness serve <addr>          — HTTP/SSE server (headless transport)
 harness telegram              — Run as a Telegram bot (one session per chat)
 harness telegram pair <id>    — Allow a chat to use the bot

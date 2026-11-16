@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/gurcuff91/harness/client"
 	"github.com/gurcuff91/harness/internal/tui/ansi"
@@ -72,9 +73,11 @@ func (t *TUI) autoConnect(ctx context.Context) {
 	// Resume path — only attempted when a model was actually resolved above
 	// (t.model != "" implies the "no providers"/"server unreachable" cases
 	// didn't happen, since those never assign it).
+	resumeFailed := false
 	if t.resumeID != "" && t.model != "" {
 		if sess, err := t.client.ResumeSession(t.resumeID); err != nil {
 			warnings = append(warnings, fmt.Sprintf("Failed to resume: %s", err.Error()))
+			resumeFailed = true
 		} else {
 			t.sessionID = sess.ID
 			t.setSessionName(sess.Name)
@@ -97,6 +100,7 @@ func (t *TUI) autoConnect(ctx context.Context) {
 			t.renderHistory()
 			t.updateInfo()
 			t.startSSE(ctx)
+			t.sendInitialPrompt()
 			return
 		}
 	}
@@ -111,6 +115,7 @@ func (t *TUI) autoConnect(ctx context.Context) {
 		// No model could be resolved (server unreachable / no active
 		// providers) — the banner above already explains why; nothing left
 		// to do without one.
+		t.keepInitialPrompt()
 		return
 	}
 
@@ -118,6 +123,7 @@ func (t *TUI) autoConnect(ctx context.Context) {
 	sess, err := t.client.CreateSession(t.model, cwd, "")
 	if err != nil {
 		t.showWarn(fmt.Sprintf("Failed to create session: %s", err.Error()))
+		t.keepInitialPrompt()
 		return
 	}
 	t.sessionID = sess.ID
@@ -130,6 +136,49 @@ func (t *TUI) autoConnect(ctx context.Context) {
 	t.loadSessionCommands()
 	t.updateInfo()
 	t.startSSE(ctx)
+	if resumeFailed {
+		// The user asked to continue a specific session and that failed: the fresh session below is a
+		// fallback, not the conversation the first message was meant for.
+		t.keepInitialPrompt()
+		return
+	}
+	t.sendInitialPrompt()
+}
+
+// sendInitialPrompt submits the command-line prompt (`harness "task"`) through the normal submit
+// path — the echo, the spinner, the queue and the status reports behave exactly as for a typed
+// message — and only ONCE: the field is consumed, so nothing that reconnects a stream or switches
+// session (/resume, /new, /fork) can replay it.
+//
+// It is called right after startSSE, and that order is the point: the echo of a prompt is an event
+// on the session's stream, so a prompt sent before the stream is subscribed loses its echo (what
+// TestTUIEchoesAColleaguePromptWithItsIcon learned). startSSE opens the stream in a goroutine, so
+// the send itself waits for the subscription (awaitStream).
+//
+// Like a typed message it goes to the agent as TEXT: it is deliberately not run through
+// handleSubmit, so a prompt that starts with "/" or "!" is not taken for a command (harness "/quit"
+// must not exit) — it is what the caller asked the agent, verbatim.
+func (t *TUI) sendInitialPrompt() {
+	text := t.initialPrompt
+	t.initialPrompt = ""
+	if text == "" || t.sessionID == "" {
+		return
+	}
+	t.awaitStream()
+	t.submitPrompt(text)
+}
+
+// keepInitialPrompt is for a start that ended without a usable session: nothing is sent, and the
+// message is put in the editor so it is not lost — one Enter sends it once the user has fixed what
+// the banner says (/connect a provider, say).
+func (t *TUI) keepInitialPrompt() {
+	text := t.initialPrompt
+	t.initialPrompt = ""
+	if text == "" || t.editor == nil {
+		return
+	}
+	t.editor.SetValue(text)
+	t.tui.RequestRender(false)
 }
 
 // resumeInPlace switches the running TUI to a different session without a
@@ -256,7 +305,26 @@ func (t *TUI) startSSE(ctx context.Context) {
 	t.status.Set(ansi.StatusIdle)
 	sseCtx, cancel := context.WithCancel(ctx)
 	t.sseCancel = cancel
-	go t.streamEvents(sseCtx)
+	ready := make(chan struct{})
+	t.sseReady = ready
+	go t.streamEventsReady(sseCtx, ready)
+}
+
+// streamReadyTimeout (a variable so a test can shorten it) bounds how long sendInitialPrompt waits for the event stream to open. Opening
+// it is a loopback request to the in-process server — milliseconds; this only keeps a stuck
+// connection from holding the first message forever.
+var streamReadyTimeout = 5 * time.Second
+
+// awaitStream blocks until the stream startSSE opened is subscribed (or failed to open, or the
+// timeout passed). The echo of a prompt is an event on that stream, so a prompt sent first loses it.
+func (t *TUI) awaitStream() {
+	if t.sseReady == nil {
+		return
+	}
+	select {
+	case <-t.sseReady:
+	case <-time.After(streamReadyTimeout):
+	}
 }
 
 // resetForNewSession wipes the scrollback and per-session state in preparation

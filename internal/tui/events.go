@@ -14,8 +14,16 @@ import (
 // streamEvents consumes the SSE event stream and renders each event into the
 // source-backed block history. Assistant text accumulates into a live Markdown
 // block (re-rendered on resize); thinking and tool calls use RawBlocks.
-func (t *TUI) streamEvents(ctx context.Context) {
+func (t *TUI) streamEvents(ctx context.Context) { t.streamEventsReady(ctx, nil) }
+
+// streamEventsReady is streamEvents that closes ready (when not nil) as soon as the stream has been
+// opened — subscribed on the server, or failed — and before the first event is consumed. It is the
+// signal sendInitialPrompt waits for.
+func (t *TUI) streamEventsReady(ctx context.Context, ready chan<- struct{}) {
 	events, err := t.client.StreamEvents(ctx, t.sessionID)
+	if ready != nil {
+		close(ready)
+	}
 	if err != nil {
 		t.addRaw(ansi.Err("✘ " + err.Error()))
 		t.setSpinning(false)

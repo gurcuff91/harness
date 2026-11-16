@@ -27,6 +27,7 @@ import (
 type fallbackFixture struct {
 	store         *store.Session // a handle on the saved session's log, to seed its history
 	c             *client.Client
+	addr          string // host:port of the server c talks to
 	sessionID     string
 	first, second string
 	disconnect    func(name string)
@@ -73,6 +74,7 @@ func newFallbackFixture(t *testing.T) *fallbackFixture {
 	t.Cleanup(func() { srv.Close() })
 	config.GetSettingsManager().SetActiveModel(f.second + "/m")
 
+	f.addr = srv.Addr()
 	f.c = client.New(srv.Addr())
 	sess, err := f.c.CreateSession(f.first+"/m", t.TempDir(), "")
 	if err != nil {

@@ -34,6 +34,8 @@
 // also declares cmd:"" children.
 package cli
 
+import "strings"
+
 // ── Root grammar ─────────────────────────────────────────────────────────
 
 // CLI is the root Kong grammar for harness. TUI is the default command
@@ -84,6 +86,22 @@ type tuiCmd struct {
 	Scheduler bool   `help:"Run the cron scheduler engine"`
 	Prompt    string `short:"p" help:"Run a single-turn prompt instead of the interactive TUI"`
 	Output    string `enum:"text,json,json-stream" default:"text" help:"Output mode (with --prompt/-p)"`
+
+	// Initial is an optional trailing positional: harness "fix the login bug" opens the interactive
+	// TUI with that message already submitted (what Herdr's tab.new --task and `hc run harness
+	// "task"` send). Several words are joined with a space. It is a leaf of the root, so it does
+	// not clash with the named subcommands (Kong forbids a positional only next to cmd:"" children
+	// IN THE SAME struct, and tuiCmd has none); a subcommand name WINS over a prompt, and a prompt
+	// that is exactly one subcommand name goes after `--` (see parseArgs in app.go: Kong alone does
+	// NOT make `--` escape a subcommand name at the root, because the positional belongs to this
+	// leaf and not to the root node, so `harness -- serve` would still run serve).
+	Initial []string `arg:"" optional:"" name:"prompt" help:"First message: opens the interactive TUI with it already submitted (words are joined; a prompt that is exactly a command name goes after --; use -p for a one-shot run with no TUI)"`
+}
+
+// initialPrompt is the positional prompt as one string: the words joined with a single space and
+// the ends trimmed, exactly as the editor trims what the user types. Blank is "no prompt".
+func (c *tuiCmd) initialPrompt() string {
+	return strings.TrimSpace(strings.Join(c.Initial, " "))
 }
 
 // ── serve ────────────────────────────────────────────────────────────────

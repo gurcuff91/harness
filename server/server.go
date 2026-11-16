@@ -1600,12 +1600,20 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
 
+	// Register the client BEFORE the response headers go out. The headers are what a client waits
+	// for (client.StreamEvents returns when it has them), so a client that has "connected" must
+	// already be receiving: registering after the flush left a window — a few microseconds, seen in
+	// 2 of 4000 connections — in which an event emitted right after StreamEvents returned (the first
+	// message of `harness "task"`, which subscribes and then sends at once) reached no one and its
+	// echo was lost. Events that arrive before the flush wait in ch (its buffer) and are written
+	// right after the headers, in order.
 	ch := make(chan []byte, sseClientBufferSize)
 	proxy.addClient(ch)
 	defer proxy.removeClient(ch)
+
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
 
 	// Stream events until client disconnects
 	for {

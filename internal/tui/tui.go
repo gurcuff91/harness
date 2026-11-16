@@ -58,6 +58,10 @@ type TUI struct {
 	resumeID         string
 	schedulerOn      bool // --scheduler: the agent runs the engine
 
+	// initialPrompt is the first message from the command line (`harness "task"`), submitted ONCE
+	// when the first session is ready; see TUI.sendInitialPrompt.
+	initialPrompt string
+
 	// Status badges (footer): counts loaded at connect time.
 	mcpConnected int // MCP servers currently connected
 	scheduleJobs int // schedules configured (shown only when schedulerOn)
@@ -99,6 +103,7 @@ type TUI struct {
 
 	// SSE.
 	sseCancel context.CancelFunc
+	sseReady  <-chan struct{} // closed once the stream startSSE opened is subscribed (or failed)
 	baseCtx   context.Context // root context for (re)starting SSE on in-place resume
 
 	// quitCh is closed when the user requests exit.
@@ -172,6 +177,14 @@ func (t *TUI) SetFlags(model, thinking, resumeID string) {
 	t.overrideThinking = thinking
 	t.resumeID = resumeID
 }
+
+// SetInitialPrompt sets the message to submit as soon as the first session is ready, as if the user
+// had typed it — `harness "fix the login bug"`. Blank means none. It is sent once: switching
+// session (/resume, /new, /fork) never replays it.
+func (t *TUI) SetInitialPrompt(text string) { t.initialPrompt = strings.TrimSpace(text) }
+
+// InitialPrompt returns the message SetInitialPrompt recorded and Run has not yet submitted.
+func (t *TUI) InitialPrompt() string { return t.initialPrompt }
 
 // SetScheduler records whether this TUI's agent runs the scheduler engine
 // (--scheduler). Drives the footer's scheduler badge.
