@@ -74,3 +74,24 @@ func SetTitle(title string) string {
 func Hyperlink(text, url string) string {
 	return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\"
 }
+
+// Program Status Protocol (OSC 7501, rev 0.4) states. A terminal that implements the
+// protocol (Herdr, for one) shows them in its sidebar/tab indicators; a terminal that does not
+// ignores the sequence, so nothing needs to be detected.
+const (
+	StatusWorking = "working" // a turn is running
+	StatusIdle    = "idle"    // nothing is running; the last turn was stopped or the stream went away
+	StatusDone    = "done"    // a turn finished normally
+	StatusError   = "error"   // a turn (or a command) failed
+	StatusClear   = "clear"   // drop this program's record — on exit
+)
+
+// ProgramStatus returns the OSC 7501 sequence reporting state for app:
+//
+//	ESC ] 7501 ; state=<state>:app=<app> ESC \
+//
+// The terminator is ST (ESC \), as the spec's examples use; BEL would also be valid. Each report
+// replaces its record entirely, so app is part of EVERY report, never just the first.
+func ProgramStatus(state, app string) string {
+	return "\x1b]7501;state=" + state + ":app=" + app + "\x1b\\"
+}

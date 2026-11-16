@@ -19,6 +19,7 @@ func (t *TUI) streamEvents(ctx context.Context) {
 	if err != nil {
 		t.addRaw(ansi.Err("✘ " + err.Error()))
 		t.setSpinning(false)
+		t.reportStreamLost(ctx)
 		return
 	}
 	t.consumeEvents(ctx, events)
@@ -39,15 +40,20 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 		select {
 		case <-ctx.Done():
 			t.setSpinning(false)
+			// No status report here: ctx is cancelled by a session switch (stopSSE already
+			// reported, synchronously) or by shutdown (Clear follows).
 			return
 		case evt, ok := <-events:
 			if !ok {
 				t.setSpinning(false)
+				t.reportStreamLost(ctx)
 				return
 			}
 			switch evt.Type {
 
 			case "turn_start":
+				t.outcome.set(outcomeOK)
+				t.status.Set(ansi.StatusWorking)
 				t.lastTurnText.Reset()
 				t.mu.Lock()
 				t.liveMD = nil
@@ -69,6 +75,10 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 				// one where a mid-turn event silences it) without needing every
 				// such event to know to turn it back on individually.
 				t.setSpinning(true)
+				// A new iteration begins: whatever failed before it (an auto-compaction that
+				// errored while the turn carried on) is not this turn's outcome.
+				t.outcome.set(outcomeOK)
+				t.status.Set(ansi.StatusWorking)
 				// evt.Loop is the agent's own 0-based iteration index (the SAME
 				// value loop_end for this iteration will carry — they're a
 				// matched pair) — read directly instead of a client-side counter
@@ -219,6 +229,7 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 			case "stop":
 				t.addRaw(ansi.Warn("⏹ Stopped"))
 				t.setSpinning(false)
+				t.outcome.set(outcomeStopped) // reported at turn_end, as idle
 
 			case "tokens":
 				// The footer's ↑ ↓ R W $ are SESSION TOTALS, so they read the
@@ -254,6 +265,9 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 				if t.queueCount == 0 {
 					t.setSpinning(false)
 				}
+				if state, ok := reportTurnEnd(t.outcome.get(), t.queueCount); ok {
+					t.status.Set(state)
+				}
 				// Hide the "(turn/max_iterations)" footer indicator now that this turn is
 				// done — updateInfo only shows it while spinning (see its own logic).
 				t.updateInfo()
@@ -268,6 +282,7 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 					t.addRaw(ansi.Primary(promptIcon(origin) + " " + msg))
 				}
 				t.setSpinning(true)
+				t.status.Set(ansi.StatusWorking)
 
 			case "follow_up_start":
 				// Backend dequeued a follow-up and is starting its turn. Echo the
@@ -281,6 +296,7 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 					t.addRaw(ansi.Primary(promptIcon(origin) + " " + msg))
 				}
 				t.setSpinning(true)
+				t.status.Set(ansi.StatusWorking)
 				t.updateInfo()
 
 			case "max_iterations_reached":
@@ -317,6 +333,11 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 					}
 				}
 				t.setSpinning(false)
+				// Immediately, not at turn_end: an error outside a turn (a failed /compact) has no
+				// turn_end to wait for. If the turn carries on, loop_start resets the outcome and
+				// the state returns to working.
+				t.outcome.set(outcomeError)
+				t.status.Set(ansi.StatusError)
 			}
 		}
 	}
@@ -397,6 +418,19 @@ func (t *TUI) formatToolResult(output string, dur float64, isErr bool) string {
 		return ansi.Err("✘") + " " + ansi.Muted(durTag+summary)
 	}
 	return ansi.Accent("✔") + " " + ansi.Muted(durTag+summary)
+}
+
+// reportStreamLost reports idle when this stream ended by itself (the channel closed: the server
+// went away or dropped it) while a turn was live — that turn's end will never arrive.
+//
+// It does nothing when ctx is already cancelled. A cancelled stream is one the TUI replaced
+// (stopSSE reported idle at the moment it cancelled) or is shutting down; this consumer wakes up
+// only later, and by then a NEW stream may already be reporting working — an idle from here would
+// overwrite it and leave the new session's turn looking finished.
+func (t *TUI) reportStreamLost(ctx context.Context) {
+	if ctx.Err() == nil {
+		t.status.IdleIfWorking()
+	}
 }
 
 // setSpinning toggles the spinner animation.

@@ -10,6 +10,14 @@ import (
 	"github.com/gurcuff91/harness/internal/tui/term"
 )
 
+// attachTerminal builds the renderer on a terminal and the status reporter on THE SAME one, so a
+// report is a write to the very terminal the frames go to (see statusReporter). It is the only
+// place a statusReporter is constructed.
+func (t *TUI) attachTerminal(tm term.Terminal) {
+	t.tui = render.New(tm)
+	t.status = newStatusReporter(tm.Write)
+}
+
 // buildUI constructs the render tree and wires input handling.
 //
 // Layout (top to bottom):
@@ -21,7 +29,11 @@ import (
 //	info       — cwd (branch) • session • queue
 //	footer     — tokens • cost • context • model • thinking
 func (t *TUI) buildUI() {
-	t.tui = render.New(term.NewProcessTerminal())
+	newTerm := t.newTerminal
+	if newTerm == nil {
+		newTerm = func() term.Terminal { return term.NewProcessTerminal() }
+	}
+	t.attachTerminal(newTerm())
 
 	t.history = components.NewHistory()
 	t.spinner = components.NewSpinner(t.tui, "")

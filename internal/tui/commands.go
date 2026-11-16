@@ -77,10 +77,7 @@ func (t *TUI) cmdFork() {
 	// the server (ForkSession registered it); we just need to reconnect the
 	// stream to the new session ID so events (turn_start, text_delta, etc.)
 	// arrive for the fork, not the parent.
-	if t.sseCancel != nil {
-		t.sseCancel()
-		t.sseCancel = nil
-	}
+	t.stopSSE()
 	// Close the parent session on the server (flush to disk). The fork is a
 	// separate session — it stays alive independently.
 	t.client.CloseSession(t.sessionID) //nolint:errcheck

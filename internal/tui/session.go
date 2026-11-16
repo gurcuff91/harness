@@ -138,10 +138,7 @@ func (t *TUI) autoConnect(ctx context.Context) {
 // reopens the stream. Mirrors v1's /resume behavior.
 func (t *TUI) resumeInPlace(sessID string) {
 	// Stop the current stream and close the active session (flush to disk).
-	if t.sseCancel != nil {
-		t.sseCancel()
-		t.sseCancel = nil
-	}
+	t.stopSSE()
 	if t.sessionID != "" && t.sessionID != sessID {
 		t.client.CloseSession(t.sessionID) //nolint:errcheck
 	}
@@ -192,10 +189,7 @@ func (t *TUI) noteModelFallback(sess *client.Session) {
 // missing t.sessionID (e.g. startup couldn't create one) is not an error
 // here, it's just nothing to close before creating the new one.
 func (t *TUI) newSessionInPlace() {
-	if t.sseCancel != nil {
-		t.sseCancel()
-		t.sseCancel = nil
-	}
+	t.stopSSE()
 	if t.sessionID != "" {
 		t.client.CloseSession(t.sessionID) //nolint:errcheck
 	}
@@ -223,6 +217,20 @@ func (t *TUI) newSessionInPlace() {
 	t.addRaw(ansi.Dimmed(fmt.Sprintf("── new session: %s ──", t.sessionName)))
 	t.updateInfo()
 	t.startSSE(t.baseCtx)
+}
+
+// stopSSE cancels the active session's event stream, for a switch to another session.
+//
+// A turn that was running on it will never deliver its turn_end here, so the terminal is told idle
+// at once rather than left on "working". It is done synchronously on purpose: the consumer of the
+// cancelled stream notices only later (its ctx.Done), and by then the new stream may already be
+// reporting — a late idle would then overwrite the new session's working.
+func (t *TUI) stopSSE() {
+	if t.sseCancel != nil {
+		t.sseCancel()
+		t.sseCancel = nil
+	}
+	t.status.IdleIfWorking()
 }
 
 // startSSE opens a persistent SSE stream for the active session.

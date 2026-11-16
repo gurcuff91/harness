@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.99.0] - 2026-11-16
+
+### Added — the TUI tells the host terminal what the agent is doing (OSC 7501, Program Status Protocol)
+Run harness inside [Herdr](https://herdr.dev) (or any terminal that implements OSC 7501, rev 0.4) and the terminal now knows when harness is working, finished, was stopped or failed: its sidebar and tab indicators update, and it can play a sound and raise a toast when a turn ends while you are looking at another tab. **Nothing extra appears on screen**, and a terminal without support ignores the sequence, so there is nothing to detect or configure.
+
+The report is `ESC ] 7501 ; state=<state>:app=harness ESC \` (ST terminator; each report replaces its record entirely, so `app=harness` is on every one). The mapping, from the events the TUI already consumes:
+
+| TUI event | Report |
+|---|---|
+| `turn_start`, `received_prompt`, `follow_up_start`, `loop_start` | `working` |
+| `error` | `error`, immediately (also covers a `/compact` error outside a turn) |
+| `turn_end`, the turn was stopped | `idle` |
+| `turn_end`, the turn errored | `error` |
+| `turn_end`, no error, nothing queued | `done` |
+| `turn_end` with a prompt queued | nothing — stays `working`; the next `follow_up_start` continues |
+| the event stream ends or is replaced while a turn is live (`/resume`, `/fork`, `/new`, channel closed) | `idle` |
+| exit | `clear` |
+
+- **The turn's outcome is a flag, not a guess.** `stop` sets it to stopped, `error` to error; `turn_start` and `loop_start` reset it, and `turn_end` reads it without resetting it. That is what makes a failed auto-compaction — an `error` event, after which the turn carries on — go back to `working` and still end in `done`, instead of the error sticking.
+- **One write per report, on the renderer's own terminal.** The renderer draws each frame as a single write inside synchronized-output markers and an OSC moves no cursor, so the two cannot interleave and the screen stays clean. Consecutive identical states are a single write (`loop_start` fires on every ReAct iteration; the protocol has no heartbeat).
+- **A switch never leaves `working` stuck.** Leaving a session mid-turn reports `idle` synchronously, before the new session's stream can report anything; the cancelled stream's consumer, which wakes up later, deliberately reports nothing, or it could overwrite the new session's `working`. A finished turn's `done`/`error` is a result and survives a switch.
+- **`clear` on exit**, sent after the renderer has stopped and before the farewell. Herdr drops `working` on its own when the shell returns, but `done` and `error` persist after the process exits, so without it a finished session would leave its last result in the sidebar. After `clear` nothing is reported, so a late event cannot bring the record back.
+- **Scope: the interactive TUI only.** `harness acp` (its stdout is the JSON-RPC channel), `serve`, Telegram, Slack and `-p` never run `internal/tui` and never emit it — a test proves none of them can import it, and the real binaries were run (`-p` in all three output modes, a full ACP session over stdio, `serve`) with stdout and stderr searched byte by byte: no `7501`. The same check catches a leak deliberately planted in each of the three.
+- Not added: any setting, env var, on-disk state or dependency; nothing changed in `agent/`, `server/` or `transports/`. The only seam is internal — the TUI's terminal can be injected, so tests run the real `Run` against a recording terminal.
+- Tests (a recording terminal replaces the no-op one): every row of the mapping through `consumeEvents`; stop → `idle`, error → `error`, error → `loop_start` → `done`; a queued follow-up never shows `done` between its two turns; dedupe; exactly-one-write and the exact bytes; `Clear` after the renderer stops and before anything else is drawn, through the real `Run`; `/resume`, `/fork` and `/new` mid-turn against a real server; the import-graph and single-construction-site checks. 34 mutants — among them removing the outcome flag, the dedupe, the `queueCount` guard and the `clear`, a BEL terminator, a dropped `app=`, a second write, and each switch path bypassing the idle report — each fail a test.
+
 ## [0.98.0] - 2026-11-16
 
 ### Fixed — a remote MCP tool slower than the connect timeout was cut off (and a way to bound calls properly)

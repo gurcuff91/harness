@@ -25,6 +25,7 @@ import (
 	"github.com/gurcuff91/harness/internal/tui/ansi"
 	"github.com/gurcuff91/harness/internal/tui/components"
 	"github.com/gurcuff91/harness/internal/tui/render"
+	"github.com/gurcuff91/harness/internal/tui/term"
 )
 
 // CommandDef and ParamDef are the session command shapes the palette and
@@ -70,6 +71,15 @@ type TUI struct {
 	sessionCmds    []CommandDef
 	lastSessionID  string
 	maxIterations  int // ReAct iteration cap per turn, from the session (footer "(turn/max)")
+
+	// status reports the agent's state to the host terminal (OSC 7501); see statusReporter. Built
+	// with the renderer, nil until buildUI runs (its methods tolerate that).
+	status  *statusReporter
+	outcome outcomeFlag // how the current turn is going; see turnOutcome
+
+	// newTerminal builds the terminal buildUI draws on; nil = the real one (stdin/stdout). A seam
+	// for tests, which run Run against a recording terminal.
+	newTerminal func() term.Terminal
 
 	// Render engine + components.
 	tui     *render.TUI
@@ -211,6 +221,12 @@ func (t *TUI) Run(ctx context.Context) error {
 	// and restores the terminal. Printing the farewell after this means our
 	// lines land cleanly with no extra blank rows injected by Stop().
 	t.tui.Stop()
+
+	// Drop the status record now that the terminal is back to normal and before anything else is
+	// printed. Herdr clears working/blocked on its own when the shell returns, but done and error
+	// persist after the process exits, so without this a finished session would leave its last
+	// result in the sidebar.
+	t.status.Clear()
 
 	// Stop() parks the cursor exactly one line below the TUI content, so the
 	// single leading \r\n here yields exactly one blank line above the
