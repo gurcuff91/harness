@@ -320,8 +320,14 @@ lost. `-p` is the one-shot mode with no TUI; it cannot be combined with a messag
 (`use either -p (one-shot) or a positional prompt (interactive)`).
 
 A command name wins over a message: `harness sessions` lists sessions. To send a message that is
-exactly a command name, put it after `--`: `harness -- serve`. Note that a mistyped command
-(`harness sesions`) is now a message, not an error.
+exactly a command name, put it after `--`: `harness -- serve`.
+
+A mistyped command is an error, not a message: `harness sesions` prints `unknown command "sesions"`
+and `did you mean: harness sessions` (exit 1, no TUI, no model call) — the same rule Claude Code
+applies (a first word within one edit of a command name). Anything further from a command is a
+message (`harness OK`, `harness fix the login bug`). To send a word that looks like a command, use
+`harness -- sesions` (the message) or `harness -p sesions` (a one-shot answer). `harness help`,
+`harness help <command>`, `harness version` and `-v/--version` do what you would expect.
 
 ```
 harness serve <addr>          — HTTP/SSE server (headless transport)

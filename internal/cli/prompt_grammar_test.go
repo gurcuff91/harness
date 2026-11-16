@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"io"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/alecthomas/kong"
 
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/internal/version"
 )
 
 // parsed is what parseArgs made of a command line: the command Kong selected and the pieces of the
@@ -210,15 +213,6 @@ func TestUsageErrorsAreStillUsageErrors(t *testing.T) {
 	}
 }
 
-// What the grammar does to a typo — recorded, because it is the cost the story names: a mistyped
-// command is now a prompt instead of an error.
-func TestATypoedCommandNameIsNowAPrompt(t *testing.T) {
-	got := parse("sesions")
-	if got.cmd != "tui <prompt>" || got.prompt != "sesions" {
-		t.Errorf("harness sesions: %+v — documented behaviour: it becomes the prompt \"sesions\"", got)
-	}
-}
-
 // The parser must hold no state between parses: a prompt from one line must not leak into the next.
 func TestNoStateLeaksBetweenParses(t *testing.T) {
 	parse("--model", "a/b", "first prompt")
@@ -310,4 +304,385 @@ func TestTheHelpDocumentsThePromptOnlyOnTheRoot(t *testing.T) {
 			t.Errorf("harness %v --help mentions the root's prompt:\n%s", args, h)
 		}
 	}
+}
+
+// ── a mistyped command is an error, not a message (Claude Code's rule) ──────
+
+// wantUnknown asserts that the line fails as a mistyped command and returns the error.
+func wantUnknown(t *testing.T, word, suggestion string, args ...string) {
+	t.Helper()
+	got := parse(args...)
+	if got.err == "" {
+		t.Errorf("harness %q parsed as %+v: want an unknown-command error (a typo must not cost a turn)", args, got)
+		return
+	}
+	for _, want := range []string{`unknown command "` + word + `"`, "did you mean: harness " + suggestion, "harness -- ", "harness -p "} {
+		if !strings.Contains(got.err, want) {
+			t.Errorf("harness %q: error lacks %q:\n%s", args, want, got.err)
+		}
+	}
+}
+
+// The rule is Claude Code's, measured on its real binary: the FIRST word, within ONE edit of a
+// command (insertion, deletion, substitution, or a swap of two neighbouring letters), ignoring case.
+func TestAMistypedCommandIsAnErrorWithASuggestion(t *testing.T) {
+	for _, c := range []struct{ word, want string }{
+		{"sesions", "sessions"},   // a deleted letter
+		{"sessoins", "sessions"},  // a swap of neighbours
+		{"sessionss", "sessions"}, // an extra letter
+		{"sessiins", "sessions"},  // a substituted letter
+		{"providrs", "providers"},
+		{"serv", "serve"},
+		{"serve1", "serve"},
+		{"acp1", "acp"},
+		{"mcpp", "mcp"},
+		{"mc", "mcp"},
+		{"memoo", "memo"},
+		{"setings", "settings"},
+		{"conect", "connect"},
+		{"delet", "delete"},
+		{"SESIONS", "sessions"}, // case is ignored
+		{"Sessoins", "sessions"},
+		{"telegrm", "telegram"},
+		{"slak", "slack"},
+		{"serves", "serve"}, // one inserted letter: a typo of serve, not a message
+		{"memos", "memo"},
+		{"setting", "settings"}, // a singular is one deleted letter
+		{"schedulez", "schedules"},
+		{"hlep", "help"}, // the two words harness itself understands
+		{"versoin", "version"},
+	} {
+		t.Run(c.word, func(t *testing.T) { wantUnknown(t, c.word, c.want, c.word) })
+	}
+}
+
+// Only the FIRST word decides, and it decides even when more words follow (as in Claude Code:
+// `claude doctr now` is an error, `claude fix the doctr bug` is a message). Flags before it change
+// nothing.
+func TestOnlyTheFirstWordIsCheckedAndItIsCheckedWithMoreWordsAndFlags(t *testing.T) {
+	wantUnknown(t, "sesions", "sessions", "sesions", "now")
+	wantUnknown(t, "sesions", "sessions", "sesions", "fix", "the", "bug")
+	wantUnknown(t, "sesions", "sessions", "--model", "a/b", "sesions")
+	wantUnknown(t, "mcpp", "mcp", "mcpp", "add", "x")
+	for _, args := range [][]string{
+		{"fix", "sesions"}, // a typo that is not the first word is just text
+		{"fix", "the", "sesions", "bug"},
+		{"run", "sesions", "now"},
+	} {
+		if got := parse(args...); got.err != "" || got.prompt == "" {
+			t.Errorf("harness %q: %+v — only the first word is checked", args, got)
+		}
+	}
+}
+
+// Everything that is NOT one edit from a command is the message it probably is: a real one-word
+// task, a path, a sentence. Two edits away is already a message (Claude: `doct`, `updt`, `agnt`).
+func TestWordsThatAreNotCloseToACommandAreMessages(t *testing.T) {
+	for _, w := range []string{
+		"OK", "fix", "hello", "refactor", "src/x.rs", "README.md", "yes", "test", "build",
+		"sesiones", // two edits from sessions (Spanish): a message
+		"sesion",   // 'sessions' minus two letters
+		"servers",  // two edits from serve (one inserted letter is "serves"; this adds another)
+		"x", "ab", "zz",
+	} {
+		t.Run(w, func(t *testing.T) {
+			if got := parse(w); got.err != "" || got.cmd != "tui <prompt>" || got.prompt != w {
+				t.Errorf("harness %q: %+v, want it sent as a message", w, got)
+			}
+		})
+	}
+}
+
+// The ways out, exactly the ones the error announces.
+func TestTheErrorsWayOutsWork(t *testing.T) {
+	if got := parse("--", "sesions"); got.err != "" || got.prompt != "sesions" || got.cmd != "tui" {
+		t.Errorf("harness -- sesions: %+v, want the message \"sesions\"", got)
+	}
+	if got := parse("-p", "sesions"); got.err != "" || got.oneShot != "sesions" {
+		t.Errorf("harness -p sesions: %+v, want the one-shot run", got)
+	}
+	if got := parse("--model", "a/b", "--", "serv"); got.err != "" || got.prompt != "serv" || got.model != "a/b" {
+		t.Errorf("flags then `-- serv`: %+v", got)
+	}
+	// words after `--` are never checked, however many and whatever they look like
+	if got := parse("--", "sesions", "mcpp", "serv"); got.err != "" || got.prompt != "sesions mcpp serv" {
+		t.Errorf("harness -- sesions mcpp serv: %+v", got)
+	}
+}
+
+// A command that is spelled right is the command, never an error and never a message.
+func TestAnExactCommandNameIsTheCommand(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		cmd  string
+	}{
+		{[]string{"sessions"}, "sessions"}, {[]string{"providers"}, "providers"}, {[]string{"acp"}, "acp"},
+		{[]string{"schedules"}, "schedules"}, {[]string{"memo"}, "memo"},
+	} {
+		if got := parse(c.args...); got.err != "" || got.cmd != c.cmd {
+			t.Errorf("harness %q: %+v, want %q", c.args, got, c.cmd)
+		}
+	}
+	// and a spelling that is itself a command is not "close to another command": serve vs serves
+	if got := parse("serve", ":0"); got.cmd != "serve <addr>" {
+		t.Errorf("harness serve :0: %+v", got)
+	}
+}
+
+// help and version are real now: they are what people type, and what used to cost a turn.
+func TestHelpAndVersionAreCommands(t *testing.T) {
+	// `harness help` → the root help; `harness help serve` → serve's help; `harness version` → the version
+	root := helpOf(t)
+	if !strings.Contains(root, "Usage: harness") {
+		t.Fatalf("setup: no root help:\n%s", root)
+	}
+	var out strings.Builder
+	p, err := newParser(kong.Writers(&out, &out), kong.Exit(func(int) {}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parseArgs(p, []string{"help"}) //nolint:errcheck
+	if !strings.Contains(out.String(), "Usage: harness") {
+		t.Errorf("harness help printed %q, want the root help", out.String())
+	}
+	out.Reset()
+	p, _ = newParser(kong.Writers(&out, &out), kong.Exit(func(int) {}))
+	parseArgs(p, []string{"help", "serve"}) //nolint:errcheck
+	if !strings.Contains(out.String(), "Usage: harness serve") {
+		t.Errorf("harness help serve printed %q, want serve's help", out.String())
+	}
+	out.Reset()
+	p, _ = newParser(kong.Writers(&out, &out), kong.Exit(func(int) {}))
+	parseArgs(p, []string{"version"}) //nolint:errcheck
+	if got := strings.TrimSpace(out.String()); got != version.Version {
+		t.Errorf("harness version printed %q, want %q", got, version.Version)
+	}
+	// ...but `help` followed by words is a message, not a request for help
+	if got := parse("help", "me", "fix", "this"); got.err != "" || got.prompt != "help me fix this" {
+		t.Errorf("harness help me fix this: %+v, want the message", got)
+	}
+	// and `help` before something that is not a command is a message too
+	if got := parse("help", "wanted"); got.err != "" || got.prompt != "help wanted" {
+		t.Errorf("harness help wanted: %+v", got)
+	}
+}
+
+func TestVersionFlags(t *testing.T) {
+	for _, flag := range []string{"--version", "-v"} {
+		var out strings.Builder
+		p, err := newParser(kong.Writers(&out, &out), kong.Exit(func(int) {}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		parseArgs(p, []string{flag}) //nolint:errcheck
+		if got := strings.TrimSpace(out.String()); got != version.Version {
+			t.Errorf("harness %s printed %q, want %q", flag, got, version.Version)
+		}
+	}
+}
+
+// editDistance is Claude Code's metric: one edit = insert, delete, substitute, or swap two
+// neighbouring letters.
+func TestEditDistance(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want int
+	}{
+		{"", "", 0}, {"a", "", 1}, {"", "ab", 2}, {"abc", "abc", 0},
+		{"sesions", "sessions", 1}, {"sessoins", "sessions", 1}, // a swap is ONE edit
+		{"udpate", "update", 1}, {"upadte", "update", 1}, // each is ONE swap of neighbours
+		{"upadtte", "update", 2},
+		{"doct", "doctor", 2}, {"docters", "doctor", 2}, {"ocdtor", "doctor", 2},
+		{"kitten", "sitting", 3}, {"ab", "ba", 1}, {"abc", "bca", 2},
+		{"ñandú", "nandu", 2}, {"日本", "日本語", 1}, // runes, not bytes
+	} {
+		if got := editDistance(c.a, c.b); got != c.want {
+			t.Errorf("editDistance(%q,%q) = %d, want %d", c.a, c.b, got, c.want)
+		}
+		if got := editDistance(c.b, c.a); got != c.want {
+			t.Errorf("editDistance(%q,%q) = %d, want %d (symmetric)", c.b, c.a, got, c.want)
+		}
+	}
+}
+
+// What `--help` and the typo check must agree on: the commands a user can see are exactly the ones
+// a typo is compared against (a hidden command must not be suggested).
+func TestSuggestionsComeFromTheVisibleCommandsOnly(t *testing.T) {
+	p, err := newParser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := commandNames(p)
+	for _, want := range []string{"serve", "sessions", "providers", "acp", "telegram", "slack", "connect", "mcp", "memo", "settings", "schedules", "delete", "disconnect", "provider", "help", "version"} {
+		found := false
+		for _, n := range names {
+			found = found || n == want
+		}
+		if !found {
+			t.Errorf("commandNames lacks %q: %v", want, names)
+		}
+	}
+	for _, n := range names {
+		if n == "tui" {
+			t.Errorf("the hidden default command %q must not be offered as a suggestion", n)
+		}
+	}
+	if sug, ok := suggestCommand("tuii", names); ok {
+		t.Errorf("a typo of the hidden command was suggested: %q", sug)
+	}
+}
+
+// ── the corners the mutants found ───────────────────────────────────────────
+
+// The words BEFORE a `--` are still checked; only what follows it is an explicit message.
+func TestTheWordsBeforeTheDoubleDashAreStillChecked(t *testing.T) {
+	wantUnknown(t, "sesions", "sessions", "sesions", "--", "x")
+	wantUnknown(t, "sesions", "sessions", "--model", "a/b", "sesions", "--", "x")
+	if got := parse("fix", "--", "sesions"); got.err != "" || got.prompt != "fix sesions" {
+		t.Errorf("harness fix -- sesions: %+v, want the message \"fix sesions\"", got)
+	}
+}
+
+// A real subcommand is the command; a typo check never runs on its arguments.
+func TestACommandsArgumentsAreNeverCheckedAsATypo(t *testing.T) {
+	for _, args := range [][]string{
+		{"connect", "sesions"}, {"delete", "sesions"}, {"serve", "sesions"},
+		{"memo", "sesions"}, {"memo", "mcpp"}, {"mcp", "add", "sesions", "--url", "http://x/mcp"},
+	} {
+		got := parse(args...)
+		if strings.Contains(got.err, "unknown command") || got.prompt != "" {
+			t.Errorf("harness %q: %+v — the typo check must not run on a real command's arguments", args, got)
+		}
+	}
+}
+
+// `help <word>` is a request for help only when <word> is a command a user can see; the hidden
+// default command (the TUI) is not one.
+func TestHelpIsOnlyForVisibleCommands(t *testing.T) {
+	p, err := newParser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isCommand(p, "tui") {
+		t.Error("the hidden default command must not count as a command to ask help for")
+	}
+	for _, c := range []string{"serve", "sessions", "telegram", "acp"} {
+		if !isCommand(p, c) {
+			t.Errorf("%s is a visible command", c)
+		}
+	}
+	for _, name := range []string{"help", "version", "tui", "nope", ""} {
+		if isCommand(p, name) {
+			t.Errorf("isCommand(%q) = true", name)
+		}
+	}
+	// and so `help tui` is a message about "tui", like any other `help <not a command>`
+	if got := parse("help", "tui"); got.err != "" || got.prompt != "help tui" || got.cmd != "tui <prompt>" {
+		t.Errorf("harness help tui: %+v, want the message \"help tui\"", got)
+	}
+	if got := parse("help", "nope"); got.err != "" || got.prompt != "help nope" {
+		t.Errorf("harness help nope: %+v", got)
+	}
+}
+
+// suggestCommand against a list a user could end up with tomorrow: a name with capitals, and an
+// alias. (Today's commands are all lowercase and have no top-level alias, which is why a mutant
+// that broke either survived — the rule must not depend on that staying true.)
+func TestSuggestCommandCopesWithCapitalsAndAliases(t *testing.T) {
+	cmds := []string{"Deploy", "remove", "rm"}
+	for _, c := range []struct {
+		word, want string
+		ok         bool
+	}{
+		{"deploy", "Deploy", true},  // the command has a capital, the typo does not
+		{"deplooy", "Deploy", true}, // and with a typo
+		{"DEPLOY", "Deploy", true},
+		{"Deploy", "", false}, // spelled exactly: not a typo
+		{"remov", "remove", true},
+		{"rmm", "rm", true}, // an alias is a name too
+		{"xyz", "", false},
+	} {
+		got, ok := suggestCommand(c.word, cmds)
+		if ok != c.ok || (ok && got != c.want) {
+			t.Errorf("suggestCommand(%q) = %q,%v, want %q,%v", c.word, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+// The swap rule needs BOTH letters to match crosswise: a lone coincidence is not a transposition.
+func TestATranspositionNeedsBothLettersToCrossOver(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want int
+	}{
+		{"ab", "ba", 1}, {"abcd", "acbd", 1}, {"abcd", "bacd", 1}, {"abcd", "abdc", 1}, // real swaps
+		{"abx", "bay", 2}, {"abc", "bxa", 3}, {"ac", "ba", 2}, {"xa", "ab", 2}, // one crossing letter only
+		{"aab", "aba", 1},
+	} {
+		if got := editDistance(c.a, c.b); got != c.want {
+			t.Errorf("editDistance(%q,%q) = %d, want %d", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+// Through Main — the real entry point — a mistyped command prints the message as written (no Kong
+// indentation, no usage dump), on stderr, and exits 1; nothing reaches stdout.
+func TestMainPrintsAMistypedCommandCleanly(t *testing.T) {
+	stderr, stdout, code := runMain(t, "sesions")
+	if code != 1 {
+		t.Errorf("exit code %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout is not empty: %q", stdout)
+	}
+	want := "harness: unknown command \"sesions\"\n  did you mean: harness sessions\n\nRun harness --help to list commands, or harness -- \"sesions\" to send it as a message (harness -p \"sesions\" for a one-shot answer).\n"
+	if stderr != want {
+		t.Errorf("stderr:\n got  %q\n want %q", stderr, want)
+	}
+	if strings.Contains(stderr, "Usage:") {
+		t.Errorf("a typo must not dump the usage: %q", stderr)
+	}
+	// the other errors still go through Kong's printer, with its usage
+	if stderr, _, code := runMain(t, "--nope"); code == 0 || !strings.Contains(stderr, "unknown flag") {
+		t.Errorf("--nope: code=%d stderr=%q", code, stderr)
+	}
+}
+
+// exitCode is what the stand-in for os.Exit panics with, so runMain can recover the exit status.
+type exitCode int
+
+// runMain runs cli.Main with the process's stdout/stderr redirected, and returns what it wrote.
+func runMain(t *testing.T, args ...string) (stderr, stdout string, code int) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	oldExit := osExit
+	osExit = func(c int) { panic(exitCode(c)) } // Kong ends the process after a usage error; do not die with it
+	defer func() { osExit = oldExit }()
+	oldOut, oldErr := os.Stdout, os.Stderr
+	ro, wo, _ := os.Pipe()
+	re, we, _ := os.Pipe()
+	os.Stdout, os.Stderr = wo, we
+	done := make(chan [2]string)
+	go func() {
+		a, _ := io.ReadAll(ro)
+		b, _ := io.ReadAll(re)
+		done <- [2]string{string(a), string(b)}
+	}()
+	func() {
+		defer func() { os.Stdout, os.Stderr = oldOut, oldErr }()
+		defer func() {
+			if r := recover(); r != nil {
+				c, ok := r.(exitCode)
+				if !ok {
+					panic(r)
+				}
+				code = int(c)
+			}
+			wo.Close()
+			we.Close()
+		}()
+		code = Main(args)
+	}()
+	got := <-done
+	return got[1], got[0], code
 }

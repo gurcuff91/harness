@@ -14,13 +14,15 @@ import (
 	"syscall"
 
 	"github.com/alecthomas/kong"
+
+	"github.com/gurcuff91/harness/internal/version"
 )
 
 // Main is the application entry point. It parses os-style args (without the
 // program name) and returns a process exit code. main() is expected to do no
 // more than call this.
 func Main(args []string) int {
-	parser, err := newParser()
+	parser, err := newParser(kong.Exit(osExit))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -28,6 +30,13 @@ func Main(args []string) int {
 
 	ctx, err := parseArgs(parser, args)
 	if err != nil {
+		// A mistyped command is not a usage error: no usage dump, and a message laid out for a
+		// person (Kong's own error printer would indent every line of it).
+		var typo *unknownCommand
+		if errors.As(err, &typo) {
+			fmt.Fprintln(os.Stderr, typo.Error())
+			return 1
+		}
 		parser.FatalIfErrorf(err)
 		return 1
 	}
@@ -39,6 +48,10 @@ func Main(args []string) int {
 	return 0
 }
 
+// osExit is what Kong calls to end the process after it has printed a usage error or a help page.
+// A variable so a test can run Main without dying with it.
+var osExit = os.Exit
+
 // newParser builds the Kong parser for the CLI grammar. It is the one place the parser is
 // configured, so the tests parse exactly what Main parses.
 func newParser(extra ...kong.Option) (*kong.Kong, error) {
@@ -48,6 +61,7 @@ func newParser(extra ...kong.Option) (*kong.Kong, error) {
 		kong.UsageOnError(),
 		kong.Help(helpWithHiddenDefaultFlags),
 		kong.ValueFormatter(enumValuesInHelp),
+		kong.Vars{"version": version.Version},
 	}, extra...)...)
 }
 
@@ -68,32 +82,161 @@ func newParser(extra ...kong.Option) (*kong.Kong, error) {
 // at all, nothing changes and the whole line goes to Kong as before, so every error and every
 // command behaves exactly as it did.
 func parseArgs(parser *kong.Kong, args []string) (*kong.Context, error) {
-	ctx, err := parseSplit(parser, args)
+	ctx, fromHead, err := parseSplit(parser, rewriteHelpVersion(parser, args))
 	if err != nil {
 		return nil, err
 	}
+	if !selectsTUI(ctx) {
+		// A real command: its arguments are its own. (CLI.TUI.Initial is empty here anyway — the
+		// positional belongs to the TUI node — so this guard is defensive, not load-bearing.)
+		return ctx, nil
+	}
 	// -p is a one-shot run with no TUI; a positional prompt is the first message of the interactive
 	// TUI. Together they ask for two different things, so it is an error rather than a guess.
-	if selectsTUI(ctx) && CLI.TUI.Prompt != "" && CLI.TUI.initialPrompt() != "" {
-		return nil, errors.New("use either -p (one-shot) or a positional prompt (interactive)")
+	if CLI.TUI.Prompt != "" && CLI.TUI.initialPrompt() != "" {
+		return nil, errors.New(`use either -p (one-shot) or a positional prompt (interactive)`)
+	}
+	// A message whose FIRST word is one edit away from a command name is far more likely a mistyped
+	// command than a message — and a message costs tokens. Same rule Claude Code applies; see
+	// suggestCommand. Words after `--` are an explicit message and are never checked.
+	if fromHead > 0 {
+		if word := CLI.TUI.Initial[0]; word != "" {
+			if sug, ok := suggestCommand(word, commandNames(parser)); ok {
+				return nil, unknownCommandError(word, sug)
+			}
+		}
 	}
 	return ctx, nil
 }
 
-func parseSplit(parser *kong.Kong, args []string) (*kong.Context, error) {
+// parseSplit parses the line, splitting at the first `--` (see parseArgs). It also returns how many
+// prompt words came from BEFORE the `--` (or from the whole line when there is none): only those
+// are candidates for the mistyped-command check.
+func parseSplit(parser *kong.Kong, args []string) (*kong.Context, int, error) {
 	for i, a := range args {
 		if a != "--" {
 			continue
 		}
 		head, tail := args[:i], args[i+1:]
 		if ctx, err := parser.Parse(head); err == nil && selectsTUI(ctx) {
+			fromHead := len(CLI.TUI.Initial)
 			CLI.TUI.Initial = append(CLI.TUI.Initial, tail...)
-			return ctx, nil
+			return ctx, fromHead, nil
 		}
 		break
 	}
-	return parser.Parse(args)
+	ctx, err := parser.Parse(args)
+	if err != nil {
+		return nil, 0, err
+	}
+	return ctx, len(CLI.TUI.Initial), nil
 }
+
+// rewriteHelpVersion turns the two words people type to ask for help into the flags Kong already
+// has: `harness help` is `--help`, `harness help serve` is `serve --help` (only for a real command:
+// `harness help me fix this` stays a message), and `harness version` is `--version`.
+func rewriteHelpVersion(parser *kong.Kong, args []string) []string {
+	switch {
+	case len(args) == 1 && args[0] == "help":
+		return []string{"--help"}
+	case len(args) == 2 && args[0] == "help" && isCommand(parser, args[1]):
+		return []string{args[1], "--help"}
+	case len(args) == 1 && args[0] == "version":
+		return []string{"--version"}
+	}
+	return args
+}
+
+// commandNames are the names (and aliases) of the visible top-level commands, plus the two words
+// rewriteHelpVersion understands — everything a mistyped first word could have been meant as.
+func commandNames(parser *kong.Kong) []string {
+	names := []string{"help", "version"}
+	for _, c := range parser.Model.Children {
+		if c.Type != kong.CommandNode || c.Hidden {
+			continue
+		}
+		names = append(names, c.Name)
+		names = append(names, c.Aliases...) // none at the top level today; a future one is a name too
+	}
+	return names
+}
+
+func isCommand(parser *kong.Kong, word string) bool {
+	for _, c := range parser.Model.Children {
+		if c.Type == kong.CommandNode && !c.Hidden && c.Name == word {
+			return true
+		}
+	}
+	return false
+}
+
+// suggestCommand reports the command a mistyped word was most likely meant as — and only if it
+// really looks like a typo: within ONE edit, an insertion, a deletion, a substitution or the swap
+// of two neighbouring letters (Damerau–Levenshtein, restricted), ignoring case.
+//
+// This is Claude Code's rule, measured against its real binary rather than guessed: `doctr`,
+// `dctor`, `docotr`, `udpate`, `mcpp`, `mc`, `Mcpp` are caught for its commands; `doct` and `updt`
+// (two edits away), `docters`, `xxdoctor`, and anything unrelated (`fix`, `OK`, `sesions` against
+// its list) go through as the message they probably are. A threshold of two would swallow far too
+// many real one-word messages; of zero, no typo at all.
+func suggestCommand(word string, commands []string) (string, bool) {
+	w := strings.ToLower(word)
+	best, bestD := "", 2
+	for _, c := range commands {
+		lc := strings.ToLower(c)
+		if w == lc && word == c {
+			// Spelled exactly right: not a typo of anything. (It reaches here only when it was not
+			// run as the command — `help me fix this` — and then it is the message it looks like.)
+			return "", false
+		}
+		d := editDistance(w, lc)
+		if d < bestD || (d == bestD && best != "" && c < best) {
+			best, bestD = c, d
+		}
+	}
+	return best, bestD <= 1
+}
+
+// editDistance is the optimal-string-alignment distance between a and b: the fewest insertions,
+// deletions, substitutions and swaps of two ADJACENT letters (each counted once) that turn one into
+// the other. It works on runes, so an accented letter is one edit, not two.
+func editDistance(a, b string) int {
+	ra, rb := []rune(a), []rune(b)
+	prev2 := make([]int, len(rb)+1)
+	prev := make([]int, len(rb)+1)
+	cur := make([]int, len(rb)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ra); i++ {
+		cur[0] = i
+		for j := 1; j <= len(rb); j++ {
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+			if i > 1 && j > 1 && ra[i-1] == rb[j-2] && ra[i-2] == rb[j-1] {
+				cur[j] = min(cur[j], prev2[j-2]+1)
+			}
+		}
+		prev2, prev, cur = prev, cur, prev2
+	}
+	return prev[len(rb)]
+}
+
+// unknownCommand is the error for a first word that looks like a mistyped command (see
+// suggestCommand). It is its own type so Main can print it as written.
+type unknownCommand struct{ word, suggestion string }
+
+// Error lays the message out like Claude Code's: what was wrong, the command it looks like, and the
+// two ways out. A mistyped command costs no turn and no tokens, and exits 1.
+func (e *unknownCommand) Error() string {
+	return fmt.Sprintf("harness: unknown command %q\n  did you mean: harness %s\n\nRun harness --help to list commands, or harness -- %q to send it as a message (harness -p %q for a one-shot answer).",
+		e.word, e.suggestion, e.word, e.word)
+}
+
+func unknownCommandError(word, suggestion string) error { return &unknownCommand{word, suggestion} }
 
 // selectsTUI reports whether the parsed command line runs the interactive TUI command (the root's
 // default, with or without a positional prompt).

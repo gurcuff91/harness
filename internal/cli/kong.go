@@ -34,7 +34,11 @@
 // also declares cmd:"" children.
 package cli
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/alecthomas/kong"
+)
 
 // ── Root grammar ─────────────────────────────────────────────────────────
 
@@ -42,6 +46,8 @@ import "strings"
 // (hidden from the top-level command list, but selected when no other
 // command is named).
 var CLI struct {
+	Version kong.VersionFlag `short:"v" help:"Print the version and exit"`
+
 	TUI tuiCmd `cmd:"" default:"withargs" hidden:"" help:"Interactive TUI (default)"`
 
 	Serve serveCmd `cmd:"" help:"Start the HTTP/SSE server (headless transport)"`
