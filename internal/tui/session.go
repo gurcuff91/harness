@@ -77,7 +77,7 @@ func (t *TUI) autoConnect(ctx context.Context) {
 			warnings = append(warnings, fmt.Sprintf("Failed to resume: %s", err.Error()))
 		} else {
 			t.sessionID = sess.ID
-			t.sessionName = sess.Name
+			t.setSessionName(sess.Name)
 			t.model = sess.Model
 			t.thinking = sess.Thinking
 			t.maxIterations = sess.MaxIterations
@@ -121,7 +121,7 @@ func (t *TUI) autoConnect(ctx context.Context) {
 		return
 	}
 	t.sessionID = sess.ID
-	t.sessionName = sess.Name
+	t.setSessionName(sess.Name)
 	if sess.Thinking != "" {
 		t.thinking = sess.Thinking
 	}
@@ -153,7 +153,7 @@ func (t *TUI) resumeInPlace(sessID string) {
 	t.resetForNewSession()
 
 	t.sessionID = sess.ID
-	t.sessionName = sess.Name
+	t.setSessionName(sess.Name)
 	t.model = sess.Model
 	t.thinking = sess.Thinking
 	t.maxIterations = sess.MaxIterations
@@ -205,7 +205,7 @@ func (t *TUI) newSessionInPlace() {
 	t.resetForNewSession()
 
 	t.sessionID = sess.ID
-	t.sessionName = sess.Name
+	t.setSessionName(sess.Name)
 	if sess.Thinking != "" {
 		t.thinking = sess.Thinking
 	}
@@ -233,11 +233,27 @@ func (t *TUI) stopSSE() {
 	t.status.IdleIfWorking()
 }
 
+// setSessionName records the session's name and publishes it as the terminal title. Every place
+// that changes the name goes through here, so the title cannot fall behind the footer.
+func (t *TUI) setSessionName(name string) {
+	t.sessionName = name
+	t.status.SetTitle(name)
+}
+
 // startSSE opens a persistent SSE stream for the active session.
+//
+// It is also where the terminal is told the session is ready: every path that establishes a
+// session (startup, resume, a new session, a fork) ends here, and a session with nothing running is
+// idle. That is what makes a fresh instance an agent in the terminal's list — with a status
+// hosts such as `hc send --if idle` can target — before any turn, and what keeps a switch from
+// leaving the previous session's state behind. It must come BEFORE the stream opens: a resumed
+// session may already have a turn in flight, whose working would otherwise be overwritten by a
+// late idle. No session (startup could not create one) means nothing is reported.
 func (t *TUI) startSSE(ctx context.Context) {
 	if t.sessionID == "" {
 		return
 	}
+	t.status.Set(ansi.StatusIdle)
 	sseCtx, cancel := context.WithCancel(ctx)
 	t.sseCancel = cancel
 	go t.streamEvents(sseCtx)

@@ -1,6 +1,11 @@
 package ansi
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
 
 // Escape sequences used by the differential renderer and terminal control.
 // Mirrors the sequences emitted by PI's TUI and ProcessTerminal.
@@ -61,9 +66,61 @@ func MoveTo(row, col int) string {
 	return fmt.Sprintf("\x1b[%d;%dH", row, col)
 }
 
-// SetTitle returns the OSC sequence to set the terminal window title.
+// SetTitle returns the OSC 0 sequence that sets the terminal's title:
+//
+//	ESC ] 0 ; <title> BEL
+//
+// The title is written as given, so it must not contain a control character: BEL or ST would end
+// the sequence early and anything after would be printed (or, with an ESC, interpreted) by the
+// terminal. Callers that do not control the text pass it through SanitizeTitle first.
 func SetTitle(title string) string {
-	return fmt.Sprintf("\x1b]0;%s\x07", title)
+	return "\x1b]0;" + title + "\x07"
+}
+
+// MaxTitleRunes is the longest title SanitizeTitle lets through.
+const MaxTitleRunes = 80
+
+// SanitizeTitle makes text safe to put in an OSC 0 title: control characters (C0, DEL and C1 —
+// which include ESC, BEL, newline and the 8-bit forms of CSI/OSC/ST) are dropped, runs of
+// whitespace collapse to one space, the ends are trimmed, and the result is cut to MaxTitleRunes
+// runes (never in the middle of a multibyte character), with an ellipsis when it was cut.
+//
+// A session's name can come from the user's own prompt, so it is treated as hostile: an
+// unsanitized BEL would end the sequence early and an ESC would let the name inject sequences of
+// its own. Invalid UTF-8 is dropped too, rather than passed on for the terminal to guess at.
+func SanitizeTitle(s string) string {
+	var b strings.Builder
+	space := false
+	n := 0
+	for _, r := range s {
+		switch {
+		case r == utf8.RuneError:
+			continue // invalid UTF-8 (or a literal U+FFFD, which says nothing either)
+		case unicode.IsControl(r):
+			// A line break or tab separates words; the other controls (ESC, BEL, NUL, C1…) are
+			// simply dropped, which also defuses any escape sequence they would have started.
+			if r == '\n' || r == '\r' || r == '\t' {
+				space = true
+			}
+			continue
+		case unicode.IsSpace(r):
+			space = true
+			continue
+		}
+		if space && n > 0 {
+			b.WriteByte(' ')
+			n++
+		}
+		space = false
+		b.WriteRune(r)
+		n++
+	}
+	out := b.String()
+	if utf8.RuneCountInString(out) <= MaxTitleRunes {
+		return out
+	}
+	rs := []rune(out)[:MaxTitleRunes-1]
+	return strings.TrimRight(string(rs), " ") + "…"
 }
 
 // Hyperlink wraps text in an OSC 8 hyperlink escape so terminals that support

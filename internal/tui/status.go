@@ -32,6 +32,12 @@ type statusReporter struct {
 	write  func(string)
 	last   string // the last state written; "" before the first
 	closed bool   // Clear was called: the record is gone and must stay gone
+
+	// The terminal title (OSC 0) travels through the same reporter, so it has the same rules for
+	// free: one write per sequence, on the renderer's own terminal, ordered with the status
+	// writes, nil-safe, and silent once Clear has run.
+	title  string // the last title written (already sanitized)
+	titled bool   // a title was written: only then is there one to restore on exit
 }
 
 // newStatusReporter returns a reporter that emits through write.
@@ -65,6 +71,33 @@ func (r *statusReporter) IdleIfWorking() {
 	}
 }
 
+// SetTitle publishes the session's name as the terminal title (OSC 0) — what Herdr shows as the
+// name of an unnamed tab and in its agents list, and what any terminal shows on its tab or window.
+//
+// The format is the session's own name, bare. A prefix such as "Harness · " would repeat what the
+// agents list already says (it shows the program beside the title), and Herdr's agents mod throws
+// away a title that equals the program name, looks like a path or contains "@": a session name is
+// none of those. (A session literally named "harness" would be dropped by it; nothing to do.)
+//
+// The name is sanitized here, not by the callers: it can come from the user's own prompt, and an
+// unsanitized BEL or ESC would end the sequence early or inject escapes (see ansi.SanitizeTitle).
+// A repeat of the title last written is not written again. A name that sanitizes to nothing is
+// not published as a title until there is a real one to replace.
+func (r *statusReporter) SetTitle(name string) {
+	if r == nil {
+		return
+	}
+	title := ansi.SanitizeTitle(name)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed || (r.titled && title == r.title) || (!r.titled && title == "") {
+		return
+	}
+	r.write(ansi.SetTitle(title))
+	r.title = title
+	r.titled = true
+}
+
 // Clear drops this program's record, on exit. It is terminal: afterwards nothing is reported, so a
 // late event (a stream goroutine waking up after the user quit) cannot bring the record back and
 // leave it stale in the terminal's sidebar.
@@ -76,6 +109,15 @@ func (r *statusReporter) Clear() {
 	defer r.mu.Unlock()
 	if r.closed {
 		return
+	}
+	// Give the title back first, so that the clear stays the last thing reported. An empty title is
+	// the simple restore: the terminal falls back to its own (the shell's prompt sets it again as
+	// soon as the shell is back). The XTWINOPS title stack (CSI 22;0 t on start, CSI 23;0 t on
+	// exit) would restore the exact previous title, but only some terminals implement it, and an
+	// unsupported one would be left with a title nobody set. Only a title this reporter set is
+	// given back: a session that never published one leaves the terminal's title alone.
+	if r.titled && r.title != "" {
+		r.write(ansi.SetTitle(""))
 	}
 	r.write(ansi.ProgramStatus(ansi.StatusClear, statusApp))
 	r.last = ansi.StatusClear

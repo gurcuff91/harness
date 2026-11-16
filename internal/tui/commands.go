@@ -84,7 +84,7 @@ func (t *TUI) cmdFork() {
 
 	// Switch TUI state to the fork.
 	t.sessionID = fork.ID
-	t.sessionName = fork.Name
+	t.setSessionName(fork.Name)
 	t.model = fork.Model
 	t.thinking = fork.Thinking
 	t.maxIterations = fork.MaxIterations
@@ -480,7 +480,7 @@ func (t *TUI) applyCommandResult(cmd string, args []string, status *client.Statu
 		}
 	case "rename":
 		if argVal != "" {
-			t.sessionName = argVal
+			t.setSessionName(argVal)
 			confirm = "renamed → " + argVal
 		}
 	case "max-iter":

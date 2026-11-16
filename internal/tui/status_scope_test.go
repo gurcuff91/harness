@@ -61,3 +61,49 @@ func TestTheReporterIsConstructedInExactlyOnePlace(t *testing.T) {
 		}
 	}
 }
+
+// The terminal title (OSC 0) travels through the status reporter, so it is built exactly where
+// the reporter is: attachTerminal. Nothing else may write the sequence — not another file of the
+// TUI, and not any other frontend.
+func TestTheTitleWriterIsConstructedOnlyInAttachTerminal(t *testing.T) {
+	// 1. ansi.SetTitle (the only function that builds the sequence) is called from one place.
+	out, err := exec.Command("grep", "-rn", "--include=*.go", "--exclude=*_test.go", "SetTitle(", "../..").CombinedOutput()
+	if err != nil {
+		t.Fatalf("grep: %v\\n%s", err, out)
+	}
+	var calls []string
+	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\\n") {
+		if strings.Contains(l, "func SetTitle(") || strings.Contains(l, "func (r *statusReporter) SetTitle(") || strings.Contains(l, "//") && strings.Index(l, "//") < strings.Index(l, "SetTitle(") {
+			continue // a definition, or a doc comment
+		}
+		calls = append(calls, l)
+	}
+	for _, l := range calls {
+		if !strings.Contains(l, "internal/tui/status.go") && !strings.Contains(l, "setSessionName") && !strings.Contains(l, "status.SetTitle") {
+			t.Errorf("an OSC 0 title is written outside the status reporter: %s", l)
+		}
+	}
+	for _, l := range calls {
+		if strings.Contains(l, "ansi.SetTitle(") && !strings.Contains(l, "internal/tui/status.go") {
+			t.Errorf("ansi.SetTitle is called outside status.go: %s", l)
+		}
+	}
+
+	// 2. The only thing that can reach the reporter's SetTitle is TUI.setSessionName.
+	out, err = exec.Command("grep", "-rn", "--include=*.go", "--exclude=*_test.go", "status.SetTitle(", ".").CombinedOutput()
+	if err != nil {
+		t.Fatalf("grep: %v\\n%s", err, out)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\\n")
+	if len(lines) != 1 || !strings.Contains(lines[0], "session.go") {
+		t.Errorf("status.SetTitle must be called from exactly one place (setSessionName in session.go): %v", lines)
+	}
+
+	// 3. And nothing assigns the name behind its back: every write of sessionName is the setter.
+	out, _ = exec.Command("grep", "-rn", "--include=*.go", "--exclude=*_test.go", "-E", `\\.sessionName = `, ".").CombinedOutput()
+	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\\n") {
+		if l != "" && !strings.Contains(l, "t.sessionName = name") {
+			t.Errorf("sessionName assigned outside setSessionName, so the title would fall behind: %s", l)
+		}
+	}
+}

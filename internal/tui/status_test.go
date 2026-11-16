@@ -60,6 +60,17 @@ func (r *recTerminal) reports() []string {
 	return out
 }
 
+// titles is the sequence of OSC 0 titles written, in order (the text between ESC ] 0 ; and BEL).
+func (r *recTerminal) titles() []string {
+	var out []string
+	for _, w := range r.all() {
+		if strings.HasPrefix(w, "\x1b]0;") {
+			out = append(out, strings.TrimSuffix(strings.TrimPrefix(w, "\x1b]0;"), "\x07"))
+		}
+	}
+	return out
+}
+
 // statusTUI is a TUI wired like the real one (attachTerminal) over a recording terminal.
 func statusTUI(t *testing.T) (*TUI, *recTerminal) {
 	t.Helper()
@@ -573,29 +584,34 @@ func TestForkMidTurnLeavesNoStuckWorking(t *testing.T) {
 	if tu.sessionID == "" {
 		t.Fatal("the fork did not switch the session")
 	}
-	eq(t, rec.reports(), []string{"working", "idle"})
+	// idle: the session was ready; working: its turn; idle: left behind, and the fork is ready
+	eq(t, rec.reports(), []string{"idle", "working", "idle"})
 }
 
 func TestResumeInPlaceMidTurnLeavesNoStuckWorking(t *testing.T) {
 	tu, rec, f := connectedTUI(t)
 	tu.status.Set(ansi.StatusWorking)
 	tu.resumeInPlace(f.sessionID)
-	eq(t, rec.reports(), []string{"working", "idle"})
+	eq(t, rec.reports(), []string{"idle", "working", "idle"})
 }
 
 func TestNewSessionInPlaceMidTurnLeavesNoStuckWorking(t *testing.T) {
 	tu, rec, _ := connectedTUI(t)
 	tu.status.Set(ansi.StatusWorking)
 	tu.newSessionInPlace()
-	eq(t, rec.reports(), []string{"working", "idle"})
+	eq(t, rec.reports(), []string{"idle", "working", "idle"})
 }
 
-func TestASwitchAfterAFinishedTurnKeepsItsResult(t *testing.T) {
+// A switch is the user at the keyboard, so the result of the turn they leave is already seen: the
+// new session is idle, not the old one's done (a stale done would also make a ready session look
+// like it has news). stopSSE alone does not do this — see
+// TestSwitchingSessionAfterAResultKeepsTheResult — it is the new session being ready that does.
+func TestASwitchAfterAFinishedTurnEndsIdle(t *testing.T) {
 	tu, rec, _ := connectedTUI(t)
 	tu.status.Set(ansi.StatusWorking)
 	tu.status.Set(ansi.StatusDone)
 	tu.cmdFork()
-	eq(t, rec.reports(), []string{"working", "done"})
+	eq(t, rec.reports(), []string{"idle", "working", "done", "idle"})
 }
 
 // When the stream cannot even be opened (the session is gone on the server) the turn that was
@@ -608,5 +624,5 @@ func TestAStreamThatCannotBeOpenedReportsIdle(t *testing.T) {
 	tu.status.Set(ansi.StatusWorking)
 	tu.sessionID = "no-such-session"
 	tu.streamEvents(context.Background())
-	eq(t, rec.reports(), []string{"working", "idle"})
+	eq(t, rec.reports(), []string{"idle", "working", "idle"})
 }
