@@ -2,9 +2,9 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.101.0] - 2026-11-16
+## [0.101.3] - 2026-11-17
 
-This release is the sum of five working steps that were built and tested one after another, and were numbered 0.100.1, 0.101.0, 0.101.1, 0.101.2 and 0.101.3 while they were in progress. Only this one is tagged: the intermediate numbers were never published, and the release is numbered 0.101.0 so the list of releases runs 0.100.0, 0.101.0 with no gap. Below are the five entries as they were written, oldest first, each under its step label; a mention of one of those numbers inside the text refers to that step, never to a published version (the step called 0.101.0, the positional prompt, is the second of the five).
+This release is the sum of five working steps that were built and tested one after another and were numbered 0.100.1, 0.101.0, 0.101.1, 0.101.2 and 0.101.3 while in progress. Only 0.101.3 is tagged and published: the earlier numbers never had a tag or a release of their own, which is why the release list jumps from v0.100.0 to v0.101.3. Below are the five entries as they were written, oldest first, each under its step label; a mention of one of those numbers inside the text refers to that step, not to a published version.
 
 **Step 0.100.1 — 2026-11-16**
 
