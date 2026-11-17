@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Corrected — a wrong claim in the 0.107.0 notes about Synthetic's quotas
+The 0.107.0 entry says search is "separate from the 500 chat requests of the subscription". The "chat" part was an inference and it is **false**: a one-token chat request left `subscription.requests` at 0 (checked right after and 20 seconds later in `/v2/quotas`), while it did move `planWeeklyLimit.percentRemaining` by a small fraction, which is the meter chat actually uses. What `subscription.limit` (500) counts is not known. What stands, measured: searches consume `search.hourly` (250 per hour) and leave `subscription.requests` untouched.
+
 ## [0.107.0] - 2026-11-17
 
 ### Added — `synthetic` as the third WebSearch backend
