@@ -2,11 +2,6 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
-
-### Corrected — a wrong claim in the 0.107.0 notes about Synthetic's quotas
-The 0.107.0 entry says search is "separate from the 500 chat requests of the subscription". The "chat" part was an inference and it is **false**: a one-token chat request left `subscription.requests` at 0 (checked right after and 20 seconds later in `/v2/quotas`), while it did move `planWeeklyLimit.percentRemaining` by a small fraction, which is the meter chat actually uses. What `subscription.limit` (500) counts is not known. What stands, measured: searches consume `search.hourly` (250 per hour) and leave `subscription.requests` untouched.
-
 ## [0.107.0] - 2026-11-17
 
 ### Added — `synthetic` as the third WebSearch backend
@@ -16,7 +11,7 @@ Built from a live probe with a subscription account (the documentation only desc
 - **The search API is subscription-only.** A pay-per-use account gets a 401 with `subscription-only`; WebSearch reports it as a failed backend and moves on, like any other failure.
 - **It always returns 5 results** and ignores `max_results`/`limit`, so the limit is applied after parsing.
 - **`text` is the whole page** (0.7 KB to 65 KB), so it becomes the snippet truncated to 500 characters, like Ollama's content. The cut never splits a multi-byte character (this also fixes the same latent flaw for Ollama's snippets). `highlights` is ignored and `published` is not used (it is absent, not null, when unknown). Results without a URL are dropped.
-- **Search has its own quota**, 250 requests per hour (`search.hourly` in `/v2/quotas`), separate from the 500 chat requests of the subscription. Ten simultaneous searches all answered 200.
+- **Search has its own quota**, 250 requests per hour (`search.hourly` in `/v2/quotas`), separate from `subscription.requests` (which search leaves untouched; what its limit of 500 counts is not known, and a chat request does not move it either: chat moves `planWeeklyLimit.percentRemaining`). Ten simultaneous searches all answered 200.
 - The "no provider connected" message now names the three backends.
 
 Tests: fake-server cases for request shape, mapping, limit, truncation, empty-result fallback, bad JSON and the 401, plus the backend order and key gate in the agent; six hand-made mutants all caught. Also checked end to end against the live API.
