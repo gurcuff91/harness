@@ -137,7 +137,7 @@ func TestNewEngineStartsWithNoWatchedSessions(t *testing.T) {
 // TestTwoEnginesOnSameStoreOnlyFireForTheirOwnWatchedSessions is the direct
 // regression test reproducing the real bug report: two harness PROCESSES
 // (here, two *Engine instances over the SAME *Store, simulating that) each
-// running --scheduler, each with a session for a DIFFERENT owner active.
+// running --with-scheduler, each with a session for a DIFFERENT owner active.
 // Before the watched-session filter, whichever engine's tick landed first
 // would win the fire+RecordRun for EVERY due schedule regardless of which
 // engine actually had a live session for it — so the schedule created in

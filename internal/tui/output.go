@@ -153,7 +153,7 @@ func (t *TUI) updateInfo() {
 }
 
 // statusBadges renders the chartreuse status badges appended to the footer:
-// connected MCP servers, and (when --scheduler is on with jobs) the scheduler.
+// connected MCP servers, and (when --with-scheduler is on with jobs) the scheduler.
 // Each is shown only when it has something to report.
 func (t *TUI) statusBadges() string {
 	var parts []string

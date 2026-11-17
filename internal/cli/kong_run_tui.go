@@ -19,27 +19,33 @@ func (c *tuiCmd) Run() error {
 		return Run(ctx, a, c.Prompt, Opts{Model: c.Model, Thinking: c.Thinking, Output: c.Output})
 	}
 
-	a := c.newTUIAgent()
+	// The extras are decided ONCE, here, and the same answer builds the agent and tells the TUI whether the
+	// scheduler is on (its footer badge): reading the flags and the environment twice could disagree.
+	x, err := extrasOf(c.withFlags)
+	if err != nil {
+		return err
+	}
+	a := c.newTUIAgent(x)
 	defer a.Close()
 
-	return c.newTUI(a).Run(ctx)
+	return c.newTUI(a, x).Run(ctx)
 }
 
 // newTUIAgent builds the agent the interactive TUI drives: the shared interactive agent plus the
 // instruction blocks only the TUI adds (see tuiDirectives). It is the one place Run gets its agent
 // from, so a test can build exactly what Run builds, without a terminal.
-func (c *tuiCmd) newTUIAgent() *agent.Agent {
-	return newInteractiveAgent(c.Scheduler, tuiDirectives()...)
+func (c *tuiCmd) newTUIAgent(x extras) *agent.Agent {
+	return newInteractiveAgent(x, tuiDirectives()...)
 }
 
 // newTUI builds the interactive TUI for the parsed command line: the flags, the scheduler switch and
 // the positional prompt (the first message, submitted once the session is ready). It is Run minus
 // the part that needs a terminal, so the wiring from the command line to the TUI can be tested.
-func (c *tuiCmd) newTUI(a *agent.Agent) *tui.TUI {
+func (c *tuiCmd) newTUI(a *agent.Agent, x extras) *tui.TUI {
 	t := tui.New(a)
 	t.SetFlags(c.Model, c.Thinking, c.Resume)
 	t.SetInitialPrompt(c.initialPrompt())
-	t.SetScheduler(c.Scheduler)
+	t.SetScheduler(x.scheduler)
 	return t
 }
 

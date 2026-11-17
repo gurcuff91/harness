@@ -6,18 +6,21 @@ package cli
 import (
 	"fmt"
 
+	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/internal/logx"
 	"github.com/gurcuff91/harness/transports/telegram"
 )
 
 func (c *telegramRunCmd) Run() error {
-	// c.Scheduler decides the AGENT's own scheduler engine here — it's an
-	// agent.AgentOptions.EnableScheduler concern, not something
-	// telegram.Options carries (see its doc comment for why).
+	// --with-colleagues / --with-scheduler decide the AGENT's own extras here — they are
+	// agent.AgentOptions concerns, not something telegram.Options carries (see its doc comment for why).
 	// No telegram.Directive here: the transport adds it to the sessions it
 	// creates/resumes (per-session directives), so it never leaks into other
 	// sessions of the same agent.
-	a := newInteractiveAgent(c.Scheduler)
+	a, err := c.newAgent()
+	if err != nil {
+		return err
+	}
 	// agent → server → transport. The transport never closes the server or
 	// the agent; the CLI owns both (closing srv also closes a).
 	srv, err := startTransportServer(a, "telegram")
@@ -43,6 +46,15 @@ func (c *telegramRunCmd) Run() error {
 		opts = append(opts, telegram.WithAllowUnpair())
 	}
 	return telegram.Run(ctx, srv, opts...)
+}
+
+// newAgent builds the agent `harness telegram` runs (see serveCmd.newAgent: Run minus the network).
+func (c *telegramRunCmd) newAgent() (*agent.Agent, error) {
+	x, err := extrasOf(c.withFlags)
+	if err != nil {
+		return nil, err
+	}
+	return newInteractiveAgent(x), nil
 }
 
 func (c *telegramPairCmd) Run() error {

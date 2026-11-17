@@ -340,7 +340,7 @@ func isNilStore(s memory.Store) bool {
 // function, so owner not resolving here would mean a session closed in the
 // narrow window between evaluate's check and this call — a legitimate,
 // harmless drop, not the routine case it used to be before that filter
-// existed. Several harness processes, each running --scheduler and each
+// existed. Several harness processes, each running --with-scheduler and each
 // watching only their own live sessions, is now a safe, intended
 // deployment shape — see Engine's own doc comment for the full story.
 func (a *Agent) fireScheduledPrompt(slug, prompt, owner string) {
@@ -395,7 +395,7 @@ func (a *Agent) unregisterSession(id string) {
 // when THIS instance is the one actually running the engine that fires
 // them. Previously the tools were always registered whenever the store
 // opened, letting a model create/manage schedules from an instance that
-// would never execute them unless some OTHER --scheduler instance happened
+// would never execute them unless some OTHER --with-scheduler instance happened
 // to be running — confusing and easy to end up with schedules that never
 // fire. One agent, one engine, one set of tools: they now travel together.
 func (a *Agent) scheduleAdapter() tools.ScheduleStore {

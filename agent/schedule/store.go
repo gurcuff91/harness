@@ -3,7 +3,7 @@
 // one entry per owner session + slug), so they live wherever settings live:
 // ~/.harness/settings.json by default, or any configstore.SettingsStore an
 // SDK embedder registered. The agent manages them via the Schedule* tools; a
-// transport (e.g. the TUI with --scheduler) runs the engine that fires their
+// transport (e.g. the TUI with --with-scheduler) runs the engine that fires their
 // prompts on time.
 package schedule
 

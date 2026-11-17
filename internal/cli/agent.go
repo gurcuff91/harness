@@ -66,47 +66,57 @@ func newAgent() *agent.Agent {
 // never touched again). The turn's actual work — the reply the user asked
 // for — is delivered on stdout regardless of where the session lives, so
 // there is nothing lost by not persisting it.
+//
+// It has WebSearch, like every agent that does real work, and never colleagues or the scheduler: a process
+// that exits when its turn ends has nothing to offer another agent, no time to wait for one, and no engine
+// to keep running.
 func newOneShotAgent() *agent.Agent {
-	return agent.New(agent.AgentOptions{
-		MCPServers: mcp.ServersFromSettings(),
-		Memory:     defaultMemory(),
-		Store:      store.NewInMemoryStore(),
-	})
+	return agent.New(oneShotOptions())
 }
 
-// newInteractiveAgent builds the root agent for interactive transports (TUI,
-// standalone `harness serve`, Telegram) — always at interactiveMaxIterations,
-// and optionally running the cron scheduler engine so a fired schedule has a
-// session to run in. directives are extra AGENT-WIDE system-prompt blocks
-// (every session sees them). Transport-specific ones (telegram.Directive,
-// slack.Directive) don't go here: those transports add them per session.
+// oneShotOptions is the AgentOptions newOneShotAgent builds, separate so a test can look at the decision.
+func oneShotOptions() agent.AgentOptions {
+	return agent.AgentOptions{
+		MCPServers:      mcp.ServersFromSettings(),
+		Memory:          defaultMemory(),
+		Store:           store.NewInMemoryStore(),
+		EnableWebSearch: true,
+	}
+}
+
+// newInteractiveAgent builds the root agent for the long-running commands that do agent work: the TUI,
+// `harness serve`, Telegram, Slack and ACP. It is always at interactiveMaxIterations and always has
+// WebSearch (these are where the model fields real-time and external questions; the tool gates itself on
+// the minimax provider being connected and returns a clear "connect the minimax provider" error otherwise,
+// so it is safe without a pre-flight check).
 //
-// EnableColleagues is always on here: these are exactly the long-running
-// processes that register themselves in the colleague registry (see
-// server.Serve) and so are the ones worth discovering/delegating to.
-// One-shot commands (newOneShotAgent) and config-only commands
-// (newConfigAgent) never enable it — a process that exits in milliseconds has
-// nothing to offer a colleague and no time to wait for one.
+// The two OPT-IN extras come in through x (see extras.go): colleagues and the scheduler engine. They are
+// off unless the command asked for them with --with-colleagues / --with-scheduler or the matching
+// environment variable, because each costs every session something even when unused. A process without
+// colleagues is still registered as an instance by the server and still ANSWERS other agents; it only
+// lacks the tools to ask them.
 //
-// EnableWebSearch is always on here too: interactive transports are where
-// the model field real-time / external questions, and the WebSearch tool
-// gates itself on the minimax provider being connected (returning a clear
-// "connect the minimax provider" error otherwise), so it's safe to enable
-// without a pre-flight provider check.
+// directives are extra AGENT-WIDE system-prompt blocks (every session sees them). Transport-specific ones
+// (telegram.Directive, slack.Directive) don't go here: those transports add them per session.
 //
-// SessionInfo itself is always registered regardless of this constructor
-// (see agent.go's buildSessionTools) — it has no dedicated EnableX flag,
-// unlike the options below.
-func newInteractiveAgent(scheduler bool, directives ...string) *agent.Agent {
-	return agent.New(agent.AgentOptions{
+// SessionInfo itself is always registered regardless of this constructor (see agent.go's
+// buildSessionTools) — it has no dedicated EnableX flag, unlike the options below.
+func newInteractiveAgent(x extras, directives ...string) *agent.Agent {
+	return agent.New(interactiveOptions(x, directives))
+}
+
+// interactiveOptions is the AgentOptions newInteractiveAgent builds, separate so a test can look at the
+// decision without opening an agent.
+func interactiveOptions(x extras, directives []string) agent.AgentOptions {
+	return agent.AgentOptions{
 		MCPServers:       mcp.ServersFromSettings(),
 		Memory:           defaultMemory(),
-		EnableScheduler:  scheduler,
-		EnableColleagues: true,
+		EnableScheduler:  x.scheduler,
+		EnableColleagues: x.colleagues,
 		EnableWebSearch:  true,
 		MaxIterations:    interactiveMaxIterations,
 		Directives:       directives,
-	})
+	}
 }
 
 // newConfigAgent builds a minimal agent for commands that only read/write

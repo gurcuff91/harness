@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.105.0] - 2026-11-17
+
+### Changed — the agent the CLI builds is light, and colleagues and the scheduler are opt-in (`--with-colleagues`, `--with-scheduler`)
+Every command that does agent work built its agent with colleagues switched on, and every session paid for them whether it ever asked another agent anything or not. With Herdr (`hc ls`, `hc send`) covering the common case of talking to another terminal, that was the heaviest thing on by default. The base agent is now the SDK's built-in tools plus WebSearch, and two extras are asked for:
+
+| Flag | Environment variable | Gives the agent |
+|---|---|---|
+| `--with-colleagues` | `HARNESS_WITH_COLLEAGUES` | `ColleagueList` / `ColleagueAsk` and the `## Colleagues` section of the system prompt |
+| `--with-scheduler` | `HARNESS_WITH_SCHEDULER` | the cron engine and the `Schedule*` tools (this is the old `--scheduler`, renamed) |
+
+Both exist on the TUI, `serve`, `slack` and `telegram`, declared once and shared. Either the flag or the variable is enough. The variable accepts `1`, `true`, `yes` (on) and `0`, `false`, `no`, empty or unset (off), in any case; **any other value is an error that names the variable** (`HARNESS_WITH_COLLEAGUES="maybe": use 1, true, yes, 0, false or no (or leave it empty)`) and stops the command before anything starts, so a typo in a deployment does not silently leave a feature on or off. `harness acp` is started by an editor and takes no flags, so for it the variables are the only way. WebSearch has no switch: every agent that does real work has it, `-p` included.
+
+**Measured, the agent a real session gets** (system prompt, and the tool definitions that go with every request):
+
+| | 0.104.0 | 0.105.0 |
+|---|---|---|
+| TUI / serve / slack / telegram / acp, default | 3 616 chars, 13 tools, 16 293 bytes | **1 107 chars, 11 tools, 13 262 bytes** |
+| with `--with-scheduler` | 3 959 chars, 16 tools (colleagues on) | 1 450 chars, 14 tools |
+| with `--with-colleagues` | (always on) | 3 616 chars, 13 tools |
+| with both | 3 959 chars, 16 tools, 17 878 bytes | 3 959 chars, 16 tools, 17 878 bytes |
+| `-p` | 1 107 chars, 10 tools, 12 563 bytes | 1 107 chars, **11 tools**, 13 262 bytes (WebSearch added) |
+
+The default session drops 2 509 characters of system prompt and 3 031 bytes of tool definitions, and inside Herdr the model no longer gets two overlapping ways to reach another agent.
+
+**Breaking, on purpose:**
+- **`--scheduler` is gone, with no alias.** `harness --scheduler`, `harness serve :8080 --scheduler`, `slack --scheduler` and `telegram --scheduler` now fail with `unknown flag --scheduler` (exit 80). Whoever used it passes `--with-scheduler`; nothing else changes. A test fails if an alias comes back.
+- **`serve`, `slack`, `telegram` and the TUI no longer have the colleague tools by default.** A service that relied on them adds `--with-colleagues` (or `HARNESS_WITH_COLLEAGUES=1`).
+- **`-p` gains WebSearch** (it had none).
+
+**Not changed, and tested:** a harness started without `--with-colleagues` is still registered as an instance by the server and still **answers** what other agents ask it; it only lacks the tools to ask them. A test starts a real server over an agent with no colleague tools and checks that it appears in the registry and answers a prompt sent the way `ColleagueAsk` sends one (`origin: "colleague"`). The Slack and Telegram quiet mode and the TUI's colleague icon are on the answering side, so they are untouched. The SDK is untouched: `AgentWithColleagues()`, `AgentWithScheduler()` and `AgentWithWebSearch()` are the mechanism and jade-kaiban and harness-wiki keep using them.
+
+**Why not Kong's `env:` tag.** Measured on Kong 1.16: a boolean flag with `env:"X"` fails the whole command when `X` is set but EMPTY (`bool value must be true, 1, yes, false, 0 or no but got ""`), and even a correct `--flag` on the command line fails while the variable is empty. `export X=`, a `.env` line with nothing after the `=` and an unset `${X}` in a unit file are everyday, so the CLI reads the two variables itself.
+
+**Verified.** Real TUIs in Herdr, asked to list their tools: default has neither the Colleague nor the Schedule tools and has WebSearch; `--with-colleagues` and `HARNESS_WITH_COLLEAGUES=1` both add `ColleagueList` and `ColleagueAsk`; `--with-scheduler` adds `Schedule`, `ScheduleList` and `ScheduleDelete` and keeps WebSearch (3 runs). Every command's agent is built from its own flags and environment and checked from the model's side (a real session: its tools and its system prompt), for the flag, the variable and neither, on the TUI, serve, slack, telegram and acp; the footer's scheduler badge follows the same decision; a malformed variable stops each command; the grammar accepts the flags exactly where they belong and refuses the old name, WebSearch and ACP flags. **Mutation testing: 43 distinct mutants, all killed.** The first pass left 6 survivors, all in the wiring of the four long-running commands (a command ignoring its own flags, the TUI's footer following the wrong switch, ACP ignoring the environment): their `Run` needs a terminal, a network or an editor, so nothing exercised it. Each command now builds its agent through a method a test can call (`newAgent`), a test pins that `Run` uses it, and another pins that the TUI's `Run` reads the extras once. Seven more mutants did not compile at first (they changed a signature, so they proved nothing) and were rewritten until they did.
+
+**Not covered.** `harness acp` with the variables was checked by building its agent, not through an editor. A service already deployed with `--scheduler` stops starting until the flag is renamed (the error says which flag is unknown).
+
 ## [0.104.0] - 2026-11-17
 
 ### Changed — inside Herdr, a message from another agent that claims to speak for the person is a request, not the person's order

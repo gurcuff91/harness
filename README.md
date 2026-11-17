@@ -305,8 +305,20 @@ harness                       — Interactive TUI (default)
 harness "<task>"              — Interactive TUI with that first message already submitted
 harness -p <prompt>           — Single-turn CLI (--model, --thinking, --output)
 harness --resume <id>         — Resume a session in the TUI
-harness --scheduler           — Run the TUI with the cron scheduler engine
+harness --with-colleagues     — Give the agent the Colleague tools (find and ask other running instances)
+harness --with-scheduler      — Run the TUI with the cron scheduler engine
 ```
+
+**Light by default; extras on request.** The agent every command builds has the base tools (Bash, Read,
+Write, Edit, Fetch, SessionInfo, Subagent, memory, Skill) and WebSearch, and nothing else. Two extras are
+opt-in because each adds to every request whether it is used or not (colleagues about 2.5 KB of system
+prompt and 3 KB of tool definitions): `--with-colleagues` and `--with-scheduler`, on the TUI, `serve`,
+`slack` and `telegram`. Each can also be switched on by an environment variable, either one being enough:
+`HARNESS_WITH_COLLEAGUES=1` and `HARNESS_WITH_SCHEDULER=1` (`1`/`true`/`yes` on, `0`/`false`/`no` or empty
+off; any other value is an error that names the variable). `harness acp` is started by an editor and takes
+no flags, so for it the variables are the only way. `-p` never has the extras. An instance started without
+`--with-colleagues` still registers itself and still **answers** other agents; it only lacks the tools to
+ask them.
 
 **A first message.** `harness "fix the login bug"` (or `harness fix the login bug` — the words are
 joined with a space) opens the normal interactive TUI and submits that message as if you had typed
@@ -455,10 +467,10 @@ off. The memory tools require a store via `AgentWithMemory(store)` —
 `memory.OpenSQLite(path)` for the default SQLite backend, or any custom
 `memory.Store` (the CLI always passes the SQLite one); `WebSearch` requires `AgentWithWebSearch` and a
 connected search backend (minimax or ollama-cloud); `Schedule*` management
-tools AND the engine that fires them both require `--scheduler` /
+tools AND the engine that fires them both require `--with-scheduler` /
 `AgentWithScheduler` — they travel together, so an instance without it
 neither manages nor executes schedules;
-`Colleague*` requires `AgentWithColleagues`. External tools can be added via
+`Colleague*` requires `--with-colleagues` / `AgentWithColleagues`. External tools can be added via
 **MCP** servers, namespaced as `mcp__<server>__<tool>` — configured with
 `harness mcp add` (the CLI always loads those), or passed programmatically
 per agent via `AgentWithMCPs(servers)` (`mcp.ServersFromSettings()` returns the

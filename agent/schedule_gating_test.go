@@ -143,7 +143,7 @@ func TestScheduleAdapterNonNilWithEnableScheduler(t *testing.T) {
 // ── registerSession/unregisterSession ↔ Engine.AddSession/DelSession wiring ──
 //
 // These confirm the fix for a second real, field-reported bug: with
-// multiple harness processes each running --scheduler over the SAME shared
+// multiple harness processes each running --with-scheduler over the SAME shared
 // schedules.json, whichever process's tick landed first could steal a
 // schedule's fire+RecordRun even if it had no matching active session at
 // all — because the Engine used to evaluate every schedule in the store

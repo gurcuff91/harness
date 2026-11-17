@@ -55,7 +55,7 @@ func TestAPositionalPromptOpensTheTUIWithIt(t *testing.T) {
 		"--resume plus a prompt":                                 {[]string{"--resume", "abc123", "next question"}, parsed{cmd: "tui <prompt>", prompt: "next question", resume: "abc123"}},
 		"--resume alone has no prompt":                           {[]string{"--resume", "abc123"}, parsed{cmd: "tui", resume: "abc123"}},
 		"-p alone is unchanged (one-shot)":                       {[]string{"-p", "x"}, parsed{cmd: "tui", oneShot: "x"}},
-		"--scheduler plus a prompt":                              {[]string{"--scheduler", "go"}, parsed{cmd: "tui <prompt>", prompt: "go"}},
+		"--with-scheduler plus a prompt":                         {[]string{"--with-scheduler", "go"}, parsed{cmd: "tui <prompt>", prompt: "go"}},
 		"an empty prompt is no prompt":                           {[]string{""}, parsed{cmd: "tui <prompt>", prompt: ""}},
 		"a blank prompt is no prompt":                            {[]string{"   \n\t "}, parsed{cmd: "tui <prompt>", prompt: ""}},
 		"blank words are no prompt":                              {[]string{"", " ", ""}, parsed{cmd: "tui <prompt>", prompt: ""}},
@@ -83,27 +83,28 @@ func TestEverySubcommandStillDispatchesToItself(t *testing.T) {
 		args []string
 		cmd  string
 	}{
-		"sessions":             {[]string{"sessions"}, "sessions"},
-		"sessions --all":       {[]string{"sessions", "--all"}, "sessions"},
-		"providers":            {[]string{"providers"}, "providers"},
-		"serve":                {[]string{"serve", ":8080"}, "serve <addr>"},
-		"serve --scheduler":    {[]string{"serve", ":8080", "--scheduler"}, "serve <addr>"},
-		"acp":                  {[]string{"acp"}, "acp"},
-		"connect":              {[]string{"connect", "anthropic"}, "connect <name>"},
-		"disconnect":           {[]string{"disconnect", "anthropic"}, "disconnect <name>"},
-		"delete":               {[]string{"delete", "abc"}, "delete <session-id>"},
-		"settings":             {[]string{"settings"}, "settings show"},
-		"mcp":                  {[]string{"mcp"}, "mcp list"},
-		"mcp add":              {[]string{"mcp", "add", "x", "--url", "http://x/mcp"}, "mcp add <name>"},
-		"provider":             {[]string{"provider"}, "provider list"},
-		"memo":                 {[]string{"memo"}, "memo"},
-		"memo with a query":    {[]string{"memo", "needle"}, "memo <query>"},
-		"schedules":            {[]string{"schedules"}, "schedules"},
-		"telegram":             {[]string{"telegram"}, "telegram run"},
-		"telegram pair":        {[]string{"telegram", "pair", "123"}, "telegram pair <chat-id>"},
-		"slack":                {[]string{"slack"}, "slack run"},
-		"slack login":          {[]string{"slack", "login"}, "slack login"},
-		"a flag before a name": {[]string{"--model", "a/b", "sessions"}, "sessions"},
+		"sessions":                {[]string{"sessions"}, "sessions"},
+		"sessions --all":          {[]string{"sessions", "--all"}, "sessions"},
+		"providers":               {[]string{"providers"}, "providers"},
+		"serve":                   {[]string{"serve", ":8080"}, "serve <addr>"},
+		"serve --with-scheduler":  {[]string{"serve", ":8080", "--with-scheduler"}, "serve <addr>"},
+		"serve --with-colleagues": {[]string{"serve", ":8080", "--with-colleagues"}, "serve <addr>"},
+		"acp":                     {[]string{"acp"}, "acp"},
+		"connect":                 {[]string{"connect", "anthropic"}, "connect <name>"},
+		"disconnect":              {[]string{"disconnect", "anthropic"}, "disconnect <name>"},
+		"delete":                  {[]string{"delete", "abc"}, "delete <session-id>"},
+		"settings":                {[]string{"settings"}, "settings show"},
+		"mcp":                     {[]string{"mcp"}, "mcp list"},
+		"mcp add":                 {[]string{"mcp", "add", "x", "--url", "http://x/mcp"}, "mcp add <name>"},
+		"provider":                {[]string{"provider"}, "provider list"},
+		"memo":                    {[]string{"memo"}, "memo"},
+		"memo with a query":       {[]string{"memo", "needle"}, "memo <query>"},
+		"schedules":               {[]string{"schedules"}, "schedules"},
+		"telegram":                {[]string{"telegram"}, "telegram run"},
+		"telegram pair":           {[]string{"telegram", "pair", "123"}, "telegram pair <chat-id>"},
+		"slack":                   {[]string{"slack"}, "slack run"},
+		"slack login":             {[]string{"slack", "login"}, "slack login"},
+		"a flag before a name":    {[]string{"--model", "a/b", "sessions"}, "sessions"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := parse(c.args...)
@@ -272,7 +273,7 @@ func TestTheParsedPromptReachesTheTUI(t *testing.T) {
 			}
 			a := agent.New(agent.AgentOptions{})
 			defer a.Close()
-			if got := CLI.TUI.newTUI(a).InitialPrompt(); got != c.want {
+			if got := CLI.TUI.newTUI(a, extras{}).InitialPrompt(); got != c.want {
 				t.Errorf("harness %q hands the TUI %q, want %q", c.args, got, c.want)
 			}
 		})

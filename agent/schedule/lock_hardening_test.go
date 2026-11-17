@@ -104,7 +104,7 @@ func TestUpdateSchedule_SeesFreshestDiskStateAcrossInstances(t *testing.T) {
 // just made — never clobber the whole file with a stale in-memory copy.
 func TestRecordRun_DoesNotClobberConcurrentEdit(t *testing.T) {
 	path := fileBackedPath(t)
-	engineStore := storeAt(t, path) // simulates the --scheduler process
+	engineStore := storeAt(t, path) // simulates the --with-scheduler process
 	userStore := storeAt(t, path)   // simulates a different process's session
 
 	if err := engineStore.Set("standup", "@daily", "v1 prompt", "sess-A"); err != nil {

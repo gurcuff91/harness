@@ -23,9 +23,9 @@ const tickInterval = 30 * time.Second
 // via the tools take effect immediately — no restart needed.
 //
 // Multiple harness processes may each run their OWN Engine over the SAME
-// shared settings store (one per --scheduler-enabled instance) — this is the
+// shared settings store (one per --with-scheduler-enabled instance) — this is the
 // intended deployment shape, not an edge case: e.g. one instance running the
-// TUI and another running `harness slack --scheduler`, both alive at once.
+// TUI and another running `harness slack --with-scheduler`, both alive at once.
 // Without the watched-session filter below, every engine would evaluate
 // EVERY schedule regardless of which instance actually has that schedule's
 // owner session active — a race where whichever process's tick happens to

@@ -56,7 +56,7 @@ var CLI struct {
 
 	Slack slackCmd `cmd:"" help:"Run as a Slack user bot (one session per channel/DM)"`
 
-	ACP acpCmd `cmd:"" help:"Run as an Agent Client Protocol agent over stdio (for Zed and other ACP clients)"`
+	ACP acpCmd `cmd:"" help:"Run as an Agent Client Protocol agent over stdio (for Zed and other ACP clients; it takes no flags: set HARNESS_WITH_COLLEAGUES=1 / HARNESS_WITH_SCHEDULER=1 to turn the extras on)"`
 
 	// ── Management ───────────────────────────────────────────────────────
 
@@ -86,12 +86,11 @@ var CLI struct {
 // ── TUI / one-shot prompt ────────────────────────────────────────────────
 
 type tuiCmd struct {
-	Model     string `help:"Model (provider/model)"`
-	Thinking  string `enum:",off,low,medium,high,xhigh,max" default:"" help:"Thinking level"`
-	Resume    string `help:"Resume session by id"`
-	Scheduler bool   `help:"Run the cron scheduler engine"`
-	Prompt    string `short:"p" help:"Run a single-turn prompt instead of the interactive TUI"`
-	Output    string `enum:"text,json,json-stream" default:"text" help:"Output mode (with --prompt/-p)"`
+	Model    string `help:"Model (provider/model)"`
+	Thinking string `enum:",off,low,medium,high,xhigh,max" default:"" help:"Thinking level"`
+	Resume   string `help:"Resume session by id"`
+	Prompt   string `short:"p" help:"Run a single-turn prompt instead of the interactive TUI"`
+	Output   string `enum:"text,json,json-stream" default:"text" help:"Output mode (with --prompt/-p)"`
 
 	// Initial is an optional trailing positional: harness "fix the login bug" opens the interactive
 	// TUI with that message already submitted (what Herdr's tab.new --task and `hc run harness
@@ -101,6 +100,8 @@ type tuiCmd struct {
 	// that is exactly one subcommand name goes after `--` (see parseArgs in app.go: Kong alone does
 	// NOT make `--` escape a subcommand name at the root, because the positional belongs to this
 	// leaf and not to the root node, so `harness -- serve` would still run serve).
+	withFlags `embed:""`
+
 	Initial []string `arg:"" optional:"" name:"prompt" help:"First message: opens the interactive TUI with it already submitted (words are joined; a prompt that is exactly a command name goes after --; use -p for a one-shot run with no TUI)"`
 }
 
@@ -114,7 +115,7 @@ func (c *tuiCmd) initialPrompt() string {
 
 type serveCmd struct {
 	Addr      string `arg:"" help:"Address to listen on (e.g. :8080)"`
-	Scheduler bool   `help:"Run the cron scheduler engine"`
+	withFlags `embed:""`
 }
 
 // ── acp ──────────────────────────────────────────────────────────────────
@@ -123,7 +124,10 @@ type serveCmd struct {
 // sub-process and speaks JSON-RPC to it over stdin/stdout — there is no
 // terminal for flags to be typed into, and every per-session setting (model,
 // thinking) is negotiated over the protocol itself instead (see
-// transports/acp's session config options).
+// transports/acp's session config options). The two opt-in extras (colleagues, the scheduler) are
+// the exception to "negotiated over the protocol": they decide which tools the AGENT has, which is
+// fixed before any session exists, so they come from HARNESS_WITH_COLLEAGUES / HARNESS_WITH_SCHEDULER in
+// the environment the editor starts the process with (see extras.go).
 type acpCmd struct{}
 
 // ── telegram ─────────────────────────────────────────────────────────────
@@ -145,8 +149,8 @@ type telegramRunCmd struct {
 	Token       string `env:"TELEGRAM_BOT_TOKEN" help:"Bot token (or set TELEGRAM_BOT_TOKEN)"`
 	Model       string `help:"Model override (provider/model)"`
 	Thinking    string `enum:",off,low,medium,high,xhigh,max" default:"" help:"Thinking level override"`
-	Scheduler   bool   `help:"Run the cron scheduler engine"`
 	AllowUnpair bool   `name:"allow-unpair" help:"Accept any chat, auto-pairing on first contact"`
+	withFlags   `embed:""`
 }
 
 type telegramPairCmd struct {
@@ -183,7 +187,7 @@ type slackRunCmd struct {
 	XoxD      string `name:"xoxd" env:"SLACK_XOXD" help:"xoxd- session cookie (or set SLACK_XOXD)"`
 	Model     string `help:"Model override (provider/model)"`
 	Thinking  string `enum:",off,low,medium,high,xhigh,max" default:"" help:"Thinking level override"`
-	Scheduler bool   `help:"Run the cron scheduler engine"`
+	withFlags `embed:""`
 }
 
 type slackLoginCmd struct {

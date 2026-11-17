@@ -57,7 +57,7 @@ type TUI struct {
 	overrideModel    string
 	overrideThinking string
 	resumeID         string
-	schedulerOn      bool // --scheduler: the agent runs the engine
+	schedulerOn      bool // --with-scheduler: the agent runs the engine
 
 	// initialPrompt is the first message from the command line (`harness "task"`), submitted ONCE
 	// when the first session is ready; see TUI.sendInitialPrompt.
@@ -189,8 +189,12 @@ func (t *TUI) SetInitialPrompt(text string) { t.initialPrompt = strings.TrimSpac
 func (t *TUI) InitialPrompt() string { return t.initialPrompt }
 
 // SetScheduler records whether this TUI's agent runs the scheduler engine
-// (--scheduler). Drives the footer's scheduler badge.
+// (--with-scheduler). Drives the footer's scheduler badge.
 func (t *TUI) SetScheduler(on bool) { t.schedulerOn = on }
+
+// SchedulerOn reports what SetScheduler recorded: whether the footer shows the scheduler's badge. The CLI's
+// tests read it to check that the flag and the environment that built the agent are the ones the TUI shows.
+func (t *TUI) SchedulerOn() bool { return t.schedulerOn }
 
 // Run starts the internal server, builds the UI, and runs the render loop until
 // the context is cancelled or the user quits.

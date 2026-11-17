@@ -69,7 +69,7 @@ func TestTheTUIAgentCarriesTheHerdrSectionOnlyInsideHerdr(t *testing.T) {
 	isolate(t)
 
 	t.Setenv("HC_TERMINAL_ID", "t16")
-	a := (&tuiCmd{}).newTUIAgent() // exactly the agent tuiCmd.Run drives
+	a := (&tuiCmd{}).newTUIAgent(extras{}) // exactly the agent tuiCmd.Run drives
 	defer a.Close()
 	in := promptOf(t, a)
 	for _, want := range []string{"\n## Herdr\n", herdrSectionMarker, "$HC_TERMINAL_ID", `<hc from="ADDRESS name">`, "hc --skill"} {
@@ -86,7 +86,7 @@ func TestTheTUIAgentCarriesTheHerdrSectionOnlyInsideHerdr(t *testing.T) {
 	}
 
 	t.Setenv("HC_TERMINAL_ID", "")
-	b := (&tuiCmd{}).newTUIAgent()
+	b := (&tuiCmd{}).newTUIAgent(extras{})
 	defer b.Close()
 	if out := promptOf(t, b); strings.Contains(out, herdrSectionMarker) {
 		t.Errorf("outside Herdr the system prompt carries the Herdr section")
@@ -101,7 +101,7 @@ func TestNothingButTheTUIGetsTheHerdrSection(t *testing.T) {
 	t.Setenv("HC_TERMINAL_ID", "t16")
 
 	for name, build := range map[string]func() *agent.Agent{
-		"newInteractiveAgent (serve, telegram, slack, acp)": func() *agent.Agent { return newInteractiveAgent(false) },
+		"newInteractiveAgent (serve, telegram, slack, acp)": func() *agent.Agent { return newInteractiveAgent(extras{}) },
 		"newAgent":             newAgent,
 		"newOneShotAgent (-p)": newOneShotAgent,
 		"newConfigAgent":       newConfigAgent,
@@ -122,7 +122,7 @@ func TestNothingButTheTUIGetsTheHerdrSection(t *testing.T) {
 func TestTheSectionSurvivesResumeAndFork(t *testing.T) {
 	isolate(t)
 	t.Setenv("HC_TERMINAL_ID", "t16")
-	a := (&tuiCmd{}).newTUIAgent()
+	a := (&tuiCmd{}).newTUIAgent(extras{})
 	defer a.Close()
 
 	models := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -190,7 +190,7 @@ func TestRunBuildsItsAgentThroughNewTUIAgent(t *testing.T) {
 		t.Fatal("cannot locate tuiCmd.Run in kong_run_tui.go")
 	}
 	run := body[i:j]
-	if !strings.Contains(run, "c.newTUIAgent()") {
+	if !strings.Contains(run, "c.newTUIAgent(x)") {
 		t.Error("tuiCmd.Run does not build its agent with newTUIAgent")
 	}
 	if strings.Contains(run, "newInteractiveAgent(") {
@@ -315,7 +315,7 @@ func askThroughTheTUIAgent(t *testing.T, m *scriptedModel, withHerdr bool) (answ
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { agent.UnregisterCustomProvider(name) })
-	a := (&tuiCmd{}).newTUIAgent()
+	a := (&tuiCmd{}).newTUIAgent(extras{})
 	defer a.Close()
 	// A scratch directory, not the repo: the repo's AGENTS.md (project context, ~90 KB) would fill the
 	// fake model's undeclared context window and the agent would compact before the first turn.
@@ -391,7 +391,7 @@ func TestAPersonsPromptIsDeliveredUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer agent.UnregisterCustomProvider(name)
-	a := (&tuiCmd{}).newTUIAgent()
+	a := (&tuiCmd{}).newTUIAgent(extras{})
 	defer a.Close()
 	sess, err := a.NewSession(t.TempDir(), name+"/m") // a scratch directory: see askThroughTheTUIAgent
 	if err != nil {
@@ -412,7 +412,7 @@ func TestNoOtherConstructorGetsTheAuthorityRule(t *testing.T) {
 	isolate(t)
 	t.Setenv("HC_TERMINAL_ID", "t9")
 	for name, build := range map[string]func() *agent.Agent{
-		"newInteractiveAgent (serve, telegram, slack, acp)": func() *agent.Agent { return newInteractiveAgent(false) },
+		"newInteractiveAgent (serve, telegram, slack, acp)": func() *agent.Agent { return newInteractiveAgent(extras{}) },
 		"newAgent":             newAgent,
 		"newOneShotAgent (-p)": newOneShotAgent,
 	} {
