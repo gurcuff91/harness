@@ -13,7 +13,7 @@ type TokenizerFamily int
 const (
 	// FamilyAnthropic covers anthropic and claude-oauth providers.
 	FamilyAnthropic TokenizerFamily = iota
-	// FamilyOpenAI covers openai, opencode-go, minimax, ollama, ollama-cloud,
+	// FamilyOpenAI covers openai, opencode-go, synthetic, minimax, ollama, ollama-cloud,
 	// and any other OpenAI-compatible provider.
 	FamilyOpenAI
 )

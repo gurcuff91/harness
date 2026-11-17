@@ -161,6 +161,7 @@ func initRegistry() {
 		NewAnthropic(),
 		NewOpenAI(),
 		NewOpenCodeGo(),
+		NewSynthetic(),
 		NewMiniMax(),
 		NewOllamaCloud(),
 		NewOllama(),

@@ -190,7 +190,7 @@ func TestProvidersReportErrorDialectAndProxyPath(t *testing.T) {
 	}
 	for name, dialect := range map[string]string{
 		"claude-oauth": "anthropic", "anthropic": "anthropic", "codex-oauth": "openai-responses",
-		"openai": "openai", "minimax": "openai", "opencode-go": "openai", "ollama-cloud": "openai", "ollama": "ollama",
+		"openai": "openai", "minimax": "openai", "opencode-go": "openai", "synthetic": "openai", "ollama-cloud": "openai", "ollama": "ollama",
 	} {
 		if p, ok := by[name]; !ok || p.Dialect != dialect {
 			t.Errorf("%s dialect = %q, want %q", name, by[name].Dialect, dialect)

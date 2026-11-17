@@ -33,6 +33,18 @@ type OpenAIRequest struct {
 	// by internal/providers/ollama.go and ollama_cloud.go, is the correct
 	// signal, same pattern as ReasoningSplit/AllowCleanEOF above.
 	OllamaReasoningEffort bool
+	// VerbatimReasoningEffort sends the thinking level itself as reasoning_effort ("off" as "none") and
+	// adds none of the other thinking fields. Used by providers whose API takes reasoning_effort as the
+	// ONLY control and lists its own levels per model (Synthetic), so neither the DeepSeek rule (every
+	// level but "max" becomes "high", which is DeepSeek's own API) nor the think/thinking fields apply.
+	VerbatimReasoningEffort bool
+	// ProviderName names the provider in an API error ("synthetic API error 402"). Empty keeps "openai",
+	// the name every OpenAI-dialect provider has always shared here.
+	ProviderName string
+	// ErrorText, when set, extracts the human-readable message from an error body the provider sent in a
+	// shape of its own (Synthetic answers {"error":"<text>"}, a plain string). An empty result falls back
+	// to the raw body, exactly as before.
+	ErrorText func(body []byte) string
 }
 
 // openAIWireRequest is the internal wire format sent to the API.
@@ -97,7 +109,16 @@ func DoOpenAIStream(ctx context.Context, client *http.Client, apiURL, apiKey str
 
 	if httpResp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(httpResp.Body)
-		return nil, types.NewProviderAPIError("openai", httpResp.StatusCode, b)
+		name := req.ProviderName
+		if name == "" {
+			name = "openai"
+		}
+		if req.ErrorText != nil {
+			if text := req.ErrorText(b); text != "" {
+				b = []byte(text)
+			}
+		}
+		return nil, types.NewProviderAPIError(name, httpResp.StatusCode, b)
 	}
 	return parseOpenAIStream(ctx, httpResp.Body, req.AllowCleanEOF, cb)
 }
@@ -206,7 +227,12 @@ func buildOpenAIBody(oaiReq *OpenAIRequest) (*openAIRequest, error) {
 		StreamOptions: &streamOpts{IncludeUsage: true},
 	}
 
-	if req.ThinkingLevel != "" {
+	if req.ThinkingLevel != "" && oaiReq.VerbatimReasoningEffort {
+		body.ReasoningEffort = req.ThinkingLevel
+		if req.ThinkingLevel == "off" {
+			body.ReasoningEffort = "none"
+		}
+	} else if req.ThinkingLevel != "" {
 		level := req.ThinkingLevel
 		isDeepSeek := strings.Contains(req.Model, "deepseek")
 		if level == "off" {
@@ -342,7 +368,7 @@ func parseOpenAIStream(ctx context.Context, body io.Reader, allowCleanEOF bool, 
 			continue
 		}
 		if u, ok := event["usage"].(map[string]any); ok {
-			resp.Usage.InputTokens = int(jsonFloat(u, "prompt_tokens"))
+			resp.Usage.InputTokens, resp.Usage.CacheRead = splitPromptTokens(u)
 			resp.Usage.OutputTokens = int(jsonFloat(u, "completion_tokens"))
 		}
 		choices, _ := event["choices"].([]any)
@@ -473,6 +499,7 @@ func parseOpenAIStream(ctx context.Context, body io.Reader, allowCleanEOF bool, 
 
 	emit(types.StreamEvent{
 		Type: types.StreamUsage, InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens,
+		CacheRead: resp.Usage.CacheRead,
 	})
 	emit(types.StreamEvent{Type: types.StreamDone})
 
@@ -481,6 +508,34 @@ func parseOpenAIStream(ctx context.Context, body io.Reader, allowCleanEOF bool, 
 }
 
 // jsonFloat is an internal helper for parsing float64 from SSE event maps.
+// splitPromptTokens turns one OpenAI-dialect usage object into the harness's own accounting: the tokens
+// that were FRESH and the tokens read from the provider's prompt cache.
+//
+// The two dialects count differently. Anthropic reports input_tokens as the fresh tokens only, with the
+// cache read beside it, and the session ADDS them (context = fresh + cache read + cache write; cost =
+// fresh*inputPrice + cacheRead*cachePrice). OpenAI-style APIs report prompt_tokens as the WHOLE prompt
+// and prompt_tokens_details.cached_tokens as a SUBSET of it (measured on Synthetic: prompt_tokens 7015,
+// cached_tokens 6976, so 39 were fresh). Handing both numbers over as they arrive would bill the cached
+// part twice and inflate the context percentage, so the cached part is taken out of the fresh count.
+//
+// A provider that reports no cache (details absent, null, of another type, or cached_tokens absent or
+// zero) gets prompt_tokens unchanged and a zero cache read: nothing changes for it. The cached count is
+// clamped to [0, prompt_tokens], so an inconsistent report can never make the fresh count negative (it
+// would subtract from the session's running total and from its cost) nor count more cache than prompt.
+func splitPromptTokens(u map[string]any) (fresh, cached int) {
+	prompt := int(jsonFloat(u, "prompt_tokens"))
+	if details, ok := u["prompt_tokens_details"].(map[string]any); ok {
+		cached = int(jsonFloat(details, "cached_tokens"))
+	}
+	if cached < 0 {
+		cached = 0
+	}
+	if cached > prompt {
+		cached = prompt
+	}
+	return prompt - cached, cached
+}
+
 func jsonFloat(m map[string]any, key string) float64 {
 	v, _ := m[key].(float64)
 	return v

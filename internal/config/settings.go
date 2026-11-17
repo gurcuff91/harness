@@ -48,6 +48,7 @@ var reservedProviderNames = map[string]bool{
 	"ollama":       true,
 	"openai":       true,
 	"opencode-go":  true,
+	"synthetic":    true,
 }
 
 // IsReservedProviderName reports whether name collides with a built-in

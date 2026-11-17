@@ -345,7 +345,7 @@ func TestCustomProviderValidation(t *testing.T) {
 // (internal/providers/*.go's Name() values).
 func TestCustomProviderReservedNames(t *testing.T) {
 	m, _ := newTestSettings(t, "")
-	reserved := []string{"anthropic", "claude-oauth", "codex-oauth", "minimax", "ollama-cloud", "ollama", "openai", "opencode-go"}
+	reserved := []string{"anthropic", "claude-oauth", "codex-oauth", "minimax", "ollama-cloud", "ollama", "openai", "opencode-go", "synthetic"}
 	for _, name := range reserved {
 		err := m.SetCustomProvider(name, CustomProvider{Type: "openai", URL: "https://x"})
 		if err == nil {

@@ -255,6 +255,7 @@ time it's passed in.
 | `anthropic` | `ANTHROPIC_API_KEY` | Anthropic `/v1/models` API | API |
 | `openai` | `OPENAI_API_KEY` | Static list | OpenRouter catalog |
 | `opencode-go` | `OPENCODE_GO_API_KEY` | `/v1/models` API | OpenRouter + hardcoded |
+| `synthetic` | `SYNTHETIC_API_KEY` | `/openai/v1/models` API (only `hf:` text models) | API (context, vision, thinking, prices incl. cache) |
 | `minimax` | `MINIMAX_API_KEY` | Static list | OpenRouter + hardcoded |
 | `ollama-cloud` | `OLLAMA_CLOUD_API_KEY` | `/v1/models` + `/api/show` | `/api/show` (context, vision, thinking) |
 | `ollama` | None (auto-detect) | `/api/tags` + `/api/show` | `/api/show` |
@@ -409,6 +410,7 @@ connect, resume, compact, skills, quit).
 ANTHROPIC_API_KEY       — Anthropic API key
 OPENAI_API_KEY          — OpenAI API key
 OPENCODE_GO_API_KEY     — OpenCode Go API key
+SYNTHETIC_API_KEY       — Synthetic (synthetic.new) API key
 OLLAMA_CLOUD_API_KEY    — Ollama Cloud API key
 MINIMAX_API_KEY         — MiniMax API key
 OLLAMA_URL              — Ollama server URL (default: localhost:11434)
