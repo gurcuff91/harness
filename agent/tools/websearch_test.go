@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // fixtures — stand up one httptest server per backend, in the dispatch
@@ -94,7 +95,7 @@ func TestNoBackendsReturnsCanonicalMessage(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for empty backend list, got nil")
 	}
-	if !strings.Contains(err.Error(), "minimax") || !strings.Contains(err.Error(), "ollama-cloud") {
+	if !strings.Contains(err.Error(), "minimax") || !strings.Contains(err.Error(), "ollama-cloud") || !strings.Contains(err.Error(), "synthetic") {
 		t.Errorf("error should name both connectable providers: %q", err.Error())
 	}
 }
@@ -371,3 +372,86 @@ type timeoutError struct{}
 func (timeoutError) Error() string   { return "i/o timeout" }
 func (timeoutError) Timeout() bool   { return true }
 func (timeoutError) Temporary() bool { return true }
+
+// ── Synthetic (third backend) ──────────────────────────────────────────────
+
+func TestSyntheticRequestAndMapping(t *testing.T) {
+	long := strings.Repeat("x", 60000)
+	var gotBody, gotAuth, gotCT, gotMethod string
+	fb := newFakeBackend(t, "synthetic", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody, gotAuth, gotCT, gotMethod = string(b), r.Header.Get("Authorization"), r.Header.Get("Content-Type"), r.Method
+		_, _ = io.WriteString(w, `{"results":[`+
+			`{"url":"https://s/1","title":"one","text":"`+long+`","highlights":["h"]},`+
+			`{"url":"https://s/2","title":"two","text":"short","published":"2025-02-11T00:00:00.000Z"},`+
+			`{"url":"","title":"no url","text":"dropped"},`+
+			`{"url":"https://s/3","title":"three","text":"t3"}]}`)
+	})
+	out, err := runWebSearch(context.Background(), &stubLookup{backends: []SearchBackend{backendOf(fb, "k")}},
+		&http.Client{Timeout: 2 * time.Second}, searchInput{Query: "cómo 東京", Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != "POST" || gotAuth != "Bearer k" || gotCT != "application/json" {
+		t.Errorf("request: %s %q %q", gotMethod, gotAuth, gotCT)
+	}
+	if gotBody != `{"query":"cómo 東京"}` {
+		t.Errorf("body = %s", gotBody)
+	}
+	var got []searchResult
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if len(got) != 2 || got[0].URL != "https://s/1" || got[1].Title != "two" || got[1].Snippet != "short" {
+		t.Fatalf("mapping/limit wrong: %+v", got)
+	}
+	if !strings.HasSuffix(got[0].Snippet, "…") || len(got[0].Snippet) > snippetMaxChars+len("…") {
+		t.Errorf("snippet not truncated: %d", len(got[0].Snippet))
+	}
+}
+
+func TestSyntheticDropsResultsWithoutURL(t *testing.T) {
+	got, err := parseSyntheticResponse([]byte(`{"results":[{"title":"a","text":"b"}]}`), 5)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestSyntheticEmptyFallsThroughAndBadJSONErrors(t *testing.T) {
+	if got, err := parseSyntheticResponse(nil, 5); err != nil || got != nil {
+		t.Errorf("empty body: %v %v", got, err)
+	}
+	if _, err := parseSyntheticResponse([]byte("{"), 5); err == nil {
+		t.Error("bad JSON must error")
+	}
+	empty := newFakeBackend(t, "minimax", func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, `{"organic":[]}`) })
+	syn := newFakeBackend(t, "synthetic", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"results":[{"url":"https://s/1","title":"t","text":"x"}]}`)
+	})
+	out, err := runWebSearch(context.Background(), &stubLookup{backends: []SearchBackend{backendOf(empty, "k"), backendOf(syn, "k")}},
+		&http.Client{Timeout: 2 * time.Second}, searchInput{Query: "q"})
+	if err != nil || !strings.Contains(out, "https://s/1") || syn.calls.Load() != 1 {
+		t.Fatalf("fallback: %v %s", err, out)
+	}
+}
+
+func TestSyntheticSubscriptionErrorIsReportedAndNamesHidden(t *testing.T) {
+	fb := newFakeBackend(t, "synthetic", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+		_, _ = io.WriteString(w, `{"error":"The search API is subscription-only"}`)
+	})
+	_, err := runWebSearch(context.Background(), &stubLookup{backends: []SearchBackend{backendOf(fb, "k")}},
+		&http.Client{Timeout: 2 * time.Second}, searchInput{Query: "q"})
+	if err == nil || strings.Contains(err.Error(), "synthetic") {
+		t.Fatalf("expected categorized error without backend name, got %v", err)
+	}
+	t.Log(err)
+}
+
+func TestTruncateSnippetKeepsRunesIntact(t *testing.T) {
+	s := strings.Repeat("a", snippetMaxChars-1) + "東京東京"
+	got := truncateSnippet(s)
+	if !utf8.ValidString(got) {
+		t.Fatalf("split a rune: %q", got[len(got)-6:])
+	}
+}

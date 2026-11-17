@@ -159,3 +159,11 @@ Unit (using `httptest.NewServer`):
 
 All existing tests continue to pass (`go test ./...`) and `go vet ./...`
 clean.
+
+## Addendum (v0.107.0): third backend, `synthetic`
+
+`POST https://api.synthetic.new/v2/search`, body `{"query"}`, Bearer auth,
+response `{results:[{url,title,text,highlights,published?}]}`. Always 5
+results (limit applied client side); `text` is the full page, truncated to
+`snippetMaxChars`; subscription-only (401 otherwise); own quota of 250/hour.
+Order: minimax, ollama-cloud, synthetic.

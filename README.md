@@ -468,7 +468,7 @@ dedicated option, just `AgentWithDisallowedTools("SessionInfo")` to turn it
 off. The memory tools require a store via `AgentWithMemory(store)` —
 `memory.OpenSQLite(path)` for the default SQLite backend, or any custom
 `memory.Store` (the CLI always passes the SQLite one); `WebSearch` requires `AgentWithWebSearch` and a
-connected search backend (minimax or ollama-cloud); `Schedule*` management
+connected search backend (minimax, ollama-cloud or synthetic); `Schedule*` management
 tools AND the engine that fires them both require `--with-scheduler` /
 `AgentWithScheduler` — they travel together, so an instance without it
 neither manages nor executes schedules;

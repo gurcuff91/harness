@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.107.0] - 2026-11-17
+
+### Added — `synthetic` as the third WebSearch backend
+WebSearch now falls back minimax, then ollama-cloud, then **synthetic** (`POST https://api.synthetic.new/v2/search`). It is active whenever the `synthetic` provider has a key (`harness connect synthetic` or `SYNTHETIC_API_KEY`); it is consulted last, so nothing changes for anyone who already has another backend.
+
+Built from a live probe with a subscription account (the documentation only describes `query` and the four result fields):
+- **The search API is subscription-only.** A pay-per-use account gets a 401 with `subscription-only`; WebSearch reports it as a failed backend and moves on, like any other failure.
+- **It always returns 5 results** and ignores `max_results`/`limit`, so the limit is applied after parsing.
+- **`text` is the whole page** (0.7 KB to 65 KB), so it becomes the snippet truncated to 500 characters, like Ollama's content. The cut never splits a multi-byte character (this also fixes the same latent flaw for Ollama's snippets). `highlights` is ignored and `published` is not used (it is absent, not null, when unknown). Results without a URL are dropped.
+- **Search has its own quota**, 250 requests per hour (`search.hourly` in `/v2/quotas`), separate from the 500 chat requests of the subscription. Ten simultaneous searches all answered 200.
+- The "no provider connected" message now names the three backends.
+
+Tests: fake-server cases for request shape, mapping, limit, truncation, empty-result fallback, bad JSON and the 401, plus the backend order and key gate in the agent; six hand-made mutants all caught. Also checked end to end against the live API.
+
 ## [0.106.0] - 2026-11-17
 
 ### Added — `synthetic`: a built-in provider for synthetic.new (OpenAI dialect, API key)

@@ -416,7 +416,7 @@ func (a *Agent) Options() AgentOptions {
 
 // webSearchBackends returns the list of currently-active search backends
 // in the dispatch order the WebSearch tool expects (minimax first,
-// ollama-cloud second). A provider is included only when it's both IsActive
+// ollama-cloud second, synthetic third). A provider is included only when it's both IsActive
 // AND ResolveCredentials returns a non-empty API key — same gate the
 // provider registry already uses to decide model availability.
 //
@@ -431,6 +431,7 @@ func (a *Agent) webSearchBackends() []tools.SearchBackend {
 	}{
 		{"minimax", "https://api.minimax.io/v1/coding_plan/search"},
 		{"ollama-cloud", "https://ollama.com/api/web_search"},
+		{"synthetic", "https://api.synthetic.new/v2/search"},
 	}
 	out := make([]tools.SearchBackend, 0, len(want))
 	for _, w := range want {

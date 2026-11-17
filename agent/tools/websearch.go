@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gurcuff91/harness/types"
 )
@@ -26,7 +27,7 @@ const (
 	webSearchMaxLimit       = 10
 )
 
-// snippetMaxChars caps the Ollama content field — its API can return
+// snippetMaxChars caps the Ollama content and Synthetic text fields — its API can return
 // full-page excerpts (~10k chars). MiniMax snippets are short by design
 // and pass through untouched.
 const snippetMaxChars = 500
@@ -122,7 +123,7 @@ func runWebSearch(ctx context.Context, lookup ProviderLookup, httpClient *http.C
 		backends = lookup.ActiveSearchBackends()
 	}
 	if len(backends) == 0 {
-		return "", fmt.Errorf("WebSearch needs at least one provider connected: `minimax` or `ollama-cloud`")
+		return "", fmt.Errorf("WebSearch needs at least one provider connected: `minimax`, `ollama-cloud` or `synthetic`")
 	}
 
 	// Per-backend dispatch loop. Each backend gets its own context.WithTimeout
@@ -218,6 +219,10 @@ func buildBackendRequest(b SearchBackend, query string) ([]byte, error) {
 		})
 	case "minimax":
 		return json.Marshal(map[string]string{"q": query})
+	case "synthetic":
+		// The API documents (and honours) only "query": it ignores
+		// max_results/limit and always answers 5 results.
+		return json.Marshal(map[string]string{"query": query})
 	default:
 		return nil, fmt.Errorf("unsupported backend: %s", b.Name)
 	}
@@ -236,6 +241,8 @@ func parseBackendResponse(b SearchBackend, body []byte, limit int) ([]searchResu
 		return parseOllamaResponse(body, limit)
 	case "minimax":
 		return parseMinimaxResponse(body, limit)
+	case "synthetic":
+		return parseSyntheticResponse(body, limit)
 	default:
 		return nil, fmt.Errorf("unsupported backend: %s", b.Name)
 	}
@@ -308,6 +315,41 @@ func parseOllamaResponse(body []byte, limit int) ([]searchResult, error) {
 	return out, nil
 }
 
+// syntheticResponse is POST https://api.synthetic.new/v2/search. Verified
+// live: always 5 results; "text" is the WHOLE page (0.7 KB to 65 KB), so it
+// is truncated like Ollama's content; "published" is absent (not null) when
+// unknown and "highlights" is ignored. Search has its own quota (250/hour).
+type syntheticResponse struct {
+	Results []syntheticItem `json:"results"`
+}
+
+type syntheticItem struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
+	Text  string `json:"text"`
+}
+
+func parseSyntheticResponse(body []byte, limit int) ([]searchResult, error) {
+	if len(body) == 0 {
+		return nil, nil
+	}
+	var resp syntheticResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	out := make([]searchResult, 0, len(resp.Results))
+	for _, item := range resp.Results {
+		if item.URL == "" {
+			continue
+		}
+		out = append(out, searchResult{Title: item.Title, URL: item.URL, Snippet: truncateSnippet(item.Text)})
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 // truncateSnippet caps a long snippet at snippetMaxChars, suffixing "…".
 // A short summary is plenty for citation; full content is one Fetch call away.
 func truncateSnippet(s string) string {
@@ -315,7 +357,11 @@ func truncateSnippet(s string) string {
 	if len(s) <= snippetMaxChars {
 		return s
 	}
-	return s[:snippetMaxChars] + "…"
+	cut := snippetMaxChars
+	for cut > 0 && !utf8.RuneStart(s[cut]) { // never split a multi-byte rune
+		cut--
+	}
+	return s[:cut] + "…"
 }
 
 // ── Error classification & shared helpers ──────────────────────────────────
