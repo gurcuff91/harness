@@ -194,3 +194,159 @@ func TestWithoutTheOptInTheDefaultPathIsUnchanged(t *testing.T) {
 		t.Errorf("a generic model gets reasoning_effort=%v, want none (the default path sends none)", m["reasoning_effort"])
 	}
 }
+
+// ── cache WRITES (created_cache_tokens) ─────────────────────────────────────────────────────────────
+
+// Some OpenAI-dialect providers report the tokens a request WROTE to the prompt cache beside the ones it
+// read: Synthetic does it for DeepSeek and Kimi as prompt_tokens_details.created_cache_tokens (measured: the
+// same 3645-token prompt, first call created_cache_tokens=3584 and cached_tokens=0, second call
+// cached_tokens=3584 and created_cache_tokens=0). Like cached_tokens it is a SUBSET of prompt_tokens (the
+// prompt_tokens of both calls is identical), so the session, which adds fresh + read + write, needs
+// fresh = prompt - cached - created or the written part is counted twice.
+func TestACacheWriteIsReportedAndTakenOutOfTheFreshCount(t *testing.T) {
+	resp, events := feedParseStream(t, usageStream(
+		`{"prompt_tokens":3645,"completion_tokens":12,"prompt_tokens_details":{"cached_tokens":0,"created_cache_tokens":3584},"completion_tokens_details":{"reasoning_tokens":9}}`))
+	if resp.Usage.InputTokens != 61 || resp.Usage.CacheRead != 0 || resp.Usage.CacheWrite != 3584 || resp.Usage.OutputTokens != 12 {
+		t.Fatalf("usage = %+v, want fresh 61, read 0, write 3584, out 12", resp.Usage)
+	}
+	if sum := resp.Usage.InputTokens + resp.Usage.CacheRead + resp.Usage.CacheWrite; sum != 3645 {
+		t.Errorf("fresh + read + write = %d, want the whole prompt (3645): the context fill would be wrong", sum)
+	}
+	// the event the session reads carries the write too (that is what the footer's W shows)
+	got := false
+	for _, e := range events {
+		if e.CacheWrite != 0 {
+			got = true
+			if e.InputTokens != 61 || e.CacheRead != 0 || e.CacheWrite != 3584 || e.OutputTokens != 12 {
+				t.Errorf("usage event = in %d read %d write %d out %d", e.InputTokens, e.CacheRead, e.CacheWrite, e.OutputTokens)
+			}
+		}
+	}
+	if !got {
+		t.Error("no usage event carried the cache write")
+	}
+}
+
+// The second call of that pair: all read, nothing written.
+func TestACacheHitHasNoWrite(t *testing.T) {
+	resp, _ := feedParseStream(t, usageStream(
+		`{"prompt_tokens":3645,"completion_tokens":9,"prompt_tokens_details":{"cached_tokens":3584,"created_cache_tokens":0}}`))
+	if resp.Usage.InputTokens != 61 || resp.Usage.CacheRead != 3584 || resp.Usage.CacheWrite != 0 {
+		t.Errorf("usage = %+v, want fresh 61, read 3584, write 0", resp.Usage)
+	}
+}
+
+// A request can read part of the prompt from the cache and write another part: all three are disjoint
+// slices of the same prompt.
+func TestAPromptThatReadsAndWritesSplitsIntoThreeParts(t *testing.T) {
+	resp, _ := feedParseStream(t, usageStream(
+		`{"prompt_tokens":10000,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":6000,"created_cache_tokens":3000}}`))
+	if resp.Usage.InputTokens != 1000 || resp.Usage.CacheRead != 6000 || resp.Usage.CacheWrite != 3000 {
+		t.Errorf("usage = %+v, want fresh 1000, read 6000, write 3000", resp.Usage)
+	}
+}
+
+// Only the LAST cumulative usage object counts, split whole: a write reported on an earlier chunk must not
+// survive into a later one that does not carry it.
+func TestACacheWriteFromAnEarlierChunkDoesNotSurvive(t *testing.T) {
+	resp, _ := feedParseStream(t, usageStream(
+		`{"prompt_tokens":500,"completion_tokens":1,"prompt_tokens_details":{"created_cache_tokens":400}}`,
+		`{"prompt_tokens":500,"completion_tokens":7}`))
+	if resp.Usage.InputTokens != 500 || resp.Usage.CacheWrite != 0 {
+		t.Errorf("usage = %+v, want fresh 500, write 0: a stale write from an earlier chunk was kept", resp.Usage)
+	}
+}
+
+// Nothing changes for a provider that reports no write: details absent, null, of another type, or
+// created_cache_tokens absent, null, zero or of another type.
+func TestNoCacheWriteDetailsMeansNothingChanges(t *testing.T) {
+	for name, usage := range map[string]string{
+		"no details":                 `{"prompt_tokens":120,"completion_tokens":30}`,
+		"details without created":    `{"prompt_tokens":120,"completion_tokens":30,"prompt_tokens_details":{"cached_tokens":0}}`,
+		"created is null":            `{"prompt_tokens":120,"completion_tokens":30,"prompt_tokens_details":{"created_cache_tokens":null}}`,
+		"created is zero":            `{"prompt_tokens":120,"completion_tokens":30,"prompt_tokens_details":{"created_cache_tokens":0}}`,
+		"created has the wrong type": `{"prompt_tokens":120,"completion_tokens":30,"prompt_tokens_details":{"created_cache_tokens":"many"}}`,
+		"details is null":            `{"prompt_tokens":120,"completion_tokens":30,"prompt_tokens_details":null}`,
+		"details has the wrong type": `{"prompt_tokens":120,"completion_tokens":30,"prompt_tokens_details":"none"}`,
+	} {
+		resp, _ := feedParseStream(t, usageStream(usage))
+		if resp.Usage.InputTokens != 120 || resp.Usage.CacheWrite != 0 || resp.Usage.CacheRead != 0 {
+			t.Errorf("%s: usage = %+v, want fresh 120, no cache", name, resp.Usage)
+		}
+	}
+}
+
+// An inconsistent report must never make a part negative or count more than the prompt: a negative write is
+// ignored, a write larger than the prompt is clamped, and read + write together larger than the prompt
+// are clamped in order (the read first, then the write gets what is left).
+func TestInconsistentCacheNumbersAreClamped(t *testing.T) {
+	for name, c := range map[string]struct {
+		usage                string
+		fresh, read, written int
+	}{
+		"negative write":               {`{"prompt_tokens":100,"completion_tokens":1,"prompt_tokens_details":{"created_cache_tokens":-40}}`, 100, 0, 0},
+		"write larger than the prompt": {`{"prompt_tokens":100,"completion_tokens":1,"prompt_tokens_details":{"created_cache_tokens":250}}`, 0, 0, 100},
+		"read plus write larger":       {`{"prompt_tokens":100,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":70,"created_cache_tokens":70}}`, 0, 70, 30},
+		"read alone already the whole": {`{"prompt_tokens":100,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":100,"created_cache_tokens":50}}`, 0, 100, 0},
+		"both negative":                {`{"prompt_tokens":100,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":-5,"created_cache_tokens":-5}}`, 100, 0, 0},
+		"a zero prompt with a write":   {`{"prompt_tokens":0,"completion_tokens":1,"prompt_tokens_details":{"created_cache_tokens":9}}`, 0, 0, 0},
+	} {
+		resp, _ := feedParseStream(t, usageStream(c.usage))
+		u := resp.Usage
+		if u.InputTokens < 0 || u.CacheRead < 0 || u.CacheWrite < 0 {
+			t.Errorf("%s: a part is negative: %+v", name, u)
+		}
+		if u.InputTokens != c.fresh || u.CacheRead != c.read || u.CacheWrite != c.written {
+			t.Errorf("%s: usage = %+v, want fresh %d read %d write %d", name, u, c.fresh, c.read, c.written)
+		}
+		if sum := u.InputTokens + u.CacheRead + u.CacheWrite; sum > 100 && c.fresh+c.read+c.written <= 100 {
+			t.Errorf("%s: the three parts add up to %d, more than the prompt", name, sum)
+		}
+	}
+}
+
+// OpenAI's own detail objects carry other numbers beside the cache (audio, image, reasoning): they are not
+// the cache and must not be mistaken for it.
+func TestOtherDetailFieldsAreNotTheCache(t *testing.T) {
+	resp, _ := feedParseStream(t, usageStream(
+		`{"prompt_tokens":300,"completion_tokens":4,"prompt_tokens_details":{"audio_tokens":10,"image_tokens":16,"text_tokens":274},"completion_tokens_details":{"reasoning_tokens":2,"created_cache_tokens":99}}`))
+	if resp.Usage.InputTokens != 300 || resp.Usage.CacheRead != 0 || resp.Usage.CacheWrite != 0 {
+		t.Errorf("usage = %+v, want fresh 300 and no cache (created_cache_tokens under completion_tokens_details is not a prompt write)", resp.Usage)
+	}
+}
+
+// A broken provider can send a NEGATIVE prompt_tokens. No part may ever be negative whatever arrives: a
+// negative number would subtract from the session's running totals and from its cost. With nothing to
+// split, every part is zero (prompt_tokens itself is what the provider said, and is reported as it came
+// only when it is not negative).
+func TestANegativePromptNeverProducesANegativePart(t *testing.T) {
+	for name, usage := range map[string]string{
+		"negative prompt, no cache":      `{"prompt_tokens":-50,"completion_tokens":3}`,
+		"negative prompt with a read":    `{"prompt_tokens":-50,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":20}}`,
+		"negative prompt with a write":   `{"prompt_tokens":-50,"completion_tokens":3,"prompt_tokens_details":{"created_cache_tokens":20}}`,
+		"negative prompt with both":      `{"prompt_tokens":-50,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":20,"created_cache_tokens":20}}`,
+		"negative prompt, negative both": `{"prompt_tokens":-50,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":-20,"created_cache_tokens":-20}}`,
+	} {
+		resp, _ := feedParseStream(t, usageStream(usage))
+		u := resp.Usage
+		if u.CacheRead < 0 || u.CacheWrite < 0 {
+			t.Errorf("%s: a cache part is negative: %+v", name, u)
+		}
+		if u.CacheRead != 0 || u.CacheWrite != 0 {
+			t.Errorf("%s: usage = %+v, want no cache parts when there is no prompt to hold them", name, u)
+		}
+	}
+}
+
+// clampInt is the one place the bounds are enforced, and it is exact: inside is untouched, outside is cut,
+// and when the bounds cross (hi below lo) the LOWER bound wins, never a number below it.
+func TestClampIntBoundsAreExact(t *testing.T) {
+	for _, c := range []struct{ v, lo, hi, want int }{
+		{5, 0, 10, 5}, {0, 0, 10, 0}, {10, 0, 10, 10}, {-1, 0, 10, 0}, {11, 0, 10, 10},
+		{5, 0, 0, 0}, {5, 0, -3, 0}, {-9, 0, -3, 0}, {-3, 0, -3, 0}, {7, 2, 1, 2},
+	} {
+		if got := clampInt(c.v, c.lo, c.hi); got != c.want {
+			t.Errorf("clampInt(%d, %d, %d) = %d, want %d", c.v, c.lo, c.hi, got, c.want)
+		}
+	}
+}

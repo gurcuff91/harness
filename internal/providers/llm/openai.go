@@ -368,7 +368,7 @@ func parseOpenAIStream(ctx context.Context, body io.Reader, allowCleanEOF bool, 
 			continue
 		}
 		if u, ok := event["usage"].(map[string]any); ok {
-			resp.Usage.InputTokens, resp.Usage.CacheRead = splitPromptTokens(u)
+			resp.Usage.InputTokens, resp.Usage.CacheRead, resp.Usage.CacheWrite = splitPromptTokens(u)
 			resp.Usage.OutputTokens = int(jsonFloat(u, "completion_tokens"))
 		}
 		choices, _ := event["choices"].([]any)
@@ -499,7 +499,7 @@ func parseOpenAIStream(ctx context.Context, body io.Reader, allowCleanEOF bool, 
 
 	emit(types.StreamEvent{
 		Type: types.StreamUsage, InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens,
-		CacheRead: resp.Usage.CacheRead,
+		CacheRead: resp.Usage.CacheRead, CacheWrite: resp.Usage.CacheWrite,
 	})
 	emit(types.StreamEvent{Type: types.StreamDone})
 
@@ -509,31 +509,44 @@ func parseOpenAIStream(ctx context.Context, body io.Reader, allowCleanEOF bool, 
 
 // jsonFloat is an internal helper for parsing float64 from SSE event maps.
 // splitPromptTokens turns one OpenAI-dialect usage object into the harness's own accounting: the tokens
-// that were FRESH and the tokens read from the provider's prompt cache.
+// that were FRESH, the tokens read from the provider's prompt cache and the tokens written to it.
 //
 // The two dialects count differently. Anthropic reports input_tokens as the fresh tokens only, with the
-// cache read beside it, and the session ADDS them (context = fresh + cache read + cache write; cost =
-// fresh*inputPrice + cacheRead*cachePrice). OpenAI-style APIs report prompt_tokens as the WHOLE prompt
-// and prompt_tokens_details.cached_tokens as a SUBSET of it (measured on Synthetic: prompt_tokens 7015,
-// cached_tokens 6976, so 39 were fresh). Handing both numbers over as they arrive would bill the cached
-// part twice and inflate the context percentage, so the cached part is taken out of the fresh count.
+// cache read and the cache write beside it, and the session ADDS them (context = fresh + cache read +
+// cache write; cost = fresh*inputPrice + cacheRead*cachePrice + cacheWrite*cacheWritePrice). OpenAI-style
+// APIs report prompt_tokens as the WHOLE prompt, and the cache numbers in prompt_tokens_details are
+// SUBSETS of it: cached_tokens (read) and, for providers that report it, created_cache_tokens (written).
+// Measured on Synthetic: the same 3645-token prompt gave prompt_tokens 3645 on the call that wrote the
+// cache (created_cache_tokens 3584, cached_tokens 0) and on the one that read it (cached_tokens 3584,
+// created_cache_tokens 0), so neither is extra tokens on top. Handing the numbers over as they arrive
+// would count the cached part twice (once in the fresh count, once in its own), so both are taken out of
+// the fresh count.
 //
-// A provider that reports no cache (details absent, null, of another type, or cached_tokens absent or
-// zero) gets prompt_tokens unchanged and a zero cache read: nothing changes for it. The cached count is
-// clamped to [0, prompt_tokens], so an inconsistent report can never make the fresh count negative (it
-// would subtract from the session's running total and from its cost) nor count more cache than prompt.
-func splitPromptTokens(u map[string]any) (fresh, cached int) {
+// A provider that reports no cache (details absent, null, of another type, or the fields absent, null,
+// zero or of another type) gets prompt_tokens unchanged and zeros: nothing changes for it. An inconsistent
+// report is clamped so no part is ever negative and the three never add up to more than the prompt (a
+// negative number would subtract from the session's running totals and from its cost): the read is taken
+// first, and the write gets what is left of the prompt.
+func splitPromptTokens(u map[string]any) (fresh, read, written int) {
 	prompt := int(jsonFloat(u, "prompt_tokens"))
 	if details, ok := u["prompt_tokens_details"].(map[string]any); ok {
-		cached = int(jsonFloat(details, "cached_tokens"))
+		read = int(jsonFloat(details, "cached_tokens"))
+		written = int(jsonFloat(details, "created_cache_tokens"))
 	}
-	if cached < 0 {
-		cached = 0
+	read = clampInt(read, 0, prompt)
+	written = clampInt(written, 0, prompt-read)
+	return prompt - read - written, read, written
+}
+
+// clampInt limits v to [lo, hi]. When hi < lo the result is lo.
+func clampInt(v, lo, hi int) int {
+	if v > hi {
+		v = hi
 	}
-	if cached > prompt {
-		cached = prompt
+	if v < lo {
+		v = lo
 	}
-	return prompt - cached, cached
+	return v
 }
 
 func jsonFloat(m map[string]any, key string) float64 {
