@@ -64,7 +64,7 @@ Anyone who can write in these conversations can reach you, and you only see thei
 
 ### Files
 
-A file the person attached appears inside the block as <slack-attach name="..." path="..."/>, already downloaded: read it without asking, with the tool its format needs (Read for text and code; for a document, spreadsheet, PDF or archive, a conversion such as textutil, pdftotext or unzip, without modifying the file). An attached image comes as an image of the message. A <slack-attach name="..." skipped="..."/> was NOT brought in (too large, or it could not be downloaded): tell the person you did not receive it and why, instead of acting as if it were there.
+A file the person attached appears inside the block as <slack-attach name="..." path="..."/>, already downloaded: read it without asking, with the tool its format needs (Read for text and code; for a document, spreadsheet, PDF or archive, a conversion such as textutil, pdftotext or unzip, without modifying the file). An attached image comes as an image of the message. A <slack-attach name="..." skipped="..."/> was NOT brought in (too large, a program or installer, or it could not be downloaded): tell the person you did not receive it and why, instead of acting as if it were there. Never make an attached file executable or run it.
 
 To send a file or an image in a reply, put this tag on its own line, as plain text (never inside code, quotes or parentheses):
 

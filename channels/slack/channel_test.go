@@ -458,3 +458,64 @@ func TestTheDefaultLimitIs50MB(t *testing.T) {
 		t.Errorf("limit = %d, reason %q", maxAttachmentBytes, tooLargeReason())
 	}
 }
+
+// Programs never reach the model: installers/packages by name (not even
+// downloaded), native binaries by content whatever they are called (an image
+// name included); scripts are text and pass.
+func TestExecutablesAreSkipped(t *testing.T) {
+	f := newFakeSlack(t)
+	f.files["a"] = []byte("MZ\x90\x00 windows")
+	f.files["b"] = []byte("\x7fELF linux")
+	f.files["c"] = []byte("\xcf\xfa\xed\xfe macho64")
+	f.files["d"] = []byte("\xca\xfe\xba\xbe fat")
+	f.files["e"] = []byte("#!/bin/sh\necho hi\n")
+	f.files["f"] = []byte("\xfe\xed\xfa\xce macho32")
+	c := New(f.srv.URL, "xoxc-1", "xoxd-1")
+	u := func(n string) string { return f.srv.URL + "/files/" + n }
+	before, _ := filepath.Glob(filepath.Join(os.TempDir(), "*-informe.pdf"))
+	images, atts := fetchFiles(context.Background(), c.bot, []SlackFile{
+		{Name: "setup.EXE", URLPrivate: u("missing-never-fetched")},
+		{Name: "tool.dmg", URLPrivate: u("missing-never-fetched")},
+		{Name: "lib.so", URLPrivate: u("missing-never-fetched")},
+		{Name: "informe.pdf", MimeType: "application/pdf", URLPrivate: u("a")},
+		{Name: "data.bin", URLPrivate: u("b")},
+		{Name: "notes.txt", MimeType: "text/plain", URLPrivate: u("c")},
+		{Name: "pic.png", MimeType: "image/png", URLPrivate: u("d")},
+		{Name: "run.sh", MimeType: "text/x-sh", URLPrivate: u("e")},
+		{Name: "x.jpg", URLPrivate: u("f")},
+	})
+	if len(images) != 0 {
+		t.Errorf("an executable came through as an image: %d", len(images))
+	}
+	for _, a := range atts {
+		switch a.Name {
+		case "run.sh":
+			if a.Path == "" {
+				t.Errorf("a script was skipped: %+v", a)
+			}
+			_ = os.Remove(a.Path)
+		default:
+			if a.Skipped != "executable" || a.Path != "" {
+				t.Errorf("%s: %+v, want skipped executable", a.Name, a)
+			}
+		}
+	}
+	if len(atts) != 9 {
+		t.Errorf("%d attachments, want 9", len(atts))
+	}
+	after, _ := filepath.Glob(filepath.Join(os.TempDir(), "*-informe.pdf"))
+	if len(after) != len(before) {
+		t.Error("a renamed executable was written to disk")
+	}
+}
+
+func TestIsNativeExecutable(t *testing.T) {
+	for in, want := range map[string]bool{
+		"MZ": true, "\x7fELF": true, "\xce\xfa\xed\xfe": true, "\xbe\xba\xfe\xca": true,
+		"": false, "M": false, "%PDF-1.7": false, "PK\x03\x04": false, "\x7fEL": false, "\x89PNG": false,
+	} {
+		if got := isNativeExecutable([]byte(in)); got != want {
+			t.Errorf("isNativeExecutable(%q) = %v", in, got)
+		}
+	}
+}

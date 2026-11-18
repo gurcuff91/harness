@@ -44,12 +44,19 @@ func fetchFiles(ctx context.Context, bot *Bot, files []SlackFile) (images []type
 			atts = append(atts, attachment{Name: name, Skipped: "not downloadable"})
 			continue
 		}
+		if hasExecutableExtension(file.Name) {
+			atts = append(atts, attachment{Name: name, Skipped: skippedExecutable})
+			continue
+		}
 		if file.Size > maxAttachmentBytes {
 			atts = append(atts, attachment{Name: name, Skipped: tooLargeReason()})
 			continue
 		}
 		if isImage(file) {
 			data, err := bot.DownloadFile(ctx, file.URLPrivate)
+			if err == nil && isNativeExecutable(data) {
+				err = errExecutable // a program named like an image
+			}
 			if err != nil {
 				atts = append(atts, attachment{Name: name, Skipped: skipReason(err)})
 				continue
@@ -84,6 +91,9 @@ func skipReason(err error) string {
 	if errors.Is(err, errTooLarge) {
 		return tooLargeReason()
 	}
+	if errors.Is(err, errExecutable) {
+		return skippedExecutable
+	}
 	return "download failed"
 }
 
@@ -109,6 +119,48 @@ var maxAttachmentBytes int64 = 50 << 20
 
 // errTooLarge marks a download stopped at maxAttachmentBytes.
 var errTooLarge = errors.New("too large")
+
+// errExecutable marks a download whose content is a native program.
+var errExecutable = errors.New("executable")
+
+// skippedExecutable is the reason given for a program or installer, which is
+// never handed to the model (it could be asked to run it).
+const skippedExecutable = "executable"
+
+// executableExtensions are installers, packages and native libraries: skipped
+// by name, without downloading them. Scripts (.sh, .ps1, .bat, .py, …) are
+// text and pass: reading or explaining one is legitimate, and running it is
+// what the Slack directive forbids.
+var executableExtensions = map[string]bool{
+	".exe": true, ".dll": true, ".msi": true, ".scr": true, ".com": true,
+	".app": true, ".dmg": true, ".pkg": true, ".deb": true, ".rpm": true,
+	".apk": true, ".so": true, ".dylib": true,
+}
+
+// hasExecutableExtension reports whether name ends in one of them.
+func hasExecutableExtension(name string) bool {
+	return executableExtensions[strings.ToLower(filepath.Ext(name))]
+}
+
+// isNativeExecutable reports whether data starts like a native program, whatever
+// the file is called: Windows PE ("MZ"), ELF, or Mach-O (32/64-bit, either byte
+// order, and universal binaries). A renamed program is caught here.
+func isNativeExecutable(data []byte) bool {
+	if len(data) >= 2 && data[0] == 'M' && data[1] == 'Z' {
+		return true
+	}
+	if len(data) < 4 {
+		return false
+	}
+	switch string(data[:4]) {
+	case "\x7fELF",
+		"\xfe\xed\xfa\xce", "\xce\xfa\xed\xfe", // Mach-O 32-bit
+		"\xfe\xed\xfa\xcf", "\xcf\xfa\xed\xfe", // Mach-O 64-bit
+		"\xca\xfe\xba\xbe", "\xbe\xba\xfe\xca": // universal (fat) binary
+		return true
+	}
+	return false
+}
 
 // isImage reports whether a file goes to the model as an image of the message.
 func isImage(f SlackFile) bool {
@@ -151,6 +203,9 @@ func downloadToTemp(ctx context.Context, bot *Bot, f SlackFile) (string, error) 
 
 	// Pattern "*-name" → /tmp/1234567890-script.py
 	// The OS picks the unique prefix; the suffix is always the original name.
+	if isNativeExecutable(data) {
+		return "", errExecutable // never written to disk
+	}
 	tmp, err := os.CreateTemp("", "*-"+name)
 	if err != nil {
 		return "", fmt.Errorf("create temp file: %w", err)
