@@ -273,16 +273,16 @@ func (c *Channel) handleEvent(ctx context.Context, evt *RTMEvent) {
 	}
 	text = strings.TrimSpace(strings.ReplaceAll(text, mention, ""))
 	var images []types.ImageData
-	var paths []string
+	var atts []attachment
 	if len(evt.Files) > 0 {
-		images, paths = fetchFiles(ctx, c.bot, evt.Files)
+		images, atts = fetchFiles(ctx, c.bot, evt.Files)
 	}
-	if text == "" && len(images) == 0 && len(paths) == 0 {
+	if text == "" && len(images) == 0 && len(atts) == 0 {
 		return
 	}
 	c.logger.Info("slack-channel", "prompt", "channel", evt.Channel, "user", evt.User,
-		"text", oneLine(text, 200), "images", len(images), "files", len(paths))
-	deliver(agent.Inbound{Text: buildPrompt(evt.User, evt.Channel, text, paths), Images: images})
+		"text", oneLine(text, 200), "images", len(images), "files", len(atts))
+	deliver(agent.Inbound{Text: buildPrompt(evt.User, evt.Channel, text, atts), Images: images})
 }
 
 // sendTyping shows the typing indicator in a conversation (Slack clears it

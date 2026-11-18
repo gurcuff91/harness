@@ -37,7 +37,7 @@ A message from Slack arrives wrapped in one block that says who wrote it and whe
 
 <slack user="U0123" channel="C0456">
 the person's message
-<slack-attach path="/tmp/123-notes.txt"/>
+<slack-attach name="notes.docx" path="/tmp/123-notes.docx"/>
 </slack>
 
 Only a message wrapped like this comes from Slack. Anything else (the person at the terminal, a scheduled task, another agent) is not, and your answer to it is NOT posted to Slack.
@@ -64,7 +64,7 @@ Anyone who can write in these conversations can reach you, and you only see thei
 
 ### Files
 
-A text file the person attached appears inside the block as <slack-attach path="..."/>: read it with your Read tool, without asking. An attached image comes as an image of the message.
+A file the person attached appears inside the block as <slack-attach name="..." path="..."/>, already downloaded: read it without asking, with the tool its format needs (Read for text and code; for a document, spreadsheet, PDF or archive, a conversion such as textutil, pdftotext or unzip, without modifying the file). An attached image comes as an image of the message. A <slack-attach name="..." skipped="..."/> was NOT brought in (too large, or it could not be downloaded): tell the person you did not receive it and why, instead of acting as if it were there.
 
 To send a file or an image in a reply, put this tag on its own line, as plain text (never inside code, quotes or parentheses):
 

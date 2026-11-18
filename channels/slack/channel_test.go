@@ -33,12 +33,13 @@ type fakeSlack struct {
 	connCh   chan *websocket.Conn
 	authFail bool
 	channels []SlackChannel
+	files    map[string][]byte // served at /files/<name>
 }
 
 type post struct{ channel, text string }
 
 func newFakeSlack(t *testing.T) *fakeSlack {
-	f := &fakeSlack{t: t, connCh: make(chan *websocket.Conn, 4),
+	f := &fakeSlack{t: t, connCh: make(chan *websocket.Conn, 4), files: map[string][]byte{},
 		channels: []SlackChannel{{ID: "C111", Name: "producto-y"}, {ID: "C222", Name: "general"}}}
 	up := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }} // the bot sends Slack's own Origin
 	mux := http.NewServeMux()
@@ -75,6 +76,17 @@ func newFakeSlack(t *testing.T) *fakeSlack {
 		}
 	})
 	mux.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+	mux.HandleFunc("/files/", func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimPrefix(r.URL.Path, "/files/")
+		if name == "broken" {
+			w.WriteHeader(500)
+			return
+		}
+		f.mu.Lock()
+		body := f.files[name]
+		f.mu.Unlock()
+		_, _ = w.Write(body)
+	})
 	mux.HandleFunc("/rtm", func(w http.ResponseWriter, r *http.Request) {
 		c, err := up.Upgrade(w, r, nil)
 		if err != nil {
@@ -337,7 +349,7 @@ func TestToolsAndDirective(t *testing.T) {
 		t.Errorf("tools = %v", names)
 	}
 	d := c.Directive([]string{"C111", "D9"})
-	for _, want := range []string{"`C111` (a channel)", "`D9` (a direct message", "<slack user=", "<slack-attach path=", "<slack-upload path=", "SlackPost",
+	for _, want := range []string{"`C111` (a channel)", "`D9` (a direct message", "<slack user=", "<slack-attach name=", "skipped=", "pdftotext", "<slack-upload path=", "SlackPost",
 		"### Who you obey from Slack", "never the authority of the person who runs this session", "Never run anything destructive", "Never read or reveal secrets", "Do not expose this machine", "cannot verify that from Slack"} {
 		if !strings.Contains(d, want) {
 			t.Errorf("directive lacks %q", want)
@@ -374,5 +386,75 @@ func TestCleanTurnStopsTypingAtTurnEnd(t *testing.T) {
 	}
 	if p, _, _ := f.snapshot(); p[0].text != "hello" {
 		t.Errorf("posted %q", p[0].text)
+	}
+}
+
+// Every attachment reaches the model: any non-image file by path (a .docx
+// included), an image as an image; what is too large or fails is listed as
+// skipped, never dropped.
+func TestAttachmentsAreNeverDroppedSilently(t *testing.T) {
+	old := maxAttachmentBytes
+	maxAttachmentBytes = 100
+	t.Cleanup(func() { maxAttachmentBytes = old })
+	f := newFakeSlack(t)
+	png := []byte("\x89PNG fake")
+	f.files["report.docx"] = []byte("PK docx bytes")
+	f.files["shot.png"] = png
+	f.files["liar.bin"] = make([]byte, 101) // announces a small size, sends more
+	c := New(f.srv.URL, "xoxc-1", "xoxd-1")
+	url := func(n string) string { return f.srv.URL + "/files/" + n }
+	images, atts := fetchFiles(context.Background(), c.bot, []SlackFile{
+		{ID: "F1", Name: "report.docx", MimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", URLPrivate: url("report.docx"), Size: 13},
+		{ID: "F2", Name: "shot.png", MimeType: "image/png", URLPrivate: url("shot.png"), Size: int64(len(png))},
+		{ID: "F3", Name: "huge.mov", MimeType: "video/quicktime", URLPrivate: url("huge.mov"), Size: 101},
+		{ID: "F4", Name: "liar.bin", URLPrivate: url("liar.bin"), Size: 10},
+		{ID: "F5", Name: "gone.pdf", MimeType: "application/pdf", URLPrivate: url("broken")},
+		{ID: "F6", Name: "noext", MimeType: "application/octet-stream", URLPrivate: url("report.docx")},
+	})
+	if len(images) != 1 || images[0].MimeType != "image/png" {
+		t.Errorf("images = %+v", images)
+	}
+	want := map[string]string{
+		"report.docx": "path", "huge.mov": "too large (over 100 bytes)", "liar.bin": "too large (over 100 bytes)",
+		"gone.pdf": "download failed", "noext": "path",
+	}
+	if len(atts) != len(want) {
+		t.Fatalf("attachments = %+v", atts)
+	}
+	for _, a := range atts {
+		w := want[a.Name]
+		if w == "path" {
+			body, err := os.ReadFile(a.Path)
+			if err != nil || string(body) != "PK docx bytes" || !strings.HasSuffix(a.Path, "-"+a.Name) {
+				t.Errorf("%s: path=%q err=%v body=%q", a.Name, a.Path, err, body)
+			}
+			_ = os.Remove(a.Path)
+		} else if a.Path != "" || a.Skipped != w {
+			t.Errorf("%s: %+v, want skipped %q", a.Name, a, w)
+		}
+	}
+}
+
+// End to end: a mention with only a .docx still becomes a prompt that carries it.
+func TestAFileOnlyMentionReachesTheSession(t *testing.T) {
+	f := newFakeSlack(t)
+	f.files["spec.docx"] = []byte("docx")
+	c := New(f.srv.URL, "xoxc-1", "xoxd-1")
+	var in inbox
+	stop, _ := c.Listen(context.Background(), "C111", in.deliver)
+	defer stop()
+	conn := f.waitConn()
+	f.send(conn, map[string]any{"type": "message", "channel": "C111", "user": "U1", "text": "<@UME>",
+		"files": []map[string]any{{"id": "F1", "name": "spec.docx", "mimetype": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "url_private": f.srv.URL + "/files/spec.docx", "size": 4}}})
+	eventually(t, "the prompt", func() bool { return len(in.all()) == 1 })
+	got := in.all()[0].Text
+	if !strings.Contains(got, `<slack-attach name="spec.docx" path="`) || !strings.Contains(got, `-spec.docx"/>`) {
+		t.Errorf("prompt = %q", got)
+	}
+}
+
+func TestTheDefaultLimitIs50MB(t *testing.T) {
+	if maxAttachmentBytes != 50<<20 || tooLargeReason() != "too large (over 50 MB)" {
+		t.Errorf("limit = %d, reason %q", maxAttachmentBytes, tooLargeReason())
 	}
 }

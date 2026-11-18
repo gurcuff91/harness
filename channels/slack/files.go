@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,40 +15,76 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
-// fetchFiles downloads the files of an incoming message: images come back as
-// prompt images, text files as temp paths (each becomes a <slack-attach/>).
-// Other kinds are skipped. Failures are skipped too, never fatal.
-func fetchFiles(ctx context.Context, bot *Bot, files []SlackFile) (images []types.ImageData, paths []string) {
+// attachment is one non-image file of an incoming message: downloaded to
+// Path, or not, with the reason in Skipped (Name says which file it was).
+type attachment struct {
+	Name    string
+	Path    string
+	Skipped string
+}
+
+// fetchFiles brings in the files of an incoming message: images become prompt
+// images, every other file is downloaded as is and handed over by path (the
+// model chooses how to read it). Nothing is dropped silently: a file that is
+// too large or cannot be downloaded is still listed, with the reason — an
+// image too, since it cannot be shown either.
+func fetchFiles(ctx context.Context, bot *Bot, files []SlackFile) (images []types.ImageData, atts []attachment) {
 	for _, f := range files {
 		file := f
 		if file.URLPrivate == "" && file.ID != "" {
-			info, err := bot.FilesInfo(ctx, file.ID)
-			if err != nil {
-				continue
+			if info, err := bot.FilesInfo(ctx, file.ID); err == nil {
+				file = *info
 			}
-			file = *info
+		}
+		name := file.Name
+		if name == "" {
+			name = file.ID
 		}
 		if file.URLPrivate == "" {
+			atts = append(atts, attachment{Name: name, Skipped: "not downloadable"})
 			continue
 		}
-		switch classifyFile(file) {
-		case fileKindImage:
+		if file.Size > maxAttachmentBytes {
+			atts = append(atts, attachment{Name: name, Skipped: tooLargeReason()})
+			continue
+		}
+		if isImage(file) {
 			data, err := bot.DownloadFile(ctx, file.URLPrivate)
 			if err != nil {
+				atts = append(atts, attachment{Name: name, Skipped: skipReason(err)})
 				continue
 			}
 			mime := file.MimeType
-			if mime == "" {
-				mime = "image/jpeg"
+			if !strings.HasPrefix(mime, "image/") {
+				if mime = imageMIMEByExtension(filepath.Ext(file.Name)); mime == "" {
+					mime = "image/jpeg"
+				}
 			}
 			images = append(images, types.ImageData{MimeType: mime, Base64: base64.StdEncoding.EncodeToString(data)})
-		case fileKindText:
-			if p, err := downloadToTemp(ctx, bot, file); err == nil {
-				paths = append(paths, p)
-			}
+			continue
 		}
+		p, err := downloadToTemp(ctx, bot, file)
+		if err != nil {
+			atts = append(atts, attachment{Name: name, Skipped: skipReason(err)})
+			continue
+		}
+		atts = append(atts, attachment{Name: name, Path: p})
 	}
-	return images, paths
+	return images, atts
+}
+
+func tooLargeReason() string {
+	if maxAttachmentBytes >= 1<<20 && maxAttachmentBytes%(1<<20) == 0 {
+		return fmt.Sprintf("too large (over %d MB)", maxAttachmentBytes>>20)
+	}
+	return fmt.Sprintf("too large (over %d bytes)", maxAttachmentBytes)
+}
+
+func skipReason(err error) string {
+	if errors.Is(err, errTooLarge) {
+		return tooLargeReason()
+	}
+	return "download failed"
 }
 
 // SlackFile is one file attached to a Slack message.
@@ -56,6 +93,7 @@ type SlackFile struct {
 	Name       string `json:"name"`
 	MimeType   string `json:"mimetype"`
 	URLPrivate string `json:"url_private"`
+	Size       int64  `json:"size"` // bytes, as Slack reports it (0 = unknown)
 }
 
 // filesInfoResponse is the response from files.info.
@@ -64,101 +102,42 @@ type filesInfoResponse struct {
 	File SlackFile `json:"file"`
 }
 
-// fileKind classifies a file for routing.
-type fileKind int
+// maxAttachmentBytes is the largest file a message may bring in (images
+// included). A bigger one is not downloaded: the model is told it was skipped.
+// A variable for tests.
+var maxAttachmentBytes int64 = 50 << 20
 
-const (
-	fileKindImage  fileKind = iota // send via SendPromptWithImages
-	fileKindText                   // download to a temp file, sent as <slack-attach path="..."/>
-	fileKindIgnore                 // TODO: PDF, video, audio, binary — future analysis tools
-)
+// errTooLarge marks a download stopped at maxAttachmentBytes.
+var errTooLarge = errors.New("too large")
 
-// isTextMIME reports whether a mimetype should be treated as plain text
-// and downloaded to /tmp for the agent to read via its Read tool.
-func isTextMIME(mime string) bool {
-	if strings.HasPrefix(mime, "text/") {
-		return true
-	}
-	switch mime {
-	case "application/json",
-		"application/xml",
-		"application/javascript",
-		"application/typescript",
-		"application/x-yaml",
-		"application/toml",
-		"application/x-sh":
-		return true
-	}
-	return false
-}
-
-// classifyFile determines how to handle a file based on its mimetype,
-// falling back to the file extension when the mimetype is empty or generic.
-func classifyFile(f SlackFile) fileKind {
+// isImage reports whether a file goes to the model as an image of the message.
+func isImage(f SlackFile) bool {
 	mime := f.MimeType
-	// Fallback by extension when mimetype is missing or too generic.
 	if mime == "" || mime == "application/octet-stream" {
-		mime = mimeByExtension(filepath.Ext(f.Name))
+		mime = imageMIMEByExtension(filepath.Ext(f.Name))
 	}
-	if strings.HasPrefix(mime, "image/") {
-		return fileKindImage
-	}
-	if isTextMIME(mime) {
-		return fileKindText
-	}
-	// TODO: handle PDF, video, audio, and other binary types via future analysis tools.
-	return fileKindIgnore
+	return strings.HasPrefix(mime, "image/")
 }
 
-// mimeByExtension returns a best-guess mimetype for a file extension.
-func mimeByExtension(ext string) string {
+// imageMIMEByExtension guesses an image mimetype when Slack gave none.
+func imageMIMEByExtension(ext string) string {
 	switch strings.ToLower(ext) {
-	case ".go":
-		return "text/x-go"
-	case ".py":
-		return "text/x-python"
-	case ".js", ".mjs":
-		return "text/javascript"
-	case ".ts", ".tsx":
-		return "text/typescript"
-	case ".java":
-		return "text/x-java-source"
-	case ".json":
-		return "application/json"
-	case ".yaml", ".yml":
-		return "application/x-yaml"
-	case ".toml":
-		return "application/toml"
-	case ".xml":
-		return "application/xml"
-	case ".html", ".htm":
-		return "text/html"
-	case ".css":
-		return "text/css"
-	case ".sh", ".bash":
-		return "text/x-sh"
-	case ".rb":
-		return "text/x-ruby"
-	case ".rs":
-		return "text/x-rust"
-	case ".c", ".h":
-		return "text/x-c"
-	case ".cpp", ".cc", ".cxx":
-		return "text/x-c++"
-	case ".md", ".txt", ".csv":
-		return "text/plain"
-	case ".swift":
-		return "text/x-swift"
-	case ".kt", ".kts":
-		return "text/x-kotlin"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
 	}
 	return ""
 }
 
-// downloadToTemp downloads a text file to a unique OS temp path using
+// downloadToTemp downloads any file to a unique OS temp path using
 // os.CreateTemp for safe atomic creation. The pattern is "*-originalname"
-// so the resulting path ends with the original filename — the agent's Read
-// tool and the model can infer language/context from it (e.g. …-script.py).
+// so the resulting path ends with the original filename — the model can infer
+// the format from it (…-script.py, …-report.docx) and pick a tool to read it.
 func downloadToTemp(ctx context.Context, bot *Bot, f SlackFile) (string, error) {
 	data, err := bot.DownloadFile(ctx, f.URLPrivate)
 	if err != nil {
@@ -166,8 +145,8 @@ func downloadToTemp(ctx context.Context, bot *Bot, f SlackFile) (string, error) 
 	}
 
 	name := filepath.Base(f.Name)
-	if name == "" || name == "." {
-		name = f.ID + ".txt"
+	if name == "" || name == "." || name == "/" {
+		name = f.ID
 	}
 
 	// Pattern "*-name" → /tmp/1234567890-script.py
@@ -221,5 +200,13 @@ func (b *Bot) DownloadFile(ctx context.Context, urlPrivate string) ([]byte, erro
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("slack download: HTTP %d", resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	// Never hold more than the limit, whatever size Slack announced.
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxAttachmentBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("slack download: read: %w", err)
+	}
+	if int64(len(data)) > maxAttachmentBytes {
+		return nil, errTooLarge
+	}
+	return data, nil
 }

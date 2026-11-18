@@ -10,11 +10,14 @@ import (
 //
 // Inbound — every prompt is wrapped in ONE block naming who wrote and where
 // (channel is always present, DMs included, since a session may listen to
-// several conversations), with the text files the person attached inside it:
+// several conversations), with the files the person attached inside it (any
+// kind; images travel as prompt images instead). A file that was not brought
+// in says so, so the model can tell the person:
 //
 //	<slack user="U0123" channel="C0456">
 //	the message
-//	<slack-attach path="/tmp/123-report.csv"/>
+//	<slack-attach name="report.docx" path="/tmp/123-report.docx"/>
+//	<slack-attach name="demo.mov" skipped="too large (over 50 MB)"/>
 //	</slack>
 //
 // Outbound — the model asks for a file to be uploaded with a self-closing tag
@@ -25,7 +28,7 @@ import (
 // Images travel as prompt images, without a tag.
 
 // buildPrompt wraps one incoming message in its <slack> block.
-func buildPrompt(userID, channelID, text string, attachPaths []string) string {
+func buildPrompt(userID, channelID, text string, atts []attachment) string {
 	var b strings.Builder
 	b.WriteString(`<slack user="`)
 	b.WriteString(attr(userID))
@@ -37,9 +40,16 @@ func buildPrompt(userID, channelID, text string, attachPaths []string) string {
 		b.WriteString(t)
 		b.WriteByte('\n')
 	}
-	for _, p := range attachPaths {
-		b.WriteString(`<slack-attach path="`)
-		b.WriteString(attr(p))
+	for _, a := range atts {
+		b.WriteString(`<slack-attach name="`)
+		b.WriteString(attr(a.Name))
+		if a.Path != "" {
+			b.WriteString(`" path="`)
+			b.WriteString(attr(a.Path))
+		} else {
+			b.WriteString(`" skipped="`)
+			b.WriteString(attr(a.Skipped))
+		}
 		b.WriteString(`"/>`)
 		b.WriteByte('\n')
 	}

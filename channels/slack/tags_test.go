@@ -6,12 +6,19 @@ import (
 )
 
 func TestBuildPrompt(t *testing.T) {
-	got := buildPrompt("U1", "D9", "  read this  ", []string{"/tmp/a b.txt", `/tmp/q"x.csv`})
-	want := "<slack user=\"U1\" channel=\"D9\">\nread this\n<slack-attach path=\"/tmp/a b.txt\"/>\n<slack-attach path=\"/tmp/q&#34;x.csv\"/>\n</slack>"
+	got := buildPrompt("U1", "D9", "  read this  ", []attachment{
+		{Name: "a b.txt", Path: "/tmp/a b.txt"},
+		{Name: `q"x.docx`, Path: `/tmp/q"x.docx`},
+		{Name: "big.mov", Skipped: "too large (over 50 MB)"},
+	})
+	want := "<slack user=\"U1\" channel=\"D9\">\nread this\n" +
+		"<slack-attach name=\"a b.txt\" path=\"/tmp/a b.txt\"/>\n" +
+		"<slack-attach name=\"q&#34;x.docx\" path=\"/tmp/q&#34;x.docx\"/>\n" +
+		"<slack-attach name=\"big.mov\" skipped=\"too large (over 50 MB)\"/>\n</slack>"
 	if got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
-	if got := buildPrompt("U1", "C1", "", []string{"/tmp/f"}); got != "<slack user=\"U1\" channel=\"C1\">\n<slack-attach path=\"/tmp/f\"/>\n</slack>" {
+	if got := buildPrompt("U1", "C1", "", []attachment{{Name: "f", Path: "/tmp/f"}}); got != "<slack user=\"U1\" channel=\"C1\">\n<slack-attach name=\"f\" path=\"/tmp/f\"/>\n</slack>" {
 		t.Errorf("file only: %q", got)
 	}
 }
