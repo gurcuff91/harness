@@ -1,64 +1,7 @@
-// Run() methods for `harness slack` and its nested subcommands (login,
-// admin add/list/remove). Each Run() below delegates to the slack.*
-// package functions and the slackLogin* helpers in slack_login.go.
-//
-// slackAdminCmd has no bare-positional add shortcut: Kong forbids mixing
-// arg:"" with cmd:"" siblings in the same struct, so admin add/list/remove
-// are genuine subcommand siblings instead.
+// Run() for `harness slack login`: the Slack account the input channels
+// (--slack-channel, API `channels`) listen with. The login itself lives in
+// channels/slack; the interactive prompts in slack_login.go.
 package cli
-
-import (
-	"fmt"
-
-	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/internal/logx"
-	"github.com/gurcuff91/harness/transports/slack"
-)
-
-func (c *slackRunCmd) Run() error {
-	// --with-colleagues / --with-scheduler decide the AGENT's own extras here — they are
-	// agent.AgentOptions concerns, not something slack.Options carries (see its doc comment for why).
-	// No slack.Directive here: the transport adds it to the sessions it
-	// creates/resumes (per-session directives), so it never leaks into other
-	// sessions of the same agent.
-	a, err := c.newAgent()
-	if err != nil {
-		return err
-	}
-	// agent → server → transport. The transport never closes the server or
-	// the agent; the CLI owns both (closing srv also closes a).
-	srv, err := startTransportServer(a, "slack")
-	if err != nil {
-		a.Close()
-		return err
-	}
-	defer srv.Close()
-	ctx, cancel := signalContext()
-	defer cancel()
-
-	opts := []slack.Option{
-		slack.WithWorkspace(c.Workspace),
-		slack.WithXoxC(c.XoxC),
-		slack.WithXoxD(c.XoxD),
-		slack.WithLogger(logx.NewHarnessLogger()),
-	}
-	if c.Model != "" {
-		opts = append(opts, slack.WithSessionModel(c.Model))
-	}
-	if c.Thinking != "" {
-		opts = append(opts, slack.WithSessionThinking(c.Thinking))
-	}
-	return slack.Run(ctx, srv, opts...)
-}
-
-// newAgent builds the agent `harness slack` runs (see serveCmd.newAgent: Run minus the network).
-func (c *slackRunCmd) newAgent() (*agent.Agent, error) {
-	x, err := extrasOf(c.withFlags)
-	if err != nil {
-		return nil, err
-	}
-	return newInteractiveAgent(x), nil
-}
 
 func (c *slackLoginCmd) Run() error {
 	ctx, cancel := signalContext()
@@ -68,37 +11,4 @@ func (c *slackLoginCmd) Run() error {
 		return slackLoginStatus(ctx)
 	}
 	return slackLoginInteractive(ctx)
-}
-
-func (c *slackAdminAddCmd) Run() error {
-	if err := slack.AddAdmin(c.UserID); err != nil {
-		return err
-	}
-	fmt.Printf("Added admin: %s\n", c.UserID)
-	fmt.Println("This user can now run /new /stop /compact /thinking /model in Slack.")
-	return nil
-}
-
-func (c *slackAdminListCmd) Run() error {
-	admins, err := slack.ListAdmins()
-	if err != nil {
-		return err
-	}
-	if len(admins) == 0 {
-		fmt.Println("No admins configured.")
-		return nil
-	}
-	fmt.Printf("%d admin(s):\n", len(admins))
-	for _, a := range admins {
-		fmt.Printf("  %s\n", a)
-	}
-	return nil
-}
-
-func (c *slackAdminRemoveCmd) Run() error {
-	if err := slack.RemoveAdmin(c.UserID); err != nil {
-		return err
-	}
-	fmt.Printf("Removed admin: %s\n", c.UserID)
-	return nil
 }

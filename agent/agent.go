@@ -336,9 +336,9 @@ func isNilStore(s memory.Store) bool {
 // is deliberate, not a gap: an instance should fire only into sessions IT
 // itself has live — never resurrect an arbitrary session from disk on the
 // engine's own initiative. A transport that wants its sessions to keep
-// receiving scheduled prompts across restarts (Telegram/Slack) is
+// receiving scheduled prompts across restarts (Telegram) is
 // responsible for keeping them active itself (see prewarmPumps in
-// transports/telegram, transports/slack), not this engine reaching into the
+// transports/telegram), not this engine reaching into the
 // store behind the transport's back.
 //
 // In practice schedEngine.evaluate (see agent/schedule/engine.go) already

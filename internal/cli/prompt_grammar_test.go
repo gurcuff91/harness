@@ -102,7 +102,6 @@ func TestEverySubcommandStillDispatchesToItself(t *testing.T) {
 		"schedules":               {[]string{"schedules"}, "schedules"},
 		"telegram":                {[]string{"telegram"}, "telegram run"},
 		"telegram pair":           {[]string{"telegram", "pair", "123"}, "telegram pair <chat-id>"},
-		"slack":                   {[]string{"slack"}, "slack run"},
 		"slack login":             {[]string{"slack", "login"}, "slack login"},
 		"a flag before a name":    {[]string{"--model", "a/b", "sessions"}, "sessions"},
 	} {

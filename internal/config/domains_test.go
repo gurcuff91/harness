@@ -242,7 +242,7 @@ func TestTelegramSessionsScopedByCWDAndUnpairDropsAll(t *testing.T) {
 
 // ── Slack ────────────────────────────────────────────────────────────────
 
-func TestSlackConfigAdminsAndSessions(t *testing.T) {
+func TestSlackConfig(t *testing.T) {
 	m := memSettings()
 	if _, ok := m.SlackConfig(); ok {
 		t.Error("no config should be reported before one is saved")
@@ -252,37 +252,6 @@ func TestSlackConfigAdminsAndSessions(t *testing.T) {
 		t.Errorf("config = %+v, %v", c, ok)
 	}
 
-	if m.SlackIsAdmin("U1") {
-		t.Error("nobody is admin before any is added (fail-closed)")
-	}
-	m.AddSlackAdmin("U2")
-	m.AddSlackAdmin("U1")
-	m.AddSlackAdmin("U1")
-	if got := m.SlackAdmins(); len(got) != 2 || got[0] != "U1" || got[1] != "U2" {
-		t.Errorf("admins = %v, want [U1 U2]", got)
-	}
-	m.RemoveSlackAdmin("U1")
-	if m.SlackIsAdmin("U1") || !m.SlackIsAdmin("U2") {
-		t.Error("RemoveSlackAdmin wrong")
-	}
-
-	m.BindSlack("/proj/a", "C1", "sess-1")
-	m.BindSlack("/proj/b", "C1", "sess-2")
-	if id, ok := m.SlackSessionFor("/proj/a", "C1"); !ok || id != "sess-1" {
-		t.Errorf("slack session in /proj/a = %q, %v", id, ok)
-	}
-	if got := m.SlackSessions("/proj/b"); len(got) != 1 || got["C1"] != "sess-2" {
-		t.Errorf("slack sessions in /proj/b = %v", got)
-	}
-	if removed, err := m.UnbindSlack("/proj/a", "C1"); err != nil || !removed {
-		t.Fatalf("UnbindSlack = %v, %v; want true, nil", removed, err)
-	}
-	if _, ok := m.SlackSessionFor("/proj/a", "C1"); ok {
-		t.Error("UnbindSlack left the binding")
-	}
-	if removed, _ := m.UnbindSlack("/proj/a", "C1"); removed {
-		t.Error("second UnbindSlack must report false (idempotent)")
-	}
 }
 
 // ── Transport secrets ────────────────────────────────────────────────────
@@ -346,15 +315,13 @@ func TestDeleteVacantInstancesSweepsLegacyMarkers(t *testing.T) {
 	}
 }
 
-// Deleting transport secrets/identity: removes exactly the targeted entry,
-// leaves admins and bindings alone, and is idempotent.
+// Deleting transport secrets/identity: removes exactly the targeted entry and
+// is idempotent.
 func TestDeleteTransportSecretsAndSlackConfig(t *testing.T) {
 	m, c := memSettings(), memCreds()
 	c.SetTelegramToken("tok")
 	c.SetSlackSession(SlackSession{XoxC: "xoxc", XoxD: "xoxd"})
 	m.SetSlackConfig(SlackConfig{Workspace: "https://w.slack.com", UserID: "U1", Team: "T"})
-	m.AddSlackAdmin("UADMIN")
-	m.BindSlack("/p", "C1", "sess")
 
 	for range 2 { // idempotent
 		if err := c.DeleteTelegramToken(); err != nil {
@@ -375,11 +342,5 @@ func TestDeleteTransportSecretsAndSlackConfig(t *testing.T) {
 	}
 	if _, ok := m.SlackConfig(); ok {
 		t.Error("slack config still present")
-	}
-	if !m.SlackIsAdmin("UADMIN") {
-		t.Error("admins must be untouched")
-	}
-	if _, ok := m.SlackSessionFor("/p", "C1"); !ok {
-		t.Error("bindings must be untouched")
 	}
 }

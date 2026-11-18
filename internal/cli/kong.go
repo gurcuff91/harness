@@ -24,12 +24,11 @@
 // EVERY node in the selected chain, child to parent, not just the leaf — by
 // design, for shared setup logic (see the docker example in Kong's repo).
 // That means a command that both DOES something itself (bare `harness
-// telegram`, `harness slack`) AND has real subcommands (`telegram list`,
-// `slack login`) can't put its own action in that parent struct's Run(): it
+// telegram`) AND has real subcommands (`telegram list`) can't put its own action in that parent struct's Run(): it
 // would fire a second time after every subcommand, and the subcommand's
 // --help would inherit all the parent's flags too. The fix used throughout
 // below is the same one TUI uses at the root: the action lives in its own
-// hidden default:"withargs" child (e.g. telegramRunCmd, slackRunCmd), a
+// hidden default:"withargs" child (e.g. telegramRunCmd), a
 // sibling of the real subcommands — never a Run() directly on a struct that
 // also declares cmd:"" children.
 package cli
@@ -54,7 +53,7 @@ var CLI struct {
 
 	Telegram telegramCmd `cmd:"" help:"Run as a Telegram bot (one session per chat)"`
 
-	Slack slackCmd `cmd:"" help:"Run as a Slack user bot (one session per channel/DM)"`
+	Slack slackCmd `cmd:"" help:"Slack account for input channels (harness slack login)"`
 
 	ACP acpCmd `cmd:"" help:"Run as an Agent Client Protocol agent over stdio (for Zed and other ACP clients; it takes no flags: set HARNESS_WITH_COLLEAGUES=1 / HARNESS_WITH_SCHEDULER=1 to turn the extras on)"`
 
@@ -174,44 +173,16 @@ type telegramTokenCmd struct {
 
 // ── slack ────────────────────────────────────────────────────────────────
 
-// slackCmd is a pure command group: no flags, no Run() of its own — only the
-// flags/action that actually run the bot live in slackRunCmd (the hidden
-// default child), so they don't leak into login/admin's own --help or
-// re-fire after those subcommands run (see the parent-Run() note atop this
-// file).
+// slackCmd is the Slack account group: today only `login`, the account the
+// input channels (--slack-channel, API channels) listen with. The Slack bot
+// (`harness slack` with no subcommand) and `slack admin` were removed in
+// v0.108.0 along with transports/slack.
 type slackCmd struct {
-	Run   slackRunCmd   `cmd:"" default:"withargs" hidden:"" help:"Run as a Slack user bot (default)"`
 	Login slackLoginCmd `cmd:"" help:"Authenticate interactively (saves the login to harness's config stores)"`
-	Admin slackAdminCmd `cmd:"" help:"Manage Slack admins"`
-}
-
-type slackRunCmd struct {
-	Workspace string `env:"SLACK_WORKSPACE" help:"Slack workspace URL (or set SLACK_WORKSPACE)"`
-	XoxC      string `name:"xoxc" env:"SLACK_XOXC" help:"xoxc- session token (or set SLACK_XOXC)"`
-	XoxD      string `name:"xoxd" env:"SLACK_XOXD" help:"xoxd- session cookie (or set SLACK_XOXD)"`
-	Model     string `help:"Model override (provider/model)"`
-	Thinking  string `enum:",off,low,medium,high,xhigh,max" default:"" help:"Thinking level override"`
-	withFlags `embed:""`
 }
 
 type slackLoginCmd struct {
 	Status bool `help:"Verify saved credentials instead of logging in"`
-}
-
-type slackAdminCmd struct {
-	Add    slackAdminAddCmd    `cmd:"" help:"Add a user as admin (can run /reset /stop /compact /thinking /model)"`
-	List   slackAdminListCmd   `cmd:"" help:"List current admins"`
-	Remove slackAdminRemoveCmd `cmd:"" help:"Remove an admin"`
-}
-
-type slackAdminAddCmd struct {
-	UserID string `arg:"" help:"User ID to add as admin"`
-}
-
-type slackAdminListCmd struct{}
-
-type slackAdminRemoveCmd struct {
-	UserID string `arg:"" help:"User ID to remove"`
 }
 
 // ── management ───────────────────────────────────────────────────────────

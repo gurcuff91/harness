@@ -1,5 +1,5 @@
 // Package logx defines the structured logging contract harness's backend
-// runners (server.Run, transports/telegram.Run, transports/slack.Run) accept
+// runners (server.Run, transports/telegram.Run) accept
 // via their WithLogger option — implement [Logger] to route harness's
 // backend logs anywhere: stdout, a file, a remote collector. See
 // internal/logx.NewHarnessLogger for the real line-oriented implementation
@@ -8,7 +8,7 @@
 package logx
 
 // Logger is the structured logging contract every Run (server.Run,
-// transports/telegram.Run, transports/slack.Run) accepts via a WithLogger
+// transports/telegram.Run) accepts via a WithLogger
 // option. component names the subsystem emitting the line (e.g. "server",
 // "telegram", "sse"); event is a short machine-readable event name; kv is a
 // flat list of alternating key, value pairs (values may be any type).

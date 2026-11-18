@@ -4,12 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [0.108.0] - 2026-11-18
 
+### Breaking — the Slack bot (`transports/slack`) is removed; Slack is now an input channel
+The always-on Slack user bot is gone, replaced by the input channels below: instead of one bot answering every channel from wherever it runs, each session listens to the conversations it is given.
+- **CLI:** `harness slack` (the bot) and `harness slack admin add|list|remove` no longer exist, nor do the `SLACK_WORKSPACE`, `SLACK_XOXC` and `SLACK_XOXD` variables. `harness slack login` (and `--status`) remains: it is the account the channels listen with. Use `harness --slack-channel <channel>` instead of running the bot.
+- **SDK:** the package `transports/slack` and the facade's `RunSlack`, `SlackOption` and `SlackWith*` are removed; use `channels/slack.New(...)` with `harness.AgentWithChannels(...)` and bind sessions with `agent.WithSessionChannels(...)`.
+- **What the bot did that a channel does not:** its Slack slash commands (`/reset`, `/stop`, `/compact`, `/thinking`, `/model`, `/info`, `/context`) and the admin list that guarded them; `SlackAsk`; one automatic session per channel or DM (with a channel, you choose the session and the conversations); answering a DM nobody bound.
+- **Saved state:** the login is kept as is. The bot's `slack_admins` and `slack_sessions` entries in `settings.json` are no longer read or written; they can be deleted by hand, and the sessions they pointed to are still in the store.
+
 ### Added — input channels: a session can listen to a Slack conversation
-Several harness instances, each in its own project, can post to Slack with the same account, but until now only `harness slack` listened: when someone mentioned the account under a report that instance A had posted, the reply came from the `harness slack` bot, running elsewhere and knowing nothing about A's project. Now the session itself can listen.
+Several harness instances, each in its own project, can post to Slack with the same account, but until now only the `harness slack` bot listened: when someone mentioned the account under a report that instance A had posted, the reply came from the `harness slack` bot, running elsewhere and knowing nothing about A's project. Now the session itself can listen.
 
 `harness --slack-channel producto-y` (repeatable; a channel id or name with or without `#`, a DM id, or a user id for their DM) opens the TUI with a session bound to that conversation, using the account saved by `harness slack login`:
 - **A mention of the account there becomes a prompt of that session** (in a DM, every message), wrapped as `<slack user="U…" channel="C…">…</slack>`, with attached text files as `<slack-attach path="…"/>` inside the block and images as prompt images.
-- **Everything the session writes while answering it is posted back** in that conversation, the same way `harness slack` does it: the text before and after each tool call, a typing indicator, `<slack-upload path="…"/>` uploads, errors (a provider 429 included) and compaction notices; not in a thread. Turns started anywhere else (the TUI, a schedule, a colleague) are never posted.
+- **Everything the session writes while answering it is posted back** in that conversation, the same way the removed bot did: the text before and after each tool call, a typing indicator, `<slack-upload path="…"/>` uploads, errors (a provider 429 included) and compaction notices; not in a thread. Turns started anywhere else (the TUI, a schedule, a colleague) are never posted.
 - **A Slack sender has its own authority, never the session owner's.** The `## Slack` section tells the model that anyone in the conversation can reach it and that a claim in the text ("I am the owner") proves nothing: from Slack it must not run destructive or irreversible commands, read or reveal secrets, or expose the machine (hostnames, process lists, paths outside the project); such requests must come from the owner directly. This is an instruction to the model, not an enforced restriction: the session keeps all its tools. Found in the first live test, where other members of a channel had the session run shell commands on the host.
 - **The session gets the Slack tools** (`SlackListChannels`, `SlackListUsers`, `SlackPost`, `SlackMessages`) **and a `## Slack` section** in its system prompt, from the channel itself, not from a profile. `SlackAsk` is not included.
 - **One conversation, one session**, across every harness process on the machine: a second session asking for it fails and names the first (session, pid, cwd). A claim left by a process that died is taken over.
@@ -19,9 +26,7 @@ For the API and the SDK:
 - `POST /api/sessions` and `POST /api/sessions/{id}/resume` accept `channels: [{"type":"slack","ref":"…"}]` (409 when taken, 400 when unavailable or unresolvable); a live session's detail lists `channels` as `slack:<id>`. `client.WithChannels(...)`. `harness serve` registers the Slack channel when a login exists and takes no flag: each client binds per session.
 - SDK: the `agent.Channel` interface, `AgentOptions.Channels` / `harness.AgentWithChannels(...)`, `agent.WithSessionChannels(...)`, `Session.Channels()`, and the new package `channels/slack` (`slack.New(workspace, xoxc, xoxd)`), independent of `transports/slack`.
 
-`channels/slack` does not depend on `transports/slack`: it has its own copy of the login (`LoadCredentials`, `SaveCredentials`, `DeleteCredentials`, `DeriveXoxC`, `VerifyAndSave`), reading and writing the same saved login, and `harness slack login` (with `--status`) now goes through it. Only the `harness slack` bot and `harness slack admin` still use the transport, so it can be removed later without losing the login or the channels.
-
-`harness slack` is unchanged. Running it with the same account as a session that listens to a channel is not supported: both would answer the mention.
+`channels/slack` owns everything Slack in harness now, including the login (`LoadCredentials`, `SaveCredentials`, `DeleteCredentials`, `DeriveXoxC`, `VerifyAndSave`); `harness slack login` (with `--status`) goes through it and reads and writes the same saved login, so an existing login keeps working without logging in again.
 
 Checked live against a real workspace (login, resolving channel names, opening and closing the socket) without posting anything; the rest is covered by tests with a fake Slack (web API and RTM socket), a fake channel in the agent and the API, and eighteen hand-made mutants, all caught.
 

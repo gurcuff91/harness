@@ -30,14 +30,10 @@ func TestDoesNotImportTheTransport(t *testing.T) {
 	}
 }
 
-// Outside the transport itself, only the `harness slack` bot command (and its
-// admin list) may still use it: every other Slack need (login, the input
-// channel) is served by this package.
-func TestOnlyTheBotCommandUsesTheTransport(t *testing.T) {
-	allowed := map[string]bool{
-		"internal/cli/kong_run_slack.go": true, // `harness slack` (the RTM bot) and `slack admin`
-		"harness.go":                     true, // the SDK's RunSlack alias
-	}
+// transports/slack was removed in v0.108.0: nothing may bring it back by
+// importing it (this package covers every Slack need: login and channels).
+func TestNothingImportsTheRemovedSlackTransport(t *testing.T) {
+	allowed := map[string]bool{}
 	root := filepath.Join("..", "..")
 	err := filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
 		if err != nil {

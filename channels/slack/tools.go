@@ -11,8 +11,8 @@ import (
 )
 
 // slackTools are the tools a session bound to a Slack conversation gets, all
-// bound to the channel's own bot. A copy of transports/slack's, adapted to this
-// package's tag format; SlackAsk is deliberately absent (see the design doc).
+// bound to the channel's own bot. SlackAsk is deliberately absent (see the
+// design doc).
 func slackTools(bot *Bot, myID string) []atools.Tool {
 	return []atools.Tool{
 		slackListChannelsTool(bot),

@@ -166,3 +166,11 @@ Telegram; live bind/unbind; `SlackAsk`; `channels/slack.LoadCredentials`.
   the right id; open failure undoes everything; close releases.
 - API/TUI flag parsing; hand-made mutants; a live check with the owner's account
   before the release.
+
+## Addendum (same release): the Slack transport is removed
+
+Decided before v0.108.0 shipped: `transports/slack` (the `harness slack` RTM
+bot, its admin list, slash commands, SlackAsk and per-channel sessions) is
+removed rather than deprecated. `channels/slack` took over the login
+(`harness slack login` stays), so decisions 10–12 above describe a transition
+that never shipped: there is no transport to coexist with or to depend on.

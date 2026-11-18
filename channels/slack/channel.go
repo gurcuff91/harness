@@ -38,9 +38,7 @@ func WithLogger(l logx.Logger) Option {
 //
 // Every harness process listening with the same account receives every event;
 // each one keeps only the conversations its sessions claimed (the 1:1 claim
-// registry guarantees no two sessions claim the same one). Running
-// `harness slack` on the same account at the same time is NOT supported: it
-// would answer a mention too.
+// registry guarantees no two sessions claim the same one).
 type Channel struct {
 	bot    *Bot
 	logger logx.Logger

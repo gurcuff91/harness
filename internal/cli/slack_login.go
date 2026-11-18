@@ -86,6 +86,6 @@ func slackLoginInteractive(ctx context.Context) error {
 
 	fmt.Printf("\n✓ Authenticated as %s  (team: %s)\n", creds.UserID, creds.Team)
 	fmt.Printf("✓ Credentials saved\n")
-	fmt.Println("\nYou can now run: harness slack")
+	fmt.Println("\nA session can now listen to a Slack conversation: harness --slack-channel <channel>")
 	return nil
 }

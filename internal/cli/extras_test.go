@@ -151,7 +151,6 @@ func TestTheWithFlagsExistOnTheAgentCommandsAndNowhereElse(t *testing.T) {
 	for _, c := range [][]string{
 		{"--with-colleagues"}, {"--with-scheduler"}, {"--with-colleagues", "--with-scheduler", "hello"},
 		{"serve", ":8080", "--with-colleagues"}, {"serve", ":8080", "--with-scheduler"},
-		{"slack", "--with-colleagues"}, {"slack", "--with-scheduler"},
 		{"telegram", "--with-colleagues"}, {"telegram", "--with-scheduler"},
 	} {
 		if err := parse(c...); err != nil {
@@ -159,7 +158,7 @@ func TestTheWithFlagsExistOnTheAgentCommandsAndNowhereElse(t *testing.T) {
 		}
 	}
 	for _, c := range [][]string{
-		{"--scheduler"}, {"serve", ":8080", "--scheduler"}, {"slack", "--scheduler"}, {"telegram", "--scheduler"}, // the OLD name: gone, no alias
+		{"--scheduler"}, {"serve", ":8080", "--scheduler"}, {"telegram", "--scheduler"}, // the OLD name: gone, no alias
 		{"--with-web-search"},        // WebSearch is always on: there is no switch for it
 		{"acp", "--with-colleagues"}, // ACP is started by an editor and takes no flags
 		{"acp", "--with-scheduler"},
@@ -190,8 +189,6 @@ func TestTheFlagsReachTheCommandsRun(t *testing.T) {
 		{[]string{"hello"}, func() withFlags { return CLI.TUI.withFlags }},
 		{[]string{"serve", ":1", "--with-colleagues"}, func() withFlags { return CLI.Serve.withFlags }},
 		{[]string{"serve", ":1"}, func() withFlags { return CLI.Serve.withFlags }},
-		{[]string{"slack", "--with-scheduler"}, func() withFlags { return CLI.Slack.Run.withFlags }},
-		{[]string{"slack"}, func() withFlags { return CLI.Slack.Run.withFlags }},
 		{[]string{"telegram", "--with-colleagues", "--with-scheduler"}, func() withFlags { return CLI.Telegram.Run.withFlags }},
 		{[]string{"telegram"}, func() withFlags { return CLI.Telegram.Run.withFlags }},
 	} {
@@ -472,7 +469,6 @@ func TestEveryCommandBuildsTheAgentItWasAskedFor(t *testing.T) {
 			return CLI.TUI.newTUIAgent(x), nil
 		}},
 		"serve":    {[]string{"serve", ":0"}, func() (*agent.Agent, error) { return CLI.Serve.newAgent() }},
-		"slack":    {[]string{"slack"}, func() (*agent.Agent, error) { return CLI.Slack.Run.newAgent() }},
 		"telegram": {[]string{"telegram"}, func() (*agent.Agent, error) { return CLI.Telegram.Run.newAgent() }},
 		"acp":      {nil, func() (*agent.Agent, error) { return CLI.ACP.newAgent() }},
 	}
@@ -551,11 +547,6 @@ func TestAMalformedVariableStopsEveryCommandThatHasTheExtras(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "HARNESS_WITH_COLLEAGUES") {
 		t.Errorf("serve: %v", err)
 	}
-	parseFor(t, "slack")
-	if a, err := CLI.Slack.Run.newAgent(); err == nil {
-		a.Close()
-		t.Error("slack built an agent")
-	}
 	parseFor(t, "telegram")
 	if a, err := CLI.Telegram.Run.newAgent(); err == nil {
 		a.Close()
@@ -627,7 +618,6 @@ func TestTheTUIRunDecidesTheExtrasOnce(t *testing.T) {
 func TestEveryRunBuildsItsAgentThroughNewAgent(t *testing.T) {
 	for file, run := range map[string]string{
 		"kong_run_serve.go":    "func (c *serveCmd) Run() error {",
-		"kong_run_slack.go":    "func (c *slackRunCmd) Run() error {",
 		"kong_run_telegram.go": "func (c *telegramRunCmd) Run() error {",
 		"kong_run_acp.go":      "func (c *acpCmd) Run() error {",
 	} {

@@ -39,7 +39,7 @@ Providers can also be connected from inside the TUI command palette.
 - **Persistent memory** — project-scoped + global memories (SQLite + FTS5), recalled across sessions
 - **Scheduled prompts** — cron-scheduled prompts that fire back into the session that created them
 - **Colleagues** — discover other running harness instances on the machine and delegate prompts to them
-- **Multiple frontends** — interactive TUI, one-shot CLI, HTTP/SSE server, Telegram bot, Slack bot, ACP agent (Zed)
+- **Multiple frontends** — interactive TUI, one-shot CLI, HTTP/SSE server, Telegram bot, ACP agent (Zed), and Slack input channels
 - **Vision** — image support via file paths or clipboard image paste (Ctrl+V in the TUI)
 - **Pure-Go TUI** — from-scratch terminal UI, zero external TUI libraries
 - **Auto-detection** — Ollama local auto-connects, models fetched from provider APIs
@@ -59,7 +59,7 @@ the essentials, and the binary lives in `cmd/harness/`.
 ```
 harness/
 ├── harness.go                # 🔓 SDK facade: NewAgent + AgentWith* (construction),
-│                             #    RunServer/RunTelegram/RunSlack/RunAcp + their
+│                             #    RunServer/RunTelegram/RunAcp + their
 │                             #    XxxWith* (transport runners), Client/NewClient
 ├── cmd/harness/main.go       # Executable entry point (package main) — calls cli.Main
 │
@@ -81,8 +81,8 @@ harness/
 │   └── server.go / sse.go / proxy.go / instances.go / run.go
 ├── transports/               # 🔓 Interactive session frontends (each runs on server)
 │   ├── telegram/             # Telegram bot (stdlib Bot API; one session per chat)
-│   ├── slack/                # Slack user bot (one session per channel/DM)
 │   └── acp/                  # Agent Client Protocol agent (Zed and other ACP clients)
+├── channels/slack/           # 🔓 Slack input channel + the Slack login (agent.Channel)
 ├── logx/                     # 🔓 Logger contract (interface) + NewNilLogger
 ├── types/                    # 🔓 Shared types (Event, Message, ModelMeta)
 │
@@ -238,7 +238,7 @@ harness.RunServer(ctx, a, harness.ServerWithAddr(":8080"))
 // …or a Telegram bot:
 harness.RunTelegram(ctx, a, harness.TelegramWithToken(token))
 
-// …or a Slack bot, or an ACP agent (RunSlack / RunAcp).
+// …or an ACP agent (RunAcp).
 ```
 
 Each `RunX` is a thin alias over its package's own `Run`. A runner's options
@@ -313,8 +313,8 @@ harness --with-scheduler      — Run the TUI with the cron scheduler engine
 **Light by default; extras on request.** The agent every command builds has the base tools (Bash, Read,
 Write, Edit, Fetch, SessionInfo, Subagent, memory, Skill) and WebSearch, and nothing else. Two extras are
 opt-in because each adds to every request whether it is used or not (colleagues about 2.5 KB of system
-prompt and 3 KB of tool definitions): `--with-colleagues` and `--with-scheduler`, on the TUI, `serve`,
-`slack` and `telegram`. Each can also be switched on by an environment variable, either one being enough:
+prompt and 3 KB of tool definitions): `--with-colleagues` and `--with-scheduler`, on the TUI, `serve`
+and `telegram`. Each can also be switched on by an environment variable, either one being enough:
 `HARNESS_WITH_COLLEAGUES=1` and `HARNESS_WITH_SCHEDULER=1` (`1`/`true`/`yes` on, `0`/`false`/`no` or empty
 off; any other value is an error that names the variable). `harness acp` is started by an editor and takes
 no flags, so for it the variables are the only way. `-p` never has the extras. An instance started without
@@ -357,8 +357,7 @@ are never posted. The session gets the Slack tools (`SlackListChannels`, `SlackL
 listened to by one session at a time, across every harness process on the machine: a second one
 fails naming the first. Explicit and never saved: `/new`, `/resume` and `--resume` without the flag
 listen to nothing. Over the API (`harness serve`), pass `channels: [{"type":"slack","ref":"…"}]`
-when creating or resuming a session. Do not run `harness slack` with the same account at the same
-time: both would answer a mention.
+when creating or resuming a session. `harness slack login --status` checks the saved login.
 
 A command name wins over a message: `harness sessions` lists sessions. To send a message that is
 exactly a command name, put it after `--`: `harness -- serve`.
@@ -377,11 +376,7 @@ harness telegram pair <id>    — Allow a chat to use the bot
 harness telegram unpair <id>  — Revoke a chat
 harness telegram list         — List paired chats
 harness telegram token [tok]  — Save the bot token (or check it with --status)
-harness slack                 — Run as a Slack user bot (one session per channel/DM)
-harness slack login           — Authenticate interactively (saves to ~/.harness/credentials.json)
-harness slack admin add <id>  — Add an admin (can run /reset /stop /compact /thinking /model)
-harness slack admin list      — List current admins
-harness slack admin remove    — Remove an admin
+harness slack login           — Save the Slack account input channels listen with (--status checks it)
 harness acp                   — Run as an Agent Client Protocol agent over stdio (for Zed)
 
 harness providers             — List providers and status
@@ -428,9 +423,6 @@ OLLAMA_CLOUD_API_KEY    — Ollama Cloud API key
 MINIMAX_API_KEY         — MiniMax API key
 OLLAMA_URL              — Ollama server URL (default: localhost:11434)
 TELEGRAM_BOT_TOKEN      — Telegram bot token (for `harness telegram`)
-SLACK_WORKSPACE         — Slack workspace URL (for `harness slack`)
-SLACK_XOXC              — Slack xoxc- session token
-SLACK_XOXD              — Slack xoxd- session cookie
 ```
 
 Model and thinking level are set via `harness settings set model|thinking <value>`
@@ -449,7 +441,7 @@ All data stored in `~/.harness/`:
 │                              core (active_model, thinking_level), mcp, provider,
 │                              schedules (cron prompts), instances (running servers,
 │                              for colleagues), telegram_allowlist, telegram_sessions,
-│                              slack (workspace/user/team), slack_admins, slack_sessions
+│                              slack (workspace/user/team), channels (input-channel claims)
 └── agent/
     ├── sessions/<cwd>/     — Session history (JSONL, partitioned by project)
     ├── skills/             — Discovered skills

@@ -21,7 +21,7 @@
 // harness is layered: agent (core) → server (the HTTP/SSE API: sessions,
 // events, commands) → transports (pure translation layers). Build ONE agent,
 // wrap it in ONE server with [StartServer], and hand that same server to any
-// number of transports — [RunTelegram], [RunSlack], [RunAcp] — and your own
+// number of transports — [RunTelegram], [RunAcp] — and your own
 // clients. Every session lives in exactly one place, and every frontend can
 // watch and drive the same session at once. Transports never close the
 // server or the agent; you do:
@@ -29,7 +29,7 @@
 //	srv, err := harness.StartServer(a, "127.0.0.1:0", server.ServerOptions{})
 //	if err != nil { log.Fatal(err) }
 //	defer srv.Close() // also closes the agent
-//	go harness.RunSlack(ctx, srv)              // registers the "slack" profile
+//	go harness.RunAcp(ctx, srv)
 //	err = harness.RunTelegram(ctx, srv, harness.TelegramWithCWD(dir))
 //
 // [RunServer] is the standalone blocking variant (serve an agent until ctx is
@@ -46,8 +46,9 @@
 //   - agent/memory     — the persistent memory store internals
 //   - server           — the HTTP/SSE backend every transport (including this
 //     facade's RunServer) runs on top of
-//   - transports/{telegram,slack,acp} — the runners RunTelegram/RunSlack/
-//     RunAcp wrap, and their Option types
+//   - transports/{telegram,acp} — the runners RunTelegram/RunAcp wrap, and
+//     their Option types
+//   - channels/slack   — the Slack input channel (see [AgentWithChannels])
 //   - client           — typed HTTP/SSE client for a running harness server
 //   - types            — Event, Message, ModelMeta and other shared types
 //
@@ -65,12 +66,11 @@ import (
 	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/server"
 	"github.com/gurcuff91/harness/transports/acp"
-	"github.com/gurcuff91/harness/transports/slack"
 	"github.com/gurcuff91/harness/transports/telegram"
 	"github.com/gurcuff91/harness/types"
 )
 
-// Logger is the structured logging contract RunServer/RunTelegram/RunSlack
+// Logger is the structured logging contract RunServer/RunTelegram
 // accept via their WithLogger option — implement it to route harness's
 // backend logs anywhere (RunAcp has no WithLogger of its own: it never logs
 // anything itself). See [logx.Logger].
@@ -395,46 +395,6 @@ var TelegramWithKeepSessionsOnStop = telegram.WithKeepSessionsOnStop
 // TelegramWithLogger sets the Logger this transport uses for its own log
 // lines. Default: [NewNilLogger] (silent). See [telegram.WithLogger].
 var TelegramWithLogger = telegram.WithLogger
-
-// RunSlack runs the Slack bot on a running (possibly shared) server and blocks
-// until ctx is cancelled. See [slack.Run].
-var RunSlack = slack.Run
-
-// SlackOption configures a [RunSlack] call. See [slack.Option].
-type SlackOption = slack.Option
-
-// SlackWithWorkspace sets the Slack workspace URL (required, unless already
-// saved via `harness slack login`). See [slack.WithWorkspace].
-var SlackWithWorkspace = slack.WithWorkspace
-
-// SlackWithXoxC sets the xoxc- browser session API token (required, unless
-// already saved). See [slack.WithXoxC].
-var SlackWithXoxC = slack.WithXoxC
-
-// SlackWithXoxD sets the xoxd- browser session cookie (required, unless
-// already saved). See [slack.WithXoxD].
-var SlackWithXoxD = slack.WithXoxD
-
-// SlackWithSessionModel overrides the model for sessions this transport
-// creates. See [slack.WithSessionModel].
-var SlackWithSessionModel = slack.WithSessionModel
-
-// SlackWithSessionThinking overrides the thinking level for sessions this
-// transport creates. See [slack.WithSessionThinking].
-var SlackWithSessionThinking = slack.WithSessionThinking
-
-// SlackWithCWD sets the working directory the bot's channel sessions are
-// created in and bound under (default: the process's cwd). See
-// [slack.WithCWD].
-var SlackWithCWD = slack.WithCWD
-
-// SlackWithKeepSessionsOnStop leaves the bot's sessions open when it stops.
-// See [slack.WithKeepSessionsOnStop].
-var SlackWithKeepSessionsOnStop = slack.WithKeepSessionsOnStop
-
-// SlackWithLogger sets the Logger this transport uses for its own log
-// lines. Default: [NewNilLogger] (silent). See [slack.WithLogger].
-var SlackWithLogger = slack.WithLogger
 
 // RunAcp runs the Agent Client Protocol bridge (Zed and other ACP clients) on
 // a running (possibly shared) server, over stdin/stdout, and blocks until ctx

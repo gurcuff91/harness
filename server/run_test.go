@@ -45,7 +45,7 @@ func waitForServer(t *testing.T, url string, timeout time.Duration) {
 // TestRunConfigDefaultsToLoopbackEphemeralAddr verifies Run's documented
 // default — "127.0.0.1:0" (loopback-only, OS-assigned port) — matches what
 // every transport's own in-process server already uses directly (see
-// transports/telegram, transports/slack, transports/acp, all calling
+// transports/telegram, transports/acp, all calling
 // net.Listen("tcp", "127.0.0.1:0")). Exercises the exact default-application
 // logic Run itself runs (looping opts over a zero-value runConfig), the same
 // pattern transports/acp's TestRunConfigDefaultsToOSStdinStdout uses for its

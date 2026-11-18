@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// The tag format of a Slack channel (independent of transports/slack's).
+// The tag format of a Slack channel.
 //
 // Inbound — every prompt is wrapped in ONE block naming who wrote and where
 // (channel is always present, DMs included, since a session may listen to

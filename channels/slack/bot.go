@@ -1,7 +1,7 @@
 // Package slack implements agent.Channel for Slack: a session bound to a Slack
 // conversation (channel or DM) receives the mentions made there as prompts and
-// posts its replies back to it. Independent of transports/slack on purpose: it
-// owns its copy of the Slack client, the tag format and the file handling.
+// posts its replies back to it. It owns everything Slack in harness: the
+// client, the login, the tag format, the file handling and the Slack tools.
 package slack
 
 import (
@@ -23,8 +23,7 @@ const (
 	backoff = 5 * time.Second
 )
 
-// Bot is a minimal Slack client for the xoxc/xoxd browser-session auth flow
-// (a copy of transports/slack's, kept independent).
+// Bot is a minimal Slack client for the xoxc/xoxd browser-session auth flow.
 type Bot struct {
 	workspace string // e.g. "https://myco.slack.com"
 	xoxc      string // xoxc-... API token (Authorization header)
