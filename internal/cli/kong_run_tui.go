@@ -7,6 +7,7 @@ package cli
 import (
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/internal/tui"
+	"github.com/gurcuff91/harness/transports/slack"
 )
 
 func (c *tuiCmd) Run() error {
@@ -25,17 +26,26 @@ func (c *tuiCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	a := c.newTUIAgent(x)
+	chans := storedChannels(slack.LoadCredentials, false) // never log to the terminal the TUI draws on
+	inputs, err := slackInputChannels(c.SlackChannels, chans)
+	if err != nil {
+		return err
+	}
+	a := c.newTUIAgent(x, chans...)
 	defer a.Close()
 
-	return c.newTUI(a, x).Run(ctx)
+	t := c.newTUI(a, x)
+	t.SetChannels(inputs)
+	return t.Run(ctx)
 }
 
 // newTUIAgent builds the agent the interactive TUI drives: the shared interactive agent plus the
 // instruction blocks only the TUI adds (see tuiDirectives). It is the one place Run gets its agent
 // from, so a test can build exactly what Run builds, without a terminal.
-func (c *tuiCmd) newTUIAgent(x extras) *agent.Agent {
-	return newInteractiveAgent(x, tuiDirectives()...)
+func (c *tuiCmd) newTUIAgent(x extras, chans ...agent.Channel) *agent.Agent {
+	opts := interactiveOptions(x, tuiDirectives())
+	opts.Channels = chans
+	return agent.New(opts)
 }
 
 // newTUI builds the interactive TUI for the parsed command line: the flags, the scheduler switch and

@@ -198,6 +198,10 @@ type Session struct {
 	busy          bool
 	followCtx     context.Context
 	currentCancel context.CancelFunc // cancel the currently executing turn
+
+	// channels are the external conversations this handle listens to (nil =
+	// none); set once by attachChannels before the session is registered.
+	channels *sessionChannels
 }
 
 type followUp struct {
@@ -1892,6 +1896,7 @@ func (s *Session) Meta() store.SessionMeta {
 // Close flushes and closes the store, and removes the session from its agent's
 // active set (so the scheduler no longer routes prompts to it).
 func (s *Session) Close() error {
+	s.closeChannels()
 	if s.agent != nil {
 		s.agent.unregisterSession(s.id)
 	}
@@ -2275,6 +2280,9 @@ func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 }
 
 func (s *Session) emit(e types.Event) {
+	if s.channels != nil {
+		s.channels.tap(e)
+	}
 	if s.handler != nil {
 		s.handler(e)
 	}
@@ -2414,4 +2422,50 @@ func stripImagesFromMessage(m types.Message) types.Message {
 		}
 	}
 	return stripped
+}
+
+// ── Input channels ──────────────────────────────────────────────────────
+
+// attachChannels starts the listeners of sc for this session (nil = none).
+func (s *Session) attachChannels(sc *sessionChannels) error {
+	if sc == nil {
+		return nil
+	}
+	s.channels = sc
+	if err := sc.start(s); err != nil {
+		s.channels = nil
+		return err
+	}
+	return nil
+}
+
+// closeChannels stops listening and releases the claims. Idempotent.
+func (s *Session) closeChannels() {
+	s.channels.close()
+}
+
+// Channels lists the conversations this session listens to, as prompt
+// origins ("slack:C0123"). Empty when it listens to none.
+func (s *Session) Channels() []string { return s.channels.origins() }
+
+// hasChannels reports whether every requested conversation is already bound
+// to this live session (so asking for it again is a no-op, not a rebind).
+func (s *Session) hasChannels(reqs []types.InputChannel) bool {
+	if s.channels == nil || s.agent == nil {
+		return false
+	}
+	for _, r := range reqs {
+		ch := s.agent.channelOf(strings.TrimSpace(r.Type))
+		if ch == nil {
+			return false
+		}
+		id, err := ch.Resolve(context.Background(), strings.TrimSpace(r.Ref))
+		if err != nil {
+			return false
+		}
+		if _, ok := s.channels.byOrigin[ChannelOrigin(ch.Type(), id)]; !ok {
+			return false
+		}
+	}
+	return true
 }

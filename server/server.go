@@ -330,6 +330,11 @@ type createSessionRequest struct {
 	// Profiles binds the new session to registered profiles by name
 	// (persisted in its meta — see Profile). Unknown names → 400.
 	Profiles []string `json:"profiles,omitempty"`
+	// Channels are the external conversations the session listens to while it
+	// is open (agent.WithSessionChannels) — never persisted. A conversation
+	// another live session already listens to → 409; an unregistered type or
+	// an unresolvable ref → 400.
+	Channels []types.InputChannel `json:"channels,omitempty"`
 }
 
 // resumeSessionRequest is the OPTIONAL body of POST /api/sessions/{id}/resume.
@@ -342,6 +347,10 @@ type resumeSessionRequest struct {
 	// removes another frontend's). Unknown names → 400. If the session is
 	// already active, a changed binding is applied at its next turn boundary.
 	Profiles []string `json:"profiles,omitempty"`
+	// Channels to listen to while the reopened session is open (see
+	// createSessionRequest.Channels). Asking an already-open session for
+	// channels it does not listen to → 400.
+	Channels []types.InputChannel `json:"channels,omitempty"`
 }
 
 // serverInfo is returned by GET /api/server.
@@ -976,9 +985,12 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	profiles, _ := mergeProfiles(nil, req.Profiles)
 	opts := append(s.profileOptions(profiles, req.Directives), agent.WithSessionProfiles(profiles...))
+	if len(req.Channels) > 0 {
+		opts = append(opts, agent.WithSessionChannels(req.Channels...))
+	}
 	sess, err := s.agent.NewSession(req.CWD, req.Model, opts...)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, channelErrStatus(err, http.StatusInternalServerError), err)
 		return
 	}
 
@@ -1316,10 +1328,12 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	sess, opened, err := s.openSession(id, req.Profiles, req.Directives)
+	sess, opened, err := s.openSession(id, req.Profiles, req.Directives, req.Channels...)
 	if err != nil {
 		status := http.StatusInternalServerError
 		switch {
+		case channelErrStatus(err, 0) != 0:
+			status = channelErrStatus(err, 0)
 		case errors.Is(err, agent.ErrNoModelAvailable):
 			// Neither the session's model nor any fallback is usable: not a
 			// server fault — the operator must connect a provider.
@@ -1351,7 +1365,7 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 // idempotent, so the caller cannot otherwise tell "I opened it" from "somebody was
 // already using it", and a caller that closes what it resumed must close only the
 // former.
-func (s *Server) openSession(id string, addProfiles, extraDirectives []string) (sess *agent.Session, opened bool, err error) {
+func (s *Server) openSession(id string, addProfiles, extraDirectives []string, channels ...types.InputChannel) (sess *agent.Session, opened bool, err error) {
 	s.openMu.Lock()
 	defer s.openMu.Unlock()
 
@@ -1367,6 +1381,13 @@ func (s *Server) openSession(id string, addProfiles, extraDirectives []string) (
 	proxy, inServer := s.sessions[id]
 	s.mu.RUnlock()
 	if inServer {
+		if len(channels) > 0 {
+			// Same rule as the agent's fast path: an open session is not
+			// rebound, and an explicit channel is never ignored.
+			if _, _, err := s.agent.ResumeSessionReport(id, agent.WithSessionChannels(channels...)); err != nil {
+				return nil, false, err
+			}
+		}
 		if changed {
 			_ = s.agent.ReconfigureSession(id, s.profileOptions(merged, nil)...)
 		}
@@ -1377,7 +1398,11 @@ func (s *Server) openSession(id string, addProfiles, extraDirectives []string) (
 	// it live (opened outside the server), this returns that same object and
 	// ignores the options — so reconfigure it explicitly when the binding
 	// changed.
-	sess, openedByAgent, err := s.agent.ResumeSessionReport(id, s.profileOptions(merged, extraDirectives)...)
+	resumeOpts := s.profileOptions(merged, extraDirectives)
+	if len(channels) > 0 {
+		resumeOpts = append(resumeOpts, agent.WithSessionChannels(channels...))
+	}
+	sess, openedByAgent, err := s.agent.ResumeSessionReport(id, resumeOpts...)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1413,11 +1438,27 @@ type sessionDetailDTO struct {
 	// only the ones it opened, or it would end somebody else's live conversation.
 	// Omitted everywhere else.
 	Resumed *bool `json:"resumed,omitempty"`
+	// Channels are the external conversations the live session listens to, as
+	// prompt origins ("slack:C0123"). Omitted when none (and for a persisted
+	// session: channels are never stored).
+	Channels []string `json:"channels,omitempty"`
 }
 
 // liveDetail is the detail DTO of an active session.
 func liveDetail(sess *agent.Session) sessionDetailDTO {
-	return sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations(), MaxTokens: sess.MaxTokens(), ModelFallback: sess.ModelFallback()}
+	return sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations(), MaxTokens: sess.MaxTokens(), ModelFallback: sess.ModelFallback(), Channels: sess.Channels()}
+}
+
+// channelErrStatus maps a session-open failure caused by a channel to its HTTP
+// status (409 taken, 400 unavailable/invalid), else def.
+func channelErrStatus(err error, def int) int {
+	switch {
+	case errors.Is(err, agent.ErrChannelTaken):
+		return http.StatusConflict
+	case errors.Is(err, agent.ErrChannelUnavailable), errors.Is(err, agent.ErrChannelInvalid):
+		return http.StatusBadRequest
+	}
+	return def
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {

@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.108.0] - 2026-11-18
+
+### Added — input channels: a session can listen to a Slack conversation
+Several harness instances, each in its own project, can post to Slack with the same account, but until now only `harness slack` listened: when someone mentioned the account under a report that instance A had posted, the reply came from the `harness slack` bot, running elsewhere and knowing nothing about A's project. Now the session itself can listen.
+
+`harness --slack-channel producto-y` (repeatable; a channel id or name with or without `#`, a DM id, or a user id for their DM) opens the TUI with a session bound to that conversation, using the account saved by `harness slack login`:
+- **A mention of the account there becomes a prompt of that session** (in a DM, every message), wrapped as `<slack user="U…" channel="C…">…</slack>`, with attached text files as `<slack-attach path="…"/>` inside the block and images as prompt images.
+- **Everything the session writes while answering it is posted back** in that conversation, the same way `harness slack` does it: the text before and after each tool call, a typing indicator, `<slack-upload path="…"/>` uploads, errors (a provider 429 included) and compaction notices; not in a thread. Turns started anywhere else (the TUI, a schedule, a colleague) are never posted.
+- **The session gets the Slack tools** (`SlackListChannels`, `SlackListUsers`, `SlackPost`, `SlackMessages`) **and a `## Slack` section** in its system prompt, from the channel itself, not from a profile. `SlackAsk` is not included.
+- **One conversation, one session**, across every harness process on the machine: a second session asking for it fails and names the first (session, pid, cwd). A claim left by a process that died is taken over.
+- **Explicit and never saved.** `/new`, `/resume`, and `--resume` without the flag listen to nothing; a channel that cannot be honored (no Slack login, unknown name, taken) stops the TUI from opening, like `--model`.
+
+For the API and the SDK:
+- `POST /api/sessions` and `POST /api/sessions/{id}/resume` accept `channels: [{"type":"slack","ref":"…"}]` (409 when taken, 400 when unavailable or unresolvable); a live session's detail lists `channels` as `slack:<id>`. `client.WithChannels(...)`. `harness serve` registers the Slack channel when a login exists and takes no flag: each client binds per session.
+- SDK: the `agent.Channel` interface, `AgentOptions.Channels` / `harness.AgentWithChannels(...)`, `agent.WithSessionChannels(...)`, `Session.Channels()`, and the new package `channels/slack` (`slack.New(workspace, xoxc, xoxd)`), independent of `transports/slack`.
+
+`harness slack` is unchanged. Running it with the same account as a session that listens to a channel is not supported: both would answer the mention.
+
+Checked live against a real workspace (login, resolving channel names, opening and closing the socket) without posting anything; the rest is covered by tests with a fake Slack (web API and RTM socket), a fake channel in the agent and the API, and eighteen hand-made mutants, all caught.
+
 ## [0.107.0] - 2026-11-17
 
 ### Added — `synthetic` as the third WebSearch backend

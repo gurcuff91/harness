@@ -123,6 +123,12 @@ type AgentOptions struct {
 	// call time, so it's safe to enable unconditionally without a pre-flight
 	// provider check. Mirrors the opt-in style of MCPServers/Memory for "extra" tools.
 	EnableWebSearch bool
+
+	// Channels are the external-conversation implementations (Slack, …) a
+	// session can be bound to with WithSessionChannels. Registering one opens
+	// nothing: a channel listens only for the sessions bound to it. The agent
+	// does not own them beyond that (each session stops its own listeners).
+	Channels []Channel
 }
 
 // defaultMaxIterations is the fallback used when AgentOptions.MaxIterations
@@ -608,6 +614,16 @@ func (a *Agent) MCPStatuses() []mcp.Status {
 func (a *Agent) Close() error {
 	a.closeOnce.Do(func() {
 		var errs []error
+		// Stop every listener and release every claim this agent's sessions hold.
+		a.sessMu.Lock()
+		live := make([]*Session, 0, len(a.activeSessions))
+		for _, s := range a.activeSessions {
+			live = append(live, s)
+		}
+		a.sessMu.Unlock()
+		for _, s := range live {
+			s.closeChannels()
+		}
 		if a.mcpManager != nil {
 			if err := a.mcpManager.Close(); err != nil {
 				errs = append(errs, err)
@@ -658,6 +674,7 @@ type sessionConfig struct {
 	tools      []tools.Tool
 	profiles   []string
 	setProfile bool
+	channels   []types.InputChannel
 }
 
 // WithSessionProfiles sets the profile names stored in a NEW session's meta
@@ -745,8 +762,12 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 	// sessRef doc comment for why the Subagent tool needs this indirection
 	// instead of the plain "model" string.
 	var sess *Session
-	sessionTools, tl := a.buildSessionTools(sessionID, cwd, &sess, res, loader, cfg.tools...)
-	systemPrompt, pl := a.buildSystemPrompt(cwd, res, cfg.directives...)
+	chans, chDirectives, chTools, err := a.prepareChannels(sessionID, cwd, cfg.channels, cfg.tools)
+	if err != nil {
+		return nil, fmt.Errorf("new session: %w", err)
+	}
+	sessionTools, tl := a.buildSessionTools(sessionID, cwd, &sess, res, loader, append(append([]tools.Tool(nil), cfg.tools...), chTools...)...)
+	systemPrompt, pl := a.buildSystemPrompt(cwd, res, append(append([]string(nil), cfg.directives...), chDirectives...)...)
 
 	meta := store.SessionMeta{
 		ID:           sessionID,
@@ -760,6 +781,7 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 	}
 	storeInst, err := store.CreateSession(a.store, meta)
 	if err != nil {
+		chans.release()
 		return nil, fmt.Errorf("create store: %w", err)
 	}
 
@@ -770,6 +792,11 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 		res.Skills, loader.ReadSkill,
 		a.memStore != nil)
 	sess.agent = a
+	if err := sess.attachChannels(chans); err != nil {
+		_ = storeInst.Close()
+		_ = a.store.DeleteSession(sessionID)
+		return nil, fmt.Errorf("new session: %w", err)
+	}
 	a.registerSession(sess)
 	return sess, nil
 }
@@ -800,6 +827,12 @@ func (a *Agent) ResumeSessionReport(sessionID string, opts ...SessionOption) (*S
 	a.sessMu.Lock()
 	if live, ok := a.activeSessions[sessionID]; ok {
 		a.sessMu.Unlock()
+		if len(cfg.channels) > 0 && !live.hasChannels(cfg.channels) {
+			// Channels are bound when a session opens; an already-open session
+			// is not rebound behind its owner's back (and an explicit channel
+			// is never silently ignored).
+			return nil, false, fmt.Errorf("resume session: %w: session %s is already open; close it to bind channels", ErrChannelInvalid, sessionID)
+		}
 		return live, false, nil
 	}
 	a.sessMu.Unlock()
@@ -856,8 +889,13 @@ func (a *Agent) ResumeSessionReport(sessionID string, opts ...SessionOption) (*S
 	}
 
 	var sess *Session
-	resumeTools, tl := a.buildSessionTools(meta.ID, cwd, &sess, res, loader, cfg.tools...)
-	resumePrompt, pl := a.buildSystemPrompt(cwd, res, cfg.directives...)
+	chans, chDirectives, chTools, err := a.prepareChannels(meta.ID, cwd, cfg.channels, cfg.tools)
+	if err != nil {
+		_ = storeInst.Close()
+		return nil, false, fmt.Errorf("resume session: %w", err)
+	}
+	resumeTools, tl := a.buildSessionTools(meta.ID, cwd, &sess, res, loader, append(append([]tools.Tool(nil), cfg.tools...), chTools...)...)
+	resumePrompt, pl := a.buildSystemPrompt(cwd, res, append(append([]string(nil), cfg.directives...), chDirectives...)...)
 	sess = newSession(storeInst,
 		provider, modelID, thinkingLvl,
 		resumeTools, tl, resumePrompt, pl,
@@ -866,6 +904,10 @@ func (a *Agent) ResumeSessionReport(sessionID string, opts ...SessionOption) (*S
 		a.memStore != nil)
 	sess.agent = a
 	sess.modelFallback = fallback
+	if err := sess.attachChannels(chans); err != nil {
+		_ = storeInst.Close()
+		return nil, false, fmt.Errorf("resume session: %w", err)
+	}
 	a.registerSession(sess)
 	return sess, true, nil
 }
@@ -892,6 +934,12 @@ func (a *Agent) ReconfigureSession(sessionID string, opts ...SessionOption) erro
 		res = &resources.Resources{}
 	}
 	sessRef := sess
+	// The session's channels keep their tools and directive: they belong to
+	// how the session was opened, not to the options being re-applied.
+	if sc := sess.channels; sc != nil {
+		cfg.tools = append(append([]tools.Tool(nil), cfg.tools...), sc.tools...)
+		cfg.directives = append(append([]string(nil), cfg.directives...), sc.directives...)
+	}
 	reg, tl := a.buildSessionTools(sessionID, cwd, &sessRef, res, loader, cfg.tools...)
 	prompt, pl := a.buildSystemPrompt(cwd, res, cfg.directives...)
 	sess.queueReconfig(&sessionReconfig{systemPrompt: prompt, pl: pl, tools: reg, tl: tl})

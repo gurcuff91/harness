@@ -347,6 +347,19 @@ first active one). `-p` rejects `--resume` (`--resume is not supported with -p`)
 a throwaway session, so there is nothing to resume. Inside the running TUI, `/model`, `/resume`,
 `/new` and `/fork` still warn instead of failing.
 
+**Slack input channels.** `harness --slack-channel producto-y` (repeatable; a channel id, a
+name with or without `#`, a DM id, or a user id for their DM) makes the session you open listen to
+that Slack conversation with the account saved by `harness slack login`: a mention of that account
+there (in a DM, any message) becomes a prompt of THIS session, which has your project's context, and
+everything it writes while answering is posted back in that conversation. Your own turns in the TUI
+are never posted. The session gets the Slack tools (`SlackListChannels`, `SlackListUsers`,
+`SlackPost`, `SlackMessages`) and a `## Slack` section in its system prompt. One conversation is
+listened to by one session at a time, across every harness process on the machine: a second one
+fails naming the first. Explicit and never saved: `/new`, `/resume` and `--resume` without the flag
+listen to nothing. Over the API (`harness serve`), pass `channels: [{"type":"slack","ref":"…"}]`
+when creating or resuming a session. Do not run `harness slack` with the same account at the same
+time: both would answer a mention.
+
 A command name wins over a message: `harness sessions` lists sessions. To send a message that is
 exactly a command name, put it after `--`: `harness -- serve`.
 

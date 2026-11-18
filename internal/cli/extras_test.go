@@ -616,7 +616,7 @@ func TestTheTUIRunDecidesTheExtrasOnce(t *testing.T) {
 	if n := strings.Count(run, "extrasOf("); n != 1 {
 		t.Errorf("tuiCmd.Run calls extrasOf %d times, want exactly 1", n)
 	}
-	if !strings.Contains(run, "c.newTUIAgent(x)") || !strings.Contains(run, "c.newTUI(a, x)") {
+	if !strings.Contains(run, "c.newTUIAgent(x, chans...)") || !strings.Contains(run, "c.newTUI(a, x)") {
 		t.Error("tuiCmd.Run does not hand the same extras to the agent and to the TUI")
 	}
 }

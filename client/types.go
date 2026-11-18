@@ -102,6 +102,9 @@ type Session struct {
 	// idempotent). A caller that closes the sessions it resumes must close only
 	// those it opened — see ResumeSession. Nil on every other response.
 	Resumed *bool `json:"resumed,omitempty"`
+	// Channels are the external conversations a live session listens to, as
+	// prompt origins ("slack:C0123"). Empty when none.
+	Channels []string `json:"channels,omitempty"`
 }
 
 // ModelFallback says a session was reopened on another model: From is what it

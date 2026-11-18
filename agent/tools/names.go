@@ -22,3 +22,14 @@ const (
 	ToolWebSearch      = "WebSearch"
 	ToolSessionInfo    = "SessionInfo"
 )
+
+// BuiltinNames lists every built-in tool name (whether or not a given session
+// registers it): a name another source must never shadow.
+func BuiltinNames() []string {
+	return []string{
+		ToolBash, ToolRead, ToolWrite, ToolEdit, ToolFetch, ToolSkill, ToolSubagent,
+		ToolMemoWrite, ToolMemoSearch, ToolMemoDelete,
+		ToolSchedule, ToolScheduleList, ToolScheduleDelete,
+		ToolColleagueList, ToolColleagueAsk, ToolWebSearch, ToolSessionInfo,
+	}
+}

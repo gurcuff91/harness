@@ -438,6 +438,16 @@ type SessionOption func(*sessionOptions)
 type sessionOptions struct {
 	directives []string
 	profiles   []string
+	channels   []types.InputChannel
+}
+
+// WithChannels makes the session listen to these external conversations
+// while it is open (e.g. {Type: "slack", Ref: "C0123"} or a channel name).
+// Never persisted: pass them on every Create/ResumeSession that should listen.
+// A conversation another live session listens to is a 409; an unknown type or
+// an unresolvable ref a 400.
+func WithChannels(chs ...types.InputChannel) SessionOption {
+	return func(o *sessionOptions) { o.channels = append(o.channels, chs...) }
 }
 
 // WithProfiles binds the session to the server's registered profiles by name
@@ -480,6 +490,9 @@ func (c *Client) CreateSession(model, cwd, name string, opts ...SessionOption) (
 	}
 	if len(o.profiles) > 0 {
 		body["profiles"] = o.profiles
+	}
+	if len(o.channels) > 0 {
+		body["channels"] = o.channels
 	}
 	return ptr(decode[Session](c, "POST", "/api/sessions", body))
 }
@@ -538,13 +551,16 @@ func (c *Client) ForkSession(id string) (*Session, error) {
 func (c *Client) ResumeSession(id string, opts ...SessionOption) (*Session, error) {
 	o := applyClientSessionOptions(opts)
 	var body any
-	if len(o.directives) > 0 || len(o.profiles) > 0 {
+	if len(o.directives) > 0 || len(o.profiles) > 0 || len(o.channels) > 0 {
 		m := map[string]any{}
 		if len(o.directives) > 0 {
 			m["directives"] = o.directives
 		}
 		if len(o.profiles) > 0 {
 			m["profiles"] = o.profiles
+		}
+		if len(o.channels) > 0 {
+			m["channels"] = o.channels
 		}
 		body = m
 	}

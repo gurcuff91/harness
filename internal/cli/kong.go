@@ -89,8 +89,12 @@ type tuiCmd struct {
 	Model    string `help:"Model (provider/model)"`
 	Thinking string `enum:",off,low,medium,high,xhigh,max" default:"" help:"Thinking level"`
 	Resume   string `help:"Resume session by id"`
-	Prompt   string `short:"p" help:"Run a single-turn prompt instead of the interactive TUI"`
-	Output   string `enum:"text,json,json-stream" default:"text" help:"Output mode (with --prompt/-p)"`
+	// SlackChannels binds the startup session to Slack conversations (id or
+	// name, repeatable): mentions there become its prompts, its replies are
+	// posted back. Uses the `harness slack login` account.
+	SlackChannels []string `name:"slack-channel" sep:"none" help:"Listen to a Slack channel or DM (id or name; repeatable): mentions there become prompts of this session and its replies are posted back. Needs harness slack login"`
+	Prompt        string   `short:"p" help:"Run a single-turn prompt instead of the interactive TUI"`
+	Output        string   `enum:"text,json,json-stream" default:"text" help:"Output mode (with --prompt/-p)"`
 
 	// Initial is an optional trailing positional: harness "fix the login bug" opens the interactive
 	// TUI with that message already submitted (what Herdr's tab.new --task and `hc run harness

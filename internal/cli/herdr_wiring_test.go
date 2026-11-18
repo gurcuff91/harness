@@ -190,7 +190,7 @@ func TestRunBuildsItsAgentThroughNewTUIAgent(t *testing.T) {
 		t.Fatal("cannot locate tuiCmd.Run in kong_run_tui.go")
 	}
 	run := body[i:j]
-	if !strings.Contains(run, "c.newTUIAgent(x)") {
+	if !strings.Contains(run, "c.newTUIAgent(x, chans...)") {
 		t.Error("tuiCmd.Run does not build its agent with newTUIAgent")
 	}
 	if strings.Contains(run, "newInteractiveAgent(") {

@@ -27,6 +27,7 @@ import (
 	"github.com/gurcuff91/harness/internal/tui/components"
 	"github.com/gurcuff91/harness/internal/tui/render"
 	"github.com/gurcuff91/harness/internal/tui/term"
+	"github.com/gurcuff91/harness/types"
 )
 
 // CommandDef and ParamDef are the session command shapes the palette and
@@ -55,6 +56,7 @@ type TUI struct {
 
 	// Flags.
 	overrideModel    string
+	channels         []types.InputChannel // --slack-channel, for the startup session only
 	overrideThinking string
 	resumeID         string
 	schedulerOn      bool // --with-scheduler: the agent runs the engine
@@ -172,6 +174,11 @@ func (t *TUI) quit() {
 		close(t.quitCh)
 	})
 }
+
+// SetChannels sets the external conversations the startup session listens to
+// (--slack-channel). An explicit request: if one cannot be honored, startup
+// fails before the TUI opens.
+func (t *TUI) SetChannels(chs []types.InputChannel) { t.channels = chs }
 
 // SetFlags applies CLI overrides.
 func (t *TUI) SetFlags(model, thinking, resumeID string) {

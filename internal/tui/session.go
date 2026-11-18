@@ -94,7 +94,7 @@ func (t *TUI) autoConnect(ctx context.Context) error {
 	// cannot be honored the process fails (see above): a task meant for THAT conversation must not
 	// run in a fresh one.
 	if t.resumeID != "" {
-		sess, err := t.client.ResumeSession(t.resumeID)
+		sess, err := t.client.ResumeSession(t.resumeID, t.channelOptions()...)
 		if err != nil {
 			return fmt.Errorf("resume session %s: %w", t.resumeID, err)
 		}
@@ -146,9 +146,9 @@ func (t *TUI) autoConnect(ctx context.Context) error {
 	}
 
 	// Create new session.
-	sess, err := t.client.CreateSession(model, cwd, "")
+	sess, err := t.client.CreateSession(model, cwd, "", t.channelOptions()...)
 	if err != nil {
-		if t.overrideModel != "" {
+		if t.overrideModel != "" || len(t.channels) > 0 {
 			// The person chose this model and it cannot be used: not a warning, not a different
 			// model. The wording is the server's, the same as `-p` prints.
 			return fmt.Errorf("create session: %w", err)
@@ -545,4 +545,14 @@ func (t *TUI) rootCommandItems() []components.SelectItem {
 	}
 	items = append(items, components.SelectItem{Value: "quit", Label: "quit", Description: "Exit harness"})
 	return items
+}
+
+// channelOptions binds the session opened at startup to the --slack-channel
+// conversations. Only that session: /new, /resume and /fork open sessions that
+// listen to nothing (channels are explicit, per session, never inherited).
+func (t *TUI) channelOptions() []client.SessionOption {
+	if len(t.channels) == 0 {
+		return nil
+	}
+	return []client.SessionOption{client.WithChannels(t.channels...)}
 }

@@ -221,6 +221,15 @@ func AgentWithScheduler() AgentOption {
 	return func(o *agent.AgentOptions) { o.EnableScheduler = true }
 }
 
+// AgentWithChannels registers external-conversation implementations (e.g.
+// channels/slack.New(...)) that sessions can be bound to with
+// agent.WithSessionChannels. Registering opens nothing: a channel listens only
+// for the sessions bound to it, and a conversation is listened to by at most
+// one session at a time, across processes.
+func AgentWithChannels(chs ...agent.Channel) AgentOption {
+	return func(o *agent.AgentOptions) { o.Channels = append(o.Channels, chs...) }
+}
+
 // AgentWithColleagues enables the ColleagueList/ColleagueAsk tools: the agent
 // can discover OTHER running harness server instances on this machine (any
 // process that called Serve — see the client package) via the shared

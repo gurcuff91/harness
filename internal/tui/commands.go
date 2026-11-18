@@ -207,6 +207,7 @@ func (t *TUI) completeOAuthConnect(provider, verifierCode, code string) {
 const (
 	scheduleIcon  = "◷"
 	colleagueIcon = "⇄"
+	channelIcon   = "@"
 	userIcon      = "❯"
 )
 
@@ -217,6 +218,9 @@ func promptIcon(origin string) string {
 		return scheduleIcon
 	case "colleague":
 		return colleagueIcon
+	}
+	if strings.HasPrefix(origin, "slack:") { // an input channel: "<type>:<id>"
+		return channelIcon
 	}
 	return userIcon
 }
