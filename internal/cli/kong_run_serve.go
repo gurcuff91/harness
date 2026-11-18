@@ -4,9 +4,9 @@ package cli
 
 import (
 	"github.com/gurcuff91/harness/agent"
+	slackch "github.com/gurcuff91/harness/channels/slack"
 	"github.com/gurcuff91/harness/internal/logx"
 	"github.com/gurcuff91/harness/server"
-	"github.com/gurcuff91/harness/transports/slack"
 )
 
 func (c *serveCmd) Run() error {
@@ -30,6 +30,6 @@ func (c *serveCmd) newAgent() (*agent.Agent, error) {
 	opts := interactiveOptions(x, nil)
 	// Clients bind sessions to conversations through the API (channels on
 	// create/resume); serve itself takes no channel flag.
-	opts.Channels = storedChannels(slack.LoadCredentials, true)
+	opts.Channels = storedChannels(slackch.LoadCredentials, true)
 	return agent.New(opts), nil
 }

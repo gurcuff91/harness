@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/transports/slack"
+	slack "github.com/gurcuff91/harness/channels/slack"
 	"github.com/gurcuff91/harness/types"
 )
 

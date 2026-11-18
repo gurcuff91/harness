@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gurcuff91/harness/transports/slack"
+	slack "github.com/gurcuff91/harness/channels/slack"
 )
 
 // slackLoginStatus verifies the saved credentials are still valid.

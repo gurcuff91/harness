@@ -6,8 +6,8 @@ package cli
 
 import (
 	"github.com/gurcuff91/harness/agent"
+	slackch "github.com/gurcuff91/harness/channels/slack"
 	"github.com/gurcuff91/harness/internal/tui"
-	"github.com/gurcuff91/harness/transports/slack"
 )
 
 func (c *tuiCmd) Run() error {
@@ -26,7 +26,7 @@ func (c *tuiCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	chans := storedChannels(slack.LoadCredentials, false) // never log to the terminal the TUI draws on
+	chans := storedChannels(slackch.LoadCredentials, false) // never log to the terminal the TUI draws on
 	inputs, err := slackInputChannels(c.SlackChannels, chans)
 	if err != nil {
 		return err

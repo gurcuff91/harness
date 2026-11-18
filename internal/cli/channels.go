@@ -7,7 +7,6 @@ import (
 	"github.com/gurcuff91/harness/agent"
 	slackch "github.com/gurcuff91/harness/channels/slack"
 	"github.com/gurcuff91/harness/internal/logx"
-	"github.com/gurcuff91/harness/transports/slack"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -19,7 +18,7 @@ const errNoSlackLogin = "slack channel not available: run harness slack login"
 // register: Slack when a login is stored (`harness slack login`). Registering
 // opens nothing — a channel only listens for the sessions bound to it.
 // loadSlack is a parameter so a test never reads the real credentials.
-func storedChannels(loadSlack func() (*slack.Credentials, error), withLogger bool) []agent.Channel {
+func storedChannels(loadSlack func() (*slackch.Credentials, error), withLogger bool) []agent.Channel {
 	creds, err := loadSlack()
 	if err != nil || creds == nil || creds.Workspace == "" || creds.XoxC == "" {
 		return nil

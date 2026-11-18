@@ -66,10 +66,8 @@ var _ agent.Channel = (*Channel)(nil)
 // New builds a Slack channel for the given workspace URL and session tokens.
 // Building it contacts nothing; the account is checked at the first use.
 //
-// NOTE: credentials are passed in explicitly; today the CLI reads them with
-// transports/slack.LoadCredentials(). When transports/slack is deprecated,
-// this package will likely get its own LoadCredentials reading the same
-// stored credentials.
+// Credentials are passed in explicitly, so an SDK caller can use any account;
+// LoadCredentials returns the one `harness slack login` saved.
 func New(workspace, xoxc, xoxd string, opts ...Option) *Channel {
 	c := &Channel{
 		bot:       NewBot(strings.TrimRight(workspace, "/"), xoxc, xoxd),

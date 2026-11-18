@@ -19,6 +19,8 @@ For the API and the SDK:
 - `POST /api/sessions` and `POST /api/sessions/{id}/resume` accept `channels: [{"type":"slack","ref":"…"}]` (409 when taken, 400 when unavailable or unresolvable); a live session's detail lists `channels` as `slack:<id>`. `client.WithChannels(...)`. `harness serve` registers the Slack channel when a login exists and takes no flag: each client binds per session.
 - SDK: the `agent.Channel` interface, `AgentOptions.Channels` / `harness.AgentWithChannels(...)`, `agent.WithSessionChannels(...)`, `Session.Channels()`, and the new package `channels/slack` (`slack.New(workspace, xoxc, xoxd)`), independent of `transports/slack`.
 
+`channels/slack` does not depend on `transports/slack`: it has its own copy of the login (`LoadCredentials`, `SaveCredentials`, `DeleteCredentials`, `DeriveXoxC`, `VerifyAndSave`), reading and writing the same saved login, and `harness slack login` (with `--status`) now goes through it. Only the `harness slack` bot and `harness slack admin` still use the transport, so it can be removed later without losing the login or the channels.
+
 `harness slack` is unchanged. Running it with the same account as a session that listens to a channel is not supported: both would answer the mention.
 
 Checked live against a real workspace (login, resolving channel names, opening and closing the socket) without posting anything; the rest is covered by tests with a fake Slack (web API and RTM socket), a fake channel in the agent and the API, and eighteen hand-made mutants, all caught.

@@ -7,26 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/gurcuff91/harness/types"
 )
-
-// NormalizeXoxD returns the d (xoxd) cookie in the URL-encoded form Slack
-// expects. Idempotent (an already-encoded value is left as-is) and tolerant of
-// a pasted "d=" prefix and surrounding whitespace/quotes.
-func NormalizeXoxD(xoxd string) string {
-	v := strings.TrimSpace(xoxd)
-	v = strings.TrimPrefix(v, "d=")
-	v = strings.Trim(v, `"'`)
-	if v == "" || strings.Contains(v, "%") {
-		return v
-	}
-	return url.QueryEscape(v)
-}
 
 // fetchFiles downloads the files of an incoming message: images come back as
 // prompt images, text files as temp paths (each becomes a <slack-attach/>).
