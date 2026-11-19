@@ -109,3 +109,11 @@ instance registry (`server.RegisterInstance`/`ListInstances`/`InstanceInfo`,
 `ResumeSessionReport`, `client.ListActiveSessions`/`WithoutQueue`/`IsBusy`).
 Telegram's quiet mode now recognises the channel's origins: a colleague's
 question (`colleague:<id>`) is quiet, a reply (`colleague:<id>#reply`) is shown.
+
+## Addendum (v0.111.1): registering the channel is the switch
+
+`AgentOptions.SessionChannels` (a per-agent list of channel requests added in
+0.110.0 to make every session a colleague) was replaced by `agent.AutoChannel`:
+a channel that implements it (`AutoRef()`) is bound by the agent to every
+session it opens. The colleague channel implements it with `"*"`, so
+`AgentWithChannels(colleague.New())` alone makes every session a colleague.

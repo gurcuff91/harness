@@ -31,9 +31,9 @@ import (
 // prompts' origin ("colleague:<id>").
 const Type = "colleague"
 
-// AutoID is the reference that asks for a fresh random id, not claimed by a
+// autoID is the reference that asks for a fresh random id, not claimed by a
 // live session ("scorpion-hero").
-const AutoID = "*"
+const autoID = "*"
 
 // maxSocketPath is the longest socket path accepted (macOS: 104 bytes with
 // the terminating NUL; Linux allows 108).
@@ -64,7 +64,11 @@ type Channel struct {
 	bound map[string]*inbox // id → its listener and reply pump
 }
 
-var _ agent.Channel = (*Channel)(nil)
+var _ agent.AutoChannel = (*Channel)(nil)
+
+// AutoRef implements agent.AutoChannel: registering the colleague channel makes
+// every session the agent opens a colleague, each with a fresh random id.
+func (c *Channel) AutoRef() string { return autoID }
 
 // New builds a colleague channel. Building it opens nothing: a socket is
 // opened when a session binds an id.
@@ -120,11 +124,11 @@ func (c *Channel) socketPath(id string) string {
 	return filepath.Join(c.runDir, "c-"+id+".sock")
 }
 
-// Resolve implements agent.Channel: AutoID picks a fresh id no live session
+// Resolve implements agent.Channel: autoID ("*") picks a fresh id no live session
 // claims; anything else must be a valid id and is used as is.
 func (c *Channel) Resolve(_ context.Context, ref string) (string, error) {
 	ref = strings.TrimSpace(ref)
-	if ref == AutoID {
+	if ref == autoID {
 		for i := 0; i < 64; i++ {
 			if id := randomID(); !agent.ChannelClaimTaken(Type, id) {
 				return id, nil

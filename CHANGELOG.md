@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.111.1] - 2026-11-19
+
+### Changed — registering the colleague channel is the switch
+`harness.AgentWithChannels(colleague.New())` alone now makes every session the agent opens (new, resumed or forked) a colleague with a fresh name: the channel implements the new `agent.AutoChannel` interface (a channel that joins every session by itself), and the agent binds each registered one to every session. **Breaking for 0.111.0's SDK, released earlier today:** `agent.AgentOptions.SessionChannels`, `harness.AgentWithSessionChannels` and `colleague.AutoID` are removed — they were a second step to ask for what registering the channel now does. A colleague's id is always generated; it is never supplied by a user.
+
 ## [0.111.0] - 2026-11-19
 
 ### Breaking — the old colleague implementation and the instance registry are removed

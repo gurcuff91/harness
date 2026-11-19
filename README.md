@@ -213,7 +213,7 @@ Without them, harness uses `configstore.FileStore` over
 the process.
 
 The agent is configured with functional options: `AgentWithThinking`,
-`AgentWithMCPs`, `AgentWithMemory`, `AgentWithScheduler`, `AgentWithChannels`, `AgentWithSessionChannels`,
+`AgentWithMCPs`, `AgentWithMemory`, `AgentWithScheduler`, `AgentWithChannels`,
 `AgentWithWebSearch`, `AgentWithTerminal`, `AgentWithMaxIterations`,
 `AgentWithMaxTokens`, `AgentWithSystemPrompt`, `AgentWithDirectives`,
 `AgentWithTools`, `AgentWithDisallowedTools`, `AgentWithStore`,
@@ -326,8 +326,8 @@ project each works in) and `ColleagueAsk`, which is asynchronous: it returns as 
 delivered, and the answer comes back later as a new prompt (`<colleague from="raiden-god" reply>…`). The
 session that is asked answers automatically when its turn ends. A session that closes takes its
 conversations with it. The TUI shows the name in its channels line (`channels [colleague: scorpion-hero]`).
-From the SDK: `harness.AgentWithChannels(colleague.New())` plus
-`harness.AgentWithSessionChannels(types.InputChannel{Type: "colleague", Ref: "*"})` so every session gets a name.
+From the SDK: `harness.AgentWithChannels(colleague.New())` — registering the channel is enough, every
+session the agent opens becomes a colleague with a name of its own.
 
 **A first message.** `harness "fix the login bug"` (or `harness fix the login bug` — the words are
 joined with a space) opens the normal interactive TUI and submits that message as if you had typed

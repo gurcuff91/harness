@@ -123,13 +123,6 @@ type AgentOptions struct {
 	// omitted rather than guessed from the launcher's environment.
 	Terminal string
 
-	// SessionChannels are bound to EVERY session this agent opens (new,
-	// resumed, forked), before any the caller asks for — e.g. a colleague
-	// channel with an automatic id, so each session is reachable by the other
-	// agents of the machine whatever frontend opened it. A resume of a session
-	// that is already open keeps what it has.
-	SessionChannels []types.InputChannel
-
 	// Channels are the external-conversation implementations (Slack, …) a
 	// session can be bound to with WithSessionChannels. Registering one opens
 	// nothing: a channel listens only for the sessions bound to it. The agent
@@ -1711,11 +1704,17 @@ func sessionChannelInfos(chs []ChannelInfo) []tools.SessionChannelInfo {
 	return out
 }
 
-// withSessionChannels is the channels a session opens with: the agent's own
-// (AgentOptions.SessionChannels) first, then the caller's.
+// withSessionChannels is the channels a session opens with: every registered
+// AutoChannel (it joins each session by itself) first, then the caller's.
 func (a *Agent) withSessionChannels(reqs []types.InputChannel) []types.InputChannel {
-	if len(a.opts.SessionChannels) == 0 {
+	var auto []types.InputChannel
+	for _, ch := range a.opts.Channels {
+		if ac, ok := ch.(AutoChannel); ok && ac != nil {
+			auto = append(auto, types.InputChannel{Type: ch.Type(), Ref: ac.AutoRef()})
+		}
+	}
+	if len(auto) == 0 {
 		return reqs
 	}
-	return append(append([]types.InputChannel(nil), a.opts.SessionChannels...), reqs...)
+	return append(auto, reqs...)
 }

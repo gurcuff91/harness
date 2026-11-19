@@ -611,8 +611,4 @@ func TestAgentWithTerminalAndChannelsSetTheirOptions(t *testing.T) {
 	if o.Terminal != "Ghostty" {
 		t.Errorf("Terminal = %q", o.Terminal)
 	}
-	AgentWithSessionChannels(types.InputChannel{Type: "colleague", Ref: "*"})(&o)
-	if len(o.SessionChannels) != 1 || o.SessionChannels[0].Type != "colleague" {
-		t.Errorf("SessionChannels = %v", o.SessionChannels)
-	}
 }

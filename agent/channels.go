@@ -61,6 +61,16 @@ type ChannelInfo struct {
 	Name string `json:"name"`
 }
 
+// AutoChannel is a Channel that joins EVERY session its agent opens — new,
+// resumed or forked, whichever frontend opens it — instead of waiting to be
+// asked: registering it is the switch (the colleague channel: each session
+// becomes a colleague with a name of its own). AutoRef is the reference each
+// session is bound with; the channel resolves it (e.g. to a fresh id).
+type AutoChannel interface {
+	Channel
+	AutoRef() string
+}
+
 // Inbound is one message a Channel delivers to its session.
 type Inbound struct {
 	Text   string

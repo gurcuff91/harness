@@ -49,7 +49,8 @@
 //   - transports/{telegram,acp} — the runners RunTelegram/RunAcp wrap, and
 //     their Option types
 //   - channels/slack, channels/colleague — the input channels (see
-//     [AgentWithChannels], [AgentWithSessionChannels])
+//     [AgentWithChannels]; registering the colleague channel makes every
+//     session a colleague)
 //   - client           — typed HTTP/SSE client for a running harness server
 //   - types            — Event, Message, ModelMeta and other shared types
 //
@@ -229,14 +230,6 @@ func AgentWithScheduler() AgentOption {
 // one session at a time, across processes.
 func AgentWithChannels(chs ...agent.Channel) AgentOption {
 	return func(o *agent.AgentOptions) { o.Channels = append(o.Channels, chs...) }
-}
-
-// AgentWithSessionChannels binds every session the agent opens (new, resumed,
-// forked) to these channels — e.g. {Type: "colleague", Ref: "*"} with
-// channels/colleague.New() registered, so each session is a colleague with a
-// name of its own. See agent.AgentOptions.SessionChannels.
-func AgentWithSessionChannels(chs ...types.InputChannel) AgentOption {
-	return func(o *agent.AgentOptions) { o.SessionChannels = append(o.SessionChannels, chs...) }
 }
 
 // AgentWithWebSearch enables the built-in WebSearch tool. The tool owns its

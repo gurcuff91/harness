@@ -506,3 +506,66 @@ func TestAChannelToolClashesWithABuiltinTheSessionHas(t *testing.T) {
 		t.Fatalf("without WebSearch: %v", err)
 	}
 }
+
+// autoFake is a fakeChannel that joins every session by itself, resolving
+// its automatic reference to a fresh id each time (like the colleague channel).
+type autoFake struct {
+	*fakeChannel
+	n *int
+}
+
+func (autoFake) AutoRef() string { return "*" }
+func (f autoFake) Resolve(ctx context.Context, ref string) (string, error) {
+	if ref == "*" {
+		*f.n++
+		return fmt.Sprintf("A%d", *f.n), nil
+	}
+	return f.fakeChannel.Resolve(ctx, ref)
+}
+
+// Registering an AutoChannel is the switch: every session the agent opens —
+// new, resumed, forked — is bound to it without being asked; a plain Channel
+// (Slack-like) never is.
+func TestAnAutoChannelJoinsEverySession(t *testing.T) {
+	auto := autoFake{newFakeChannel("auto"), new(int)}
+	auto.toolName = "AutoTool"
+	plain := newFakeChannel("plain")
+	plain.toolName = "PlainTool"
+	withCleanProviderRegistry(t)
+	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
+	name := "autoch-" + strings.NewReplacer("/", "-").Replace(t.Name())
+	var thinking string
+	providers.AddForTest(&echoProvider{fakeThinkingProbeProvider{name: name, lastThinking: &thinking}})
+	a := New(AgentOptions{Store: store.NewInMemoryStore(), Channels: []Channel{auto, plain}})
+	defer a.Close()
+	types := func(s *Session) string {
+		var out []string
+		for _, c := range s.Channels() {
+			out = append(out, c.Type+":"+c.ID)
+		}
+		return strings.Join(out, ",")
+	}
+	s, err := a.NewSession(t.TempDir(), name+"/fake-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := types(s); got != "auto:A1" {
+		t.Errorf("new session channels = %q, want only the auto channel", got)
+	}
+	f, err := a.ForkSession(s.ID())
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+	if got := types(f); got != "auto:A2" {
+		t.Errorf("fork channels = %q", got)
+	}
+	id := s.ID()
+	_ = s.Close()
+	r, err := a.ResumeSession(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := types(r); got != "auto:A3" {
+		t.Errorf("resumed session channels = %q (a fresh id on every open)", got)
+	}
+}

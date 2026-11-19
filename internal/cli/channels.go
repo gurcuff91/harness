@@ -64,6 +64,3 @@ func colleagueChannels(x extras, withLogger bool) []agent.Channel {
 	}
 	return []agent.Channel{colleaguech.New(opts...)}
 }
-
-// colleagueAuto is the request that gives a session a fresh colleague id.
-var colleagueAuto = types.InputChannel{Type: colleaguech.Type, Ref: colleaguech.AutoID}

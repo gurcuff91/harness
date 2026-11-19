@@ -136,8 +136,8 @@ func TestTwoColleaguesTalk(t *testing.T) {
 	ch := New(WithRunDir(shortDir(t)))
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), Channels: []agent.Channel{ch}})
 	defer a.Close()
-	open := func(id string) (*agent.Session, *eventLog) {
-		s, err := a.NewSession(t.TempDir(), "scripted/m", agent.WithSessionChannels(types.InputChannel{Type: Type, Ref: id}))
+	open := func() (*agent.Session, *eventLog) {
+		s, err := a.NewSession(t.TempDir(), "scripted/m") // registering the channel makes it a colleague
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -145,19 +145,19 @@ func TestTwoColleaguesTalk(t *testing.T) {
 		s.Subscribe(l.add)
 		return s, l
 	}
-	scorpion, sl := open("scorpion-hero")
-	raiden, rl := open("raiden-god")
-	_ = raiden
+	scorpion, sl := open()
+	raiden, rl := open()
+	sID, rID := colleagueID(t, scorpion), colleagueID(t, raiden)
 
 	sentBefore := repliesSent.Load()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if _, err := scorpion.PromptAndWait(ctx, "ASK raiden-god: what is your module path?"); err != nil {
+	if _, err := scorpion.PromptAndWait(ctx, "ASK "+rID+": what is your module path?"); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "scorpion receives raiden's reply", func() bool {
 		for _, p := range sl.prompts() {
-			if p.Origin == "colleague:raiden-god#reply" {
+			if p.Origin == "colleague:"+rID+"#reply" {
 				return true
 			}
 		}
@@ -165,17 +165,17 @@ func TestTwoColleaguesTalk(t *testing.T) {
 	})
 	// raiden got the question from scorpion, with scorpion as origin
 	rp := rl.prompts()
-	if len(rp) != 1 || rp[0].Origin != "colleague:scorpion-hero" || !strings.Contains(rp[0].Output, "what is your module path?") {
+	if len(rp) != 1 || rp[0].Origin != "colleague:"+sID || !strings.Contains(rp[0].Output, "what is your module path?") {
 		t.Fatalf("raiden's prompts = %+v", rp)
 	}
 	// the reply carries raiden's final answer
 	var reply string
 	for _, p := range sl.prompts() {
-		if p.Origin == "colleague:raiden-god#reply" {
+		if p.Origin == "colleague:"+rID+"#reply" {
 			reply = p.Output
 		}
 	}
-	if !strings.Contains(reply, `<colleague from="raiden-god" reply>`) || !strings.Contains(reply, "ANSWER: what is your module path?") {
+	if !strings.Contains(reply, `<colleague from="`+rID+`" reply>`) || !strings.Contains(reply, "ANSWER: what is your module path?") {
 		t.Errorf("reply = %q", reply)
 	}
 	// No loop: once scorpion's reply turn has ended (its THANKS), give it time
@@ -226,14 +226,15 @@ func TestAReplyToAColleagueThatLeftIsLost(t *testing.T) {
 	ch := New(WithRunDir(shortDir(t)))
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), Channels: []agent.Channel{ch}})
 	defer a.Close()
-	raiden, err := a.NewSession(t.TempDir(), "scripted2/m", agent.WithSessionChannels(types.InputChannel{Type: Type, Ref: "raiden-god"}))
+	raiden, err := a.NewSession(t.TempDir(), "scripted2/m")
 	if err != nil {
 		t.Fatal(err)
 	}
+	rID := colleagueID(t, raiden)
 	l := &eventLog{}
 	raiden.Subscribe(l.add)
 	// a "colleague" that asks and is gone before the answer
-	if err := send(context.Background(), ch.socketPath("raiden-god"), message{Kind: kindAsk, From: "ghost-one", Text: "hello"}); err != nil {
+	if err := send(context.Background(), ch.socketPath(rID), message{Kind: kindAsk, From: "ghost-one", Text: "hello"}); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "raiden answers", func() bool { return model.count() >= 1 && len(l.prompts()) == 1 })
@@ -271,16 +272,18 @@ func TestTheReplyIsTheFinalText(t *testing.T) {
 	ch := New(WithRunDir(shortDir(t)))
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), Channels: []agent.Channel{ch}})
 	defer a.Close()
-	if _, err := a.NewSession(t.TempDir(), "scripted3/m", agent.WithSessionChannels(types.InputChannel{Type: Type, Ref: "raiden-god"})); err != nil {
+	raiden, err := a.NewSession(t.TempDir(), "scripted3/m")
+	if err != nil {
 		t.Fatal(err)
 	}
+	rID := colleagueID(t, raiden)
 	var got inboxRec
 	stop, err := ch.Listen(context.Background(), "asker-one", got.deliver) // a bare listener as the asker
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stop()
-	if err := send(context.Background(), ch.socketPath("raiden-god"), message{Kind: kindAsk, From: "asker-one", Text: "please use a tool"}); err != nil {
+	if err := send(context.Background(), ch.socketPath(rID), message{Kind: kindAsk, From: "asker-one", Text: "please use a tool"}); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "the reply", func() bool { return len(got.all()) == 1 })
@@ -306,14 +309,27 @@ func TestAutoIDAvoidsTakenIDs(t *testing.T) {
 	}
 	ch := New(WithRunDir(shortDir(t)))
 	for i := 0; i < 20; i++ {
-		id, err := ch.Resolve(context.Background(), AutoID)
+		id, err := ch.Resolve(context.Background(), autoID)
 		if err != nil || id != "a-free" {
 			t.Fatalf("Resolve = %q, %v; want the one free id", id, err)
 		}
 	}
 	// all taken: an error, never a taken id
 	_, _ = sm.ClaimChannel(config.ChannelClaim{Type: Type, ID: "a-free", Session: "s-free", PID: os.Getpid()}, func(config.ChannelClaim) bool { return true })
-	if id, err := ch.Resolve(context.Background(), AutoID); err == nil {
+	if id, err := ch.Resolve(context.Background(), autoID); err == nil {
 		t.Fatalf("every id taken, yet got %q", id)
 	}
+}
+
+// colleagueID is the id the colleague channel gave a session (every session
+// the agent opens gets one: the channel joins it by itself).
+func colleagueID(t *testing.T, s *agent.Session) string {
+	t.Helper()
+	for _, c := range s.Channels() {
+		if c.Type == Type {
+			return c.ID
+		}
+	}
+	t.Fatal("the session is not a colleague")
+	return ""
 }

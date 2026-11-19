@@ -5,7 +5,6 @@ import (
 	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/mcp"
-	"github.com/gurcuff91/harness/types"
 )
 
 // interactiveMaxIterations is the ReAct iteration cap for interactive
@@ -115,13 +114,10 @@ func interactiveOptions(x extras, directives []string) agent.AgentOptions {
 		MaxIterations:   interactiveMaxIterations,
 		Directives:      directives,
 	}
-	// --with-colleagues activates the colleague channel (channels/colleague):
-	// every session this agent opens — whichever frontend opens it — gets a
-	// colleague id of its own.
-	if x.colleagues {
-		opts.Channels = colleagueChannels(x, false)
-		opts.SessionChannels = []types.InputChannel{colleagueAuto}
-	}
+	// --with-colleagues registers the colleague channel (channels/colleague):
+	// that alone makes every session this agent opens — whichever frontend
+	// opens it — a colleague with an id of its own.
+	opts.Channels = colleagueChannels(x, false)
 	return opts
 }
 
