@@ -33,9 +33,10 @@ func (stubChannel) Resolve(_ context.Context, ref string) (string, error) {
 func (stubChannel) Listen(context.Context, string, func(agent.Inbound)) (func(), error) {
 	return func() {}, nil
 }
-func (stubChannel) HandleEvent(string, types.Event) {}
-func (stubChannel) Directive([]string) string       { return "" }
-func (stubChannel) Tools() []tools.Tool             { return nil }
+func (stubChannel) HandleEvent(string, types.Event)          {}
+func (stubChannel) Name(_ context.Context, id string) string { return "#" + strings.ToLower(id) }
+func (stubChannel) Directive([]string) string                { return "" }
+func (stubChannel) Tools() []tools.Tool                      { return nil }
 
 func channelServer(t *testing.T) *client.Client {
 	t.Helper()
@@ -68,7 +69,7 @@ func TestSessionChannelsOverTheAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(s1.Channels) != 1 || s1.Channels[0] != "stub:C1" {
+	if len(s1.Channels) != 1 || s1.Channels[0] != (client.ChannelInfo{Type: "stub", ID: "C1", Name: "#c1"}) {
 		t.Errorf("created session channels = %v", s1.Channels)
 	}
 	if got, _ := c.GetSession(s1.ID); len(got.Channels) != 1 {
@@ -110,11 +111,11 @@ func TestSessionChannelsOverTheAPI(t *testing.T) {
 		t.Errorf("unresolvable on resume: status %d (%v)", statusOf(err), err)
 	}
 	r, err = c.ResumeSession(s1.ID, client.WithChannels(types.InputChannel{Type: "stub", Ref: "c2"}))
-	if err != nil || len(r.Channels) != 1 || r.Channels[0] != "stub:C2" {
+	if err != nil || len(r.Channels) != 1 || r.Channels[0].ID != "C2" || r.Channels[0].Name != "#c2" {
 		t.Fatalf("resume with channel: %v %v", r, err)
 	}
 	b, _ := json.Marshal(r)
-	if !strings.Contains(string(b), `"channels":["stub:C2"]`) {
+	if !strings.Contains(string(b), `"channels":[{"type":"stub","id":"C2","name":"#c2"}]`) {
 		t.Errorf("wire form: %s", b)
 	}
 }

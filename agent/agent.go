@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -123,6 +124,12 @@ type AgentOptions struct {
 	// call time, so it's safe to enable unconditionally without a pre-flight
 	// provider check. Mirrors the opt-in style of MCPServers/Memory for "extra" tools.
 	EnableWebSearch bool
+
+	// Terminal names the terminal this agent's sessions run in (e.g.
+	// "Ghostty", or a workspace terminal with its address), reported by SessionInfo. Empty for an agent that has
+	// no terminal of its own (a server, an SDK embedder, a bot): it is then
+	// omitted rather than guessed from the launcher's environment.
+	Terminal string
 
 	// Channels are the external-conversation implementations (Slack, …) a
 	// session can be bound to with WithSessionChannels. Registering one opens
@@ -1455,6 +1462,10 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 				Version:       version.Version,
 				MCPConnected:  mcpConnected,
 				ScheduleCount: scheduleCount,
+				OS:            runtime.GOOS,
+				Arch:          runtime.GOARCH,
+				Terminal:      a.opts.Terminal,
+				Channels:      sessionChannelInfos(sess.Channels()),
 
 				InputTokens:   stats.InputTokens,
 				OutputTokens:  stats.OutputTokens,
@@ -1704,3 +1715,13 @@ func defaultSessionName(t time.Time) string {
 }
 
 // isDefaultSessionName returns true if the name matches the auto-generated date format.
+
+// sessionChannelInfos converts the session's channels for SessionInfo (always
+// a non-nil slice, so the tool reports [] rather than null).
+func sessionChannelInfos(chs []ChannelInfo) []tools.SessionChannelInfo {
+	out := make([]tools.SessionChannelInfo, 0, len(chs))
+	for _, c := range chs {
+		out = append(out, tools.SessionChannelInfo{Type: c.Type, ID: c.ID, Name: c.Name})
+	}
+	return out
+}

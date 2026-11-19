@@ -319,3 +319,24 @@ func (c *Channel) Tools() []atools.Tool {
 	c.idMu.Unlock()
 	return slackTools(c.bot, me)
 }
+
+// Name implements agent.Channel: "#name" for a channel, "@person" for a DM,
+// the id itself when Slack does not say.
+func (c *Channel) Name(ctx context.Context, id string) string {
+	info, err := c.bot.ConversationInfo(ctx, id)
+	if err != nil {
+		return id
+	}
+	if info.IsIM {
+		if u, err := c.bot.UserInfo(ctx, info.User); err == nil {
+			if n := u.displayName(); n != "" {
+				return "@" + n
+			}
+		}
+		return id
+	}
+	if info.Name != "" {
+		return "#" + info.Name
+	}
+	return id
+}

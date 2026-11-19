@@ -230,6 +230,7 @@ func (s *Session) AddMessage(msg types.Message) error {
 func (s *Session) AppendMessage(msg types.Message) (index int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	stamp(&msg)
 	if err := s.port.AppendMessage(s.id, msg); err != nil {
 		return 0, err
 	}
@@ -244,6 +245,7 @@ func (s *Session) AddCompactionSummary(summary string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ckpt := CompactionMessage(summary)
+	stamp(&ckpt)
 	if err := s.port.AppendMessage(s.id, ckpt); err != nil {
 		return err
 	}
@@ -351,4 +353,12 @@ func Rename(port SessionStore, sessionID, name string) error {
 	}
 	meta.Name = name
 	return port.SaveMeta(meta)
+}
+
+// stamp sets a message's CreatedAt (UTC, millisecond precision) unless the
+// caller already set one. Every message the session logs passes through here.
+func stamp(msg *types.Message) {
+	if msg.CreatedAt.IsZero() {
+		msg.CreatedAt = time.Now().UTC().Truncate(time.Millisecond)
+	}
 }

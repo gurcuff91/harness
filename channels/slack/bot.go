@@ -481,3 +481,65 @@ func (b *Bot) apiCall(ctx context.Context, method string, params map[string]stri
 	}
 	return body, nil
 }
+
+// ── conversations.info / users.info ─────────────────────────────────────
+
+// conversationInfo is what conversations.info says about one conversation.
+type conversationInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	IsIM bool   `json:"is_im"`
+	User string `json:"user"` // the other person, in a DM
+}
+
+// ConversationInfo returns a conversation's name, or, for a DM, its person.
+func (b *Bot) ConversationInfo(ctx context.Context, id string) (*conversationInfo, error) {
+	raw, err := b.apiCall(ctx, "conversations.info", map[string]string{"channel": id})
+	if err != nil {
+		return nil, err
+	}
+	var r struct {
+		OK      bool             `json:"ok"`
+		Error   string           `json:"error"`
+		Channel conversationInfo `json:"channel"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return nil, fmt.Errorf("slack conversations.info: decode: %w", err)
+	}
+	if !r.OK {
+		return nil, fmt.Errorf("slack conversations.info: %s", r.Error)
+	}
+	return &r.Channel, nil
+}
+
+// UserInfo returns one user.
+func (b *Bot) UserInfo(ctx context.Context, userID string) (*SlackUser, error) {
+	raw, err := b.apiCall(ctx, "users.info", map[string]string{"user": userID})
+	if err != nil {
+		return nil, err
+	}
+	var r struct {
+		OK    bool      `json:"ok"`
+		Error string    `json:"error"`
+		User  SlackUser `json:"user"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return nil, fmt.Errorf("slack users.info: decode: %w", err)
+	}
+	if !r.OK {
+		return nil, fmt.Errorf("slack users.info: %s", r.Error)
+	}
+	return &r.User, nil
+}
+
+// displayName is how a person is shown: display name, else real name, else
+// the @handle.
+func (u SlackUser) displayName() string {
+	switch {
+	case u.Profile.DisplayName != "":
+		return u.Profile.DisplayName
+	case u.Profile.RealName != "":
+		return u.Profile.RealName
+	}
+	return u.Name
+}

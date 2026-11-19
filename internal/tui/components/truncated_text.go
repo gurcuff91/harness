@@ -17,6 +17,7 @@ import (
 type TruncatedText struct {
 	mu       sync.Mutex
 	text     string
+	short    string // shown instead of text when text does not fit ("" = none)
 	paddingX int
 }
 
@@ -25,17 +26,22 @@ func NewTruncatedText(text string, paddingX int) *TruncatedText {
 	return &TruncatedText{text: text, paddingX: paddingX}
 }
 
-// SetText updates the content.
-func (t *TruncatedText) SetText(text string) {
+// SetText updates the content (and drops any shorter alternative).
+func (t *TruncatedText) SetText(text string) { t.SetTexts(text, "") }
+
+// SetTexts sets the content and a shorter alternative drawn instead when the
+// content does not fit the width (the alternative is then truncated as
+// usual). An empty short means none.
+func (t *TruncatedText) SetTexts(text, short string) {
 	t.mu.Lock()
-	t.text = text
+	t.text, t.short = text, short
 	t.mu.Unlock()
 }
 
 // Render returns exactly one line, truncated (with ellipsis) to width.
 func (t *TruncatedText) Render(width int) []string {
 	t.mu.Lock()
-	text := t.text
+	text, short := t.text, t.short
 	t.mu.Unlock()
 
 	if text == "" {
@@ -44,6 +50,9 @@ func (t *TruncatedText) Render(width int) []string {
 	avail := width - t.paddingX*2
 	if avail < 1 {
 		avail = 1
+	}
+	if short != "" && ansi.VisibleWidth(text) > avail {
+		text = short
 	}
 	line := ansi.TruncateToWidth(text, avail, "…", false)
 	if t.paddingX > 0 {

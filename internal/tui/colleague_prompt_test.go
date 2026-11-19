@@ -10,22 +10,25 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
-// The icon picked for each origin: a colleague's prompt has its own, distinct from
-// the scheduler's clock and from the user's own prompt.
+// Three icons, no more: the person at this terminal, a schedule, and
+// everything that came from outside (any other origin, present or future).
 func TestPromptIconPerOrigin(t *testing.T) {
 	for origin, want := range map[string]string{
-		"":          userIcon,
-		"user":      userIcon,
-		"scheduled": scheduleIcon,
-		"colleague": colleagueIcon,
-		"telegram":  userIcon,
+		"":              userIcon,
+		"user":          userIcon,
+		"scheduled":     scheduleIcon,
+		"colleague":     outsideIcon,
+		"herdr":         outsideIcon,
+		"slack:C0123":   outsideIcon,
+		"telegram":      outsideIcon,
+		"something-new": outsideIcon,
 	} {
 		if got := promptIcon(origin); got != want {
 			t.Errorf("promptIcon(%q) = %q, want %q", origin, got, want)
 		}
 	}
-	if colleagueIcon == userIcon || colleagueIcon == scheduleIcon {
-		t.Errorf("the colleague icon %q must be distinct from user %q and scheduled %q", colleagueIcon, userIcon, scheduleIcon)
+	if outsideIcon == userIcon || outsideIcon == scheduleIcon || userIcon == scheduleIcon {
+		t.Error("the three icons must be distinct")
 	}
 }
 
@@ -63,8 +66,8 @@ func TestTUIEchoesAColleaguePromptWithItsIcon(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if !strings.Contains(got, colleagueIcon+" colleague says hi") {
-		t.Fatalf("the TUI did not echo the colleague's prompt with its icon %q:\n%s", colleagueIcon, got)
+	if !strings.Contains(got, outsideIcon+" colleague says hi") {
+		t.Fatalf("the TUI did not echo the colleague's prompt with its icon %q:\n%s", outsideIcon, got)
 	}
 	if strings.Contains(got, userIcon+" colleague says hi") {
 		t.Errorf("a colleague's prompt must NOT be shown as typed by the user:\n%s", got)
@@ -99,12 +102,61 @@ func TestTUIHistoryShowsPersistedOrigins(t *testing.T) {
 	tu := f.tui(f.sessionID)
 	tu.autoConnect(context.Background())
 	got := screenText(tu)
-	for _, want := range []string{userIcon + " typed by the user", colleagueIcon + " sent by a colleague", scheduleIcon + " fired by the scheduler"} {
+	for _, want := range []string{userIcon + " typed by the user", outsideIcon + " sent by a colleague", scheduleIcon + " fired by the scheduler"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the reloaded history lacks %q:\n%s", want, got)
 		}
 	}
 	if strings.Contains(got, userIcon+" sent by a colleague") || strings.Contains(got, userIcon+" fired by the scheduler") {
 		t.Errorf("a colleague's or scheduled prompt shows as typed by the user once reloaded:\n%s", got)
+	}
+}
+
+// A message Herdr pastes into the TUI goes to the session with origin "herdr":
+// echoed with the outside icon and stored with that origin, so a resumed
+// history shows it the same way.
+func TestAHerdrPromptIsSentWithItsOrigin(t *testing.T) {
+	f := newFallbackFixture(t)
+	tu := f.tui(f.sessionID)
+	tu.autoConnect(context.Background())
+	tu.sseCancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	events, err := f.c.StreamEvents(ctx, f.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go tu.consumeEvents(ctx, events)
+
+	msg := `<hc from="t17 jade">which module path?</hc>`
+	tu.submitPrompt(msg)
+	tu.submitPrompt("typed by the person")
+	deadline := time.Now().Add(10 * time.Second)
+	var got string
+	for time.Now().Before(deadline) {
+		if got = screenText(tu); strings.Contains(got, "typed by the person") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(got, outsideIcon+" "+msg) || !strings.Contains(got, userIcon+" typed by the person") {
+		t.Fatalf("echo:\n%s", got)
+	}
+	msgs, err := f.c.GetMessages(f.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origins := map[string]string{}
+	for _, m := range msgs {
+		if m.Role == "user" && len(m.Parts) > 0 {
+			o := ""
+			if m.Meta != nil {
+				o = m.Meta.Origin
+			}
+			origins[m.Parts[0].Text] = o
+		}
+	}
+	if origins[msg] != "herdr" || origins["typed by the person"] != "" {
+		t.Errorf("stored origins = %v", origins)
 	}
 }

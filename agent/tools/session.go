@@ -35,10 +35,17 @@ type SessionInfoSnapshot struct {
 	Thinking  string `json:"thinking"`
 	CreatedAt string `json:"created_at"`
 
-	// Environment — harness version and counts of other active integrations.
-	Version       string `json:"version"`
-	MCPConnected  int    `json:"mcp_connected"`
-	ScheduleCount int    `json:"schedule_count"`
+	// Environment — harness version, counts of other active integrations, the
+	// system, the terminal (only when the session runs in one), and the
+	// external conversations it listens to. No hostname, no user name: a turn
+	// started from Slack can call this tool.
+	Version       string               `json:"version"`
+	MCPConnected  int                  `json:"mcp_connected"`
+	ScheduleCount int                  `json:"schedule_count"`
+	OS            string               `json:"os"`
+	Arch          string               `json:"arch"`
+	Terminal      string               `json:"terminal,omitempty"`
+	Channels      []SessionChannelInfo `json:"channels"`
 
 	// Usage — accumulated over the session's lifetime. Exposing this to the
 	// model is a deliberate reversal of an earlier, stricter convention
@@ -55,6 +62,13 @@ type SessionInfoSnapshot struct {
 	ContextWindow int     `json:"context_window"`
 }
 
+// SessionChannelInfo is one conversation the session listens to.
+type SessionChannelInfo struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // SessionInfoProvider supplies the live snapshot SessionInfo returns — the
 // agent injects a closure reading its own Session, keeping this package
 // free of any dependency on agent/store's concrete types.
@@ -66,7 +80,7 @@ func SessionInfo(provider SessionInfoProvider) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolSessionInfo,
-			Description: "Return a snapshot of THIS session's own identity, configuration, environment, and accumulated usage: id, working directory, name, active model, thinking level, harness version, connected MCP servers, owned schedules, and token/cache/cost/context-window usage so far.",
+			Description: "Return a snapshot of THIS session's own identity, configuration, environment, and accumulated usage: id, working directory, name, active model, thinking level, harness version, connected MCP servers, owned schedules, the operating system and architecture, the terminal it runs in (when it runs in one, with its address when the terminal has one), the external conversations it listens to (e.g. Slack channels), and token/cache/cost/context-window usage so far.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 		},
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {

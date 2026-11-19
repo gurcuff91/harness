@@ -605,3 +605,11 @@ func TestNewAnthropicProviderFacadeAliasIsWired(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentWithTerminalAndChannelsSetTheirOptions(t *testing.T) {
+	var o agent.AgentOptions
+	AgentWithTerminal("Ghostty")(&o)
+	if o.Terminal != "Ghostty" {
+		t.Errorf("Terminal = %q", o.Terminal)
+	}
+}

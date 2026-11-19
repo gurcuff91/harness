@@ -118,7 +118,12 @@ func (t *TUI) updateInfo() {
 	if t.queueCount > 0 {
 		queue = fmt.Sprintf(" [%d queued]", t.queueCount)
 	}
-	t.info.SetText(ansi.Dimmed(fmt.Sprintf("%s • %s%s%s", loc, name, turn, queue)))
+	base := fmt.Sprintf("%s • %s%s%s", loc, name, turn, queue)
+	if full, short := channelsLabel(t.channelInfos); full != "" {
+		t.info.SetTexts(ansi.Dimmed(base+" • "+full), ansi.Dimmed(base+" • "+short))
+	} else {
+		t.info.SetText(ansi.Dimmed(base))
+	}
 
 	if t.model == "" {
 		t.footer.SetText("")

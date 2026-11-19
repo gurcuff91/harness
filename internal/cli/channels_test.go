@@ -67,3 +67,24 @@ func TestSlackChannelFlagParses(t *testing.T) {
 		t.Error("serve accepted --slack-channel")
 	}
 }
+
+// Only the TUI runs in a terminal of its own: its agent reports one to
+// SessionInfo; serve (and every other command) does not guess one.
+func TestOnlyTheTUIAgentHasATerminal(t *testing.T) {
+	t.Setenv("HC_TERMINAL_ID", "")
+	t.Setenv("TERM_PROGRAM", "ghostty")
+	a := (&tuiCmd{}).newTUIAgent(extras{})
+	defer a.Close()
+	if got := a.Options().Terminal; got != "Ghostty" {
+		t.Errorf("TUI agent terminal = %q", got)
+	}
+	parseFor(t, "serve", ":0")
+	s, err := CLI.Serve.newAgent()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if got := s.Options().Terminal; got != "" {
+		t.Errorf("serve agent terminal = %q, want none", got)
+	}
+}

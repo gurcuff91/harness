@@ -1,6 +1,9 @@
 package types
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // ── Message — provider-agnostic conversation format ──────────────────────
 
@@ -29,7 +32,11 @@ type MessageMeta struct {
 type Message struct {
 	Role  MessageRole   `json:"role"`
 	Parts []ContentPart `json:"parts"`
-	Meta  *MessageMeta  `json:"meta,omitempty"`
+	// CreatedAt is when the message was added to the session's log (UTC),
+	// stamped by the store; zero (omitted) in messages written before it
+	// existed. Display data for clients — never sent to a model.
+	CreatedAt time.Time    `json:"created_at,omitzero"`
+	Meta      *MessageMeta `json:"meta,omitempty"`
 }
 
 // ContentPart is one element within a message.
@@ -181,13 +188,14 @@ func (m Message) ToolCalls() []ToolCall {
 // clients iterate it unconditionally.
 func (m Message) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Role  MessageRole   `json:"role"`
-		Parts []ContentPart `json:"parts"`
-		Meta  *MessageMeta  `json:"meta,omitempty"`
+		Role      MessageRole   `json:"role"`
+		Parts     []ContentPart `json:"parts"`
+		Meta      *MessageMeta  `json:"meta,omitempty"`
+		CreatedAt time.Time     `json:"created_at,omitzero"`
 	}
 	parts := m.Parts
 	if parts == nil {
 		parts = []ContentPart{}
 	}
-	return json.Marshal(wire{Role: m.Role, Parts: parts, Meta: m.Meta})
+	return json.Marshal(wire{Role: m.Role, Parts: parts, Meta: m.Meta, CreatedAt: m.CreatedAt})
 }

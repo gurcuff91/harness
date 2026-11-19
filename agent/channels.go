@@ -39,11 +39,22 @@ type Channel interface {
 	// what it wants. It is called synchronously from the session's event path
 	// and MUST NOT block: queue the work.
 	HandleEvent(id string, evt types.Event)
+	// Name is a readable name for conversation id (Slack: "#channel" or
+	// "@person"), shown to people and to the model; id itself when it cannot
+	// tell. Called once, when a session binds the conversation.
+	Name(ctx context.Context, id string) string
 	// Directive is the system-prompt section for a session bound to ids.
 	Directive(ids []string) string
 	// Tools are added to a session bound to at least one conversation of this
 	// channel.
 	Tools() []tools.Tool
+}
+
+// ChannelInfo describes one conversation a session listens to.
+type ChannelInfo struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // Inbound is one message a Channel delivers to its session.
@@ -78,6 +89,7 @@ func WithSessionChannels(chs ...types.InputChannel) SessionOption {
 type boundChannel struct {
 	ch   Channel
 	id   string
+	name string
 	stop func()
 }
 
@@ -145,7 +157,11 @@ func (a *Agent) prepareChannels(sessionID, cwd string, reqs []types.InputChannel
 			return nil, nil, nil, fmt.Errorf("%w: %s is listened to by session %s (pid %d, %s)",
 				ErrChannelTaken, origin, owner.Session, owner.PID, owner.CWD)
 		}
-		b := &boundChannel{ch: ch, id: id}
+		name := ch.Name(ctx, id)
+		if name == "" {
+			name = id
+		}
+		b := &boundChannel{ch: ch, id: id, name: name}
 		sc.bound = append(sc.bound, b)
 		sc.byOrigin[origin] = b
 	}
@@ -265,14 +281,14 @@ func (sc *sessionChannels) release() {
 	}
 }
 
-// ids lists the bound conversations as origins ("slack:C0123"), for display.
-func (sc *sessionChannels) origins() []string {
+// infos lists the bound conversations, in binding order.
+func (sc *sessionChannels) infos() []ChannelInfo {
 	if sc == nil {
 		return nil
 	}
-	out := make([]string, 0, len(sc.bound))
+	out := make([]ChannelInfo, 0, len(sc.bound))
 	for _, b := range sc.bound {
-		out = append(out, ChannelOrigin(b.ch.Type(), b.id))
+		out = append(out, ChannelInfo{Type: b.ch.Type(), ID: b.id, Name: b.name})
 	}
 	return out
 }

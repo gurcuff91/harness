@@ -1438,10 +1438,10 @@ type sessionDetailDTO struct {
 	// only the ones it opened, or it would end somebody else's live conversation.
 	// Omitted everywhere else.
 	Resumed *bool `json:"resumed,omitempty"`
-	// Channels are the external conversations the live session listens to, as
-	// prompt origins ("slack:C0123"). Omitted when none (and for a persisted
-	// session: channels are never stored).
-	Channels []string `json:"channels,omitempty"`
+	// Channels are the external conversations the live session listens to.
+	// Omitted when none (and for a persisted session: channels are never
+	// stored).
+	Channels []agent.ChannelInfo `json:"channels,omitempty"`
 }
 
 // liveDetail is the detail DTO of an active session.

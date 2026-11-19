@@ -116,6 +116,7 @@ func (t *TUI) autoConnect(ctx context.Context) error {
 			thinking = t.overrideThinking
 		}
 		t.sessionID = sess.ID
+		t.channelInfos = sess.Channels
 		t.setSessionName(sess.Name)
 		t.model = model
 		t.thinking = thinking
@@ -175,6 +176,7 @@ func (t *TUI) autoConnect(ctx context.Context) error {
 	t.model, t.thinking, t.isSubscription = model, thinking, subscription
 	t.addRaw(t.welcomeBanner(warnings...))
 	t.sessionID = sess.ID
+	t.channelInfos = sess.Channels
 	t.setSessionName(sess.Name)
 	t.maxIterations = sess.MaxIterations
 	t.loadStatsFromSession(sess)
@@ -242,6 +244,7 @@ func (t *TUI) resumeInPlace(sessID string) {
 	t.resetForNewSession()
 
 	t.sessionID = sess.ID
+	t.channelInfos = sess.Channels
 	t.setSessionName(sess.Name)
 	t.model = sess.Model
 	t.thinking = sess.Thinking
@@ -294,6 +297,7 @@ func (t *TUI) newSessionInPlace() {
 	t.resetForNewSession()
 
 	t.sessionID = sess.ID
+	t.channelInfos = sess.Channels
 	t.setSessionName(sess.Name)
 	if sess.Thinking != "" {
 		t.thinking = sess.Thinking

@@ -64,6 +64,23 @@ func newFakeSlack(t *testing.T) *fakeSlack {
 		case "conversations.list":
 			b, _ := json.Marshal(map[string]any{"ok": true, "channels": f.channels})
 			_, _ = w.Write(b)
+		case "conversations.info":
+			switch r.Form.Get("channel") {
+			case "C111":
+				_, _ = w.Write([]byte(`{"ok":true,"channel":{"id":"C111","name":"producto-y"}}`))
+			case "D9":
+				_, _ = w.Write([]byte(`{"ok":true,"channel":{"id":"D9","is_im":true,"user":"U2"}}`))
+			case "D8":
+				_, _ = w.Write([]byte(`{"ok":true,"channel":{"id":"D8","is_im":true,"user":"UGONE"}}`))
+			default:
+				_, _ = w.Write([]byte(`{"ok":false,"error":"channel_not_found"}`))
+			}
+		case "users.info":
+			if r.Form.Get("user") == "U2" {
+				_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U2","name":"gus","profile":{"real_name":"Gustavo","display_name":""}}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"ok":false,"error":"user_not_found"}`))
 		case "conversations.open":
 			_, _ = w.Write([]byte(`{"ok":true,"channel":{"id":"D` + r.Form.Get("users") + `"}}`))
 		case "files.getUploadURLExternal":
@@ -517,5 +534,29 @@ func TestIsNativeExecutable(t *testing.T) {
 		if got := isNativeExecutable([]byte(in)); got != want {
 			t.Errorf("isNativeExecutable(%q) = %v", in, got)
 		}
+	}
+}
+
+func TestName(t *testing.T) {
+	f := newFakeSlack(t)
+	c := New(f.srv.URL, "xoxc-1", "xoxd-1")
+	for id, want := range map[string]string{
+		"C111": "#producto-y", // a channel
+		"D9":   "@Gustavo",    // a DM: its person (real name when no display name)
+		"D8":   "D8",          // a DM whose person cannot be read: the id
+		"CZZ":  "CZZ",         // unknown: the id
+	} {
+		if got := c.Name(context.Background(), id); got != want {
+			t.Errorf("Name(%s) = %q, want %q", id, got, want)
+		}
+	}
+	if (SlackUser{Name: "h", Profile: struct {
+		RealName    string `json:"real_name"`
+		DisplayName string `json:"display_name"`
+	}{"Real", "Disp"}}).displayName() != "Disp" {
+		t.Error("display name must win")
+	}
+	if (SlackUser{Name: "h"}).displayName() != "h" {
+		t.Error("the handle is the last resort")
 	}
 }

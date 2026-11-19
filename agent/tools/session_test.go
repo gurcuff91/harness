@@ -30,7 +30,7 @@ func TestSessionInfoReturnsExactFieldSet(t *testing.T) {
 
 	wantKeys := []string{
 		"id", "cwd", "name", "model", "thinking", "created_at",
-		"version", "mcp_connected", "schedule_count",
+		"version", "mcp_connected", "schedule_count", "os", "arch", "channels",
 		"input_tokens", "output_tokens", "cache_read", "cache_write",
 		"cost_usd", "context_usage", "context_window",
 	}
@@ -48,5 +48,34 @@ func TestSessionInfoReturnsExactFieldSet(t *testing.T) {
 	}
 	if len(got) != len(wantKeys) {
 		t.Errorf("got %d keys, want exactly %d: %s", len(got), len(wantKeys), out)
+	}
+}
+
+// The environment block: terminal only when known, channels always an array.
+func TestSessionInfoEnvironment(t *testing.T) {
+	run := func(s SessionInfoSnapshot) map[string]any {
+		out, err := SessionInfo(func() SessionInfoSnapshot { return s }).Execute(context.Background(), json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		_ = json.Unmarshal([]byte(out), &got)
+		return got
+	}
+	got := run(SessionInfoSnapshot{OS: "darwin", Arch: "arm64", Terminal: "Workspace (t16)",
+		Channels: []SessionChannelInfo{{Type: "slack", ID: "C1", Name: "#prod"}}})
+	if got["os"] != "darwin" || got["arch"] != "arm64" || got["terminal"] != "Workspace (t16)" {
+		t.Errorf("environment = %v", got)
+	}
+	ch, _ := got["channels"].([]any)
+	if len(ch) != 1 || ch[0].(map[string]any)["name"] != "#prod" {
+		t.Errorf("channels = %v", got["channels"])
+	}
+	none := run(SessionInfoSnapshot{Channels: []SessionChannelInfo{}})
+	if _, ok := none["terminal"]; ok {
+		t.Error("terminal present without one")
+	}
+	if c, ok := none["channels"].([]any); !ok || len(c) != 0 {
+		t.Errorf("channels must be an empty array, got %v", none["channels"])
 	}
 }

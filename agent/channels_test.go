@@ -62,6 +62,7 @@ func (f *fakeChannel) HandleEvent(id string, e types.Event) {
 	f.events[id] = append(f.events[id], e)
 	f.mu.Unlock()
 }
+func (f *fakeChannel) Name(_ context.Context, id string) string { return "#" + strings.ToLower(id) }
 func (f *fakeChannel) Directive(ids []string) string {
 	return "## FAKE CHANNEL " + strings.Join(ids, ",")
 }
@@ -170,7 +171,7 @@ func TestChannelTurnsGoToTheirConversationOnly(t *testing.T) {
 	if !ch.isListening("ONE") || !ch.isListening("TWO") {
 		t.Fatal("not listening to both conversations")
 	}
-	if got := sess.Channels(); len(got) != 2 || got[0] != "fake:ONE" || got[1] != "fake:TWO" {
+	if got := sess.Channels(); len(got) != 2 || got[0] != (ChannelInfo{Type: "fake", ID: "ONE", Name: "#one"}) || got[1].ID != "TWO" || got[1].Name != "#two" {
 		t.Errorf("Channels() = %v", got)
 	}
 	if !strings.Contains(sess.systemPrompt, "## FAKE CHANNEL ONE,TWO") {

@@ -811,7 +811,7 @@ const openAPISpecTemplate = `{
             "properties": {
               "max_iterations": { "type": "integer" },
               "max_tokens": { "type": "integer", "description": "Output-token ceiling: the agent's MaxTokens when set, else the model's catalog value capped at 64k (each request is further bounded by the room left in the window)" },
-              "channels": { "type": "array", "items": { "type": "string" }, "example": ["slack:C0123ABC"], "description": "External conversations the live session listens to, as prompt origins. Omitted when none (always for a persisted session: channels are never stored)." },
+              "channels": { "type": "array", "items": { "type": "object", "properties": { "type": { "type": "string", "example": "slack" }, "id": { "type": "string", "example": "C0123ABC" }, "name": { "type": "string", "example": "#producto-y", "description": "Readable name: #channel, @person for a DM, the id when unknown." } } }, "description": "External conversations the live session listens to. Omitted when none (always for a persisted session: channels are never stored)." },
               "resumed": { "type": "boolean", "description": "Only on the response of POST /api/sessions/{id}/resume: true when that call opened the session, false when it was already active and was just returned (resume is idempotent). A caller that closes the sessions it resumes must close only the ones it opened, or it would end somebody else's live conversation. Omitted on every other response." },
               "model_fallback": {
                 "type": "object",
@@ -879,7 +879,7 @@ const openAPISpecTemplate = `{
         "properties": {
           "text":   { "type": "string" },
           "images": { "type": "array", "items": { "$ref": "#/components/schemas/ImageData" } },
-          "origin": { "type": "string", "description": "Where the prompt came from — any short string: \"user\" (default), \"scheduled\", \"colleague\" (another agent's ColleagueAsk), a transport (\"telegram\", \"slack\", \"acp\") or your own. Echoed on received_prompt/follow_up_start and stored with the message; frontends use it to pick an icon. The model never sees it." },
+          "origin": { "type": "string", "description": "Where the prompt came from — any short string: \"user\" (default), \"scheduled\", \"colleague\" (another agent's ColleagueAsk), \"herdr\" (a message Herdr typed into the TUI), \"slack:<id>\" (an input channel), a transport (\"telegram\", \"acp\") or your own. Echoed on received_prompt/follow_up_start and stored with the message; frontends use it to pick an icon. The model never sees it." },
           "no_queue": { "type": "boolean", "description": "Run only if the session is idle: a session with a turn in flight answers 409 'session is busy' instead of queueing the prompt behind it. Default false (queue)." }
         }
       },
@@ -957,7 +957,9 @@ const openAPISpecTemplate = `{
         "type": "object",
         "properties": {
           "role":  { "type": "string", "enum": ["user","assistant"] },
-          "parts": { "type": "array", "items": { "type": "object" } }
+          "parts": { "type": "array", "items": { "type": "object" } },
+          "meta":  { "type": "object", "description": "Present only when something is set: origin (where a prompt came from), is_compaction, is_system_generated." },
+          "created_at": { "type": "string", "format": "date-time", "description": "When the message was added to the log (UTC, millisecond precision). Absent in messages written before v0.109.0. Never sent to the model." }
         }
       }
     }

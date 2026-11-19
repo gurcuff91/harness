@@ -84,6 +84,7 @@ func (t *TUI) cmdFork() {
 
 	// Switch TUI state to the fork.
 	t.sessionID = fork.ID
+	t.channelInfos = fork.Channels // a fork listens to nothing
 	t.setSessionName(fork.Name)
 	t.model = fork.Model
 	t.thinking = fork.Thinking
@@ -205,24 +206,66 @@ func (t *TUI) completeOAuthConnect(provider, verifierCode, code string) {
 // prompt. The transport picks the icon from the prompt's origin, carried by the
 // received_prompt / follow_up_start events.
 const (
-	scheduleIcon  = "◷"
-	colleagueIcon = "⇄"
-	channelIcon   = "@"
-	userIcon      = "❯"
+	scheduleIcon = "◷"
+	outsideIcon  = "⇄" // a prompt from outside: a colleague, Herdr, a channel, …
+	userIcon     = "❯"
 )
 
-// promptIcon returns the echo icon for a prompt origin.
+// promptIcon returns the echo icon for a prompt origin: three, no more —
+// the person at this terminal, a schedule, or anything that came from outside.
 func promptIcon(origin string) string {
 	switch origin {
+	case "", "user":
+		return userIcon
 	case "scheduled":
 		return scheduleIcon
-	case "colleague":
-		return colleagueIcon
 	}
-	if strings.HasPrefix(origin, "slack:") { // an input channel: "<type>:<id>"
-		return channelIcon
+	return outsideIcon
+}
+
+// herdrOrigin is the origin of a prompt Herdr typed into this terminal.
+const herdrOrigin = "herdr"
+
+// originOf tells a typed prompt from one Herdr pasted: Herdr wraps another
+// agent's message in <hc from=…>…</hc> and its own notes in a bare <hc>.
+// Display only — the origin grants nothing (anyone can type "<hc").
+func originOf(text string) string {
+	t := strings.TrimLeft(text, " \t\r\n")
+	if strings.HasPrefix(t, "<hc>") || strings.HasPrefix(t, "<hc ") {
+		return herdrOrigin
 	}
-	return userIcon
+	return ""
+}
+
+// channelsLabel is the status-line mark of the conversations the session
+// listens to: full ("⇄ #prod, @gus") and short ("⇄ slack ×2"); "" when none.
+func channelsLabel(chs []client.ChannelInfo) (full, short string) {
+	if len(chs) == 0 {
+		return "", ""
+	}
+	names := make([]string, 0, len(chs))
+	count := map[string]int{}
+	var types []string
+	for _, c := range chs {
+		n := c.Name
+		if n == "" {
+			n = c.ID
+		}
+		names = append(names, n)
+		if count[c.Type] == 0 {
+			types = append(types, c.Type)
+		}
+		count[c.Type]++
+	}
+	parts := make([]string, 0, len(types))
+	for _, ty := range types {
+		if count[ty] == 1 {
+			parts = append(parts, ty)
+		} else {
+			parts = append(parts, fmt.Sprintf("%s ×%d", ty, count[ty]))
+		}
+	}
+	return outsideIcon + " " + strings.Join(names, ", "), outsideIcon + " " + strings.Join(parts, ", ")
 }
 
 func (t *TUI) submitPrompt(text string) {
@@ -242,7 +285,11 @@ func (t *TUI) submitPrompt(text string) {
 	}
 
 	go func() {
-		if _, err := t.client.SendPrompt(t.sessionID, text); err != nil {
+		var opts []client.PromptOption
+		if o := originOf(text); o != "" {
+			opts = append(opts, client.WithOrigin(o))
+		}
+		if _, err := t.client.SendPrompt(t.sessionID, text, opts...); err != nil {
 			t.addRaw(ansi.Err("✘ " + err.Error()))
 			t.setSpinning(false)
 		}

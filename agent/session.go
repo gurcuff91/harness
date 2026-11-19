@@ -2444,9 +2444,9 @@ func (s *Session) closeChannels() {
 	s.channels.close()
 }
 
-// Channels lists the conversations this session listens to, as prompt
-// origins ("slack:C0123"). Empty when it listens to none.
-func (s *Session) Channels() []string { return s.channels.origins() }
+// Channels lists the conversations this session listens to (type, id and a
+// readable name). Empty when it listens to none.
+func (s *Session) Channels() []ChannelInfo { return s.channels.infos() }
 
 // hasChannels reports whether every requested conversation is already bound
 // to this live session (so asking for it again is a no-op, not a rebind).

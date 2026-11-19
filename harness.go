@@ -252,6 +252,13 @@ func AgentWithWebSearch() AgentOption {
 	return func(o *agent.AgentOptions) { o.EnableWebSearch = true }
 }
 
+// AgentWithTerminal names the terminal the agent's sessions run in, reported
+// by the SessionInfo tool (e.g. "Ghostty"). Leave it unset for an agent with
+// no terminal of its own (a server, a bot).
+func AgentWithTerminal(name string) AgentOption {
+	return func(o *agent.AgentOptions) { o.Terminal = name }
+}
+
 // ── Custom providers ─────────────────────────────────────────────────────
 //
 // Registers a custom OpenAI Chat Completions-compatible provider globally

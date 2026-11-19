@@ -45,6 +45,7 @@ func (c *tuiCmd) Run() error {
 func (c *tuiCmd) newTUIAgent(x extras, chans ...agent.Channel) *agent.Agent {
 	opts := interactiveOptions(x, tuiDirectives())
 	opts.Channels = chans
+	opts.Terminal = tui.TerminalName() // only the TUI runs in a terminal of its own
 	return agent.New(opts)
 }
 

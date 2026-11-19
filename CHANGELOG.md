@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.109.0] - 2026-11-19
+
+### Changed — the TUI has three prompt icons, and a message from Herdr is marked as coming from outside
+- **`❯`** is the person at this terminal, **`◷`** a scheduled prompt, and **`⇄`** everything that came from outside: a colleague, a Slack channel, Telegram, Herdr, and any origin added later. The `@` that 0.108.0 showed for Slack is gone.
+- **A message Herdr types into the TUI** (another agent's `<hc from=…>`, or a bare `<hc>` note) is now sent with origin `herdr`: it shows `⇄` instead of looking like something you typed, and the origin is stored, so a resumed session shows it the same way. The origin is display information only and grants nothing (anyone can type `<hc`).
+
+### Added — the TUI's status line says which conversations the session listens to
+With `--slack-channel`, the line with the session's name ends in `⇄ #producto-y, @gus`; when the names do not fit, `⇄ slack ×2`. Channels now have readable names: `agent.Channel` gained `Name(ctx, id)` (Slack: `#channel`, `@person` for a DM, the id when Slack does not say).
+
+**Changed shape (SDK and API, from 0.108.0):** `Session.Channels()` returns `[]agent.ChannelInfo{Type, ID, Name}` instead of `[]string` origins, and a session's `channels` in the API is `[{"type","id","name"}]` instead of `["slack:C…"]` (`client.ChannelInfo`).
+
+### Added — SessionInfo reports the system, the terminal and the channels
+The `SessionInfo` tool now returns `os` and `arch`, `channels` (`[{type, id, name}]`), and `terminal` when the session runs in one: `Herdr (t16)` inside Herdr, otherwise the terminal's name when it can be told from the environment (Ghostty, WezTerm, iTerm2, Terminal.app, VS Code, tmux, Windows Terminal, kitty, Alacritty, Konsole, a VTE terminal, JetBrains) or `Generic terminal`. Only the TUI sets it; `serve`, Telegram, ACP, `-p` and SDK agents omit it rather than report the terminal of whoever launched them (`harness.AgentWithTerminal` sets it for an SDK agent). No hostname or user name: a turn started from Slack can call this tool.
+
+### Added — every message records when it was written
+Each message in a session's log now has `created_at` (UTC, millisecond precision), set when it is added: prompts, replies, tool results and compaction markers. `GET /api/sessions/{id}/messages` returns it, so a client can show the date and time of each prompt and answer. Messages written before this version have none and read as before. The model never sees it (checked for every provider dialect).
+
 ## [0.108.2] - 2026-11-18
 
 ### Fixed — a channel claim is no longer kept alive by a reused pid, and Windows decides liveness correctly

@@ -102,9 +102,9 @@ type Session struct {
 	// idempotent). A caller that closes the sessions it resumes must close only
 	// those it opened — see ResumeSession. Nil on every other response.
 	Resumed *bool `json:"resumed,omitempty"`
-	// Channels are the external conversations a live session listens to, as
-	// prompt origins ("slack:C0123"). Empty when none.
-	Channels []string `json:"channels,omitempty"`
+	// Channels are the external conversations a live session listens to.
+	// Empty when none.
+	Channels []ChannelInfo `json:"channels,omitempty"`
 }
 
 // ModelFallback says a session was reopened on another model: From is what it
@@ -253,4 +253,12 @@ type MemorySearchResult struct {
 	Skip     int      `json:"skip"`
 	Limit    int      `json:"limit"`
 	Results  []Memory `json:"results"`
+}
+
+// ChannelInfo is one conversation a session listens to: its channel type
+// ("slack"), its id, and a readable name ("#producto-y", "@gus").
+type ChannelInfo struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
