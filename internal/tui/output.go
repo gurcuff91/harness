@@ -118,11 +118,14 @@ func (t *TUI) updateInfo() {
 	if t.queueCount > 0 {
 		queue = fmt.Sprintf(" [%d queued]", t.queueCount)
 	}
-	base := fmt.Sprintf("%s • %s%s%s", loc, name, turn, queue)
-	if full, short := channelsLabel(t.channelInfos); full != "" {
-		t.info.SetTexts(ansi.Dimmed(base+" • "+full), ansi.Dimmed(base+" • "+short))
+	t.info.SetText(ansi.Dimmed(fmt.Sprintf("%s • %s%s%s", loc, name, turn, queue)))
+	// The channels get a line of their own above, only while there are any.
+	if t.channelsLine == nil {
+		// a TUI built without the full layout (tests): nothing to update
+	} else if full, short := channelsLabel(t.channelInfos); full != "" {
+		t.channelsLine.SetTexts(ansi.Dimmed("channels "+full), ansi.Dimmed("channels "+short))
 	} else {
-		t.info.SetText(ansi.Dimmed(base))
+		t.channelsLine.SetText("")
 	}
 
 	if t.model == "" {

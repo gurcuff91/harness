@@ -19,6 +19,15 @@ type TruncatedText struct {
 	text     string
 	short    string // shown instead of text when text does not fit ("" = none)
 	paddingX int
+	// collapse: with no text, render NO line at all (instead of an empty
+	// one), so an optional status line takes no room while it has nothing.
+	collapse bool
+}
+
+// NewCollapsibleText is a TruncatedText that renders no line at all while its
+// text is empty.
+func NewCollapsibleText(paddingX int) *TruncatedText {
+	return &TruncatedText{paddingX: paddingX, collapse: true}
 }
 
 // NewTruncatedText creates a single-line truncating text component.
@@ -45,6 +54,9 @@ func (t *TruncatedText) Render(width int) []string {
 	t.mu.Unlock()
 
 	if text == "" {
+		if t.collapse {
+			return nil
+		}
 		return []string{""}
 	}
 	avail := width - t.paddingX*2

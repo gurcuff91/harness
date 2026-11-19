@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.109.5] - 2026-11-19
+
+### Changed — the channels have a status line of their own
+The conversations a session listens to are no longer appended to the line with the session's name: they get their own line above it, `channels [slack: #social] [telegram: @bot]`, so the list can grow without crowding the path and the session name. The line exists only while the session listens to something; otherwise the status bar keeps its two lines. When the names do not fit, each group shows its count (`channels [slack: 3]`).
+
 ## [0.109.4] - 2026-11-19
 
 ### Added — `/info` shows the session id, the system, the terminal and the channels

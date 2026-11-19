@@ -38,6 +38,7 @@ func (t *TUI) buildUI() {
 	t.history = components.NewHistory()
 	t.spinner = components.NewSpinner(t.tui, "")
 	t.editor = components.NewEditor(t.tui, defaultPlaceholder)
+	t.channelsLine = components.NewCollapsibleText(0)
 	t.info = components.NewTruncatedText("", 0)
 	t.footer = components.NewTruncatedText("", 0)
 	t.palette = newPaletteController(t)
@@ -65,6 +66,7 @@ func (t *TUI) buildUI() {
 	//   editor    (input)
 	//   ───────   sep2  (emerald)
 	//   palette   (command list, only when open)
+	//   channels  (the conversations the session listens to; only when any)
 	//   info      (cwd • session • queue)
 	//   footer    (tokens • cost • model)
 	sep1 := newEditorSeparator(t.editor) // sep1 — shows "↑ N more" on overflow
@@ -87,6 +89,7 @@ func (t *TUI) buildUI() {
 	t.tui.AddChild(t.editor)
 	t.tui.AddChild(sep2)
 	t.tui.AddChild(t.palette) // renders nothing unless open
+	t.tui.AddChild(t.channelsLine)
 	t.tui.AddChild(t.info)
 	t.tui.AddChild(t.footer)
 

@@ -48,6 +48,7 @@ func newTestTUIForEvents() *TUI {
 	t.tui = render.New(term)
 	t.history = components.NewHistory()
 	t.spinner = components.NewSpinner(t.tui, "")
+	t.channelsLine = components.NewCollapsibleText(0)
 	t.info = components.NewTruncatedText("", 0)
 	t.footer = components.NewTruncatedText("", 0)
 	return t

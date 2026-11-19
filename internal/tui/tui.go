@@ -90,13 +90,14 @@ type TUI struct {
 	newTerminal func() term.Terminal
 
 	// Render engine + components.
-	tui     *render.TUI
-	history *components.History // scrollback as source-backed blocks
-	spinner *components.Spinner
-	editor  *components.Editor
-	info    *components.TruncatedText
-	footer  *components.TruncatedText
-	palette *paletteController
+	tui          *render.TUI
+	history      *components.History // scrollback as source-backed blocks
+	spinner      *components.Spinner
+	editor       *components.Editor
+	channelsLine *components.TruncatedText // the channels the session listens to; no line when none
+	info         *components.TruncatedText
+	footer       *components.TruncatedText
+	palette      *paletteController
 
 	// Streaming state (guarded by mu).
 	mu       sync.Mutex

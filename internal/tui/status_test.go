@@ -79,6 +79,7 @@ func statusTUI(t *testing.T) (*TUI, *recTerminal) {
 	tu.attachTerminal(rec)
 	tu.history = components.NewHistory()
 	tu.spinner = components.NewSpinner(tu.tui, "")
+	tu.channelsLine = components.NewCollapsibleText(0)
 	tu.info = components.NewTruncatedText("", 0)
 	tu.footer = components.NewTruncatedText("", 0)
 	return tu, rec
@@ -560,6 +561,7 @@ func connectedTUI(t *testing.T) (*TUI, *recTerminal, *fallbackFixture) {
 	tu.attachTerminal(rec)
 	tu.history = components.NewHistory()
 	tu.spinner = components.NewSpinner(tu.tui, "")
+	tu.channelsLine = components.NewCollapsibleText(0)
 	tu.info = components.NewTruncatedText("", 0)
 	tu.footer = components.NewTruncatedText("", 0)
 	tu.client = f.c
