@@ -319,11 +319,27 @@ func (t *TUI) newSessionInPlace() {
 // cancelled stream notices only later (its ctx.Done), and by then the new stream may already be
 // reporting — a late idle would then overwrite the new session's working.
 func (t *TUI) stopSSE() {
-	if t.sseCancel != nil {
-		t.sseCancel()
-		t.sseCancel = nil
+	if cancel := t.takeSSECancel(); cancel != nil {
+		cancel()
 	}
 	t.status.IdleIfWorking()
+}
+
+// setSSECancel records the current stream's cancel func (sseMu).
+func (t *TUI) setSSECancel(c context.CancelFunc) {
+	t.sseMu.Lock()
+	t.sseCancel = c
+	t.sseMu.Unlock()
+}
+
+// takeSSECancel removes and returns the current stream's cancel func (nil if
+// none), so exactly one caller cancels it.
+func (t *TUI) takeSSECancel() context.CancelFunc {
+	t.sseMu.Lock()
+	defer t.sseMu.Unlock()
+	c := t.sseCancel
+	t.sseCancel = nil
+	return c
 }
 
 // setSessionName records the session's name and publishes it as the terminal title. Every place
@@ -348,7 +364,7 @@ func (t *TUI) startSSE(ctx context.Context) {
 	}
 	t.status.Set(ansi.StatusIdle)
 	sseCtx, cancel := context.WithCancel(ctx)
-	t.sseCancel = cancel
+	t.setSSECancel(cancel)
 	ready := make(chan struct{})
 	t.sseReady = ready
 	go t.streamEventsReady(sseCtx, ready)

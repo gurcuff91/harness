@@ -37,6 +37,12 @@ type fallbackFixture struct {
 // two providers of the test, so "nothing is left to fall back to" means nothing —
 // not "nothing except whatever an earlier test of the binary left registered".
 func newFallbackFixture(t *testing.T) *fallbackFixture {
+	return newFallbackFixtureWith(t, agent.AgentOptions{})
+}
+
+// newFallbackFixtureWith is newFallbackFixture over an agent built from opts
+// (its Store and ResourceLoader are the fixture's own).
+func newFallbackFixtureWith(t *testing.T, opts agent.AgentOptions) *fallbackFixture {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), nil))
@@ -65,7 +71,8 @@ func newFallbackFixture(t *testing.T) *fallbackFixture {
 	}
 
 	fs := store.NewInMemoryStore()
-	a := agent.New(agent.AgentOptions{Store: fs, ResourceLoader: resources.NilLoader{}})
+	opts.Store, opts.ResourceLoader = fs, resources.NilLoader{}
+	a := agent.New(opts)
 	t.Cleanup(func() { a.Close() })
 	srv, err := server.Start(a, "", server.ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
 	if err != nil {

@@ -47,7 +47,7 @@ func TestTUIEchoesAColleaguePromptWithItsIcon(t *testing.T) {
 	// away can be emitted before the stream is subscribed and its echo is lost.
 	// Replace it with a stream opened here: StreamEvents returns once the server
 	// has subscribed this client, so everything sent after it is delivered.
-	tu.sseCancel()
+	tu.takeSSECancel()()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	events, err := f.c.StreamEvents(ctx, f.sessionID)
@@ -119,7 +119,7 @@ func TestAHerdrPromptIsSentWithItsOrigin(t *testing.T) {
 	f := newFallbackFixture(t)
 	tu := f.tui(f.sessionID)
 	tu.autoConnect(context.Background())
-	tu.sseCancel()
+	tu.takeSSECancel()()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	events, err := f.c.StreamEvents(ctx, f.sessionID)

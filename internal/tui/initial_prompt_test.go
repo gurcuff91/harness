@@ -67,8 +67,8 @@ func startWith(t *testing.T, f *fallbackFixture, resume, prompt string) *TUI {
 	tu.SetInitialPrompt(prompt)
 	tu.autoConnect(context.Background())
 	t.Cleanup(func() {
-		if tu.sseCancel != nil {
-			tu.sseCancel()
+		if c := tu.takeSSECancel(); c != nil {
+			c()
 		}
 	})
 	return tu
@@ -321,8 +321,8 @@ func TestAFailedResumeFailsAndNeverStartsAFreshSessionForThePrompt(t *testing.T)
 	tu.SetInitialPrompt("meant for the old conversation")
 	err := tu.autoConnect(context.Background())
 	t.Cleanup(func() {
-		if tu.sseCancel != nil {
-			tu.sseCancel()
+		if c := tu.takeSSECancel(); c != nil {
+			c()
 		}
 	})
 	if err == nil || !strings.Contains(err.Error(), "no-such-session-id") {
@@ -542,8 +542,8 @@ func TestThePromptIsSentOnlyAfterTheStreamOpensAndRightAfterIt(t *testing.T) {
 			waitFor(t, "the prompt to reach the server", func() bool { return len(proxy.promptTexts()) >= 1 })
 			<-done
 			t.Cleanup(func() {
-				if tu.sseCancel != nil {
-					tu.sseCancel()
+				if c := tu.takeSSECancel(); c != nil {
+					c()
 				}
 			})
 			proxy.mu.Lock()
@@ -572,8 +572,8 @@ func TestAFreshSessionReceivesThePromptWithoutAnyResume(t *testing.T) {
 	tu := tuiThrough(f, proxy, "", "hello on a fresh session")
 	tu.autoConnect(context.Background())
 	t.Cleanup(func() {
-		if tu.sseCancel != nil {
-			tu.sseCancel()
+		if c := tu.takeSSECancel(); c != nil {
+			c()
 		}
 	})
 	if tu.sessionID == "" || tu.sessionID == f.sessionID {
@@ -639,8 +639,8 @@ func startErr(t *testing.T, f *fallbackFixture, proxy *wireProxy, model, thinkin
 	tu.SetInitialPrompt(prompt)
 	err := tu.autoConnect(context.Background())
 	t.Cleanup(func() {
-		if tu.sseCancel != nil {
-			tu.sseCancel()
+		if c := tu.takeSSECancel(); c != nil {
+			c()
 		}
 	})
 	time.Sleep(150 * time.Millisecond) // anything a failed start wrongly scheduled would have been drawn by now

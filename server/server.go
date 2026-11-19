@@ -13,6 +13,7 @@ import (
 	"net/http/pprof"
 	"net/url"
 	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -1687,6 +1688,11 @@ type sessionInfoDTO struct {
 	// Environment counts for this session.
 	MCPConnected  int `json:"mcp_connected"`
 	ScheduleCount int `json:"schedule_count"`
+	// The system the session runs on, and its terminal when the agent runs
+	// in one (agent.AgentOptions.Terminal) — the same as the SessionInfo tool.
+	OS       string `json:"os"`
+	Arch     string `json:"arch"`
+	Terminal string `json:"terminal,omitempty"`
 }
 
 // handleSessionInfo handles GET /api/sessions/{id}/info. The session must be
@@ -1742,6 +1748,9 @@ func (s *Server) handleSessionInfo(w http.ResponseWriter, r *http.Request) {
 		QueueDepth:    sess.FollowUpCount(),
 		MCPConnected:  mcpConnected,
 		ScheduleCount: scheduleCount,
+		OS:            runtime.GOOS,
+		Arch:          runtime.GOARCH,
+		Terminal:      s.agent.Options().Terminal,
 	})
 }
 

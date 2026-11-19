@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.109.4] - 2026-11-19
+
+### Added — `/info` shows the session id, the system, the terminal and the channels
+The TUI's session info panel now lists the session's full `id` (to resume it, or to hand it to another tool), the `system` it runs on (`darwin/arm64`), its `terminal` (`Herdr (t16)`, `Ghostty`, … — the same label the SessionInfo tool reports) and, when the session listens to any, its channels grouped by type (`slack  #social, @gus`). `GET /api/sessions/{id}/info` returns `os`, `arch` and `terminal` (the latter only when the server's agent runs in a terminal), and so does `client.SessionInfo`.
+
+### Fixed — a data race in the TUI between quitting and opening the event stream
+The function that stops the session's event stream was written by the goroutine that opens it and read by the one that quits (on Ctrl+C or a cancelled context) without a lock. The race detector caught it in about one run in three of an existing TUI test (`TestRunRestoresTheTitleAfterTheRendererStops`), before and after this release's other changes. It is now guarded and handed to exactly one caller; 15 runs in a row under `-race` are clean.
+
 ## [0.109.3] - 2026-11-19
 
 ### Changed — tool and prompt icons no longer share a symbol

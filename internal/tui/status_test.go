@@ -344,10 +344,10 @@ func TestACancelledStreamDoesNotReportItself(t *testing.T) {
 func TestSwitchingSessionMidTurnLeavesNoStuckWorking(t *testing.T) {
 	tu, rec := statusTUI(t)
 	cancelled := false
-	tu.sseCancel = func() { cancelled = true }
+	tu.setSSECancel(func() { cancelled = true })
 	tu.status.Set(ansi.StatusWorking) // a turn is running on the old stream
 	tu.stopSSE()                      // resume / fork / new: the old stream goes away
-	if !cancelled || tu.sseCancel != nil {
+	if !cancelled || tu.takeSSECancel() != nil {
 		t.Fatal("stopSSE must cancel and clear the stream")
 	}
 	eq(t, rec.reports(), []string{"working", "idle"})
@@ -570,8 +570,8 @@ func connectedTUI(t *testing.T) (*TUI, *recTerminal, *fallbackFixture) {
 		t.Fatalf("setup: on %q, want %q", tu.sessionID, f.sessionID)
 	}
 	t.Cleanup(func() {
-		if tu.sseCancel != nil {
-			tu.sseCancel()
+		if c := tu.takeSSECancel(); c != nil {
+			c()
 		}
 	})
 	return tu, rec, f
@@ -625,4 +625,31 @@ func TestAStreamThatCannotBeOpenedReportsIdle(t *testing.T) {
 	tu.sessionID = "no-such-session"
 	tu.streamEvents(context.Background())
 	eq(t, rec.reports(), []string{"idle", "working", "idle"})
+}
+
+// The stream's cancel func is set by startSSE and taken by stopSSE and quit,
+// which can run on different goroutines (quit on the context-cancel one):
+// taking it is atomic and hands it to exactly one caller.
+func TestTheStreamCancelIsTakenOnce(t *testing.T) {
+	tu, _ := statusTUI(t)
+	calls := 0
+	tu.setSSECancel(func() { calls++ })
+	var wg sync.WaitGroup
+	got := make(chan context.CancelFunc, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); got <- tu.takeSSECancel() }()
+	}
+	wg.Wait()
+	close(got)
+	n := 0
+	for c := range got {
+		if c != nil {
+			n++
+			c()
+		}
+	}
+	if n != 1 || calls != 1 {
+		t.Errorf("the cancel func was handed out %d times and called %d times, want 1 and 1", n, calls)
+	}
 }

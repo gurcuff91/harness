@@ -237,32 +237,48 @@ func originOf(text string) string {
 	return ""
 }
 
+// channelGroup is the conversations of one channel type, in binding order.
+type channelGroup struct {
+	typ   string
+	names []string
+}
+
+// channelGroups groups a session's channels by type, keeping the binding
+// order of both the types and the names (a channel with no name shows its id).
+func channelGroups(chs []client.ChannelInfo) []channelGroup {
+	var out []channelGroup
+	at := map[string]int{}
+	for _, c := range chs {
+		n := c.Name
+		if n == "" {
+			n = c.ID
+		}
+		i, ok := at[c.Type]
+		if !ok {
+			i = len(out)
+			at[c.Type] = i
+			out = append(out, channelGroup{typ: c.Type})
+		}
+		out[i].names = append(out[i].names, n)
+	}
+	return out
+}
+
 // channelsLabel is the status-line mark of the conversations the session
 // listens to, one bracketed group per channel type in binding order: full
 // ("[slack: #prod, @gus] [telegram: @bot]") and short, with only the count
 // ("[slack: 2] [telegram: 1]"); "" when none. Text only, like the rest of
 // that line.
 func channelsLabel(chs []client.ChannelInfo) (full, short string) {
-	if len(chs) == 0 {
+	groups := channelGroups(chs)
+	if len(groups) == 0 {
 		return "", ""
 	}
-	names := map[string][]string{}
-	var types []string
-	for _, c := range chs {
-		n := c.Name
-		if n == "" {
-			n = c.ID
-		}
-		if _, seen := names[c.Type]; !seen {
-			types = append(types, c.Type)
-		}
-		names[c.Type] = append(names[c.Type], n)
-	}
-	fullParts := make([]string, 0, len(types))
-	shortParts := make([]string, 0, len(types))
-	for _, ty := range types {
-		fullParts = append(fullParts, "["+ty+": "+strings.Join(names[ty], ", ")+"]")
-		shortParts = append(shortParts, fmt.Sprintf("[%s: %d]", ty, len(names[ty])))
+	fullParts := make([]string, 0, len(groups))
+	shortParts := make([]string, 0, len(groups))
+	for _, g := range groups {
+		fullParts = append(fullParts, "["+g.typ+": "+strings.Join(g.names, ", ")+"]")
+		shortParts = append(shortParts, fmt.Sprintf("[%s: %d]", g.typ, len(g.names)))
 	}
 	return strings.Join(fullParts, " "), strings.Join(shortParts, " ")
 }
@@ -620,6 +636,7 @@ func (t *TUI) showInfo() {
 		name = sess.ID[:8]
 	}
 	b.WriteString(dim("session", name))
+	b.WriteString(dim("id", sess.ID))
 
 	// Model + runtime config
 	b.WriteString("\n")
@@ -647,8 +664,17 @@ func (t *TUI) showInfo() {
 
 	// Environment
 	b.WriteString("\n")
+	if info.OS != "" {
+		b.WriteString(mut("system", info.OS+"/"+info.Arch))
+	}
+	if info.Terminal != "" {
+		b.WriteString(mut("terminal", info.Terminal))
+	}
 	b.WriteString(mut("mcps", fmt.Sprintf("%d connected", info.MCPConnected)))
 	b.WriteString(mut("schedules", fmt.Sprintf("%d", info.ScheduleCount)))
+	for _, g := range channelGroups(sess.Channels) {
+		b.WriteString(mut(g.typ, strings.Join(g.names, ", ")))
+	}
 
 	// Runtime state
 	if info.Busy {

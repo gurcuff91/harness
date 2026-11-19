@@ -192,6 +192,12 @@ type SessionInfo struct {
 	// ScheduleCount is the number of cron schedules owned by this session
 	// (i.e. the schedules that will fire into it).
 	ScheduleCount int `json:"schedule_count"`
+	// OS and Arch are the system the session runs on (runtime.GOOS/GOARCH).
+	OS   string `json:"os"`
+	Arch string `json:"arch"`
+	// Terminal is the terminal the session runs in ("Ghostty", a workspace
+	// terminal with its address, …); empty for an agent with none (serve).
+	Terminal string `json:"terminal,omitempty"`
 }
 
 // MCPServer is the settings-collection payload. It reuses types' own shape

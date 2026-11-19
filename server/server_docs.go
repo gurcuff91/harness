@@ -845,6 +845,9 @@ const openAPISpecTemplate = `{
           "session":       { "$ref": "#/components/schemas/SessionDetail" },
           "mcp_connected": { "type": "integer" },
           "schedule_count":{ "type": "integer" },
+          "os":            { "type": "string", "example": "darwin" },
+          "arch":          { "type": "string", "example": "arm64" },
+          "terminal":      { "type": "string", "example": "Ghostty", "description": "The terminal the session runs in, when the server's agent runs in one (the TUI); omitted otherwise." },
           "busy":          { "type": "boolean" },
           "queue_depth":   { "type": "integer" }
         }

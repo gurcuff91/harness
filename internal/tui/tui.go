@@ -106,6 +106,11 @@ type TUI struct {
 	lastKind string                          // last history section kind (for spacing)
 
 	// SSE.
+	// sseCancel stops the current session's event stream. Set by startSSE
+	// (autoConnect, and every session switch on the input goroutine), taken
+	// by stopSSE and quit (input goroutine, context-cancel goroutine): guarded
+	// by sseMu. Use setSSECancel / takeSSECancel.
+	sseMu     sync.Mutex
 	sseCancel context.CancelFunc
 	sseReady  <-chan struct{} // closed once the stream startSSE opened is subscribed (or failed)
 	baseCtx   context.Context // root context for (re)starting SSE on in-place resume
@@ -168,9 +173,8 @@ func (t *TUI) quit() {
 			t.lastSessionID = t.sessionID
 			t.client.CloseSession(t.sessionID) //nolint:errcheck
 		}
-		if t.sseCancel != nil {
-			t.sseCancel()
-			t.sseCancel = nil
+		if cancel := t.takeSSECancel(); cancel != nil {
+			cancel()
 		}
 		close(t.quitCh)
 	})
@@ -232,8 +236,8 @@ func (t *TUI) Run(ctx context.Context) error {
 	// stays silent until a usable session exists, and there is no record to clear), and Main prints
 	// the error and exits 1.
 	if err := t.autoConnect(ctx); err != nil {
-		if t.sseCancel != nil {
-			t.sseCancel()
+		if cancel := t.takeSSECancel(); cancel != nil {
+			cancel()
 		}
 		return err
 	}

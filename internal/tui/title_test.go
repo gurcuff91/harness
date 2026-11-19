@@ -51,8 +51,8 @@ func TestAFreshSessionIsIdleToo(t *testing.T) {
 	tu.baseCtx = context.Background()
 	tu.autoConnect(context.Background())
 	t.Cleanup(func() {
-		if tu.sseCancel != nil {
-			tu.sseCancel()
+		if c := tu.takeSSECancel(); c != nil {
+			c()
 		}
 	})
 	if tu.sessionID == "" {
@@ -391,7 +391,7 @@ func TestStartSSEWithNoSessionReportsNothing(t *testing.T) {
 	tu.sessionID = ""
 	tu.startSSE(context.Background())
 	eq(t, rec.reports(), nil)
-	if tu.sseCancel != nil {
+	if tu.takeSSECancel() != nil {
 		t.Error("a stream was opened for no session")
 	}
 }
