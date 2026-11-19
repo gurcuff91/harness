@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.109.1] - 2026-11-19
+
+### Fixed — the TUI no longer smears lines into a tool's body when its text has tabs
+A tool call whose text contains tabs (typically a Bash command with pasted code: a heredoc, a `python3 -c`, Go indented with tabs) could leave the TUI drawing in the wrong rows: the line above the input box appeared inside the tool's body, with fragments of the spinner around it. The renderer measured a tab as 3 columns but sent it to the terminal as a real tab, which the terminal moves to the next 8-column stop; the line was then wider on screen than measured, the terminal wrapped it on its own, and every later redraw of the changed lines landed one row off. Every tab is now drawn as the 3 spaces it is measured at, in the one barrier every line passes through, so it covers tool output, replies, markdown and errors alike. Reproduced from the field case (a 14-tab command) in tests through the real render path.
+
 ## [0.109.0] - 2026-11-19
 
 ### Changed — the TUI has three prompt icons, and a message from Herdr is marked as coming from outside

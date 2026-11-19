@@ -205,7 +205,6 @@ func TestBoundaryCasesByExactValue(t *testing.T) {
 func TestWhatTheTUIEmitsItselfPassesUntouched(t *testing.T) {
 	for name, in := range map[string]string{
 		"plain":                  "hello world",
-		"tab":                    "a\tb",
 		"unicode":                "ñandú 日本語 🚀 ⚔️ — │ █ ▄",
 		"reset":                  Reset,
 		"bold dim ital under":    Bold + Dim + Ital + Under + "x" + Reset,
@@ -408,4 +407,57 @@ func FuzzAllowedSGRMatchesTheReference(f *testing.F) {
 			t.Fatalf("allowedSGR(%q) = %v, the reference says %v", params, got, want)
 		}
 	})
+}
+
+// A TAB is drawn as the width it is measured at. Left as a TAB, the terminal
+// moves it to the next 8-column stop, the line is wider on screen than the
+// renderer believes, the terminal wraps it on its own and every row below is
+// off by one (the editor's border was seen smeared into a Bash tool's body).
+func TestATabIsExpandedToItsMeasuredWidth(t *testing.T) {
+	in := "a\tb\t\tc"
+	out := SafeLine(in)
+	if strings.ContainsRune(out, '\t') {
+		t.Fatalf("a TAB reached the terminal: %q", out)
+	}
+	if out != "a   b      c" {
+		t.Errorf("got %q", out)
+	}
+	if VisibleWidth(in) != VisibleWidth(out) {
+		t.Errorf("measured %d before, %d after: what is drawn must be what was measured", VisibleWidth(in), VisibleWidth(out))
+	}
+	styled := Bold + "x\ty" + Reset
+	if got := SafeLine(styled); got != Bold+"x   y"+Reset {
+		t.Errorf("styled: %q", got)
+	}
+}
+
+// The case from the field: a long command with tabs, wrapped to the terminal
+// width. Every line handed to the terminal fits it, with no TAB left in it.
+func TestAWrappedCommandWithTabsFitsTheTerminal(t *testing.T) {
+	cmd := "python3 -c \"p='agent/agent.go';s=open(p).read();s=s.replace('\t\t\tif requestedMaxIterations > 0 {\\n\t\t\t\tmaxIter = requestedMaxIterations','\t\t\tif false && requestedMaxIterations > 0 {\\n\t\t\t\tmaxIter = requestedMaxIterations',1)\""
+	for _, width := range []int{40, 63, 80, 117} {
+		for _, l := range WrapTextWithAnsi(cmd, width) {
+			drawn := SafeLine(l)
+			if strings.ContainsRune(drawn, '\t') {
+				t.Fatalf("width %d: TAB drawn: %q", width, drawn)
+			}
+			if w := screenWidth(drawn); w > width {
+				t.Errorf("width %d: a line takes %d columns on screen: %q", width, w, drawn)
+			}
+		}
+	}
+}
+
+// screenWidth is how many columns a terminal really uses for s, with TABs at
+// 8-column stops (the terminal's rule, not the renderer's).
+func screenWidth(s string) int {
+	col := 0
+	for _, r := range StripEscapes(s) {
+		if r == '\t' {
+			col += 8 - col%8
+			continue
+		}
+		col += VisibleWidth(string(r))
+	}
+	return col
 }

@@ -232,3 +232,25 @@ func TestACachedHostileLineStaysNeutralized(t *testing.T) {
 		}
 	}
 }
+
+// No TAB reaches the terminal, through the real render path (first frame, a
+// diff and a cached line): a terminal draws it to the next 8-column stop, wider
+// than the renderer measured it, and the rows below drift (the editor's border
+// was seen smeared into a Bash tool's body whose command had tabs in it).
+func TestNoTabReachesTheTerminal(t *testing.T) {
+	const cols = 40
+	tui, term := newTestTUI(cols, 24)
+	line := "('\t\t\tif requestedMaxIterations > 0 {"
+	comp := &staticComponent{lines: []string{line, "second"}}
+	tui.AddChild(comp)
+	tui.doRender()
+	comp.lines = []string{line, "second\tchanged"}
+	tui.doRender()
+	out := written(term)
+	if strings.ContainsRune(out, '\t') {
+		t.Fatalf("a TAB reached the terminal: %q", out)
+	}
+	if !strings.Contains(out, "('         if requestedMaxIterations") {
+		t.Errorf("the tabs were not drawn as spaces: %q", out)
+	}
+}

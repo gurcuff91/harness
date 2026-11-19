@@ -5,6 +5,9 @@ import (
 	"unicode/utf8"
 )
 
+// tabSpaces is what a TAB becomes on screen (tabWidth spaces).
+var tabSpaces = strings.Repeat(" ", tabWidth)
+
 // SafeLine is the barrier between text the TUI does not control and the host terminal.
 //
 // Everything the TUI draws ends up as lines handed to the terminal, and a lot of it is not ours:
@@ -25,12 +28,18 @@ import (
 //     cannot see, and nothing here has a use for it.
 //   - CSI K, the erase-to-end-of-line the components use.
 //   - OSC 8 hyperlinks (open and close) whose URL passes SafeURL.
-//   - TAB.
+//
+// Expanded:
+//   - TAB becomes tabWidth spaces — exactly what the width helpers count it as. A terminal moves a
+//     TAB to its next tab stop (every 8 columns), so a line holding one is WIDER on screen than it
+//     was measured: the terminal wraps it on its own, every row below shifts by one, and the diff
+//     renderer then redraws its "changed" lines on the wrong rows (seen live: the editor's border
+//     smeared into a Bash tool's body whose command had tabs in it).
 //
 // Neutralized:
 //   - Any other escape sequence: its ESC (0x1B) is replaced by the visible symbol U+241B "␛" and the
 //     rest of the text is kept, so what was there stays readable and nothing is silently hidden.
-//   - Every other control character — C0 (except TAB), DEL, and the C1 range, whose single
+//   - Every other control character — C0, DEL, and the C1 range, whose single
 //     characters U+0080–U+009F are the 8-bit forms of CSI/OSC/DCS/ST: dropped, except that BEL is
 //     shown as "␇" (U+2407) for the same reason as the ESC. A bare CR or LF cannot occur in a line
 //     (lines are split on \n and a CR moves the cursor), so they are dropped too.
@@ -57,7 +66,9 @@ func SafeLine(s string) string {
 		}
 		if c < 0x80 {
 			switch {
-			case c == '\t' || c >= 0x20 && c != 0x7f:
+			case c == '\t':
+				b.WriteString(tabSpaces)
+			case c >= 0x20 && c != 0x7f:
 				b.WriteByte(c)
 			case c == 0x07:
 				b.WriteString(belSymbol)
@@ -121,7 +132,7 @@ func isSafe(s string) bool {
 			}
 			i += n
 		case c < 0x80:
-			if c < 0x20 && c != '\t' || c == 0x7f {
+			if c < 0x20 || c == 0x7f { // TAB included: it is expanded
 				return false
 			}
 			i++
