@@ -34,7 +34,7 @@ func TestChannelsLabel(t *testing.T) {
 		{Type: "slack", ID: "D9", Name: "@gus"},
 		{Type: "other", ID: "X1"}, // no name: its id
 	})
-	if f != "⇄ #producto-y, @gus, X1" || s != "⇄ slack ×2, other" {
+	if f != "[slack: #producto-y, @gus] [other: X1]" || s != "[slack: 2] [other: 1]" {
 		t.Errorf("full %q, short %q", f, s)
 	}
 }
@@ -50,7 +50,21 @@ func TestStatusLineShortensTheChannels(t *testing.T) {
 		t.Errorf("wide: %q", wide)
 	}
 	narrow := ansi.StripEscapes(tt.Render(40)[0])
-	if !strings.Contains(narrow, "⇄ slack ×2") {
+	if !strings.Contains(narrow, "[slack: 2]") {
 		t.Errorf("narrow: %q", narrow)
+	}
+}
+
+// The status line carries no icon: the channels are plain text, like the rest
+// of it.
+func TestChannelsLabelHasNoIcon(t *testing.T) {
+	f, s := channelsLabel([]client.ChannelInfo{{Type: "slack", ID: "C1", Name: "#social"}})
+	if f != "[slack: #social]" || s != "[slack: 1]" {
+		t.Errorf("full %q, short %q", f, s)
+	}
+	for _, icon := range []string{outsideIcon, userIcon, scheduleIcon} {
+		if strings.Contains(f+s, icon) {
+			t.Errorf("an icon in the status line: %q / %q", f, s)
+		}
 	}
 }

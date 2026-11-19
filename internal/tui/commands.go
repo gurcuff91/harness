@@ -238,34 +238,33 @@ func originOf(text string) string {
 }
 
 // channelsLabel is the status-line mark of the conversations the session
-// listens to: full ("⇄ #prod, @gus") and short ("⇄ slack ×2"); "" when none.
+// listens to, one bracketed group per channel type in binding order: full
+// ("[slack: #prod, @gus] [telegram: @bot]") and short, with only the count
+// ("[slack: 2] [telegram: 1]"); "" when none. Text only, like the rest of
+// that line.
 func channelsLabel(chs []client.ChannelInfo) (full, short string) {
 	if len(chs) == 0 {
 		return "", ""
 	}
-	names := make([]string, 0, len(chs))
-	count := map[string]int{}
+	names := map[string][]string{}
 	var types []string
 	for _, c := range chs {
 		n := c.Name
 		if n == "" {
 			n = c.ID
 		}
-		names = append(names, n)
-		if count[c.Type] == 0 {
+		if _, seen := names[c.Type]; !seen {
 			types = append(types, c.Type)
 		}
-		count[c.Type]++
+		names[c.Type] = append(names[c.Type], n)
 	}
-	parts := make([]string, 0, len(types))
+	fullParts := make([]string, 0, len(types))
+	shortParts := make([]string, 0, len(types))
 	for _, ty := range types {
-		if count[ty] == 1 {
-			parts = append(parts, ty)
-		} else {
-			parts = append(parts, fmt.Sprintf("%s ×%d", ty, count[ty]))
-		}
+		fullParts = append(fullParts, "["+ty+": "+strings.Join(names[ty], ", ")+"]")
+		shortParts = append(shortParts, fmt.Sprintf("[%s: %d]", ty, len(names[ty])))
 	}
-	return outsideIcon + " " + strings.Join(names, ", "), outsideIcon + " " + strings.Join(parts, ", ")
+	return strings.Join(fullParts, " "), strings.Join(shortParts, " ")
 }
 
 func (t *TUI) submitPrompt(text string) {

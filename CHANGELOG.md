@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.109.2] - 2026-11-19
+
+### Changed — the status line shows channels as `[slack: #channel, @person]`, without an icon
+The channels a session listens to are now one bracketed group per channel type at the end of the line with the session's name — `[slack: #social, @gus]`, and later `[telegram: @bot]` beside it — instead of `⇄ #social, @gus`: that line has no icons anywhere else. When the names do not fit, each group shows its count (`[slack: 2]`).
+
 ## [0.109.1] - 2026-11-19
 
 ### Fixed — the TUI no longer smears lines into a tool's body when its text has tabs
