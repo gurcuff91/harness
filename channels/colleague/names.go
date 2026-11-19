@@ -6,8 +6,8 @@ import (
 	"regexp"
 )
 
-// names: a character and a trait from the Mortal Kombat universe, the same
-// pools the instance registry uses, joined by a dash ("scorpion-hero").
+// names: a character and a trait from the Mortal Kombat universe, joined by a
+// dash ("scorpion-hero").
 var characters = []string{
 	"scorpion", "subzero", "raiden", "liukang", "kunglao", "kitana",
 	"mileena", "jade", "sonya", "jax", "johnnycage", "kano", "baraka",

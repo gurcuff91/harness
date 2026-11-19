@@ -97,3 +97,15 @@ Tests for the frame, the socket (mode, leftover file, long path), ask/reply
 without a loop, a lost reply, id clash, and two real agents talking over a
 socket; mutants; the Windows CI job (Unix sockets there); a live check with two
 TUIs in Herdr.
+
+## Addendum (v0.111.0): the old implementation is removed
+
+Coexistence (§6) ended one release later. Removed: the HTTP colleague tools
+(`AgentOptions.EnableColleagues`, `harness.AgentWithColleagues`), the server's
+instance registry (`server.RegisterInstance`/`ListInstances`/`InstanceInfo`,
+`GET /api/instances`, the `instance` field of `GET /api/server`, the
+`instances` settings namespace), and the API that only the old tools used
+(`GET /api/sessions?active=true`, `no_queue`, `resumed`, `PromptWithoutQueue`,
+`ResumeSessionReport`, `client.ListActiveSessions`/`WithoutQueue`/`IsBusy`).
+Telegram's quiet mode now recognises the channel's origins: a colleague's
+question (`colleague:<id>`) is quiet, a reply (`colleague:<id>#reply`) is shown.

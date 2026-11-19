@@ -72,7 +72,6 @@ func TestAgentWithBoolOptionsSetTheirFlag(t *testing.T) {
 		get  func(agent.AgentOptions) bool
 	}{
 		{"AgentWithScheduler", AgentWithScheduler(), func(o agent.AgentOptions) bool { return o.EnableScheduler }},
-		{"AgentWithColleagues", AgentWithColleagues(), func(o agent.AgentOptions) bool { return o.EnableColleagues }},
 		{"AgentWithWebSearch", AgentWithWebSearch(), func(o agent.AgentOptions) bool { return o.EnableWebSearch }},
 	}
 	for _, c := range cases {
@@ -611,5 +610,9 @@ func TestAgentWithTerminalAndChannelsSetTheirOptions(t *testing.T) {
 	AgentWithTerminal("Ghostty")(&o)
 	if o.Terminal != "Ghostty" {
 		t.Errorf("Terminal = %q", o.Terminal)
+	}
+	AgentWithSessionChannels(types.InputChannel{Type: "colleague", Ref: "*"})(&o)
+	if len(o.SessionChannels) != 1 || o.SessionChannels[0].Type != "colleague" {
+		t.Errorf("SessionChannels = %v", o.SessionChannels)
 	}
 }

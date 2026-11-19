@@ -378,8 +378,8 @@ func ChannelClaimTaken(typ, id string) bool {
 }
 
 // builtinNamesForSession lists the built-in tools a session of this agent
-// gets — the always-on ones and those whose switch is on (colleagues, the
-// scheduler, memory, WebSearch) — so a channel's tool clashes only with what
+// gets — the always-on ones and those whose switch is on (the scheduler,
+// memory, WebSearch) — so a channel's tool clashes only with what
 // the session will really have.
 func (a *Agent) builtinNamesForSession() []string {
 	names := []string{tools.ToolBash, tools.ToolRead, tools.ToolWrite, tools.ToolEdit, tools.ToolFetch,
@@ -389,9 +389,6 @@ func (a *Agent) builtinNamesForSession() []string {
 	}
 	if a.scheduleAdapter() != nil {
 		names = append(names, tools.ToolSchedule, tools.ToolScheduleList, tools.ToolScheduleDelete)
-	}
-	if a.opts.EnableColleagues {
-		names = append(names, tools.ToolColleagueList, tools.ToolColleagueAsk)
 	}
 	if a.opts.EnableWebSearch {
 		names = append(names, tools.ToolWebSearch)

@@ -11,8 +11,8 @@ import (
 //
 // It matches on the net.Error contract rather than a specific sentinel so it
 // works uniformly across every tool that can time out, whatever the source:
-//   - context.DeadlineExceeded (Subagent's per-call ctx, ColleagueAsk's HTTP
-//     client ctx) — implements net.Error with Timeout() == true.
+//   - context.DeadlineExceeded (Subagent's per-call ctx) — implements
+//     net.Error with Timeout() == true.
 //   - http.Client.Timeout (Fetch) — surfaces a *url.Error whose underlying
 //     error reports Timeout() == true.
 //

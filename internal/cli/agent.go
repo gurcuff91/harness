@@ -93,9 +93,7 @@ func oneShotOptions() agent.AgentOptions {
 //
 // The two OPT-IN extras come in through x (see extras.go): colleagues and the scheduler engine. They are
 // off unless the command asked for them with --with-colleagues / --with-scheduler or the matching
-// environment variable, because each costs every session something even when unused. A process without
-// colleagues is still registered as an instance by the server and still ANSWERS other agents; it only
-// lacks the tools to ask them.
+// environment variable, because each costs every session something even when unused.
 //
 // directives are extra AGENT-WIDE system-prompt blocks (every session sees them). Transport-specific ones
 // (telegram.Directive, slack.Directive) don't go here: those transports add them per session.
@@ -117,10 +115,9 @@ func interactiveOptions(x extras, directives []string) agent.AgentOptions {
 		MaxIterations:   interactiveMaxIterations,
 		Directives:      directives,
 	}
-	// --with-colleagues activates the colleague CHANNEL (channels/colleague),
-	// not the old HTTP colleague tools (those stay SDK-only, AgentWithColleagues,
-	// until they are deprecated): every session this agent opens — whichever
-	// frontend opens it — gets a colleague id of its own.
+	// --with-colleagues activates the colleague channel (channels/colleague):
+	// every session this agent opens — whichever frontend opens it — gets a
+	// colleague id of its own.
 	if x.colleagues {
 		opts.Channels = colleagueChannels(x, false)
 		opts.SessionChannels = []types.InputChannel{colleagueAuto}

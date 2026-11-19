@@ -48,7 +48,8 @@
 //     facade's RunServer) runs on top of
 //   - transports/{telegram,acp} — the runners RunTelegram/RunAcp wrap, and
 //     their Option types
-//   - channels/slack   — the Slack input channel (see [AgentWithChannels])
+//   - channels/slack, channels/colleague — the input channels (see
+//     [AgentWithChannels], [AgentWithSessionChannels])
 //   - client           — typed HTTP/SSE client for a running harness server
 //   - types            — Event, Message, ModelMeta and other shared types
 //
@@ -230,17 +231,12 @@ func AgentWithChannels(chs ...agent.Channel) AgentOption {
 	return func(o *agent.AgentOptions) { o.Channels = append(o.Channels, chs...) }
 }
 
-// AgentWithColleagues enables the ColleagueList/ColleagueAsk tools: the agent
-// can discover OTHER running harness server instances on this machine (any
-// process that called Serve — see the client package) via the shared
-// colleague registry (kept in the settings store), and delegate a prompt to one of them by
-// name over HTTP. Each colleague answers using its OWN model, MCPs, and
-// project context, not the caller's — real delegation, not talking to itself.
-// Meant for long-running processes (a served agent, a transport); one-shot
-// callers have nothing to offer a colleague and no time to wait for one. Off
-// by default.
-func AgentWithColleagues() AgentOption {
-	return func(o *agent.AgentOptions) { o.EnableColleagues = true }
+// AgentWithSessionChannels binds every session the agent opens (new, resumed,
+// forked) to these channels — e.g. {Type: "colleague", Ref: "*"} with
+// channels/colleague.New() registered, so each session is a colleague with a
+// name of its own. See agent.AgentOptions.SessionChannels.
+func AgentWithSessionChannels(chs ...types.InputChannel) AgentOption {
+	return func(o *agent.AgentOptions) { o.SessionChannels = append(o.SessionChannels, chs...) }
 }
 
 // AgentWithWebSearch enables the built-in WebSearch tool. The tool owns its

@@ -201,9 +201,9 @@ func (t *TUI) completeOAuthConnect(provider, verifierCode, code string) {
 
 // submitPrompt sends a prompt to the session, queueing it locally if a turn is
 // already in flight.
-// scheduleIcon marks a prompt fired by the scheduler (a clock); colleagueIcon a
-// prompt another agent sent to this session through ColleagueAsk; userIcon a user
-// prompt. The transport picks the icon from the prompt's origin, carried by the
+// scheduleIcon marks a prompt fired by the scheduler (a clock); outsideIcon a
+// prompt that came from outside (a colleague, Herdr, a channel, …); userIcon a
+// user prompt. The transport picks the icon from the prompt's origin, carried by the
 // received_prompt / follow_up_start events.
 const (
 	scheduleIcon = "◷"

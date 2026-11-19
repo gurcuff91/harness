@@ -65,18 +65,15 @@ const (
 
 // Subagent returns a Tool that delegates a task to a sub-agent, blocking for
 // the response (or, with background: true, returning immediately with a
-// path to a result file) — the same timeout/background shape as
-// ColleagueAsk, for the same reason: a long-running exploration task
+// path to a result file), for this reason: a long-running exploration task
 // shouldn't be forced to fit inside one fixed timeout, and shouldn't have to
 // block the caller's turn if the model doesn't need the answer immediately.
 //
-// Unlike ColleagueAsk (which delegates to a separate harness PROCESS),
 // Subagent's background mode only survives as long as THIS process does —
 // the sub-agent runs in-process via the executor closure, so if the parent
 // process exits, the goroutine (and whatever it was about to write to the
 // result file) goes with it. "background" here means "outlives the turn
-// that launched it", not "survives the process" — worth remembering since
-// the name mirrors ColleagueAsk's, but the durability guarantee doesn't. See
+// that launched it", not "survives the process". See
 // runSubagentBackground's doc comment for why it deliberately does NOT use
 // the ctx this tool is invoked with for that goroutine — using it was a real
 // bug (every background call died with "context canceled" the instant its
@@ -130,8 +127,7 @@ func Subagent(executor SubagentExecutor) Tool {
 			// background mode nothing is waiting: the tool already returned,
 			// and the goroutine below is the only thing watching the request.
 			// Applying the same timeout there would silently cut off exactly
-			// the slow task background was meant to tolerate (see the same
-			// reasoning in ColleagueAsk).
+			// the slow task background was meant to tolerate.
 			if req.Background {
 				return runSubagentBackground(executor, req.Prompt, req.MaxIterations, req.Readonly)
 			}

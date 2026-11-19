@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.111.0] - 2026-11-19
+
+### Breaking — the old colleague implementation and the instance registry are removed
+The colleague channel (0.110.0) is now the only way agents on a machine talk to each other. Everything the old implementation needed is gone:
+- **SDK:** `agent.AgentOptions.EnableColleagues` and `harness.AgentWithColleagues()` (the HTTP colleague tools). Migrate to the channel: `harness.AgentWithChannels(colleague.New())` (package `channels/colleague`) plus the new `harness.AgentWithSessionChannels(types.InputChannel{Type: "colleague", Ref: "*"})`, which gives every session the agent opens a colleague name — exactly what `--with-colleagues` does. The tools keep their names (`ColleagueList`, `ColleagueAsk`) but `ColleagueAsk` is asynchronous: the answer arrives later as a new prompt.
+- **The instance registry:** `server.RegisterInstance`, `UnregisterInstance`, `ListInstances` and `InstanceInfo`; `GET /api/instances`; the `instance` field of `GET /api/server`. A server no longer registers itself anywhere. `ServerOptions.Transport` stays (it is still reported as `transport` by `GET /api/server`).
+- **API that only the old tools used:** `GET /api/sessions?active=true` (and `client.ListActiveSessions`, `client.ActiveSession`), the `no_queue` field of `/prompt` and `/ask` with its 409 "session is busy" (and `client.WithoutQueue`, `client.IsBusy`, `agent.PromptWithoutQueue`, `types.PromptRejected`), and the `resumed` field of `POST /api/sessions/{id}/resume` (and `client.Session.Resumed`, `agent.Agent.ResumeSessionReport` — `ResumeSession` is unchanged).
+- **Tool constants:** `tools.ToolColleagueList`, `tools.ToolColleagueAsk` and `tools.BuiltinNames()`.
+- **Saved state:** the `instances` namespace of `settings.json` is no longer read or written; it can be deleted by hand.
+
+### Fixed — Telegram stays quiet on a colleague's question, and shows a colleague's reply
+Telegram's quiet mode still checked for the old origin `colleague`, so a Telegram-bound session started with `--with-colleagues` posted in the chat the answer it was writing for another agent. It now recognises the channel's origins: a colleague's question (`colleague:<id>`) runs quiet, and a reply to something the session asked (`colleague:<id>#reply`) is shown in the chat.
+
+`--with-colleagues` costs 2 403 characters of system prompt and 1 165 bytes of tool definitions per request (measured; the help and docs carried the old tools' figures).
+
 ## [0.110.0] - 2026-11-19
 
 ### Changed — `--with-colleagues` makes every session a colleague that other sessions can message

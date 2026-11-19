@@ -128,58 +128,6 @@ func TestSwapScheduleConcurrentIncrementsAcrossProcesses(t *testing.T) {
 	}
 }
 
-// ── Instances ────────────────────────────────────────────────────────────
-
-func TestReserveInstanceOnlyClaimsFreeNames(t *testing.T) {
-	m := memSettings()
-	if ok, err := m.ReserveInstance("n", InstanceEntry{PID: 1}); err != nil || !ok {
-		t.Fatalf("first reservation = %v, %v; want true", ok, err)
-	}
-	if ok, _ := m.ReserveInstance("n", InstanceEntry{PID: 2}); ok {
-		t.Error("a taken name must not be reserved again")
-	}
-	if got := m.Instances()["n"]; got.PID != 1 {
-		t.Errorf("holder = %+v, want the first reservation (PID 1)", got)
-	}
-}
-
-func TestDeleteInstanceIfOnlyRemovesTheProbedHolder(t *testing.T) {
-	m := memSettings()
-	m.ReserveInstance("n", InstanceEntry{PID: 1})
-
-	if err := m.DeleteInstanceIf("n", 999); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := m.Instances()["n"]; !ok {
-		t.Fatal("a PID mismatch must leave the entry alone")
-	}
-
-	if err := m.DeleteInstanceIf("n", 1); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := m.Instances()["n"]; ok {
-		t.Fatal("the matching PID must remove the entry")
-	}
-	// The vacated name is free again.
-	if ok, _ := m.ReserveInstance("n", InstanceEntry{PID: 2}); !ok {
-		t.Error("a vacated name must be reservable")
-	}
-}
-
-func TestDeleteInstanceIsIdempotent(t *testing.T) {
-	m := memSettings()
-	m.ReserveInstance("n", InstanceEntry{PID: 1})
-	if err := m.DeleteInstance("n"); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.DeleteInstance("n"); err != nil {
-		t.Errorf("deleting a missing instance must not error, got %v", err)
-	}
-	if len(m.Instances()) != 0 {
-		t.Error("instance still listed after delete")
-	}
-}
-
 // ── Telegram ─────────────────────────────────────────────────────────────
 
 func TestTelegramAllowlist(t *testing.T) {
@@ -278,40 +226,6 @@ func TestTransportSecretsLiveInCredentials(t *testing.T) {
 	c.SetSlackSession(SlackSession{XoxC: "xoxc-1", XoxD: "xoxd-1"})
 	if s, ok := c.SlackSession(); !ok || s.XoxC != "xoxc-1" || s.XoxD != "xoxd-1" {
 		t.Errorf("slack session = %+v, %v", s, ok)
-	}
-}
-
-// DeleteInstanceIf deletes for real — no vacant marker is left behind.
-func TestDeleteInstanceIfLeavesNoMarker(t *testing.T) {
-	m := memSettings()
-	m.ReserveInstance("n", InstanceEntry{PID: 1})
-	if err := m.DeleteInstanceIf("n", 1); err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := m.store.List(nsInstances)
-	if _, ok := raw["n"]; ok {
-		t.Fatalf("raw registry still holds %q = %s; want the key removed", "n", raw["n"])
-	}
-}
-
-// Legacy null markers (written by 0.81–0.84) are swept; live entries stay.
-func TestDeleteVacantInstancesSweepsLegacyMarkers(t *testing.T) {
-	m := memSettings()
-	m.ReserveInstance("live", InstanceEntry{PID: 1})
-	for _, n := range []string{"old-a", "old-b"} {
-		if err := m.store.Set(nsInstances, n, []byte(vacantInstance)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if got := m.DeleteVacantInstances(); got != 2 {
-		t.Errorf("removed = %d, want 2", got)
-	}
-	raw, _ := m.store.List(nsInstances)
-	if len(raw) != 1 || raw["live"] == nil {
-		t.Fatalf("registry after sweep = %v, want only the live entry", raw)
-	}
-	if got := m.DeleteVacantInstances(); got != 0 {
-		t.Errorf("second sweep removed %d, want 0", got)
 	}
 }
 

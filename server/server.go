@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"os"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -60,12 +59,11 @@ type Server struct {
 	// s.sessions and each build one — the second stealing the event stream).
 	openMu sync.Mutex
 
-	profMu       sync.RWMutex
-	profiles     map[string]Profile
-	addr         string // resolved listen address (set in Serve)
-	instanceName string // unique instance name (MK11-themed, set in Serve)
-	mu           sync.RWMutex
-	sessions     map[string]*SessionProxy
+	profMu   sync.RWMutex
+	profiles map[string]Profile
+	addr     string // resolved listen address (set in Serve)
+	mu       sync.RWMutex
+	sessions map[string]*SessionProxy
 
 	// Graceful shutdown plumbing (set in Serve).
 	httpSrv   *http.Server
@@ -130,7 +128,6 @@ func (s *Server) handler() http.Handler {
 
 	// Routes
 	r.Get("/api/server", s.handleServerInfo)
-	r.Get("/api/instances", s.handleListInstances)
 	r.Get("/api/docs", s.handleDocs)
 	r.Get("/api/docs/openapi.json", s.handleOpenAPISpec)
 	r.Get("/api/settings", s.handleSettings)
@@ -203,24 +200,6 @@ func (s *Server) Serve(l net.Listener) error {
 	s.listener = l
 	s.mu.Unlock()
 	s.logger.Info("server", "listening", "addr", addr)
-
-	// Register this instance in the colleague registry (settings store).
-	name, err := RegisterInstance(InstanceInfo{
-		Version:   staticServerVersion,
-		Transport: s.transport,
-		URL:       "http://" + addr,
-		CWD:       staticServerCWD,
-		PID:       staticServerPID,
-		StartedAt: staticServerStartedAt,
-	})
-	if err != nil {
-		s.logger.Warn("server", "register_instance", "error", err.Error())
-	} else {
-		s.mu.Lock()
-		s.instanceName = name
-		s.mu.Unlock()
-		s.logger.Info("server", "instance", "name", name)
-	}
 
 	// Serve() itself (past this point) is the one legitimate unlocked read of
 	// httpSrv: Close() only ever calls Shutdown() on it after this field is
@@ -301,7 +280,6 @@ func (s *Server) Close() error {
 		// the lock below needs to paper over.
 		s.mu.RLock()
 		httpSrv := s.httpSrv
-		instanceName := s.instanceName
 		s.mu.RUnlock()
 		if httpSrv != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -311,10 +289,6 @@ func (s *Server) Close() error {
 			}
 		}
 
-		// 4. Unregister this instance from the colleague registry.
-		if instanceName != "" {
-			UnregisterInstance(instanceName)
-		}
 	})
 	return s.closeErr
 }
@@ -358,7 +332,6 @@ type resumeSessionRequest struct {
 type serverInfo struct {
 	Name      string `json:"name"`
 	Version   string `json:"version"`
-	Instance  string `json:"instance"`
 	Transport string `json:"transport"`
 	URL       string `json:"url"`
 	CWD       string `json:"cwd"`
@@ -385,32 +358,17 @@ func init() {
 
 func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
-	addr, instanceName := s.addr, s.instanceName
+	addr := s.addr
 	s.mu.RUnlock()
 	writeJSON(w, http.StatusOK, serverInfo{
 		Name:      staticServerName,
 		Version:   staticServerVersion,
-		Instance:  instanceName,
 		Transport: s.transport,
 		URL:       "http://" + addr,
 		CWD:       staticServerCWD,
 		PID:       staticServerPID,
 		StartedAt: staticServerStartedAt,
 	})
-}
-
-// handleListInstances returns all registered server instances from
-// the colleague registry (dead entries are purged on every registration).
-func (s *Server) handleListInstances(w http.ResponseWriter, r *http.Request) {
-	instances, err := ListInstances()
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	if instances == nil {
-		instances = map[string]InstanceInfo{}
-	}
-	writeJSON(w, http.StatusOK, instances)
 }
 
 // SettingsDTO is the API representation of harness settings. Its JSON tags are
@@ -1021,49 +979,8 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, liveDetail(sess))
 }
 
-// activeSession is one element of GET /api/sessions?active=true: a session that
-// is open in THIS server right now, with what a peer needs to decide whether and
-// how to talk to it. Everything listed here can be prompted (POST
-// /api/sessions/{id}/prompt|ask) without resuming anything.
-type activeSession struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	CWD   string `json:"cwd"`
-	Model string `json:"model"`
-	// Busy: a turn is in flight. A prompt sent with no_queue is refused (409)
-	// while it is true.
-	Busy bool `json:"busy"`
-}
-
-// activeSessionList returns the sessions open in this server, sorted by name then
-// id so the output is stable. cwd, when non-empty, keeps only that working
-// directory's sessions. Lock-free reads only (Meta/IsBusy): safe while turns run.
-func (s *Server) activeSessionList(cwd string) []activeSession {
-	s.mu.RLock()
-	out := make([]activeSession, 0, len(s.sessions))
-	for id, proxy := range s.sessions {
-		m := proxy.session.Meta()
-		if cwd != "" && m.CWD != cwd {
-			continue
-		}
-		out = append(out, activeSession{ID: id, Name: m.Name, CWD: m.CWD, Model: m.Model, Busy: proxy.session.IsBusy()})
-	}
-	s.mu.RUnlock()
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Name != out[j].Name {
-			return out[i].Name < out[j].Name
-		}
-		return out[i].ID < out[j].ID
-	})
-	return out
-}
-
 // handleListSessions returns all sessions, optionally filtered by ?cwd=
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Query().Get("active") == "true" {
-		writeJSON(w, http.StatusOK, s.activeSessionList(r.URL.Query().Get("cwd")))
-		return
-	}
 	cwd := r.URL.Query().Get("cwd")
 	var sessions []store.SessionMeta
 	var err error
@@ -1344,7 +1261,7 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	sess, opened, err := s.openSession(id, req.Profiles, req.Directives, req.Channels...)
+	sess, err := s.openSession(id, req.Profiles, req.Directives, req.Channels...)
 	if err != nil {
 		status := http.StatusInternalServerError
 		switch {
@@ -1362,9 +1279,7 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	}
 	// Meta() is the lock-free public accessor — safe even if the session is
 	// mid-turn (see its doc comment).
-	detail := liveDetail(sess)
-	detail.Resumed = &opened
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, liveDetail(sess))
 }
 
 // openSession resumes session id in this server — idempotent and atomic, so
@@ -1375,13 +1290,7 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 // directives); if it's already active — in this server or in the agent (the
 // scheduler, a colleague, …) — and the binding changed, it's reconfigured at
 // its next turn boundary, never mid-turn.
-//
-// opened reports whether THIS call is what made the session active: false when it
-// was already open — in this server, or live in the agent outside it. Resuming is
-// idempotent, so the caller cannot otherwise tell "I opened it" from "somebody was
-// already using it", and a caller that closes what it resumed must close only the
-// former.
-func (s *Server) openSession(id string, addProfiles, extraDirectives []string, channels ...types.InputChannel) (sess *agent.Session, opened bool, err error) {
+func (s *Server) openSession(id string, addProfiles, extraDirectives []string, channels ...types.InputChannel) (*agent.Session, error) {
 	s.openMu.Lock()
 	defer s.openMu.Unlock()
 
@@ -1389,7 +1298,7 @@ func (s *Server) openSession(id string, addProfiles, extraDirectives []string, c
 	merged, changed := mergeProfiles(bound, addProfiles)
 	if changed {
 		if err := s.agent.SetSessionProfiles(id, merged); err != nil {
-			return nil, false, err
+			return nil, err
 		}
 	}
 
@@ -1400,14 +1309,14 @@ func (s *Server) openSession(id string, addProfiles, extraDirectives []string, c
 		if len(channels) > 0 {
 			// Same rule as the agent's fast path: an open session is not
 			// rebound, and an explicit channel is never ignored.
-			if _, _, err := s.agent.ResumeSessionReport(id, agent.WithSessionChannels(channels...)); err != nil {
-				return nil, false, err
+			if _, err := s.agent.ResumeSession(id, agent.WithSessionChannels(channels...)); err != nil {
+				return nil, err
 			}
 		}
 		if changed {
 			_ = s.agent.ReconfigureSession(id, s.profileOptions(merged, nil)...)
 		}
-		return proxy.session, false, nil
+		return proxy.session, nil
 	}
 
 	// Not in this server: resume through the agent. If the agent already has
@@ -1418,9 +1327,9 @@ func (s *Server) openSession(id string, addProfiles, extraDirectives []string, c
 	if len(channels) > 0 {
 		resumeOpts = append(resumeOpts, agent.WithSessionChannels(channels...))
 	}
-	sess, openedByAgent, err := s.agent.ResumeSessionReport(id, resumeOpts...)
+	sess, err := s.agent.ResumeSession(id, resumeOpts...)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if changed {
 		_ = s.agent.ReconfigureSession(id, s.profileOptions(merged, extraDirectives)...)
@@ -1428,7 +1337,7 @@ func (s *Server) openSession(id string, addProfiles, extraDirectives []string, c
 	s.mu.Lock()
 	s.sessions[id] = newSessionProxy(sess, s.logger)
 	s.mu.Unlock()
-	return sess, openedByAgent, nil
+	return sess, nil
 }
 
 // sessionDetailDTO wraps store.SessionMeta with fields that live on the runtime
@@ -1447,13 +1356,6 @@ type sessionDetailDTO struct {
 	// is then the model it runs on now (and is saved with from now on); this
 	// says what it was and why it changed. Omitted in the normal case.
 	ModelFallback *agent.ModelFallback `json:"model_fallback,omitempty"`
-	// Resumed is set only on the response of POST /api/sessions/{id}/resume: true
-	// when that call opened the session, false when it was already active and the
-	// call just returned it. Resume is idempotent, so without this a caller cannot
-	// tell the two apart — and one that closes the sessions it resumes must close
-	// only the ones it opened, or it would end somebody else's live conversation.
-	// Omitted everywhere else.
-	Resumed *bool `json:"resumed,omitempty"`
 	// Channels are the external conversations the live session listens to.
 	// Omitted when none (and for a persisted session: channels are never
 	// stored).
@@ -1522,14 +1424,7 @@ type promptRequest struct {
 	// (default), "scheduled", a transport's name ("telegram", "slack",
 	// "acp"), or a caller's own. Echoed on received_prompt/follow_up_start.
 	Origin string `json:"origin,omitempty"`
-	// NoQueue, when true, makes the prompt run only if the session is idle: a
-	// session with a turn in flight answers 409 "session is busy" and the prompt
-	// is neither queued nor stored. Default false: queue behind the running turn.
-	NoQueue bool `json:"no_queue,omitempty"`
 }
-
-// errSessionBusy is the 409 a no_queue prompt gets while a turn is in flight.
-const msgSessionBusy = "session is busy"
 
 func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -1565,14 +1460,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		opts = append(opts, agent.PromptWithImages(req.Images...))
 	}
 	opts = append(opts, agent.PromptWithOrigin(req.Origin))
-	if req.NoQueue {
-		opts = append(opts, agent.PromptWithoutQueue())
-	}
 	ps := proxy.session.Prompt(context.Background(), req.Text, opts...)
-	if ps == types.PromptRejected {
-		writeError(w, http.StatusConflict, msgSessionBusy, nil)
-		return
-	}
 
 	status := "started"
 	if ps == types.PromptQueued {
@@ -1618,18 +1506,11 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	if len(req.Images) > 0 {
 		opts = append(opts, agent.PromptWithImages(req.Images...))
 	}
-	if req.NoQueue {
-		opts = append(opts, agent.PromptWithoutQueue())
-	}
 
 	// PromptAndWait blocks until the turn finishes — the HTTP client controls
 	// the timeout via its own request context.
 	text, err := proxy.session.PromptAndWait(r.Context(), req.Text, opts...)
 	if err != nil {
-		if errors.Is(err, agent.ErrBusy) {
-			writeError(w, http.StatusConflict, msgSessionBusy, nil)
-			return
-		}
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}

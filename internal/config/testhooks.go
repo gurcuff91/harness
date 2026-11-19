@@ -7,7 +7,7 @@ import "github.com/gurcuff91/harness/configstore"
 // that restores the previous state. A nil argument keeps that side as it is.
 //
 // For tests only. The managers are process singletons, so without this a test
-// exercising schedules, instances or transport state would read and WRITE the
+// exercising schedules, channel claims or transport state would read and WRITE the
 // real ~/.harness files (isolating HOME doesn't help once a manager exists).
 // Typical use:
 //

@@ -483,26 +483,26 @@ func TestChannelToolPrefix(t *testing.T) {
 	}
 }
 
-// A channel's tool that the agent's old built-ins already provide (here the
-// HTTP colleague tools of EnableColleagues) fails the open, explicitly.
-func TestAChannelToolClashesWithAnOldBuiltin(t *testing.T) {
-	ch := newFakeChannel("colleague")
-	ch.toolName = "ColleagueAsk"
+// A channel's tool that a built-in the session really has already provides
+// (here WebSearch, on with EnableWebSearch) fails the open, explicitly; the
+// same name is free when that built-in is off.
+func TestAChannelToolClashesWithABuiltinTheSessionHas(t *testing.T) {
+	ch := newFakeChannel("web")
+	ch.toolName = "WebSearch"
 	withCleanProviderRegistry(t)
 	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
-	name := "oldclash-" + strings.NewReplacer("/", "-").Replace(t.Name())
+	name := "clash-" + strings.NewReplacer("/", "-").Replace(t.Name())
 	var thinking string
 	providers.AddForTest(&echoProvider{fakeThinkingProbeProvider{name: name, lastThinking: &thinking}})
-	a := New(AgentOptions{Store: store.NewInMemoryStore(), Channels: []Channel{ch}, EnableColleagues: true})
+	a := New(AgentOptions{Store: store.NewInMemoryStore(), Channels: []Channel{ch}, EnableWebSearch: true})
 	defer a.Close()
-	_, err := a.NewSession(t.TempDir(), name+"/fake-model", WithSessionChannels(types.InputChannel{Type: "colleague", Ref: "x"}))
-	if !errors.Is(err, ErrChannelInvalid) || !strings.Contains(err.Error(), "ColleagueAsk") {
+	_, err := a.NewSession(t.TempDir(), name+"/fake-model", WithSessionChannels(types.InputChannel{Type: "web", Ref: "x"}))
+	if !errors.Is(err, ErrChannelInvalid) || !strings.Contains(err.Error(), "WebSearch") {
 		t.Fatalf("err = %v", err)
 	}
-	// without the old tools, the same channel opens
 	b := New(AgentOptions{Store: store.NewInMemoryStore(), Channels: []Channel{ch}})
 	defer b.Close()
-	if _, err := b.NewSession(t.TempDir(), name+"/fake-model", WithSessionChannels(types.InputChannel{Type: "colleague", Ref: "y"})); err != nil {
-		t.Fatalf("without the old tools: %v", err)
+	if _, err := b.NewSession(t.TempDir(), name+"/fake-model", WithSessionChannels(types.InputChannel{Type: "web", Ref: "y"})); err != nil {
+		t.Fatalf("without WebSearch: %v", err)
 	}
 }

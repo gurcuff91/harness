@@ -57,21 +57,10 @@ const openAPISpecTemplate = `{
       "get": {
         "tags": ["server"],
         "summary": "Server info",
-        "description": "Returns harness version, instance name, transport, URL, and process metadata.",
+        "description": "Returns harness version, transport, URL, and process metadata.",
         "operationId": "getServerInfo",
         "responses": {
           "200": { "description": "Server info", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ServerInfo" } } } }
-        }
-      }
-    },
-    "/api/instances": {
-      "get": {
-        "tags": ["server"],
-        "summary": "List running instances",
-        "description": "Returns all registered server instances (the colleague registry, kept in the settings store). Dead instances are purged whenever an instance registers.",
-        "operationId": "listInstances",
-        "responses": {
-          "200": { "description": "Instance registry", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": { "$ref": "#/components/schemas/InstanceInfo" } } } } }
         }
       }
     },
@@ -366,14 +355,13 @@ const openAPISpecTemplate = `{
       "get": {
         "tags": ["sessions"],
         "summary": "List sessions",
-        "description": "Persisted sessions (every session ever saved, active or not). With ?active=true it instead lists the sessions OPEN in this server right now, each with its busy state — see ActiveSession; every one of those can be prompted directly, with no resume.",
+        "description": "Persisted sessions (every session ever saved, active or not).",
         "operationId": "listSessions",
         "parameters": [
-          { "name": "cwd", "in": "query", "schema": { "type": "string" }, "description": "Filter by working directory" },
-          { "name": "active", "in": "query", "schema": { "type": "boolean" }, "description": "true: only the sessions open in this server right now (array of ActiveSession instead of SessionMeta)" }
+          { "name": "cwd", "in": "query", "schema": { "type": "string" }, "description": "Filter by working directory" }
         ],
         "responses": {
-          "200": { "description": "Session list (SessionMeta[], or ActiveSession[] with active=true)", "content": { "application/json": { "schema": { "oneOf": [ { "type": "array", "items": { "$ref": "#/components/schemas/SessionMeta" } }, { "type": "array", "items": { "$ref": "#/components/schemas/ActiveSession" } } ] } } } }
+          "200": { "description": "Session list", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/SessionMeta" } } } } }
         }
       },
       "post": {
@@ -461,7 +449,7 @@ const openAPISpecTemplate = `{
       "post": {
         "tags": ["sessions"],
         "summary": "Send prompt (async)",
-        "description": "Queues a user prompt into the session. Returns immediately with status 'started' or 'queued'. With no_queue:true a busy session refuses it instead (409) and nothing is queued or stored.",
+        "description": "Queues a user prompt into the session. Returns immediately with status 'started' or 'queued'.",
         "operationId": "sendPrompt",
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
         "requestBody": {
@@ -469,8 +457,7 @@ const openAPISpecTemplate = `{
           "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PromptRequest" } } }
         },
         "responses": {
-          "202": { "description": "Prompt accepted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
-          "409": { "description": "no_queue was set and the session is busy (a turn is in flight): 'session is busy'. Nothing was queued or stored.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+          "202": { "description": "Prompt accepted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } }
         }
       }
     },
@@ -489,7 +476,6 @@ const openAPISpecTemplate = `{
           "200": { "description": "Agent response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AskResponse" } } } },
           "400": { "description": "Bad request (missing text, images unsupported)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "404": { "description": "Session not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
-          "409": { "description": "no_queue was set and the session is busy (a turn is in flight): 'session is busy'. Nothing was queued or stored.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "500": { "description": "Agent error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
       }
@@ -660,23 +646,11 @@ const openAPISpecTemplate = `{
         "properties": {
           "name":       { "type": "string", "example": "harness" },
           "version":    { "type": "string", "example": "v0.73.74" },
-          "instance":   { "type": "string", "example": "jade-warrior", "description": "Unique MK11-themed instance name" },
           "transport":  { "type": "string", "example": "tui", "description": "Calling transport (tui, telegram, slack, server, cli)" },
           "url":        { "type": "string", "example": "http://127.0.0.1:52341" },
           "cwd":        { "type": "string", "example": "/Users/gustavo/Workspace/harness" },
           "pid":        { "type": "integer", "example": 92807 },
           "started_at": { "type": "string", "format": "date-time", "example": "2026-07-31T00:22:16Z" }
-        }
-      },
-      "InstanceInfo": {
-        "type": "object",
-        "properties": {
-          "version":    { "type": "string", "example": "v0.73.74" },
-          "transport":  { "type": "string", "example": "tui" },
-          "url":        { "type": "string", "example": "http://127.0.0.1:52341" },
-          "cwd":        { "type": "string" },
-          "pid":        { "type": "integer" },
-          "started_at": { "type": "string", "format": "date-time" }
         }
       },
       "Settings": {
@@ -812,7 +786,6 @@ const openAPISpecTemplate = `{
               "max_iterations": { "type": "integer" },
               "max_tokens": { "type": "integer", "description": "Output-token ceiling: the agent's MaxTokens when set, else the model's catalog value capped at 64k (each request is further bounded by the room left in the window)" },
               "channels": { "type": "array", "items": { "type": "object", "properties": { "type": { "type": "string", "example": "slack" }, "id": { "type": "string", "example": "C0123ABC" }, "name": { "type": "string", "example": "#producto-y", "description": "Readable name: #channel, @person for a DM, the id when unknown." } } }, "description": "External conversations the live session listens to. Omitted when none (always for a persisted session: channels are never stored)." },
-              "resumed": { "type": "boolean", "description": "Only on the response of POST /api/sessions/{id}/resume: true when that call opened the session, false when it was already active and was just returned (resume is idempotent). A caller that closes the sessions it resumes must close only the ones it opened, or it would end somebody else's live conversation. Omitted on every other response." },
               "model_fallback": {
                 "type": "object",
                 "description": "Present only when the session was reopened (resume or fork) on a DIFFERENT model than it was saved with, because the saved model's provider was unavailable (disconnected, credentials removed, model retired). 'model' is then the model it runs on now — and is saved with from now on, so the session does not flip back by itself when the provider returns. Omitted in the normal case.",
@@ -882,19 +855,7 @@ const openAPISpecTemplate = `{
         "properties": {
           "text":   { "type": "string" },
           "images": { "type": "array", "items": { "$ref": "#/components/schemas/ImageData" } },
-          "origin": { "type": "string", "description": "Where the prompt came from — any short string: \"user\" (default), \"scheduled\", \"colleague\" (another agent's ColleagueAsk), \"herdr\" (a message Herdr typed into the TUI), \"slack:<id>\" (an input channel), a transport (\"telegram\", \"acp\") or your own. Echoed on received_prompt/follow_up_start and stored with the message; frontends use it to pick an icon. The model never sees it." },
-          "no_queue": { "type": "boolean", "description": "Run only if the session is idle: a session with a turn in flight answers 409 'session is busy' instead of queueing the prompt behind it. Default false (queue)." }
-        }
-      },
-      "ActiveSession": {
-        "type": "object",
-        "description": "A session open in this server right now (GET /api/sessions?active=true).",
-        "properties": {
-          "id": { "type": "string", "format": "uuid" },
-          "name": { "type": "string" },
-          "cwd": { "type": "string", "description": "The session's working directory (the project it has context on)." },
-          "model": { "type": "string", "description": "provider/model" },
-          "busy": { "type": "boolean", "description": "A turn is in flight. A prompt sent with no_queue is refused (409) while true." }
+          "origin": { "type": "string", "description": "Where the prompt came from — any short string: \"user\" (default), \"scheduled\", \"colleague:<id>\" (another agent's question through the colleague channel; \"colleague:<id>#reply\" for its answer to this session's), \"herdr\" (a message Herdr typed into the TUI), \"slack:<id>\" (an input channel), a transport (\"telegram\", \"acp\") or your own. Echoed on received_prompt/follow_up_start and stored with the message; frontends use it to pick an icon. The model never sees it." }
         }
       },
       "AskResponse": {

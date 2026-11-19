@@ -20,8 +20,8 @@ type chatPump struct {
 	sessionID string
 	model     string          // the session's actual model (for logs)
 	buf       strings.Builder // accumulates the current turn's text
-	// quiet is true while the running turn answers a colleague's prompt: its
-	// reply belongs to the colleague, not to this chat, so nothing of it is sent.
+	// quiet is true while the running turn answers a colleague's question: its
+	// answer belongs to the colleague, not to this chat, so nothing of it is sent.
 	// Set from the prompt echo, cleared at turn_end. Touched only by the drain
 	// goroutine.
 	quiet        bool
@@ -201,13 +201,16 @@ func (t *Transport) drain(ctx context.Context, p *chatPump, events <-chan client
 			}
 		case "received_prompt", "follow_up_start":
 			// A prompt echo: the turn that follows answers THIS prompt, whoever sent
-			// it. A colleague's question is answered to the colleague — sending that
-			// here would show the chat an answer without its question — so the turn
-			// runs quiet. A scheduled task is work this chat asked for: it keeps its
-			// output and gets a typing indicator like a typed message.
-			p.quiet = evt.Origin == "colleague"
-			if evt.Origin == "scheduled" || evt.Origin == "colleague" {
-				t.logger.Info("telegram", evt.Origin+"_prompt", "chat", p.chatID, "quiet", p.quiet, "text", oneLine(evt.Text, 200))
+			// it. A colleague's question (origin "colleague:<id>") is answered to the
+			// colleague by the colleague channel — sending that here would show the
+			// chat an answer without its question — so the turn runs quiet. A
+			// colleague's REPLY ("colleague:<id>#reply") answers something this
+			// session asked: it is shown, like any turn. A scheduled task is work this
+			// chat asked for: it keeps its output and gets a typing indicator like a
+			// typed message.
+			p.quiet = isColleagueQuestion(evt.Origin)
+			if evt.Origin == "scheduled" || strings.HasPrefix(evt.Origin, "colleague:") {
+				t.logger.Info("telegram", "outside_prompt", "chat", p.chatID, "origin", evt.Origin, "quiet", p.quiet, "text", oneLine(evt.Text, 200))
 			}
 			if evt.Origin == "scheduled" {
 				p.startTyping(ctx, t.bot)
@@ -309,4 +312,10 @@ func (t *Transport) sendText(ctx context.Context, chatID int64, text string) {
 		}
 		t.logger.Info("telegram", "reply", kv...)
 	}
+}
+
+// isColleagueQuestion: the prompt is another agent's question (its answer goes
+// back to that agent), not a reply to something this session asked.
+func isColleagueQuestion(origin string) bool {
+	return strings.HasPrefix(origin, "colleague:") && !strings.HasSuffix(origin, "#reply")
 }

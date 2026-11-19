@@ -110,14 +110,6 @@ type AgentOptions struct {
 	// only one agent should enable this so prompts don't fire twice.
 	EnableScheduler bool
 
-	// EnableColleagues turns on the ColleagueList/ColleagueAsk tools: the agent
-	// can discover OTHER running harness server instances on this machine (via
-	// the colleague registry in the settings store) and delegate a prompt to
-	// one of them over HTTP — each colleague answers with its own model, MCPs,
-	// and project context, not the caller's. Off by default; disabled for
-	// subagents and one-shot CLI commands regardless of this flag.
-	EnableColleagues bool
-
 	// EnableWebSearch registers the built-in WebSearch tool. The tool owns its
 	// own HTTP client and uses the active minimax provider's API key — if the
 	// provider isn't connected, the tool returns a single actionable error at
@@ -825,17 +817,6 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 // system prompt it was opened with, so two frontends sharing a session never
 // overwrite each other's prompt.
 func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session, error) {
-	sess, _, err := a.ResumeSessionReport(sessionID, opts...)
-	return sess, err
-}
-
-// ResumeSessionReport is ResumeSession that also says whether THIS call opened
-// the session (the bool is true) or found it already active and returned the live
-// handle (false). A caller that resumes a session only to talk to it
-// once and then close it needs exactly that bit: it may close what it opened, but
-// closing a session it merely found active would pull it out from under whoever
-// is using it (a person in a TUI, a transport, the scheduler).
-func (a *Agent) ResumeSessionReport(sessionID string, opts ...SessionOption) (*Session, bool, error) {
 	cfg := applySessionOptions(opts)
 	// Fast path: already active — return the live handle.
 	a.sessMu.Lock()
@@ -845,18 +826,18 @@ func (a *Agent) ResumeSessionReport(sessionID string, opts ...SessionOption) (*S
 			// Channels are bound when a session opens; an already-open session
 			// is not rebound behind its owner's back (and an explicit channel
 			// is never silently ignored).
-			return nil, false, fmt.Errorf("resume session: %w: session %s is already open; close it to bind channels", ErrChannelInvalid, sessionID)
+			return nil, fmt.Errorf("resume session: %w: session %s is already open; close it to bind channels", ErrChannelInvalid, sessionID)
 		}
-		return live, false, nil
+		return live, nil
 	}
 	a.sessMu.Unlock()
 
 	storeInst, err := store.OpenSession(a.store, sessionID)
 	if err != nil {
-		return nil, false, fmt.Errorf("open store: %w", err)
+		return nil, fmt.Errorf("open store: %w", err)
 	}
 	if storeInst == nil {
-		return nil, false, fmt.Errorf("session %s not found", sessionID)
+		return nil, fmt.Errorf("session %s not found", sessionID)
 	}
 
 	meta := storeInst.Meta()
@@ -867,12 +848,12 @@ func (a *Agent) ResumeSessionReport(sessionID string, opts ...SessionOption) (*S
 	// model, and the switch is persisted and reported (Session.ModelFallback).
 	provider, modelID, fallback, err := resolveSessionModel(meta.Model)
 	if err != nil {
-		return nil, false, fmt.Errorf("resume session: %w", err)
+		return nil, fmt.Errorf("resume session: %w", err)
 	}
 	if fallback != nil {
 		meta.Model = fallback.To
 		if err := storeInst.UpdateMeta(meta); err != nil {
-			return nil, false, fmt.Errorf("resume session: persist model fallback: %w", err)
+			return nil, fmt.Errorf("resume session: persist model fallback: %w", err)
 		}
 	}
 
@@ -906,7 +887,7 @@ func (a *Agent) ResumeSessionReport(sessionID string, opts ...SessionOption) (*S
 	chans, chDirectives, chTools, err := a.prepareChannels(meta.ID, cwd, a.withSessionChannels(cfg.channels), cfg.tools)
 	if err != nil {
 		_ = storeInst.Close()
-		return nil, false, fmt.Errorf("resume session: %w", err)
+		return nil, fmt.Errorf("resume session: %w", err)
 	}
 	resumeTools, tl := a.buildSessionTools(meta.ID, cwd, &sess, res, loader, append(append([]tools.Tool(nil), cfg.tools...), chTools...)...)
 	resumePrompt, pl := a.buildSystemPrompt(cwd, res, append(append([]string(nil), cfg.directives...), chDirectives...)...)
@@ -920,10 +901,10 @@ func (a *Agent) ResumeSessionReport(sessionID string, opts ...SessionOption) (*S
 	sess.modelFallback = fallback
 	if err := sess.attachChannels(chans); err != nil {
 		_ = storeInst.Close()
-		return nil, false, fmt.Errorf("resume session: %w", err)
+		return nil, fmt.Errorf("resume session: %w", err)
 	}
 	a.registerSession(sess)
-	return sess, true, nil
+	return sess, nil
 }
 
 // ReconfigureSession rebuilds a LIVE session's system prompt and tool
@@ -1269,7 +1250,7 @@ func (a *Agent) buildFetchSummarizer(cwd string, loader resources.ResourceLoader
 			// (no sharedMemory below, so a.memStore stays nil and Memo* never
 			// registers regardless of this list). Every built-in name is
 			// listed explicitly rather than relying on the absence of
-			// MCPServers/EnableColleagues/Memory/opts.Tools alone —
+			// MCPServers/Memory/opts.Tools alone —
 			// defense in depth so a future default change elsewhere can't
 			// silently hand this single-purpose summarizer a tool it was
 			// never meant to have.
@@ -1278,7 +1259,6 @@ func (a *Agent) buildFetchSummarizer(cwd string, loader resources.ResourceLoader
 				tools.ToolSkill, tools.ToolSubagent,
 				tools.ToolMemoWrite, tools.ToolMemoSearch, tools.ToolMemoDelete,
 				tools.ToolSchedule, tools.ToolScheduleList, tools.ToolScheduleDelete,
-				tools.ToolColleagueList, tools.ToolColleagueAsk,
 			},
 		})
 		// Current model at call time, not whatever was active when this
@@ -1396,18 +1376,6 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 		}
 		if a.isToolAllowed(tools.ToolScheduleDelete) {
 			reg.Register(tools.ScheduleDelete(adapter, sessionID))
-		}
-	}
-	// Colleague tools — discover and delegate to OTHER running harness
-	// instances on this machine, via the instance registry the server package
-	// keeps in the settings store (injected as a ColleagueDirectory, since
-	// agent/tools never imports internal/). Off unless EnableColleagues.
-	if a.opts.EnableColleagues {
-		if a.isToolAllowed(tools.ToolColleagueList) {
-			reg.Register(tools.ColleagueList(colleagueDirectory))
-		}
-		if a.isToolAllowed(tools.ToolColleagueAsk) {
-			reg.Register(tools.ColleagueAsk(colleagueDirectory))
 		}
 	}
 
@@ -1698,10 +1666,6 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources, sessionD
 	// otherwise would describe tools the model doesn't have).
 	if a.opts.EnableScheduler {
 		b.WriteString("\n\n## Scheduling\n\nYou can schedule prompts to run automatically on a recurring cron schedule. Use Schedule to create or update one, ScheduleList to review what's scheduled and how often it has run, and ScheduleDelete to remove one. Schedule work the user wants done repeatedly on a cadence; the prompt runs later exactly as if the user sent it.")
-	}
-
-	if a.opts.EnableColleagues {
-		b.WriteString("\n\n## Colleagues\n\nYou are not the only agent running. Other colleague instances may be reachable right now, each with its own model, tools, and project context — use them instead of trying to do everything yourself.\n\nUse ColleagueList to see who's reachable, then ColleagueAsk to delegate to one by name. For each colleague it shows:\n\n- environment — where it lives, and so what it can do that you can't: tui (a person is at a terminal using it), slack or telegram (it can post and reply in that chat platform), or server (a headless agent with tools and nobody watching).\n- cwd — the working directory it was started in: the project it belongs to, and where a new conversation with it works. It is all you have to place a colleague that has no active session.\n- sessions — its ACTIVE sessions, the conversations it has open right now. Each has an id, a name, a working directory (the project it has context on), its model, and busy.\n\nChoosing: delegate by environment when the task needs a capability you don't have; delegate by working directory (the colleague's, or a session's) when the task belongs to that project. A colleague working in the SAME project as you is also worth delegating to for a substantial, self-contained task. Neither is restrictive — combine them.\n\nTalking to a session: pass its id as ColleagueAsk's `session` and your message goes straight to that conversation, which carries on with everything it already knows. busy means a turn is running in that session right now — a person or another task is using it. A busy session is NEVER queued behind: your message is not sent and ColleagueAsk returns an error. When that happens, don't retry in a loop — try a different session, wait and ask again later, or omit `session`. The colleague's own user may be watching that session, and they will see your message there as coming from a colleague. A session id that no longer exists on the colleague is an error (not found): call ColleagueList again, or start a new conversation.\n\nWithout `session`, ColleagueAsk starts a NEW conversation with the colleague, using its own model, and its reply ends with that conversation's session id. The conversation is closed as soon as the colleague answers — nothing is left open on its side — but passing that id as `session` on a later call picks it up where it left off, with everything said so far; use that for clarifying questions and multi-step work. A colleague with no active sessions can always be asked without `session`.")
 	}
 
 	b.WriteString(fmt.Sprintf("\n\n## Working Directory\n\n%s\n\nPrefer absolute paths when reading, writing, or editing files, and when running Bash commands that touch specific files. Relative paths resolve against this working directory, but an absolute path is unambiguous.\n", cwd))

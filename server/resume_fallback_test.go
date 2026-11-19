@@ -252,31 +252,3 @@ func rawPost(t *testing.T, srv *Server, path string) (int, string) {
 	}
 	return resp.StatusCode, b.String()
 }
-
-// POST /resume says whether the call opened the session: a closed one yes, one
-// that is already active no — and the field exists on that response only.
-func TestResumeEndpointReportsWhetherItOpenedTheSession(t *testing.T) {
-	p := newToggle("rf-saved", "m1")
-	srv, c, _ := fallbackServer(t, p)
-	sess, err := c.CreateSession("rf-saved/m1", t.TempDir(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sess.Resumed != nil {
-		t.Errorf("a create response must not carry resumed: %v", *sess.Resumed)
-	}
-	if code, body := rawPost(t, srv, "/api/sessions/"+sess.ID+"/resume"); code != 200 || !strings.Contains(body, `"resumed":false`) {
-		t.Errorf("resume of an active session: %d %s, want resumed:false", code, body)
-	}
-	c.CloseSession(sess.ID)
-	got, err := c.ResumeSession(sess.ID)
-	if err != nil || got.Resumed == nil || !*got.Resumed {
-		t.Fatalf("resume of a closed session: %+v %v, want resumed=true", got, err)
-	}
-	if code, body := rawPost(t, srv, "/api/sessions/"+sess.ID+"/resume"); code != 200 || !strings.Contains(body, `"resumed":false`) {
-		t.Errorf("second resume: %d %s, want resumed:false", code, body)
-	}
-	if code, _, body := rawGet(t, srv, "/api/sessions/"+sess.ID); code != 200 || strings.Contains(string(body), `"resumed"`) {
-		t.Errorf("GET /api/sessions/{id}: %d %s — resumed belongs to the resume response only", code, body)
-	}
-}

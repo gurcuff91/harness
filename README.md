@@ -78,7 +78,7 @@ harness/
 ├── client/                   # 🔓 Typed HTTP/SSE client over the server API
 │   └── client.go / types.go / event.go / error.go / stream.go
 ├── server/                   # 🔓 HTTP/SSE backend — the API all clients talk to
-│   └── server.go / sse.go / proxy.go / instances.go / run.go
+│   └── server.go / sse.go / proxy.go / run.go
 ├── transports/               # 🔓 Interactive session frontends (each runs on server)
 │   ├── telegram/             # Telegram bot (stdlib Bot API; one session per chat)
 │   └── acp/                  # Agent Client Protocol agent (Zed and other ACP clients)
@@ -213,8 +213,8 @@ Without them, harness uses `configstore.FileStore` over
 the process.
 
 The agent is configured with functional options: `AgentWithThinking`,
-`AgentWithMCPs`, `AgentWithMemory`, `AgentWithScheduler`, `AgentWithColleagues`,
-`AgentWithWebSearch`, `AgentWithMaxIterations`,
+`AgentWithMCPs`, `AgentWithMemory`, `AgentWithScheduler`, `AgentWithChannels`, `AgentWithSessionChannels`,
+`AgentWithWebSearch`, `AgentWithTerminal`, `AgentWithMaxIterations`,
 `AgentWithMaxTokens`, `AgentWithSystemPrompt`, `AgentWithDirectives`,
 `AgentWithTools`, `AgentWithDisallowedTools`, `AgentWithStore`,
 `AgentWithResourceLoader` (and `AgentWithOptions` to apply a pre-built
@@ -326,7 +326,8 @@ project each works in) and `ColleagueAsk`, which is asynchronous: it returns as 
 delivered, and the answer comes back later as a new prompt (`<colleague from="raiden-god" reply>…`). The
 session that is asked answers automatically when its turn ends. A session that closes takes its
 conversations with it. The TUI shows the name in its channels line (`channels [colleague: scorpion-hero]`).
-The older HTTP colleague tools remain available to SDK users (`AgentWithColleagues`) for now.
+From the SDK: `harness.AgentWithChannels(colleague.New())` plus
+`harness.AgentWithSessionChannels(types.InputChannel{Type: "colleague", Ref: "*"})` so every session gets a name.
 
 **A first message.** `harness "fix the login bug"` (or `harness fix the login bug` — the words are
 joined with a space) opens the normal interactive TUI and submits that message as if you had typed
@@ -446,8 +447,7 @@ All data stored in `~/.harness/`:
 │                              "telegram": {"bot_token": ...}, "slack": {"session": {xoxc, xoxd}}}
 ├── settings.json           — Everything non-sensitive, one namespace per domain:
 │                              core (active_model, thinking_level), mcp, provider,
-│                              schedules (cron prompts), instances (running servers,
-│                              for colleagues), telegram_allowlist, telegram_sessions,
+│                              schedules (cron prompts), telegram_allowlist, telegram_sessions,
 │                              slack (workspace/user/team), channels (input-channel claims)
 └── agent/
     ├── sessions/<cwd>/     — Session history (JSONL, partitioned by project)
@@ -473,7 +473,7 @@ All data stored in `~/.harness/`:
 | `SessionInfo` | Snapshot of the current session — identity (id/cwd/name/model/thinking/created_at), environment (harness version, connected MCPs, owned schedules), and accumulated usage (tokens/cache/cost/context) |
 | `MemoWrite` / `MemoSearch` / `MemoDelete` | Persistent project + global memory |
 | `Schedule` / `ScheduleList` / `ScheduleDelete` | Cron-scheduled prompts |
-| `ColleagueList` / `ColleagueAsk` | Discover and delegate to other running instances |
+| `ColleagueList` / `ColleagueAsk` | List the other sessions of the machine and message one (asynchronous) |
 
 `SessionInfo` is always registered, like Bash/Read/Write/Edit/Fetch — no
 dedicated option, just `AgentWithDisallowedTools("SessionInfo")` to turn it
@@ -484,7 +484,7 @@ connected search backend (minimax, ollama-cloud or synthetic); `Schedule*` manag
 tools AND the engine that fires them both require `--with-scheduler` /
 `AgentWithScheduler` — they travel together, so an instance without it
 neither manages nor executes schedules;
-`Colleague*` requires `--with-colleagues` / `AgentWithColleagues`. External tools can be added via
+`Colleague*` requires `--with-colleagues` (the colleague channel). External tools can be added via
 **MCP** servers, namespaced as `mcp__<server>__<tool>` — configured with
 `harness mcp add` (the CLI always loads those), or passed programmatically
 per agent via `AgentWithMCPs(servers)` (`mcp.ServersFromSettings()` returns the

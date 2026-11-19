@@ -164,7 +164,7 @@ func TestLoadColleagueImages_ExtensionContentMismatchUsesRealDetectedMime(t *tes
 		t.Fatal(err)
 	}
 
-	images, err := loadColleagueImages([]string{path})
+	images, err := LoadImages([]string{path})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestLoadColleagueImages_RejectsUnsupportedContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := loadColleagueImages([]string{path})
+	_, err := LoadImages([]string{path})
 	if err == nil {
 		t.Fatal("expected an error for content that isn't any supported image format")
 	}
@@ -194,7 +194,7 @@ func TestLoadColleagueImages_CorrectContentStillWorks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	images, err := loadColleagueImages([]string{path})
+	images, err := LoadImages([]string{path})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

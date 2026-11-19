@@ -9,11 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"time"
-
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/client"
-	"github.com/gurcuff91/harness/server"
 )
 
 func envOf(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
@@ -335,101 +331,6 @@ func TestTheLightAgentIsMuchSmaller(t *testing.T) {
 	if fp-lp < 2000 || ft-lt < 2500 {
 		t.Errorf("the extras weigh only %d chars of prompt and %d bytes of tools; the claim is about 2 800 and 4 600", fp-lp, ft-lt)
 	}
-}
-
-// A process without --with-colleagues is still an instance other agents can find and ask: the registry is
-// written by the SERVER, not by the tools, so it only lacks the tools to ask THEM. This is the behaviour the
-// owner expects, so it is tested for real: a server over an agent with NO colleague tools registers itself,
-// shows up in the registry other agents read, and answers a prompt sent to it the way ColleagueAsk sends one.
-func TestWithoutColleaguesAnInstanceIsStillRegisteredAndAnswers(t *testing.T) {
-	isolate(t)
-	t.Setenv("HC_TERMINAL_ID", "")
-
-	// a model that answers with a fixed sentence
-	models := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/models") {
-			w.Write([]byte(`{"data":[{"id":"m"}]}`))
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"pong from the light instance"}}]}`+"\n\n")
-		fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`+"\n\n")
-		fmt.Fprint(w, "data: [DONE]\n\n")
-	}))
-	defer models.Close()
-	herdrFakeSeq++
-	prov := fmt.Sprintf("cli-extras-answer-%d", herdrFakeSeq)
-	if err := agent.NewOpenAIProvider(prov, models.URL); err != nil {
-		t.Fatal(err)
-	}
-	defer agent.UnregisterCustomProvider(prov)
-
-	a := newInteractiveAgent(extras{}) // NO colleagues, NO scheduler
-	srv, err := startTransportServer(a, "tui")
-	if err != nil {
-		a.Close()
-		t.Fatal(err)
-	}
-	defer srv.Close()
-
-	// 1. it is in the registry (what GET /api/instances and ColleagueList read). Start serves on a
-	// goroutine and the registration happens inside Serve, so it lands a moment AFTER Start returns:
-	// wait for it with a deadline instead of reading once.
-	var registered *server.InstanceInfo
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-		for _, info := range registeredInstances(t) {
-			if info.URL == "http://"+srv.Addr() {
-				info := info
-				registered = &info
-			}
-		}
-		if registered != nil {
-			break
-		}
-	}
-	if registered == nil {
-		t.Fatalf("a server over an agent with no colleague tools is not in the registry (%s)", srv.Addr())
-	}
-	if registered.Transport != "tui" {
-		t.Errorf("registered as transport %q, want tui", registered.Transport)
-	}
-
-	// 2. it answers a prompt sent over its API, which is how a colleague asks
-	c := client.New(srv.Addr())
-	sess, err := c.CreateSession(prov+"/m", t.TempDir(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	reply, err := c.Ask(sess.ID, "ping", 30*time.Second, client.WithOrigin("colleague"))
-	if err != nil {
-		t.Fatalf("the light instance did not answer a colleague's prompt: %v", err)
-	}
-	if !strings.Contains(reply, "pong from the light instance") {
-		t.Errorf("reply = %q", reply)
-	}
-
-	// 3. and the model that answered did NOT have the tools to ask others
-	tools := map[string]bool{}
-	live, err := a.ResumeSession(sess.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, d := range live.Tools() {
-		tools[d.Name] = true
-	}
-	if tools["ColleagueList"] || tools["ColleagueAsk"] {
-		t.Errorf("the light instance has colleague tools: %v", tools)
-	}
-}
-
-// registeredInstances reads the registry the way the colleague tools and GET /api/instances do.
-func registeredInstances(t *testing.T) map[string]server.InstanceInfo {
-	t.Helper()
-	m, err := server.ListInstances()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return m
 }
 
 // ── the commands' own wiring: Run's agent, with the flags and the environment ───────────────────

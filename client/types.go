@@ -97,11 +97,6 @@ type Session struct {
 	// provider was unavailable. Model then names the model in use now. Nil in
 	// the normal case.
 	ModelFallback *ModelFallback `json:"model_fallback,omitempty"`
-	// Resumed is set only by ResumeSession: true when that call opened the session,
-	// false when it was already active and was simply returned (resume is
-	// idempotent). A caller that closes the sessions it resumes must close only
-	// those it opened — see ResumeSession. Nil on every other response.
-	Resumed *bool `json:"resumed,omitempty"`
 	// Channels are the external conversations a live session listens to.
 	// Empty when none.
 	Channels []ChannelInfo `json:"channels,omitempty"`
@@ -114,17 +109,6 @@ type ModelFallback struct {
 	From   string `json:"from"`
 	To     string `json:"to"`
 	Reason string `json:"reason"`
-}
-
-// ActiveSession is one element of GET /api/sessions?active=true: a session open
-// in the server right now. Busy means a turn is in flight — a prompt sent
-// WithoutQueue is then refused with 409 instead of waiting behind it.
-type ActiveSession struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	CWD   string `json:"cwd"`
-	Model string `json:"model"`
-	Busy  bool   `json:"busy"`
 }
 
 // Schedule is one element of GET /api/schedules — a cron-scheduled prompt in

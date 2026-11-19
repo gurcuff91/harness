@@ -15,7 +15,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -62,9 +61,9 @@ func WithContext(ctx context.Context) Option {
 
 // New creates a client for the given server target. Accepts either a bare
 // address ("127.0.0.1:8080", assumed http://) or a full URL with scheme
-// ("http://127.0.0.1:8080", "https://harness.example.com") — the latter is
-// what InstanceInfo.URL (see agent/colleague) and any user-supplied --addr
-// already carry, so both forms just work without the caller normalizing them.
+// ("http://127.0.0.1:8080", "https://harness.example.com") — what a
+// user-supplied --addr carries — so both forms just work without the caller
+// normalizing them.
 func New(addr string, opts ...Option) *Client {
 	base := addr
 	if !strings.Contains(base, "://") {
@@ -506,18 +505,6 @@ func (c *Client) ListSessions(cwd string) ([]Session, error) {
 	return decode[[]Session](c, "GET", path, nil)
 }
 
-// ListActiveSessions returns the sessions open in the server RIGHT NOW (not the
-// persisted ones ListSessions returns), each with whether a turn is in flight.
-// Every one of them can be prompted directly — no ResumeSession needed. cwd,
-// when non-empty, keeps only that working directory's sessions.
-func (c *Client) ListActiveSessions(cwd string) ([]ActiveSession, error) {
-	path := "/api/sessions?active=true"
-	if cwd != "" {
-		path += "&cwd=" + url.QueryEscape(cwd)
-	}
-	return decode[[]ActiveSession](c, "GET", path, nil)
-}
-
 // GetSession returns one session's metadata (model, thinking, stats, …).
 func (c *Client) GetSession(id string) (*Session, error) {
 	return ptr(decode[Session](c, "GET", "/api/sessions/"+id, nil))
@@ -591,21 +578,6 @@ func WithOrigin(origin string) PromptOption {
 			body["origin"] = origin
 		}
 	}
-}
-
-// WithoutQueue makes the prompt run only if the session is idle. A session with a
-// turn in flight answers 409 instead of queueing it behind that turn — Ask /
-// SendPrompt then return an *Error with Status 409 (see IsBusy) and nothing was
-// stored in the session. Use it to talk to a session somebody else is using.
-func WithoutQueue() PromptOption {
-	return func(body map[string]any) { body["no_queue"] = true }
-}
-
-// IsBusy reports whether err is the "session is busy" refusal of a prompt sent
-// WithoutQueue.
-func IsBusy(err error) bool {
-	var ae *Error
-	return errors.As(err, &ae) && ae.Status == http.StatusConflict && ae.Message == "session is busy"
 }
 
 func promptBody(text string, images []types.ImageData, opts []PromptOption) map[string]any {

@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -156,47 +155,5 @@ func TestListProviderModelsQuery(t *testing.T) {
 	defer srv.Close()
 	if _, err := New(srv.URL).ListProviderModels("a&b c"); err != nil || gotQuery != "provider=a%26b+c" {
 		t.Errorf("query = %q err=%v", gotQuery, err)
-	}
-}
-
-// IsBusy is the refusal of a no_queue prompt — a 409 AND that message. A different
-// failure that merely carries the same text (a 500), or a 409 about something else
-// (an "is not active"-style conflict), is NOT a busy refusal.
-func TestIsBusyNeedsBothTheStatusAndTheMessage(t *testing.T) {
-	respond := func(status int, msg string) error {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(status)
-			w.Write([]byte(`{"error":{"message":"` + msg + `"}}`))
-		}))
-		defer srv.Close()
-		_, err := New(srv.URL).Ask("s", "x", 0, WithoutQueue())
-		return err
-	}
-	for name, tc := range map[string]struct {
-		status int
-		msg    string
-		want   bool
-	}{
-		"409 session is busy":               {409, "session is busy", true},
-		"500 carrying the same text":        {500, "session is busy", false},
-		"409 about something else":          {409, "session name already used", false},
-		"404":                               {404, "session not found", false},
-		"409 with a different busy wording": {409, "the session is busy right now", false},
-	} {
-		err := respond(tc.status, tc.msg)
-		if err == nil {
-			t.Fatalf("%s: expected an error", name)
-		}
-		if got := IsBusy(err); got != tc.want {
-			t.Errorf("%s: IsBusy = %v, want %v (err = %v)", name, got, tc.want, err)
-		}
-	}
-	if IsBusy(nil) {
-		t.Error("IsBusy(nil) must be false")
-	}
-	// the status survives into the error
-	var ae *Error
-	if err := respond(409, "session is busy"); !errors.As(err, &ae) || ae.Status != 409 {
-		t.Errorf("Error.Status = %+v", ae)
 	}
 }

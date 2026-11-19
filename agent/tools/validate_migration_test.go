@@ -100,27 +100,16 @@ func TestWriteContentEmptyIsStillLegitimate(t *testing.T) {
 	}
 }
 
-// TestSubagentAndColleagueAskStillCatchWhitespaceOnly verifies the two tools
-// that need MORE than presence checking (blank-but-not-empty prompts) still
+// TestSubagentStillCatchesWhitespaceOnly verifies a tool that needs MORE than
+// presence checking (blank-but-not-empty prompts) still
 // reject whitespace-only input via their own TrimSpace check, which
 // requireFields' tag alone would miss (IsZero() is false for "   ").
-func TestSubagentAndColleagueAskStillCatchWhitespaceOnly(t *testing.T) {
+func TestSubagentStillCatchesWhitespaceOnly(t *testing.T) {
 	t.Run("Subagent whitespace-only prompt", func(t *testing.T) {
 		tool := Subagent(func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
 			return "unreachable", nil
 		})
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{"prompt":"   "}`))
-		if err == nil {
-			t.Fatalf("expected whitespace-only prompt to be rejected, got out=%q", out)
-		}
-	})
-	t.Run("ColleagueAsk whitespace-only colleague and prompt", func(t *testing.T) {
-		tool := ColleagueAsk(func() map[string]Colleague { return nil })
-		out, err := tool.Execute(context.Background(), json.RawMessage(`{"colleague":"   ","prompt":"x"}`))
-		if err == nil {
-			t.Fatalf("expected whitespace-only colleague to be rejected, got out=%q", out)
-		}
-		out, err = tool.Execute(context.Background(), json.RawMessage(`{"colleague":"x","prompt":"   "}`))
 		if err == nil {
 			t.Fatalf("expected whitespace-only prompt to be rejected, got out=%q", out)
 		}

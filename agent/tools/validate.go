@@ -25,7 +25,7 @@ import (
 //
 // NOTE on blank-vs-empty: IsZero() catches an ABSENT or empty-string field,
 // not a string that is merely all-whitespace ("   "). A few tools
-// (Subagent.prompt, ColleagueAsk.colleague/.prompt) additionally
+// (Subagent.prompt) additionally
 // strings.TrimSpace() their own required fields for that reason — this
 // helper covers "missing", not "meaningless"; callers needing the stronger
 // guarantee keep their own TrimSpace check alongside the tag, not instead of

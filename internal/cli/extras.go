@@ -9,11 +9,12 @@ import (
 // The optional capabilities the CLI can give an agent, and the one place that decides whether each is on.
 //
 // The agent the CLI builds is deliberately light: the base tools and nothing else. Two extras are opt-in,
-// because each costs every session something whether it is used or not (measured: colleagues add 2 509
-// characters to the system prompt and 3 031 bytes of tool definitions to EVERY request, the scheduler 343
+// because each costs every session something whether it is used or not (measured: colleagues add 2 403
+// characters to the system prompt and 1 165 bytes of tool definitions to EVERY request, the scheduler 343
 // characters and 1 585 bytes), and most runs use neither:
 //
-//   - colleagues: ColleagueList / ColleagueAsk, to find and ask OTHER running harness instances;
+//   - colleagues: the colleague channel (channels/colleague) — every session the agent opens gets a name and
+//     ColleagueList / ColleagueAsk, to talk to the other sessions of the machine;
 //   - scheduler: the cron engine that fires scheduled prompts, and the tools that create them.
 //
 // Each is switched on by a flag (--with-colleagues, --with-scheduler) OR by an environment variable
@@ -23,9 +24,8 @@ import (
 //
 // WebSearch is NOT an extra: every agent the CLI builds for real work has it, with no switch.
 //
-// Turning colleagues off does not make an instance invisible: the instance REGISTRY is written by the
-// server (server.RegisterInstance), not by the tools, so a harness started without --with-colleagues is still
-// listed and still answers what other agents ask it. It only lacks the tools to ask THEM.
+// Without --with-colleagues a session is not a colleague at all: no name, no socket, no tools. Colleagues are
+// the sessions that opted in.
 
 const (
 	envWithColleagues = "HARNESS_WITH_COLLEAGUES"
@@ -37,7 +37,7 @@ const (
 // are plain booleans on the command line: absent means "not given", and the environment is consulted only
 // then (see extrasFrom).
 type withFlags struct {
-	WithColleagues bool `name:"with-colleagues" help:"Give the agent ColleagueList/ColleagueAsk, to find and ask other running harness instances (also: HARNESS_WITH_COLLEAGUES=1)"`
+	WithColleagues bool `name:"with-colleagues" help:"Make every session a colleague: a name, and ColleagueList/ColleagueAsk to talk to the other sessions of this machine (also: HARNESS_WITH_COLLEAGUES=1)"`
 	WithScheduler  bool `name:"with-scheduler" help:"Run the cron scheduler engine, and give the agent the tools that create schedules (also: HARNESS_WITH_SCHEDULER=1)"`
 }
 

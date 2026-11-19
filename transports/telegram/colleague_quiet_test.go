@@ -106,15 +106,16 @@ func turn(origin, answer string) []client.Event {
 
 // A colleague's question is answered to the colleague: nothing reaches the chat.
 func TestColleaguePromptAnswerIsNotSentToTelegram(t *testing.T) {
-	if got := drainEvents(t, turn("colleague", "the answer for the colleague")); len(got) != 0 {
+	if got := drainEvents(t, turn("colleague:raiden-god", "the answer for the colleague")); len(got) != 0 {
 		t.Errorf("sent %q: a colleague's answer must stay out of the chat", got)
 	}
 }
 
 // Everything else keeps sending: a scheduled task (work the chat asked for), a
-// typed message, and a prompt with no origin.
+// typed message, a prompt with no origin, and a colleague's REPLY (the answer
+// to something this session asked).
 func TestOtherOriginsStillSendTheirAnswer(t *testing.T) {
-	for _, origin := range []string{"scheduled", "telegram", "user", ""} {
+	for _, origin := range []string{"scheduled", "telegram", "user", "", "colleague:raiden-god#reply"} {
 		got := drainEvents(t, turn(origin, "the answer"))
 		if len(got) != 1 || !strings.Contains(got[0], "the answer") {
 			t.Errorf("origin %q: sent %q, want the answer once", origin, got)
@@ -126,7 +127,7 @@ func TestOtherOriginsStillSendTheirAnswer(t *testing.T) {
 // call.
 func TestColleagueTurnIsQuietForErrorsAndToolText(t *testing.T) {
 	got := drainEvents(t, []client.Event{
-		{Type: "received_prompt", Origin: "colleague"},
+		{Type: "received_prompt", Origin: "colleague:raiden-god"},
 		{Type: "turn_start"},
 		{Type: "text", Delta: "let me check"},
 		{Type: "text_end"},
@@ -142,9 +143,9 @@ func TestColleagueTurnIsQuietForErrorsAndToolText(t *testing.T) {
 // Quiet belongs to ONE turn: a typed message after a colleague's is answered
 // normally, and a queued colleague follow-up silences only its own turn.
 func TestQuietDoesNotLeakAcrossTurns(t *testing.T) {
-	ev := append(turn("colleague", "for the colleague"), turn("telegram", "for the user")...)
+	ev := append(turn("colleague:raiden-god", "for the colleague"), turn("telegram", "for the user")...)
 	ev = append(ev, []client.Event{
-		{Type: "follow_up_start", Origin: "colleague"},
+		{Type: "follow_up_start", Origin: "colleague:raiden-god"},
 		{Type: "turn_start"}, {Type: "text", Delta: "again for the colleague"}, {Type: "text_end"}, {Type: "turn_end"},
 	}...)
 	ev = append(ev, turn("telegram", "for the user, second")...)
@@ -158,7 +159,7 @@ func TestQuietDoesNotLeakAcrossTurns(t *testing.T) {
 // the next prompt echo resets it.
 func TestQuietIsResetByTheNextPromptEcho(t *testing.T) {
 	ev := []client.Event{
-		{Type: "received_prompt", Origin: "colleague"},
+		{Type: "received_prompt", Origin: "colleague:raiden-god"},
 		{Type: "turn_start"},
 		{Type: "stop"},
 	}
@@ -172,7 +173,7 @@ func TestQuietIsResetByTheNextPromptEcho(t *testing.T) {
 // Typing shows the moment a scheduled prompt arrives; never for a colleague's.
 // The stream stays open so drain's final stopTyping doesn't hide it.
 func TestTypingIndicatorOnlyForScheduledEcho(t *testing.T) {
-	for origin, want := range map[string]bool{"scheduled": true, "colleague": false} {
+	for origin, want := range map[string]bool{"scheduled": true, "colleague:raiden-god": false} {
 		fake := newFakeTelegram(t)
 		tr := &Transport{bot: fake.bot(), logger: logx.NewNilLogger(), pumps: map[int64]*chatPump{}}
 		p := &chatPump{chatID: 42, sessionID: "s"}
@@ -256,7 +257,7 @@ func TestColleaguePromptToTelegramSessionRunsQuietEndToEnd(t *testing.T) {
 	}
 
 	c := client.New(srv.Addr())
-	out, err := c.Ask(pump.sessionID, "what is the status?", 20*time.Second, client.WithOrigin("colleague"), client.WithoutQueue())
+	out, err := c.Ask(pump.sessionID, "what is the status?", 20*time.Second, client.WithOrigin("colleague:raiden-god"))
 	if err != nil || !strings.Contains(out, "ANSWER to: what is the status?") {
 		t.Fatalf("the colleague's answer: %q %v", out, err)
 	}
@@ -283,5 +284,19 @@ func TestColleaguePromptToTelegramSessionRunsQuietEndToEnd(t *testing.T) {
 	got := fake.sent()
 	if len(got) != 1 || !strings.Contains(got[0], "ANSWER") || !strings.Contains(got[0], "hello") {
 		t.Fatalf("Telegram received %q, want exactly the answer to the typed message", got)
+	}
+}
+
+func TestIsColleagueQuestion(t *testing.T) {
+	for origin, want := range map[string]bool{
+		"colleague:raiden-god":       true,
+		"colleague:raiden-god#reply": false,
+		"colleague":                  false,
+		"scheduled":                  false,
+		"":                           false,
+	} {
+		if got := isColleagueQuestion(origin); got != want {
+			t.Errorf("isColleagueQuestion(%q) = %v, want %v", origin, got, want)
+		}
 	}
 }
