@@ -1294,10 +1294,25 @@ func (s *Server) handleForkSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, err := s.agent.ForkSession(id)
+	// The body is optional: {"channels": [...]} binds the fork to channels of
+	// its own (it never inherits its parent's).
+	var req struct {
+		Channels []types.InputChannel `json:"channels,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
+		return
+	}
+	var opts []agent.SessionOption
+	if len(req.Channels) > 0 {
+		opts = append(opts, agent.WithSessionChannels(req.Channels...))
+	}
+	sess, err := s.agent.ForkSession(id, opts...)
 	if err != nil {
 		status := http.StatusInternalServerError
 		switch {
+		case channelErrStatus(err, 0) != 0:
+			status = channelErrStatus(err, 0)
 		case errors.Is(err, agent.ErrNoModelAvailable):
 			status = http.StatusConflict // nothing to run the copy on: connect a provider
 		case strings.Contains(err.Error(), "not found"):

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/gurcuff91/harness/agent"
+	colleaguech "github.com/gurcuff91/harness/channels/colleague"
 	slackch "github.com/gurcuff91/harness/channels/slack"
 	"github.com/gurcuff91/harness/internal/logx"
 	"github.com/gurcuff91/harness/types"
@@ -49,3 +50,20 @@ func slackInputChannels(refs []string, registered []agent.Channel) ([]types.Inpu
 	}
 	return nil, fmt.Errorf("%s", errNoSlackLogin)
 }
+
+// colleagueChannels is the colleague channel when --with-colleagues (or
+// HARNESS_WITH_COLLEAGUES) asked for it: every session the command opens gets a
+// colleague id of its own, so the agents on this machine can talk.
+func colleagueChannels(x extras, withLogger bool) []agent.Channel {
+	if !x.colleagues {
+		return nil
+	}
+	var opts []colleaguech.Option
+	if withLogger {
+		opts = append(opts, colleaguech.WithLogger(logx.NewHarnessLogger()))
+	}
+	return []agent.Channel{colleaguech.New(opts...)}
+}
+
+// colleagueAuto is the request that gives a session a fresh colleague id.
+var colleagueAuto = types.InputChannel{Type: colleaguech.Type, Ref: colleaguech.AutoID}

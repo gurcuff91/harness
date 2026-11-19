@@ -220,7 +220,7 @@ func (t *TUI) Run(ctx context.Context) error {
 	defer srv.Close()
 	t.client = client.New(addr)
 
-	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer cancel()
 	t.baseCtx = ctx
 

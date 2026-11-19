@@ -80,7 +80,7 @@ func Run(ctx context.Context, a *agent.Agent, prompt string, opts Opts) error {
 	sessionID := sess.ID
 	defer c.CloseSession(sessionID) //nolint
 
-	ctx2, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	ctx2, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer cancel()
 
 	// Apply thinking level before sending the prompt.

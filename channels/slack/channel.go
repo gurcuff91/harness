@@ -312,8 +312,9 @@ func (c *Channel) HandleEvent(id string, evt types.Event) {
 	p.push(evt)
 }
 
-// Tools implements agent.Channel.
-func (c *Channel) Tools() []atools.Tool {
+// Tools implements agent.Channel (the Slack tools act as the account, not as
+// one conversation: ids are not needed).
+func (c *Channel) Tools(_ []string) []atools.Tool {
 	c.idMu.Lock()
 	me := c.myID
 	c.idMu.Unlock()

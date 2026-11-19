@@ -38,7 +38,7 @@ Providers can also be connected from inside the TUI command palette.
 - **MCP** — external tools via Model Context Protocol (local stdio + remote HTTP servers)
 - **Persistent memory** — project-scoped + global memories (SQLite + FTS5), recalled across sessions
 - **Scheduled prompts** — cron-scheduled prompts that fire back into the session that created them
-- **Colleagues** — discover other running harness instances on the machine and delegate prompts to them
+- **Colleagues** — every session started with `--with-colleagues` gets a name (`scorpion-hero`) and can ask the other sessions on the machine, which answer asynchronously
 - **Multiple frontends** — interactive TUI, one-shot CLI, HTTP/SSE server, Telegram bot, ACP agent (Zed), and Slack input channels
 - **Vision** — image support via file paths or clipboard image paste (Ctrl+V in the TUI)
 - **Pure-Go TUI** — from-scratch terminal UI, zero external TUI libraries
@@ -306,7 +306,7 @@ harness                       — Interactive TUI (default)
 harness "<task>"              — Interactive TUI with that first message already submitted
 harness -p <prompt>           — Single-turn CLI (--model, --thinking, --output)
 harness --resume <id>         — Resume a session in the TUI
-harness --with-colleagues     — Give the agent the Colleague tools (find and ask other running instances)
+harness --with-colleagues     — Make every session a colleague: a name, and ColleagueList/ColleagueAsk to talk to the others
 harness --with-scheduler      — Run the TUI with the cron scheduler engine
 ```
 
@@ -317,9 +317,16 @@ prompt and 3 KB of tool definitions): `--with-colleagues` and `--with-scheduler`
 and `telegram`. Each can also be switched on by an environment variable, either one being enough:
 `HARNESS_WITH_COLLEAGUES=1` and `HARNESS_WITH_SCHEDULER=1` (`1`/`true`/`yes` on, `0`/`false`/`no` or empty
 off; any other value is an error that names the variable). `harness acp` is started by an editor and takes
-no flags, so for it the variables are the only way. `-p` never has the extras. An instance started without
-`--with-colleagues` still registers itself and still **answers** other agents; it only lacks the tools to
-ask them.
+no flags, so for it the variables are the only way. `-p` never has the extras.
+
+**Colleagues.** With `--with-colleagues`, every session the process opens (new, resumed or forked) gets a
+random name like `scorpion-hero` and listens for the other agents of the machine on a Unix socket in a
+directory only you can enter (`~/.harness/run`). The model gets `ColleagueList` (who is online and the
+project each works in) and `ColleagueAsk`, which is asynchronous: it returns as soon as the message is
+delivered, and the answer comes back later as a new prompt (`<colleague from="raiden-god" reply>…`). The
+session that is asked answers automatically when its turn ends. A session that closes takes its
+conversations with it. The TUI shows the name in its channels line (`channels [colleague: scorpion-hero]`).
+The older HTTP colleague tools remain available to SDK users (`AgentWithColleagues`) for now.
 
 **A first message.** `harness "fix the login bug"` (or `harness fix the login bug` — the words are
 joined with a space) opens the normal interactive TUI and submits that message as if you had typed

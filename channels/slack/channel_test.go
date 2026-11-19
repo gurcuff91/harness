@@ -355,7 +355,7 @@ func (p post) comment() string { return p.text }
 func TestToolsAndDirective(t *testing.T) {
 	c := New("https://x.slack.com", "a", "b")
 	var names []string
-	for _, tl := range c.Tools() {
+	for _, tl := range c.Tools(nil) {
 		names = append(names, tl.Def.Name)
 		var schema map[string]any
 		if err := json.Unmarshal(tl.Def.InputSchema, &schema); err != nil {

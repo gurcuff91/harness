@@ -557,3 +557,8 @@ func loadColleagueImages(paths []string) ([]types.ImageData, error) {
 	}
 	return images, nil
 }
+
+// LoadImages reads local image files for a message to another agent: each
+// path must be a supported image (png, jpg, jpeg, gif, webp) by extension AND
+// by content. Shared by the colleague channel's ColleagueAsk.
+func LoadImages(paths []string) ([]types.ImageData, error) { return loadColleagueImages(paths) }

@@ -252,10 +252,12 @@ func selectsTUI(ctx *kong.Context) bool {
 	return c == "tui" || c == "tui <prompt>"
 }
 
-// signalContext returns a context cancelled on SIGINT/SIGTERM — the standard
+// signalContext returns a context cancelled on SIGINT/SIGTERM/SIGHUP (a closed
+// terminal hangs up: without it the process dies without closing its sessions,
+// leaving its channel sockets and claims behind) — the standard
 // setup for commands that run until interrupted.
 func signalContext() (context.Context, context.CancelFunc) {
-	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 }
 
 // helpWithHiddenDefaultFlags wraps kong.DefaultHelpPrinter so a command's own

@@ -5,6 +5,7 @@ import (
 	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/mcp"
+	"github.com/gurcuff91/harness/types"
 )
 
 // interactiveMaxIterations is the ReAct iteration cap for interactive
@@ -108,15 +109,23 @@ func newInteractiveAgent(x extras, directives ...string) *agent.Agent {
 // interactiveOptions is the AgentOptions newInteractiveAgent builds, separate so a test can look at the
 // decision without opening an agent.
 func interactiveOptions(x extras, directives []string) agent.AgentOptions {
-	return agent.AgentOptions{
-		MCPServers:       mcp.ServersFromSettings(),
-		Memory:           defaultMemory(),
-		EnableScheduler:  x.scheduler,
-		EnableColleagues: x.colleagues,
-		EnableWebSearch:  true,
-		MaxIterations:    interactiveMaxIterations,
-		Directives:       directives,
+	opts := agent.AgentOptions{
+		MCPServers:      mcp.ServersFromSettings(),
+		Memory:          defaultMemory(),
+		EnableScheduler: x.scheduler,
+		EnableWebSearch: true,
+		MaxIterations:   interactiveMaxIterations,
+		Directives:      directives,
 	}
+	// --with-colleagues activates the colleague CHANNEL (channels/colleague),
+	// not the old HTTP colleague tools (those stay SDK-only, AgentWithColleagues,
+	// until they are deprecated): every session this agent opens — whichever
+	// frontend opens it — gets a colleague id of its own.
+	if x.colleagues {
+		opts.Channels = colleagueChannels(x, false)
+		opts.SessionChannels = []types.InputChannel{colleagueAuto}
+	}
+	return opts
 }
 
 // newConfigAgent builds a minimal agent for commands that only read/write

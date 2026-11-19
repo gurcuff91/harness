@@ -36,7 +36,7 @@ func (stubChannel) Listen(context.Context, string, func(agent.Inbound)) (func(),
 func (stubChannel) HandleEvent(string, types.Event)          {}
 func (stubChannel) Name(_ context.Context, id string) string { return "#" + strings.ToLower(id) }
 func (stubChannel) Directive([]string) string                { return "" }
-func (stubChannel) Tools() []tools.Tool                      { return nil }
+func (stubChannel) Tools([]string) []tools.Tool              { return nil }
 
 func channelServer(t *testing.T) *client.Client {
 	t.Helper()

@@ -3,7 +3,8 @@ name: Test
 # Runs the OS-specific code on the systems it is written for. The release
 # workflow only builds Windows and macOS binaries on Linux; this is where their
 # platform code actually executes (the process liveness check behind
-# input-channel claims, agent/proc_*.go). Not a release gate.
+# input-channel claims, agent/proc_*.go; the colleague channel's Unix sockets,
+# channels/colleague). Not a release gate.
 on:
   push:
     branches: [main]
@@ -32,3 +33,5 @@ jobs:
         run: go build ./...
       - name: Process liveness and channel claims
         run: go test ./agent ./internal/config -run "OwnerAlive|ProcLookup|ReusedPid|AnotherUsers|Claim|Release|Conversation" -count=1 -v
+      - name: Colleague channel (Unix sockets, also on Windows)
+        run: go test ./channels/colleague -count=1 -v

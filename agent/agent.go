@@ -131,6 +131,13 @@ type AgentOptions struct {
 	// omitted rather than guessed from the launcher's environment.
 	Terminal string
 
+	// SessionChannels are bound to EVERY session this agent opens (new,
+	// resumed, forked), before any the caller asks for — e.g. a colleague
+	// channel with an automatic id, so each session is reachable by the other
+	// agents of the machine whatever frontend opened it. A resume of a session
+	// that is already open keeps what it has.
+	SessionChannels []types.InputChannel
+
 	// Channels are the external-conversation implementations (Slack, …) a
 	// session can be bound to with WithSessionChannels. Registering one opens
 	// nothing: a channel listens only for the sessions bound to it. The agent
@@ -769,7 +776,7 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 	// sessRef doc comment for why the Subagent tool needs this indirection
 	// instead of the plain "model" string.
 	var sess *Session
-	chans, chDirectives, chTools, err := a.prepareChannels(sessionID, cwd, cfg.channels, cfg.tools)
+	chans, chDirectives, chTools, err := a.prepareChannels(sessionID, cwd, a.withSessionChannels(cfg.channels), cfg.tools)
 	if err != nil {
 		return nil, fmt.Errorf("new session: %w", err)
 	}
@@ -896,7 +903,7 @@ func (a *Agent) ResumeSessionReport(sessionID string, opts ...SessionOption) (*S
 	}
 
 	var sess *Session
-	chans, chDirectives, chTools, err := a.prepareChannels(meta.ID, cwd, cfg.channels, cfg.tools)
+	chans, chDirectives, chTools, err := a.prepareChannels(meta.ID, cwd, a.withSessionChannels(cfg.channels), cfg.tools)
 	if err != nil {
 		_ = storeInst.Close()
 		return nil, false, fmt.Errorf("resume session: %w", err)
@@ -1065,7 +1072,8 @@ func (a *Agent) SessionProfiles(sessionID string) []string {
 // Session-scoped directives and tools (WithSessionDirectives/WithSessionTools)
 // are not persisted, so the fork does not inherit the parent's — only the
 // Agent-wide ones.
-func (a *Agent) ForkSession(sessionID string) (*Session, error) {
+func (a *Agent) ForkSession(sessionID string, opts ...SessionOption) (*Session, error) {
+	cfg := applySessionOptions(opts)
 	// Look up parent — prefer the live in-memory session (holds the mutex);
 	// fall back to opening from disk for inactive sessions.
 	a.sessMu.Lock()
@@ -1129,8 +1137,16 @@ func (a *Agent) ForkSession(sessionID string) (*Session, error) {
 	}
 
 	var sess *Session
-	forkTools, tl := a.buildSessionTools(meta.ID, cwd, &sess, res, loader)
-	forkPrompt, pl := a.buildSystemPrompt(cwd, res)
+	// A fork listens to nothing of its parent's; it may be given channels of
+	// its own (opts), exactly like a new session.
+	chans, chDirectives, chTools, err := a.prepareChannels(meta.ID, cwd, a.withSessionChannels(cfg.channels), cfg.tools)
+	if err != nil {
+		_ = forkStore.Close()
+		_ = a.store.DeleteSession(meta.ID)
+		return nil, fmt.Errorf("fork: %w", err)
+	}
+	forkTools, tl := a.buildSessionTools(meta.ID, cwd, &sess, res, loader, append(append([]tools.Tool(nil), cfg.tools...), chTools...)...)
+	forkPrompt, pl := a.buildSystemPrompt(cwd, res, append(append([]string(nil), cfg.directives...), chDirectives...)...)
 	sess = newSession(forkStore,
 		provider, modelID, thinkingLvl,
 		forkTools, tl, forkPrompt, pl,
@@ -1139,6 +1155,11 @@ func (a *Agent) ForkSession(sessionID string) (*Session, error) {
 		a.memStore != nil)
 	sess.agent = a
 	sess.modelFallback = fallback
+	if err := sess.attachChannels(chans); err != nil {
+		_ = forkStore.Close()
+		_ = a.store.DeleteSession(meta.ID)
+		return nil, fmt.Errorf("fork: %w", err)
+	}
 	a.registerSession(sess)
 	return sess, nil
 }
@@ -1724,4 +1745,13 @@ func sessionChannelInfos(chs []ChannelInfo) []tools.SessionChannelInfo {
 		out = append(out, tools.SessionChannelInfo{Type: c.Type, ID: c.ID, Name: c.Name})
 	}
 	return out
+}
+
+// withSessionChannels is the channels a session opens with: the agent's own
+// (AgentOptions.SessionChannels) first, then the caller's.
+func (a *Agent) withSessionChannels(reqs []types.InputChannel) []types.InputChannel {
+	if len(a.opts.SessionChannels) == 0 {
+		return reqs
+	}
+	return append(append([]types.InputChannel(nil), a.opts.SessionChannels...), reqs...)
 }

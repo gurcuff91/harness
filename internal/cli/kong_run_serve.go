@@ -30,6 +30,6 @@ func (c *serveCmd) newAgent() (*agent.Agent, error) {
 	opts := interactiveOptions(x, nil)
 	// Clients bind sessions to conversations through the API (channels on
 	// create/resume); serve itself takes no channel flag.
-	opts.Channels = storedChannels(slackch.LoadCredentials, true)
+	opts.Channels = append(opts.Channels, storedChannels(slackch.LoadCredentials, true)...)
 	return agent.New(opts), nil
 }

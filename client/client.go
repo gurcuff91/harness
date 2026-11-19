@@ -536,8 +536,13 @@ func (c *Client) CloseSession(id string) (*Status, error) {
 
 // ForkSession creates a new session that is an exact copy of id at this moment.
 // Returns the forked session's metadata (new ID, fresh timestamps, same history).
-func (c *Client) ForkSession(id string) (*Session, error) {
-	s, err := decode[Session](c, "POST", "/api/sessions/"+id+"/fork", nil)
+func (c *Client) ForkSession(id string, opts ...SessionOption) (*Session, error) {
+	o := applyClientSessionOptions(opts)
+	var body any
+	if len(o.channels) > 0 {
+		body = map[string]any{"channels": o.channels}
+	}
+	s, err := decode[Session](c, "POST", "/api/sessions/"+id+"/fork", body)
 	if err != nil {
 		return nil, err
 	}

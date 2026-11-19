@@ -44,7 +44,7 @@ func (c *tuiCmd) Run() error {
 // from, so a test can build exactly what Run builds, without a terminal.
 func (c *tuiCmd) newTUIAgent(x extras, chans ...agent.Channel) *agent.Agent {
 	opts := interactiveOptions(x, tuiDirectives())
-	opts.Channels = chans
+	opts.Channels = append(opts.Channels, chans...)
 	opts.Terminal = tui.TerminalName() // only the TUI runs in a terminal of its own
 	return agent.New(opts)
 }

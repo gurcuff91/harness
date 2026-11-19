@@ -66,7 +66,7 @@ func (f *fakeChannel) Name(_ context.Context, id string) string { return "#" + s
 func (f *fakeChannel) Directive(ids []string) string {
 	return "## FAKE CHANNEL " + strings.Join(ids, ",")
 }
-func (f *fakeChannel) Tools() []tools.Tool {
+func (f *fakeChannel) Tools(_ []string) []tools.Tool {
 	return []tools.Tool{{
 		Def:     types.ToolDef{Name: f.toolName, Description: "fake", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		Execute: func(context.Context, json.RawMessage) (string, error) { return "ok", nil },
@@ -464,7 +464,7 @@ func TestAChannelToolNameClashFailsTheOpen(t *testing.T) {
 	name := "clash-" + strings.NewReplacer("/", "-").Replace(t.Name())
 	var thinking string
 	providers.AddForTest(&echoProvider{fakeThinkingProbeProvider{name: name, lastThinking: &thinking}})
-	a := New(AgentOptions{Store: store.NewInMemoryStore(), Channels: []Channel{ch}, Tools: ch.Tools()})
+	a := New(AgentOptions{Store: store.NewInMemoryStore(), Channels: []Channel{ch}, Tools: ch.Tools(nil)})
 	defer a.Close()
 	_, err := a.NewSession(t.TempDir(), name+"/fake-model", WithSessionChannels(types.InputChannel{Type: "fake", Ref: "a"}))
 	if !errors.Is(err, ErrChannelInvalid) || !strings.Contains(err.Error(), "already in the session") {
@@ -480,5 +480,29 @@ func TestChannelToolPrefix(t *testing.T) {
 		if got := channelToolPrefix(typ); got != want {
 			t.Errorf("channelToolPrefix(%q) = %q, want %q", typ, got, want)
 		}
+	}
+}
+
+// A channel's tool that the agent's old built-ins already provide (here the
+// HTTP colleague tools of EnableColleagues) fails the open, explicitly.
+func TestAChannelToolClashesWithAnOldBuiltin(t *testing.T) {
+	ch := newFakeChannel("colleague")
+	ch.toolName = "ColleagueAsk"
+	withCleanProviderRegistry(t)
+	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
+	name := "oldclash-" + strings.NewReplacer("/", "-").Replace(t.Name())
+	var thinking string
+	providers.AddForTest(&echoProvider{fakeThinkingProbeProvider{name: name, lastThinking: &thinking}})
+	a := New(AgentOptions{Store: store.NewInMemoryStore(), Channels: []Channel{ch}, EnableColleagues: true})
+	defer a.Close()
+	_, err := a.NewSession(t.TempDir(), name+"/fake-model", WithSessionChannels(types.InputChannel{Type: "colleague", Ref: "x"}))
+	if !errors.Is(err, ErrChannelInvalid) || !strings.Contains(err.Error(), "ColleagueAsk") {
+		t.Fatalf("err = %v", err)
+	}
+	// without the old tools, the same channel opens
+	b := New(AgentOptions{Store: store.NewInMemoryStore(), Channels: []Channel{ch}})
+	defer b.Close()
+	if _, err := b.NewSession(t.TempDir(), name+"/fake-model", WithSessionChannels(types.InputChannel{Type: "colleague", Ref: "y"})); err != nil {
+		t.Fatalf("without the old tools: %v", err)
 	}
 }

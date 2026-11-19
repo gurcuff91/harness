@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.110.0] - 2026-11-19
+
+### Changed — `--with-colleagues` makes every session a colleague that other sessions can message
+Colleagues are now an input channel, like Slack. With `--with-colleagues` (or `HARNESS_WITH_COLLEAGUES`), every session the process opens — new, resumed or forked, from the TUI, `serve`, Telegram or ACP — gets a random name like `scorpion-hero`, shown in the TUI's channels line (`channels [colleague: scorpion-hero]`), and listens for the other sessions of the machine.
+- **A colleague is a session, not a process.** `ColleagueList` shows who is online now and the project each one works in; `ColleagueAsk` sends one a message.
+- **Asynchronous.** `ColleagueAsk` returns as soon as the message is delivered ("Delivered to raiden-god. Its reply will arrive later…"). The session that is asked receives it as a prompt (`<colleague from="scorpion-hero">…</colleague>`, shown with `⇌`), answers it like any prompt (queued if it is busy), and its final answer goes back automatically when its turn ends; the asker receives it as a new prompt, `<colleague from="raiden-god" reply>…</colleague>`. A reply never answers back, so two colleagues cannot loop. A session that closes takes its conversations with it: a reply to it is dropped.
+- **No server, no port.** Sessions talk over Unix sockets in a directory only the user can enter (`~/.harness/run`, mode 0700; `/tmp/harness-<uid>` when the home is too long for a socket path), one JSON line per message. Nothing is exposed to other users or to the network.
+- **The `## Colleagues` section of the system prompt** explains both tags, that an answer is sent automatically (so the model must not answer with ColleagueAsk), that it must end its turn after asking instead of waiting, and the authority rule: a colleague's message carries that agent's authority, never the person's.
+- The old colleague tools — instance registry, HTTP to another process's API, synchronous answer, session choice — are no longer given by the CLI. They stay in the SDK (`AgentWithColleagues`) until they are deprecated; a session cannot have both.
+- SDK: `channels/colleague.New()`, `agent.AgentOptions.SessionChannels` (channels bound to every session an agent opens), `agent.Inbound.Origin`, `agent.LiveChannelClaims`. `Agent.ForkSession`, `POST /api/sessions/{id}/fork` and `client.ForkSession` accept channels, like create and resume. **`agent.Channel.Tools` now takes the bound ids** (`Tools(ids []string)`): an SDK implementation of `Channel` must update its signature.
+
+### Fixed — a closed terminal no longer leaves the TUI's sessions open
+The TUI and the other commands now also stop cleanly on SIGHUP — what a terminal sends when it is closed, and what `hc kill` sends — closing their sessions. Before, the process died without closing them, and a session listening to a channel left its claim (and, for a colleague, its socket file) behind; found while testing the colleague channel live.
+
+Checked live with two TUIs in Herdr: one asked the other, through `ColleagueList` and `ColleagueAsk`, for its project's Go module path, and received the right answer as a reply; both cleaned their sockets and claims on Ctrl+C and on `hc kill`. Tests cover the frame, the socket (mode, a leftover file, a path too long, the fallback directory), ask/reply without a loop between two real sessions, the final text as the answer, a lost reply, automatic ids avoiding taken ones and the clash with the old tools; fourteen hand-made mutants, all caught. A new CI step runs the colleague tests on Linux, macOS and Windows.
+
 ## [0.109.5] - 2026-11-19
 
 ### Changed — the channels have a status line of their own

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -86,5 +87,80 @@ func TestOnlyTheTUIAgentHasATerminal(t *testing.T) {
 	defer s.Close()
 	if got := s.Options().Terminal; got != "" {
 		t.Errorf("serve agent terminal = %q, want none", got)
+	}
+}
+
+// --with-colleagues: every session the agent opens is a colleague — new,
+// resumed, forked — each with a fresh id of its own, and without it none is.
+func TestWithColleaguesEverySessionIsAColleague(t *testing.T) {
+	isolate(t)
+	t.Setenv("HC_TERMINAL_ID", "")
+	a := newInteractiveAgent(extras{colleagues: true})
+	defer a.Close()
+	model := fakeProviderModel(t)
+	idOf := func(s *agent.Session) string {
+		for _, c := range s.Channels() {
+			if c.Type == "colleague" {
+				return c.ID
+			}
+		}
+		return ""
+	}
+	s1, err := a.NewSession(t.TempDir(), model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2, err := a.NewSession(t.TempDir(), model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id1, id2 := idOf(s1), idOf(s2)
+	if id1 == "" || id2 == "" || id1 == id2 {
+		t.Fatalf("colleague ids %q, %q: want two different ones", id1, id2)
+	}
+	f, err := a.ForkSession(s1.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idf := idOf(f); idf == "" || idf == id1 || idf == id2 {
+		t.Errorf("fork id %q", idf)
+	}
+	sid := s2.ID()
+	_ = s2.Close()
+	r, err := a.ResumeSession(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idOf(r) == "" {
+		t.Error("a resumed session is not a colleague")
+	}
+
+	plain := newInteractiveAgent(extras{})
+	defer plain.Close()
+	p, err := plain.NewSession(t.TempDir(), model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idOf(p) != "" {
+		t.Error("a colleague id without --with-colleagues")
+	}
+}
+
+// A closed terminal (or `hc kill`) hangs the process up: SIGHUP must cancel
+// the command's context like SIGINT/SIGTERM, or the process dies without
+// closing its sessions and leaves their channel sockets and claims behind.
+func TestSignalContextHandlesHangup(t *testing.T) {
+	src, err := os.ReadFile("app.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), "syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)") {
+		t.Error("signalContext does not handle SIGHUP")
+	}
+	for _, f := range []string{"../tui/tui.go", "cli.go"} {
+		b, _ := os.ReadFile(f)
+		if !strings.Contains(string(b), "syscall.SIGHUP") {
+			t.Errorf("%s does not handle SIGHUP", f)
+		}
 	}
 }

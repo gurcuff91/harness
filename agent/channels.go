@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 
@@ -48,8 +49,9 @@ type Channel interface {
 	// Tools are added to a session bound to at least one conversation of this
 	// channel. Each one's name must start with the channel's type, first
 	// letter upper-cased (Type "slack" → "SlackPost"): the open fails
-	// otherwise.
-	Tools() []tools.Tool
+	// otherwise. ids are the conversations of this channel the session binds
+	// (the same ids Directive gets), for tools that act as the session.
+	Tools(ids []string) []tools.Tool
 }
 
 // ChannelInfo describes one conversation a session listens to.
@@ -63,6 +65,11 @@ type ChannelInfo struct {
 type Inbound struct {
 	Text   string
 	Images []types.ImageData
+	// Origin overrides the prompt's origin (default "<type>:<id>" of the
+	// conversation). It must start with "<type>:" — a channel whose senders
+	// are themselves addressable (colleagues) puts the SENDER there. The turn
+	// is still routed to the conversation that delivered it.
+	Origin string
 }
 
 // Channel errors, for callers that map them (the HTTP server: 409 / 400).
@@ -102,6 +109,9 @@ type sessionChannels struct {
 	sessionID string
 	bound     []*boundChannel
 	byOrigin  map[string]*boundChannel
+	// byPrompt: an origin a channel delivered with (Inbound.Origin) → the
+	// conversation it came through, so its turn goes back to that channel.
+	byPrompt map[string]*boundChannel
 
 	// directives and tools the channels add to the session — kept so a
 	// reconfiguration (ReconfigureSession) re-applies them instead of dropping
@@ -125,7 +135,7 @@ func (a *Agent) prepareChannels(sessionID, cwd string, reqs []types.InputChannel
 	if len(reqs) == 0 {
 		return nil, nil, nil, nil
 	}
-	sc := &sessionChannels{agent: a, sessionID: sessionID, byOrigin: map[string]*boundChannel{}}
+	sc := &sessionChannels{agent: a, sessionID: sessionID, byOrigin: map[string]*boundChannel{}, byPrompt: map[string]*boundChannel{}}
 	ctx := context.Background()
 	for _, r := range reqs {
 		typ, ref := strings.TrimSpace(r.Type), strings.TrimSpace(r.Ref)
@@ -174,7 +184,7 @@ func (a *Agent) prepareChannels(sessionID, cwd string, reqs []types.InputChannel
 	// Every tool the session will have without the channels: the built-ins
 	// (always-on and gated), the agent's (MCP included) and the session's own.
 	taken := map[string]bool{}
-	for _, n := range tools.BuiltinNames() {
+	for _, n := range a.builtinNamesForSession() {
 		taken[n] = true
 	}
 	for _, t := range a.toolReg.Definitions() {
@@ -200,7 +210,7 @@ func (a *Agent) prepareChannels(sessionID, cwd string, reqs []types.InputChannel
 			directives = append(directives, d)
 		}
 		prefix := channelToolPrefix(typ)
-		for _, t := range b.ch.Tools() {
+		for _, t := range b.ch.Tools(ids) {
 			if !strings.HasPrefix(t.Def.Name, prefix) {
 				sc.release()
 				return nil, nil, nil, fmt.Errorf("%w: the %s channel's tool %q must be named %s… (a channel's tools carry its type, so a frontend can tell them apart)",
@@ -224,8 +234,16 @@ func (a *Agent) prepareChannels(sessionID, cwd string, reqs []types.InputChannel
 func (sc *sessionChannels) start(sess *Session) error {
 	for _, b := range sc.bound {
 		origin := ChannelOrigin(b.ch.Type(), b.id)
+		b := b
 		stop, err := b.ch.Listen(context.Background(), b.id, func(in Inbound) {
-			opts := []PromptOption{PromptWithOrigin(origin)}
+			o := origin
+			if in.Origin != "" && strings.HasPrefix(in.Origin, b.ch.Type()+":") {
+				o = in.Origin
+				sc.mu.Lock()
+				sc.byPrompt[o] = b
+				sc.mu.Unlock()
+			}
+			opts := []PromptOption{PromptWithOrigin(o)}
 			if len(in.Images) > 0 {
 				opts = append(opts, PromptWithImages(in.Images...))
 			}
@@ -250,6 +268,9 @@ func (sc *sessionChannels) tap(e types.Event) {
 	}
 	if e.Type == types.EventReceivedPrompt || e.Type == types.EventFollowUpStart {
 		sc.current = sc.byOrigin[e.Origin]
+		if sc.current == nil {
+			sc.current = sc.byPrompt[e.Origin]
+		}
 	}
 	cur := sc.current
 	if e.Type == types.EventTurnEnd {
@@ -319,4 +340,61 @@ func channelToolPrefix(typ string) string {
 		return ""
 	}
 	return strings.ToUpper(typ[:1]) + typ[1:]
+}
+
+// ChannelClaim is one recorded claim: which session (and process) listens to a
+// conversation. ListedChannels returns them for a channel that offers a
+// directory of its own peers (colleagues).
+type ChannelClaim struct {
+	Type    string
+	ID      string
+	Session string
+	CWD     string
+}
+
+// LiveChannelClaims lists the claims on conversations of type typ whose owner
+// process is alive (the same check that guards taking a claim over: pid plus
+// its start marker), sorted by id.
+func LiveChannelClaims(typ string) []ChannelClaim {
+	var out []ChannelClaim
+	for _, c := range config.GetSettingsManager().ChannelClaims() {
+		if c.Type == typ && ownerAlive(c.PID, c.Started, lookupProc) {
+			out = append(out, ChannelClaim{Type: c.Type, ID: c.ID, Session: c.Session, CWD: c.CWD})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// ChannelClaimTaken reports whether conversation (typ, id) is claimed by a
+// live owner — for a channel that picks a free id itself.
+func ChannelClaimTaken(typ, id string) bool {
+	for _, c := range LiveChannelClaims(typ) {
+		if c.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// builtinNamesForSession lists the built-in tools a session of this agent
+// gets — the always-on ones and those whose switch is on (colleagues, the
+// scheduler, memory, WebSearch) — so a channel's tool clashes only with what
+// the session will really have.
+func (a *Agent) builtinNamesForSession() []string {
+	names := []string{tools.ToolBash, tools.ToolRead, tools.ToolWrite, tools.ToolEdit, tools.ToolFetch,
+		tools.ToolSkill, tools.ToolSubagent, tools.ToolSessionInfo}
+	if a.memStore != nil {
+		names = append(names, tools.ToolMemoWrite, tools.ToolMemoSearch, tools.ToolMemoDelete)
+	}
+	if a.scheduleAdapter() != nil {
+		names = append(names, tools.ToolSchedule, tools.ToolScheduleList, tools.ToolScheduleDelete)
+	}
+	if a.opts.EnableColleagues {
+		names = append(names, tools.ToolColleagueList, tools.ToolColleagueAsk)
+	}
+	if a.opts.EnableWebSearch {
+		names = append(names, tools.ToolWebSearch)
+	}
+	return names
 }
