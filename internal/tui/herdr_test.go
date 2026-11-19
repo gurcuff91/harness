@@ -397,3 +397,16 @@ func TestTheAuthorityRuleDoesNotNameAnyone(t *testing.T) {
 		}
 	}
 }
+
+// A message sent to another agent is answered later, as a new prompt (the
+// sender's turn queues it). An agent that sleeps or reads the other screen
+// waiting for it misses the reply and asks again — seen live between two
+// harness TUIs. The section says so, without naming a command.
+func TestTheSectionSaysARepliesComeAsAPrompt(t *testing.T) {
+	got := herdrDirective(insideHerdr().env())
+	for _, want := range []string{"A reply to your message arrives later as a new prompt", "never sleep, poll or read the recipient's screen"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the section lacks %q", want)
+		}
+	}
+}

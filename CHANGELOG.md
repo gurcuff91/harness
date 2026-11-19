@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.108.1] - 2026-11-18
+
+### Fixed — Herdr: an agent that messages another one waits for the reply as a prompt
+The `## Herdr` section of the TUI's system prompt now says that a reply to a message sent to another agent arrives later as a new prompt, and that the model must never sleep, poll or read the recipient's screen for it. Seen live between two harness TUIs: the asking agent kept its turn busy sleeping and reading the other screen, so the reply (queued as its next prompt) was not seen in time, and it asked for it again.
+
+Measured with 12 real agent pairs inside Herdr (one asks another for its Go module path): before, 6 of 6 askers polled (`sleep`, reading the screen, waiting on the terminal); after, claude-sonnet-5-5 polled 0 of 3 and MiniMax-M2.7 still polled 3 of 3. A prompt-level rule, like the authority rule: it holds on Sonnet, not on MiniMax. The section stays under its 260-word ceiling (259) and names no `hc` subcommand.
+
 ## [0.108.0] - 2026-11-18
 
 ### Breaking — the Slack bot (`transports/slack`) is removed; Slack is now an input channel
