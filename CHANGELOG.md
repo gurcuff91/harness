@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.108.2] - 2026-11-18
+
+### Fixed — a channel claim is no longer kept alive by a reused pid, and Windows decides liveness correctly
+A Slack channel is claimed by the session that listens to it, and a claim whose process died is taken over. "Died" was decided by the pid alone, which an operating system reuses: in a container restarted by a deploy (Fly) the new process usually gets the same low pid as the killed one, so the old claim looked alive and the channel stayed blocked, "already taken" by itself, until someone edited `settings.json` by hand.
+- **A claim now records when its process started** (`started`, an opaque marker read from the OS: `/proc/<pid>/stat` on Linux, `sysctl kern.proc.pid` on macOS, the process creation time on Windows). A live process with the same pid but another start time is another process, so the claim is taken over.
+- **Every doubt still keeps the claim**: a process whose start cannot be read, or a claim written by 0.108.0/0.108.1 (no marker), counts as alive if its pid exists, exactly as before. Taking a live owner's channel would make two sessions answer the same mention.
+- **Windows**: a process that has exited but is still held open by someone else (a monitor, an antivirus, its parent) used to count as alive; it now counts as exited (`GetExitCodeProcess`). And a process of another user or an elevated one ("access denied") used to count as DEAD, which could hand a live owner's channel to a second session; it now counts as alive.
+- `golang.org/x/sys` (already in the build through `golang.org/x/term`) is now a direct dependency, for the macOS lookup; same version, no new code in the binary.
+- A new CI workflow runs the liveness and claim tests on Linux, macOS and Windows (until now the Windows and macOS code was only compiled). Checked locally on macOS and in a Linux container where the process is pid 1.
+
 ## [0.108.1] - 2026-11-18
 
 ### Fixed — Herdr: an agent that messages another one waits for the reply as a prompt

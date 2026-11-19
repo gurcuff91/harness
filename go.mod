@@ -10,6 +10,7 @@ require (
 	github.com/rivo/uniseg v0.4.7
 	github.com/robfig/cron/v3 v3.0.1
 	golang.design/x/clipboard v0.7.0
+	golang.org/x/sys v0.44.0
 	golang.org/x/term v0.43.0
 	modernc.org/sqlite v1.53.0
 )
@@ -23,7 +24,6 @@ require (
 	golang.org/x/image v0.6.0 // indirect
 	golang.org/x/mobile v0.0.0-20230301163155-e0f57694e12c // indirect
 	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/sys v0.44.0 // indirect
 	modernc.org/libc v1.73.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

@@ -19,10 +19,14 @@ const nsChannels = "channels"
 
 // ChannelClaim records who listens to one external conversation.
 type ChannelClaim struct {
-	Type      string `json:"type"`
-	ID        string `json:"id"`
-	Session   string `json:"session"`
-	PID       int    `json:"pid"`
+	Type    string `json:"type"`
+	ID      string `json:"id"`
+	Session string `json:"session"`
+	PID     int    `json:"pid"`
+	// Started marks when the owner process started (opaque, OS-specific), so a
+	// later process that reuses the pid is not mistaken for the owner. Empty
+	// in claims written before it existed, or where the OS cannot tell.
+	Started   string `json:"started,omitempty"`
 	CWD       string `json:"cwd,omitempty"`
 	ClaimedAt string `json:"claimed_at"`
 }
@@ -31,9 +35,9 @@ type ChannelClaim struct {
 // owner holds it. It returns that owner (and claims nothing) when the
 // conversation is taken. A claim is held by its (Session, PID) pair: the same
 // pair claiming again succeeds (idempotent); any other pair is a conflict while
-// alive(owner.PID) is true. A claim whose process is gone is taken over.
-// Atomic across processes (SettingsStore.SwapValue).
-func (m *SettingsManager) ClaimChannel(c ChannelClaim, alive func(pid int) bool) (owner *ChannelClaim, err error) {
+// alive(owner) is true. A claim whose process is gone is taken over. Atomic
+// across processes (SettingsStore.SwapValue).
+func (m *SettingsManager) ClaimChannel(c ChannelClaim, alive func(owner ChannelClaim) bool) (owner *ChannelClaim, err error) {
 	if c.Type == "" || c.ID == "" || c.Session == "" {
 		return nil, fmt.Errorf("config: channel claim needs a type, an id and a session")
 	}
@@ -50,7 +54,7 @@ func (m *SettingsManager) ClaimChannel(c ChannelClaim, alive func(pid int) bool)
 			var cur ChannelClaim
 			if json.Unmarshal(raw, &cur) == nil && cur.Session != "" {
 				same := cur.Session == c.Session && cur.PID == c.PID
-				if !same && alive(cur.PID) {
+				if !same && alive(cur) {
 					owner = &cur
 					return nil, false, nil
 				}

@@ -12,8 +12,8 @@ func channelsManager(t *testing.T) *SettingsManager {
 	return NewSettingsManager(configstore.NewInMemoryStore())
 }
 
-func alwaysAlive(int) bool { return true }
-func neverAlive(int) bool  { return false }
+func alwaysAlive(ChannelClaim) bool { return true }
+func neverAlive(ChannelClaim) bool  { return false }
 
 func TestClaimChannelIsExclusiveWhileTheOwnerLives(t *testing.T) {
 	m := channelsManager(t)

@@ -264,7 +264,7 @@ func TestAClaimFromAnotherProcess(t *testing.T) {
 	ch := newFakeChannel("fake")
 	a, model, _ := channelAgent(t, ch)
 	sm := config.GetSettingsManager()
-	alive := func(int) bool { return true }
+	alive := func(config.ChannelClaim) bool { return true }
 	_, _ = sm.ClaimChannel(config.ChannelClaim{Type: "fake", ID: "C1", Session: "elsewhere", PID: 1, CWD: "/other"}, alive) // pid 1 always exists
 	_, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
 	if !errors.Is(err, ErrChannelTaken) || !strings.Contains(err.Error(), "/other") {
@@ -300,7 +300,7 @@ func TestAFailedOpenLeavesNothing(t *testing.T) {
 				tc.mut(ch)
 			}
 			a, model, st := channelAgent(t, ch)
-			_, _ = config.GetSettingsManager().ClaimChannel(config.ChannelClaim{Type: "fake", ID: "HELD", Session: "x", PID: 1}, func(int) bool { return true })
+			_, _ = config.GetSettingsManager().ClaimChannel(config.ChannelClaim{Type: "fake", ID: "HELD", Session: "x", PID: 1}, func(config.ChannelClaim) bool { return true })
 			_, err := a.NewSession(t.TempDir(), model, WithSessionChannels(tc.req...))
 			if err == nil {
 				t.Fatal("open succeeded")

@@ -134,8 +134,8 @@ func (a *Agent) prepareChannels(sessionID, cwd string, reqs []types.InputChannel
 			continue // the same conversation asked twice (e.g. by id and by name)
 		}
 		owner, err := config.GetSettingsManager().ClaimChannel(config.ChannelClaim{
-			Type: typ, ID: id, Session: sessionID, PID: channelPID, CWD: cwd,
-		}, processAlive)
+			Type: typ, ID: id, Session: sessionID, PID: channelPID, Started: ownStart, CWD: cwd,
+		}, func(o config.ChannelClaim) bool { return ownerAlive(o.PID, o.Started, lookupProc) })
 		if err != nil {
 			sc.release()
 			return nil, nil, nil, fmt.Errorf("claim %s: %w", origin, err)
