@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.111.3] - 2026-11-19
+
+### Changed — an image sent on Slack is also kept as a file
+An image attached to a Slack message was only shown to the model as an image of that message: it existed nowhere as a file, so the model could not upload it, attach it to anything, hand it to another agent or look at it again later (an older turn's images are not sent again). Seen in production: an agent could not attach a screenshot it had just been sent. Now the image is still shown in the message, AND saved like any other attachment, listed in the block as `<slack-attach name="shot.png" path="/tmp/…-shot.png" image="true"/>`; the `## Slack` section says what the path is for. The image is downloaded once; a program disguised as an image is still never written to disk.
+
 ## [0.111.2] - 2026-11-19
 
 ### Fixed — a Slack reply is no longer posted twice

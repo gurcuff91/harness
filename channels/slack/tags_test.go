@@ -10,11 +10,13 @@ func TestBuildPrompt(t *testing.T) {
 		{Name: "a b.txt", Path: "/tmp/a b.txt"},
 		{Name: `q"x.docx`, Path: `/tmp/q"x.docx`},
 		{Name: "big.mov", Skipped: "too large (over 50 MB)"},
+		{Name: "shot.png", Path: "/tmp/shot.png", Image: true},
 	})
 	want := "<slack user=\"U1\" channel=\"D9\">\nread this\n" +
 		"<slack-attach name=\"a b.txt\" path=\"/tmp/a b.txt\"/>\n" +
 		"<slack-attach name=\"q&#34;x.docx\" path=\"/tmp/q&#34;x.docx\"/>\n" +
-		"<slack-attach name=\"big.mov\" skipped=\"too large (over 50 MB)\"/>\n</slack>"
+		"<slack-attach name=\"big.mov\" skipped=\"too large (over 50 MB)\"/>\n" +
+		"<slack-attach name=\"shot.png\" path=\"/tmp/shot.png\" image=\"true\"/>\n</slack>"
 	if got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}

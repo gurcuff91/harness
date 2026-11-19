@@ -21,6 +21,9 @@ type attachment struct {
 	Name    string
 	Path    string
 	Skipped string
+	// Image: the file is also in the message as an image (the model sees it
+	// there); Path is where it was saved, for when the file itself is needed.
+	Image bool
 }
 
 // fetchFiles brings in the files of an incoming message: images become prompt
@@ -68,6 +71,12 @@ func fetchFiles(ctx context.Context, bot *Bot, files []SlackFile) (images []type
 				}
 			}
 			images = append(images, types.ImageData{MimeType: mime, Base64: base64.StdEncoding.EncodeToString(data)})
+			// Saved too: the image in the message is seen this turn only (older
+			// turns' images are stripped from later requests), and it is not a
+			// file the model can upload, attach or hand on.
+			if p, err := writeTemp(file, data); err == nil {
+				atts = append(atts, attachment{Name: name, Path: p, Image: true})
+			}
 			continue
 		}
 		p, err := downloadToTemp(ctx, bot, file)
@@ -195,7 +204,12 @@ func downloadToTemp(ctx context.Context, bot *Bot, f SlackFile) (string, error) 
 	if err != nil {
 		return "", err
 	}
+	return writeTemp(f, data)
+}
 
+// writeTemp saves data (a downloaded file) at a fresh temp path that ends with
+// the file's own name. A native program is never written.
+func writeTemp(f SlackFile, data []byte) (string, error) {
 	name := filepath.Base(f.Name)
 	if name == "" || name == "." || name == "/" {
 		name = f.ID

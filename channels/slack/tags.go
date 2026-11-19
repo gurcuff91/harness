@@ -11,12 +11,13 @@ import (
 // Inbound — every prompt is wrapped in ONE block naming who wrote and where
 // (channel is always present, DMs included, since a session may listen to
 // several conversations), with the files the person attached inside it (any
-// kind; images travel as prompt images instead). A file that was not brought
-// in says so, so the model can tell the person:
+// kind; an image ALSO travels as a prompt image, and is marked image="true").
+// A file that was not brought in says so, so the model can tell the person:
 //
 //	<slack user="U0123" channel="C0456">
 //	the message
 //	<slack-attach name="report.docx" path="/tmp/123-report.docx"/>
+//	<slack-attach name="shot.png" path="/tmp/124-shot.png" image="true"/>
 //	<slack-attach name="demo.mov" skipped="too large (over 50 MB)"/>
 //	</slack>
 //
@@ -46,6 +47,9 @@ func buildPrompt(userID, channelID, text string, atts []attachment) string {
 		if a.Path != "" {
 			b.WriteString(`" path="`)
 			b.WriteString(attr(a.Path))
+			if a.Image {
+				b.WriteString(`" image="true`)
+			}
 		} else {
 			b.WriteString(`" skipped="`)
 			b.WriteString(attr(a.Skipped))
