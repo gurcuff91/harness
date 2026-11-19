@@ -25,6 +25,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Clipboard headers (Linux cgo)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libx11-dev
       - name: Build
         run: go build ./...
       - name: Process liveness and channel claims

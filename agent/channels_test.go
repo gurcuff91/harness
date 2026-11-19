@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -265,12 +266,15 @@ func TestAClaimFromAnotherProcess(t *testing.T) {
 	a, model, _ := channelAgent(t, ch)
 	sm := config.GetSettingsManager()
 	alive := func(config.ChannelClaim) bool { return true }
-	_, _ = sm.ClaimChannel(config.ChannelClaim{Type: "fake", ID: "C1", Session: "elsewhere", PID: 1, CWD: "/other"}, alive) // pid 1 always exists
+	// The test's parent (go test) is a live process of this user on every OS;
+	// pid 1 does not exist on Windows.
+	other := os.Getppid()
+	_, _ = sm.ClaimChannel(config.ChannelClaim{Type: "fake", ID: "C1", Session: "elsewhere", PID: other, CWD: "/other"}, alive)
 	_, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
 	if !errors.Is(err, ErrChannelTaken) || !strings.Contains(err.Error(), "/other") {
 		t.Fatalf("live foreign claim: err=%v", err)
 	}
-	_ = sm.ReleaseChannel("fake", "C1", "elsewhere", 1)
+	_ = sm.ReleaseChannel("fake", "C1", "elsewhere", other)
 	_, _ = sm.ClaimChannel(config.ChannelClaim{Type: "fake", ID: "C1", Session: "dead", PID: 999999999}, alive)
 	s, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
 	if err != nil {
@@ -300,7 +304,7 @@ func TestAFailedOpenLeavesNothing(t *testing.T) {
 				tc.mut(ch)
 			}
 			a, model, st := channelAgent(t, ch)
-			_, _ = config.GetSettingsManager().ClaimChannel(config.ChannelClaim{Type: "fake", ID: "HELD", Session: "x", PID: 1}, func(config.ChannelClaim) bool { return true })
+			_, _ = config.GetSettingsManager().ClaimChannel(config.ChannelClaim{Type: "fake", ID: "HELD", Session: "x", PID: os.Getppid()}, func(config.ChannelClaim) bool { return true })
 			_, err := a.NewSession(t.TempDir(), model, WithSessionChannels(tc.req...))
 			if err == nil {
 				t.Fatal("open succeeded")
