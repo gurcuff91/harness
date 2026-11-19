@@ -207,7 +207,7 @@ func (t *TUI) completeOAuthConnect(provider, verifierCode, code string) {
 // received_prompt / follow_up_start events.
 const (
 	scheduleIcon = "◷"
-	outsideIcon  = "⇄" // a prompt from outside: a colleague, Herdr, a channel, …
+	outsideIcon  = "⇌" // a prompt from outside: a colleague, Herdr, a channel, …
 	userIcon     = "❯"
 )
 

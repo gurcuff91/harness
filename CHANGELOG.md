@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.109.3] - 2026-11-19
+
+### Changed — tool and prompt icons no longer share a symbol
+- A prompt from outside (a colleague, Herdr, a channel, …) is now `⇌` instead of `⇄`.
+- The colleague tools (`ColleagueList`, `ColleagueAsk`) are now `⚇` instead of `⇄`: a tool call and a prompt from outside were drawn with the same icon.
+- The tools an input channel brings (`SlackPost`, `SlackListChannels`, `SlackListUsers`, `SlackMessages`) are now `⌁` instead of `◈`, the generic icon of MCP and unknown tools.
+
+### Changed — a channel's tools must carry its type in their name
+Binding a session to a channel now fails (`invalid channel`, HTTP 400) unless every tool the channel brings starts with its type, first letter upper-cased (`slack` → `Slack…`). The Slack channel already complies; this makes the prefix something a frontend can rely on (it is how the TUI picks the `⌁` icon) instead of a naming habit. It matters only to an SDK implementation of `agent.Channel`.
+
 ## [0.109.2] - 2026-11-19
 
 ### Changed — the status line shows channels as `[slack: #channel, @person]`, without an icon

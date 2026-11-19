@@ -215,14 +215,31 @@ func toolStyle(name string) (colorFn func(string) string, icon string) {
 	case "Schedule", "ScheduleList", "ScheduleDelete":
 		return ansi.Accent, "◷" // clock: cron-scheduled prompt management
 	case "ColleagueList", "ColleagueAsk":
-		return ansi.Accent, "⇄" // back-and-forth: request/response with another agent
+		return ansi.Accent, "⚇" // two figures: another agent like this one
 	case "WebSearch":
 		return ansi.Accent, "◌" // diana/objetivo (U+25CC): live web search
 	case "SessionInfo":
 		return ansi.Accent, "ℹ" // info symbol (U+2139): snapshot of session identity/config, not an action
-	default:
-		return ansi.Accent, "◈" // diamond: generic MCP/external tool
 	}
+	if isChannelTool(name) {
+		return ansi.Accent, "⌁" // a connection: a tool an input channel brought (SlackPost, …)
+	}
+	return ansi.Accent, "◈" // diamond: generic MCP/external tool
+}
+
+// channelToolPrefixes are the tool-name prefixes of the input channels this
+// TUI knows: a channel's tools are all named after its type (enforced when a
+// session binds the channel: agent.prepareChannels), so the prefix is a fact,
+// not a guess. Add a prefix with each new channel type.
+var channelToolPrefixes = []string{"Slack"}
+
+func isChannelTool(name string) bool {
+	for _, p := range channelToolPrefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // mcpDisplayName converts an MCP tool name from its internal wire format

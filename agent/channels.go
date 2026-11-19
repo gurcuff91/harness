@@ -46,7 +46,9 @@ type Channel interface {
 	// Directive is the system-prompt section for a session bound to ids.
 	Directive(ids []string) string
 	// Tools are added to a session bound to at least one conversation of this
-	// channel.
+	// channel. Each one's name must start with the channel's type, first
+	// letter upper-cased (Type "slack" → "SlackPost"): the open fails
+	// otherwise.
 	Tools() []tools.Tool
 }
 
@@ -197,7 +199,13 @@ func (a *Agent) prepareChannels(sessionID, cwd string, reqs []types.InputChannel
 		if d := b.ch.Directive(ids); d != "" {
 			directives = append(directives, d)
 		}
+		prefix := channelToolPrefix(typ)
 		for _, t := range b.ch.Tools() {
+			if !strings.HasPrefix(t.Def.Name, prefix) {
+				sc.release()
+				return nil, nil, nil, fmt.Errorf("%w: the %s channel's tool %q must be named %s… (a channel's tools carry its type, so a frontend can tell them apart)",
+					ErrChannelInvalid, typ, t.Def.Name, prefix)
+			}
 			if taken[t.Def.Name] {
 				sc.release()
 				return nil, nil, nil, fmt.Errorf("%w: the %s channel's tool %s is already in the session (a profile or an agent tool provides it)",
@@ -301,4 +309,14 @@ func (a *Agent) channelOf(typ string) Channel {
 		}
 	}
 	return nil
+}
+
+// channelToolPrefix is the prefix every tool of a channel of type typ must
+// carry: the type with its first letter upper-cased ("slack" → "Slack").
+// Enforced when a session binds the channel, so a frontend can rely on it.
+func channelToolPrefix(typ string) string {
+	if typ == "" {
+		return ""
+	}
+	return strings.ToUpper(typ[:1]) + typ[1:]
 }

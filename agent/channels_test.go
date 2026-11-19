@@ -291,12 +291,12 @@ func TestAFailedOpenLeavesNothing(t *testing.T) {
 		req  []types.InputChannel
 		want error
 	}{
-		"unknown type":    {nil, []types.InputChannel{{Type: "nope", Ref: "x"}}, ErrChannelUnavailable},
-		"empty ref":       {nil, []types.InputChannel{{Type: "fake", Ref: " "}}, ErrChannelInvalid},
-		"resolve fails":   {func(f *fakeChannel) { f.resolveErr = errors.New("no such channel") }, []types.InputChannel{{Type: "fake", Ref: "x"}}, ErrChannelInvalid},
-		"listen fails":    {func(f *fakeChannel) { f.listenErr = errors.New("socket down") }, []types.InputChannel{{Type: "fake", Ref: "a"}, {Type: "fake", Ref: "b"}}, nil},
-		"tool name clash": {func(f *fakeChannel) { f.toolName = "Bash" }, []types.InputChannel{{Type: "fake", Ref: "a"}}, ErrChannelInvalid},
-		"second is taken": {nil, []types.InputChannel{{Type: "fake", Ref: "a"}, {Type: "fake", Ref: "held"}}, ErrChannelTaken},
+		"unknown type":                      {nil, []types.InputChannel{{Type: "nope", Ref: "x"}}, ErrChannelUnavailable},
+		"empty ref":                         {nil, []types.InputChannel{{Type: "fake", Ref: " "}}, ErrChannelInvalid},
+		"resolve fails":                     {func(f *fakeChannel) { f.resolveErr = errors.New("no such channel") }, []types.InputChannel{{Type: "fake", Ref: "x"}}, ErrChannelInvalid},
+		"listen fails":                      {func(f *fakeChannel) { f.listenErr = errors.New("socket down") }, []types.InputChannel{{Type: "fake", Ref: "a"}, {Type: "fake", Ref: "b"}}, nil},
+		"tool without the channel's prefix": {func(f *fakeChannel) { f.toolName = "PostMessage" }, []types.InputChannel{{Type: "fake", Ref: "a"}}, ErrChannelInvalid},
+		"second is taken":                   {nil, []types.InputChannel{{Type: "fake", Ref: "a"}, {Type: "fake", Ref: "held"}}, ErrChannelTaken},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -452,5 +452,33 @@ func TestReconfigureKeepsTheChannel(t *testing.T) {
 	}
 	if !found {
 		t.Error("reconfigure dropped the channel's tools")
+	}
+}
+
+// A channel tool whose name another source already has (here an agent tool
+// with the channel's own prefix) fails the open instead of shadowing it.
+func TestAChannelToolNameClashFailsTheOpen(t *testing.T) {
+	ch := newFakeChannel("fake")
+	withCleanProviderRegistry(t)
+	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
+	name := "clash-" + strings.NewReplacer("/", "-").Replace(t.Name())
+	var thinking string
+	providers.AddForTest(&echoProvider{fakeThinkingProbeProvider{name: name, lastThinking: &thinking}})
+	a := New(AgentOptions{Store: store.NewInMemoryStore(), Channels: []Channel{ch}, Tools: ch.Tools()})
+	defer a.Close()
+	_, err := a.NewSession(t.TempDir(), name+"/fake-model", WithSessionChannels(types.InputChannel{Type: "fake", Ref: "a"}))
+	if !errors.Is(err, ErrChannelInvalid) || !strings.Contains(err.Error(), "already in the session") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(config.GetSettingsManager().ChannelClaims()) != 0 {
+		t.Error("a claim was left behind")
+	}
+}
+
+func TestChannelToolPrefix(t *testing.T) {
+	for typ, want := range map[string]string{"slack": "Slack", "telegram": "Telegram", "x": "X", "": ""} {
+		if got := channelToolPrefix(typ); got != want {
+			t.Errorf("channelToolPrefix(%q) = %q, want %q", typ, got, want)
+		}
 	}
 }

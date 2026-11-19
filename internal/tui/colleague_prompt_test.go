@@ -160,3 +160,27 @@ func TestAHerdrPromptIsSentWithItsOrigin(t *testing.T) {
 		t.Errorf("stored origins = %v", origins)
 	}
 }
+
+// Tool icons that must stay distinct from the prompt icons: a colleague tool
+// is not a prompt from outside, and a channel's tools (named after its type)
+// have their own.
+func TestToolIconsForColleaguesAndChannels(t *testing.T) {
+	icon := func(n string) string { _, i := toolStyle(n); return i }
+	for name, want := range map[string]string{
+		"ColleagueList": "⚇", "ColleagueAsk": "⚇",
+		"SlackPost": "⌁", "SlackListChannels": "⌁", "SlackMessages": "⌁",
+		"mcp__x__Search": "◈", "Unknown": "◈", "Bash": "$",
+	} {
+		if got := icon(name); got != want {
+			t.Errorf("%s: %q, want %q", name, got, want)
+		}
+	}
+	for _, n := range []string{"ColleagueAsk", "SlackPost"} {
+		if i := icon(n); i == outsideIcon || i == userIcon || i == scheduleIcon {
+			t.Errorf("%s uses a prompt icon %q", n, i)
+		}
+	}
+	if outsideIcon != "⇌" {
+		t.Errorf("the outside-prompt icon is %q", outsideIcon)
+	}
+}
