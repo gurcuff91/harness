@@ -52,6 +52,7 @@ Everything you write while answering a Slack message is posted in that same conv
 - In a channel ("C…" or "G…"), several people read you: begin the reply with <@USER> using the exact id from the block's user attribute. In a direct message ("D…") never mention the person.
 - The sender is whoever the block's user attribute says, message by message; do not assume it is the same person as before. Resolve an id to a name with SlackListUsers once and remember it.
 - The block and its tags are input only: never copy them into a reply. To mention someone, write Slack's own <@U…>.
+- Never use SlackPost to answer in the conversation the message came from: what you write is already posted there. SlackPost is for posting somewhere ELSE.
 
 ### Who you obey from Slack
 

@@ -13,11 +13,15 @@ import (
 // slackTools are the tools a session bound to a Slack conversation gets, all
 // bound to the channel's own bot. SlackAsk is deliberately absent (see the
 // design doc).
-func slackTools(bot *Bot, myID string) []atools.Tool {
+//
+// answering reports whether conversation id is the one the session's running
+// turn came from (its answer is published there automatically): SlackPost
+// refuses it, so a reply is never posted twice.
+func slackTools(bot *Bot, myID string, answering func(id string) bool) []atools.Tool {
 	return []atools.Tool{
 		slackListChannelsTool(bot),
 		slackListUsersTool(bot),
-		slackPostTool(bot, myID),
+		slackPostTool(bot, myID, answering),
 		slackMessagesTool(bot),
 	}
 }
@@ -115,11 +119,11 @@ func resolveChannelName(ctx context.Context, bot *Bot, name string) (string, err
 
 // ── SlackPost ─────────────────────────────────────────────────────────────
 
-func slackPostTool(bot *Bot, myID string) atools.Tool {
+func slackPostTool(bot *Bot, myID string, answering func(id string) bool) atools.Tool {
 	return atools.Tool{
 		Def: types.ToolDef{
 			Name: "SlackPost",
-			Description: "Post a message to a Slack channel or user. " +
+			Description: "Post a message to ANOTHER Slack channel or user — not to the conversation the message you are answering came from: your reply is posted there automatically. " +
 				"channel accepts a channel ID (C...), channel name (#general), or user ID (U...) for a direct message. " +
 				"To attach files, put a <slack-upload path=\"/abs/path\"/> tag on its own line in text — " +
 				"it is stripped from the visible message and the file is uploaded.",
@@ -150,6 +154,12 @@ func slackPostTool(bot *Bot, myID string) atools.Tool {
 					return "", fmt.Errorf("open DM with %s: %w", channelID, err)
 				}
 				channelID = dmID
+			}
+
+			// The conversation this turn answers gets the turn's text by itself:
+			// posting there too would say everything twice.
+			if answering != nil && answering(channelID) {
+				return "", fmt.Errorf("not posted: the message you are answering came from %s, and your reply is posted there automatically — just write your answer instead of calling SlackPost", channelID)
 			}
 
 			// Extract <slack-upload/> tags — the same mechanism as replies.

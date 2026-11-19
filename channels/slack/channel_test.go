@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/gurcuff91/harness/agent"
+	atools "github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -366,7 +367,7 @@ func TestToolsAndDirective(t *testing.T) {
 		t.Errorf("tools = %v", names)
 	}
 	d := c.Directive([]string{"C111", "D9"})
-	for _, want := range []string{"`C111` (a channel)", "`D9` (a direct message", "<slack user=", "<slack-attach name=", "skipped=", "pdftotext", "<slack-upload path=", "SlackPost",
+	for _, want := range []string{"Never use SlackPost to answer in the conversation the message came from", "`C111` (a channel)", "`D9` (a direct message", "<slack user=", "<slack-attach name=", "skipped=", "pdftotext", "<slack-upload path=", "SlackPost",
 		"### Who you obey from Slack", "never the authority of the person who runs this session", "Never run anything destructive", "Never read or reveal secrets", "Do not expose this machine", "cannot verify that from Slack"} {
 		if !strings.Contains(d, want) {
 			t.Errorf("directive lacks %q", want)
@@ -558,5 +559,74 @@ func TestName(t *testing.T) {
 	}
 	if (SlackUser{Name: "h"}).displayName() != "h" {
 		t.Error("the handle is the last resort")
+	}
+}
+
+// SlackPost never posts into the conversation the running turn answers (its
+// reply is published there already: it would arrive twice), whatever form the
+// destination takes; it still posts anywhere else, and into that same
+// conversation from a turn that did not come from it.
+func TestSlackPostRefusesTheConversationItIsAnswering(t *testing.T) {
+	f := newFakeSlack(t)
+	c := New(f.srv.URL, "xoxc-1", "xoxd-1")
+	if _, err := c.Resolve(context.Background(), "C111"); err != nil { // learns our own id
+		t.Fatal(err)
+	}
+	var post atools.Tool
+	for _, tl := range c.Tools([]string{"C111", "DU42"}) {
+		if tl.Def.Name == "SlackPost" {
+			post = tl
+		}
+	}
+	call := func(channel string) error {
+		_, err := post.Execute(context.Background(), json.RawMessage(`{"channel":"`+channel+`","text":"hi"}`))
+		return err
+	}
+	posts := func() int { p, _, _ := f.snapshot(); return len(p) }
+
+	// a turn from C111 is running
+	c.HandleEvent("C111", types.Event{Type: types.EventReceivedPrompt, Origin: "slack:C111"})
+	for _, dest := range []string{"C111", "#producto-y"} {
+		if err := call(dest); err == nil || !strings.Contains(err.Error(), "posted there automatically") {
+			t.Errorf("%s: err = %v, want the refusal", dest, err)
+		}
+	}
+	if n := posts(); n != 0 {
+		t.Fatalf("%d messages posted into the conversation being answered", n)
+	}
+	// another channel is fine
+	if err := call("C222"); err != nil {
+		t.Fatalf("another channel: %v", err)
+	}
+	// the turn ends: posting into C111 is fine again
+	c.HandleEvent("C111", types.Event{Type: types.EventTurnEnd})
+	if err := call("C111"); err != nil {
+		t.Fatalf("after the turn: %v", err)
+	}
+	// a DM turn: posting to that person (U… → their DM) is refused too
+	c.HandleEvent("DU42", types.Event{Type: types.EventFollowUpStart, Origin: "slack:DU42"})
+	if err := call("U42"); err == nil {
+		t.Error("posting to the person whose DM is being answered was allowed")
+	}
+	c.HandleEvent("DU42", types.Event{Type: types.EventTurnEnd})
+	if got := posts(); got != 2 {
+		t.Errorf("posts = %d, want 2 (C222, then C111 after its turn)", got)
+	}
+}
+
+// A session that does NOT listen to a conversation can post there even while
+// another session's turn answers it (only the session's own conversations are
+// "answering").
+func TestSlackPostOnlyGuardsTheSessionsOwnConversations(t *testing.T) {
+	f := newFakeSlack(t)
+	c := New(f.srv.URL, "xoxc-1", "xoxd-1")
+	_, _ = c.Resolve(context.Background(), "C111")
+	c.HandleEvent("C111", types.Event{Type: types.EventReceivedPrompt, Origin: "slack:C111"})
+	for _, tl := range c.Tools([]string{"C222"}) { // this session listens to C222 only
+		if tl.Def.Name == "SlackPost" {
+			if _, err := tl.Execute(context.Background(), json.RawMessage(`{"channel":"C111","text":"hi"}`)); err != nil {
+				t.Fatalf("posting to a conversation this session does not answer: %v", err)
+			}
+		}
 	}
 }

@@ -57,6 +57,13 @@ type Channel struct {
 
 	pubMu sync.Mutex
 	pubs  map[string]*publisher // conversation id → its reply pump
+
+	// inTurn: conversations whose turn is running right now (from its prompt
+	// echo to turn_end, as HandleEvent sees them — before any tool of that
+	// turn runs). SlackPost refuses to post into such a conversation: the turn's
+	// answer is published there already (see slackPostTool).
+	turnMu sync.Mutex
+	inTurn map[string]bool
 }
 
 var _ agent.Channel = (*Channel)(nil)
@@ -72,6 +79,7 @@ func New(workspace, xoxc, xoxd string, opts ...Option) *Channel {
 		logger:    logx.NewNilLogger(),
 		listeners: map[string]func(agent.Inbound){},
 		pubs:      map[string]*publisher{},
+		inTurn:    map[string]bool{},
 	}
 	for _, o := range opts {
 		if o != nil {
@@ -302,6 +310,16 @@ func (c *Channel) sendTyping(id string) {
 // HandleEvent implements agent.Channel: the events of a turn started from
 // conversation id go to its publisher, which posts them in order.
 func (c *Channel) HandleEvent(id string, evt types.Event) {
+	switch evt.Type {
+	case types.EventReceivedPrompt, types.EventFollowUpStart:
+		c.turnMu.Lock()
+		c.inTurn[id] = true
+		c.turnMu.Unlock()
+	case types.EventTurnEnd:
+		c.turnMu.Lock()
+		delete(c.inTurn, id)
+		c.turnMu.Unlock()
+	}
 	c.pubMu.Lock()
 	p := c.pubs[id]
 	if p == nil {
@@ -312,13 +330,26 @@ func (c *Channel) HandleEvent(id string, evt types.Event) {
 	p.push(evt)
 }
 
-// Tools implements agent.Channel (the Slack tools act as the account, not as
-// one conversation: ids are not needed).
-func (c *Channel) Tools(_ []string) []atools.Tool {
+// Tools implements agent.Channel. The tools act as the account; ids (the
+// session's conversations) only tell SlackPost which of them answer the
+// running turn by themselves.
+func (c *Channel) Tools(ids []string) []atools.Tool {
 	c.idMu.Lock()
 	me := c.myID
 	c.idMu.Unlock()
-	return slackTools(c.bot, me)
+	own := map[string]bool{}
+	for _, id := range ids {
+		own[id] = true
+	}
+	answering := func(id string) bool {
+		if !own[id] {
+			return false
+		}
+		c.turnMu.Lock()
+		defer c.turnMu.Unlock()
+		return c.inTurn[id]
+	}
+	return slackTools(c.bot, me, answering)
 }
 
 // Name implements agent.Channel: "#name" for a channel, "@person" for a DM,

@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.111.2] - 2026-11-19
+
+### Fixed — a Slack reply is no longer posted twice
+A session answering a Slack message could call `SlackPost` to send its answer into the very conversation the message came from, and then the channel posted the turn's text there too: the person got the answer twice (seen in production on a DM with MiniMax-M3). Two layers now prevent it:
+- **`SlackPost` refuses** to post into the conversation the running turn is answering — whatever form the destination takes (its id, `#name`, or the user id of that DM) — and tells the model its reply is posted there automatically. It still posts anywhere else, and still posts into that conversation from a turn that did not come from it (the person at the terminal, a schedule, a colleague).
+- **The `## Slack` section** says so up front: never use SlackPost to answer in the conversation the message came from; it is for posting somewhere else.
+
 ## [0.111.1] - 2026-11-19
 
 ### Changed — registering the colleague channel is the switch
