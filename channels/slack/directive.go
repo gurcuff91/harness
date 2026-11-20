@@ -78,4 +78,4 @@ The file must already exist. It is removed from the posted text and uploaded; im
 - **SlackListChannels** — the channels and their ids (to resolve #name).
 - **SlackListUsers** — the people and their ids (to resolve a name, or to mention someone).
 - **SlackPost** — post to a channel (id or #name) or to a person (user id, as a direct message). Fire-and-forget; attach files with <slack-upload/> tags in its text.
-- **SlackMessages** — read a channel's recent messages, to catch up on what was said without mentioning you.`
+- **SlackMessages** — read a channel's recent messages, to catch up on what was said without mentioning you. Its files are listed by name; pass files: true to download them (each gets a path, images are shown to you). A Slack file URL cannot be opened any other way.`

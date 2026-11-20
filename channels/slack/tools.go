@@ -193,42 +193,94 @@ func slackPostTool(bot *Bot, myID string, answering func(id string) bool) atools
 
 // ── SlackMessages ─────────────────────────────────────────────────────────
 
+// maxHistoryImages caps the images SlackMessages hands to the model as images
+// in one call (every downloaded file still gets its path).
+const maxHistoryImages = 8
+
+// historyFile is an attachment as SlackMessages reports it: never the private
+// URL (the model cannot open it without the session — it only invites a
+// failing curl), but the downloaded path when files were asked for.
+type historyFile struct {
+	Name    string `json:"name"`
+	Size    int64  `json:"size,omitempty"`
+	Path    string `json:"path,omitempty"`
+	Image   bool   `json:"image,omitempty"`
+	Skipped string `json:"skipped,omitempty"`
+}
+
+type historyMessage struct {
+	User    string        `json:"user,omitempty"`
+	Text    string        `json:"text"`
+	TS      string        `json:"ts"`
+	Subtype string        `json:"subtype,omitempty"`
+	BotID   string        `json:"bot_id,omitempty"`
+	Files   []historyFile `json:"files,omitempty"`
+}
+
 func slackMessagesTool(bot *Bot) atools.Tool {
 	return atools.Tool{
 		Def: types.ToolDef{
-			Name:        "SlackMessages",
-			Description: "Read recent messages posted in a Slack channel, as JSON — useful to catch up on what the group has been discussing beyond messages sent directly to you. Only meaningful for channels (multiple participants), not DMs (a DM is already the 1:1 conversation you're part of). Each entry has the sender's user ID (resolve names with SlackListUsers), text, timestamp, subtype (empty for a normal message; otherwise an event like channel_join/channel_leave/channel_topic), and any attached files with their URLs.",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{"channel":{"type":"string","description":"Channel ID (C...) or channel name (#general)"},"limit":{"type":"integer","description":"Maximum messages to return (default 50, max 200)","minimum":1,"maximum":200}},"required":["channel"]}`),
+			Name: "SlackMessages",
+			Description: "Read recent messages posted in a Slack channel, as JSON — useful to catch up on what the group has been discussing beyond messages sent directly to you. " +
+				"Each entry has the sender's user ID (resolve names with SlackListUsers), text, timestamp, subtype (empty for a normal message; otherwise an event like channel_join/channel_leave/channel_topic), and its attached files by name and size. " +
+				"Pass files: true to also download those files: each gets a local path (read it with the tool its format needs), and images are shown to you as well (up to 8 per call). " +
+				"Files are private to the Slack session: a file URL cannot be fetched any other way.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"channel":{"type":"string","description":"Channel ID (C...), DM ID (D...) or channel name (#general)"},"limit":{"type":"integer","description":"Maximum messages to return (default 50, max 200)","minimum":1,"maximum":200},"files":{"type":"boolean","description":"Download the messages' attachments (default false): each gets a local path, images are also shown to you"}},"required":["channel"]}`),
 		},
-		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
+		ExecuteRich: func(ctx context.Context, input json.RawMessage) (string, []types.ImageData, error) {
 			var args struct {
 				Channel string `json:"channel"`
 				Limit   int    `json:"limit"`
+				Files   bool   `json:"files"`
 			}
 			if err := json.Unmarshal(input, &args); err != nil {
-				return "", fmt.Errorf("invalid arguments: %w", err)
+				return "", nil, fmt.Errorf("invalid arguments: %w", err)
 			}
 			if args.Channel == "" {
-				return "", fmt.Errorf("channel is required")
+				return "", nil, fmt.Errorf("channel is required")
 			}
-
 			channelID, err := resolveChannelID(ctx, bot, args.Channel)
 			if err != nil {
-				return "", err
+				return "", nil, err
 			}
-
 			messages, err := bot.GetChannelHistory(ctx, channelID, args.Limit)
 			if err != nil {
-				return "", err
+				return "", nil, err
 			}
 			if len(messages) == 0 {
-				return "No messages found in this channel.", nil
+				return "No messages found in this channel.", nil, nil
 			}
-			b, err := json.MarshalIndent(messages, "", "  ")
+			var images []types.ImageData
+			out := make([]historyMessage, 0, len(messages))
+			for _, m := range messages {
+				hm := historyMessage{User: m.User, Text: m.Text, TS: m.TS, Subtype: m.Subtype, BotID: m.BotID}
+				for _, f := range m.Files {
+					hf := historyFile{Name: f.Name, Size: f.Size}
+					if hf.Name == "" {
+						hf.Name = f.ID
+					}
+					if args.Files {
+						imgs, atts := fetchFiles(ctx, bot, []SlackFile{f})
+						if len(atts) > 0 {
+							hf.Path, hf.Skipped, hf.Image = atts[0].Path, atts[0].Skipped, atts[0].Image
+						}
+						if len(imgs) > 0 && len(images) < maxHistoryImages {
+							images = append(images, imgs...)
+						}
+					}
+					hm.Files = append(hm.Files, hf)
+				}
+				out = append(out, hm)
+			}
+			b, err := json.MarshalIndent(out, "", "  ")
 			if err != nil {
-				return "", fmt.Errorf("format messages: %w", err)
+				return "", nil, fmt.Errorf("format messages: %w", err)
 			}
-			return string(b), nil
+			text := string(b)
+			if len(images) > 0 {
+				text += fmt.Sprintf("\n\n%d image(s) attached, in message order.", len(images))
+			}
+			return text, images, nil
 		},
 	}
 }

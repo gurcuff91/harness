@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.111.4] - 2026-11-20
+
+### Added — `SlackMessages` can bring the files of earlier messages
+`SlackMessages` listed each message's attachments with their private Slack URL, which only the Slack session can open: in production an agent asked to read the images posted earlier in a channel tried `curl` on that URL, got Slack's login page, and had to ask for the images again. Now:
+- By default the attachments are listed by **name and size only** — no URL that invites a failing download.
+- With **`files: true`** they are downloaded through the session, the same way as the files of a message that mentions the agent: each gets a local `path` (50 MB cap, programs never written), and images are also **shown to the model** as images of the tool's result (up to 8 per call; every file still gets its path).
+The `## Slack` section mentions it.
+
 ## [0.111.3] - 2026-11-19
 
 ### Changed — an image sent on Slack is also kept as a file
