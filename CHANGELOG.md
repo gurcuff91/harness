@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.111.5] - 2026-11-20
+
+### Changed — `SlackMessages` says which images it did not show
+With `files: true`, at most 8 images come back as images in one call; the rest were downloaded too, but the model was not told which ones it had not seen. Each image shown is now marked `"shown": true`, and when some were left out the result says so: "8 of 10 images shown, in message order (marked "shown"); the other 2 are only at their path — open them with Read."
+
 ## [0.111.4] - 2026-11-20
 
 ### Added — `SlackMessages` can bring the files of earlier messages

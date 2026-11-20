@@ -201,10 +201,13 @@ const maxHistoryImages = 8
 // URL (the model cannot open it without the session — it only invites a
 // failing curl), but the downloaded path when files were asked for.
 type historyFile struct {
-	Name    string `json:"name"`
-	Size    int64  `json:"size,omitempty"`
-	Path    string `json:"path,omitempty"`
-	Image   bool   `json:"image,omitempty"`
+	Name  string `json:"name"`
+	Size  int64  `json:"size,omitempty"`
+	Path  string `json:"path,omitempty"`
+	Image bool   `json:"image,omitempty"`
+	// Shown: this image is among the ones returned with the result (the model
+	// sees it); an image without it is only at its path.
+	Shown   bool   `json:"shown,omitempty"`
 	Skipped string `json:"skipped,omitempty"`
 }
 
@@ -251,6 +254,7 @@ func slackMessagesTool(bot *Bot) atools.Tool {
 				return "No messages found in this channel.", nil, nil
 			}
 			var images []types.ImageData
+			totalImages := 0
 			out := make([]historyMessage, 0, len(messages))
 			for _, m := range messages {
 				hm := historyMessage{User: m.User, Text: m.Text, TS: m.TS, Subtype: m.Subtype, BotID: m.BotID}
@@ -264,8 +268,12 @@ func slackMessagesTool(bot *Bot) atools.Tool {
 						if len(atts) > 0 {
 							hf.Path, hf.Skipped, hf.Image = atts[0].Path, atts[0].Skipped, atts[0].Image
 						}
-						if len(imgs) > 0 && len(images) < maxHistoryImages {
-							images = append(images, imgs...)
+						if len(imgs) > 0 {
+							totalImages++
+							if len(images) < maxHistoryImages {
+								images = append(images, imgs...)
+								hf.Shown = true
+							}
 						}
 					}
 					hm.Files = append(hm.Files, hf)
@@ -277,8 +285,12 @@ func slackMessagesTool(bot *Bot) atools.Tool {
 				return "", nil, fmt.Errorf("format messages: %w", err)
 			}
 			text := string(b)
-			if len(images) > 0 {
-				text += fmt.Sprintf("\n\n%d image(s) attached, in message order.", len(images))
+			switch {
+			case totalImages > len(images):
+				text += fmt.Sprintf("\n\n%d of %d images shown, in message order (marked \"shown\"); the other %d are only at their path — open them with Read.",
+					len(images), totalImages, totalImages-len(images))
+			case len(images) > 0:
+				text += fmt.Sprintf("\n\n%d image(s) shown, in message order.", len(images))
 			}
 			return text, images, nil
 		},

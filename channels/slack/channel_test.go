@@ -690,7 +690,7 @@ func TestSlackMessagesFiles(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s: %v", hf.Name, err)
 			}
-			if hf.Name == "opts.png" && (!hf.Image || string(body) != string(png)) {
+			if hf.Name == "opts.png" && (!hf.Image || !hf.Shown || string(body) != string(png)) {
 				t.Errorf("image file = %+v", hf)
 			}
 			if hf.Name == "notes.txt" && (hf.Image || string(body) != "option A, option B") {
@@ -701,6 +701,9 @@ func TestSlackMessagesFiles(t *testing.T) {
 	}
 	if strings.Contains(out, "files/") {
 		t.Error("a private URL leaked with files: true")
+	}
+	if !strings.Contains(out, "1 image(s) shown") {
+		t.Errorf("summary missing: %s", out)
 	}
 }
 
@@ -729,6 +732,13 @@ func TestSlackMessagesCapsImages(t *testing.T) {
 		}
 		if n := strings.Count(out, `"path"`); n != maxHistoryImages+3 {
 			t.Errorf("%d paths, want every file (%d)", n, maxHistoryImages+3)
+		}
+		if n := strings.Count(out, `"shown": true`); n != maxHistoryImages {
+			t.Errorf("%d marked shown, want %d", n, maxHistoryImages)
+		}
+		want := fmt.Sprintf("%d of %d images shown", maxHistoryImages, maxHistoryImages+3)
+		if !strings.Contains(out, want) || !strings.Contains(out, "the other 3 are only at their path — open them with Read") {
+			t.Errorf("the result does not say which images were not shown:\n%s", out[len(out)-200:])
 		}
 	}
 }
