@@ -45,9 +45,10 @@ const oauthTokenURL = "https://platform.claude.com/v1/oauth/token"
 
 // oauthRefreshClient is used ONLY for the refresh request. It has a bounded
 // timeout so a refresh can never hang indefinitely — critical because the
-// refresh runs while holding the cross-process credentials lock, and an
-// unbounded hang there would let the stale-lock reclaim (see filelock.go) steal
-// the lock from this still-alive process, causing a double redemption. Distinct
+// refresh runs while holding the cross-process credentials lock, and every other
+// writer of credentials.json waits for it (filelock waits up to 2 minutes; an
+// older harness binary sharing the home reclaims a lock older than 45 s, which
+// would mean a double redemption). Distinct
 // from c.client (streaming, bounded by the provider transport's header/idle
 // timeouts) and from http.DefaultClient (0 = infinite, what this code used
 // before).

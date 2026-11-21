@@ -54,8 +54,8 @@ var codexVersion = envOrDefault("CODEX_CLI_VERSION", "0.144.0")
 
 // codexRefreshClient: bounded timeout, for the same reason claude-oauth's
 // refresh client is bounded — the refresh runs while holding the cross-
-// process credentials lock, and an unbounded hang there would let the
-// stale-lock reclaim steal the lock from this still-alive process.
+// process credentials lock, and every other writer of credentials.json waits
+// for it (see claude-oauth's oauthRefreshClient).
 var codexRefreshClient = llm.NewProviderClient(30 * time.Second)
 
 // ── CodexOAuth ───────────────────────────────────────────────────────────

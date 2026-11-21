@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.114.0] - 2026-11-21
+
+### Fixed — processes sharing `~/.harness` no longer fail with "filelock: timed out"
+Every write to `settings.json` and `credentials.json` takes a cross-process lock. It was a lock FILE created exclusively and polled every 20 ms for at most 2 seconds, which failed in two ways seen in production (two jade-kaiban processes starting together): a process writing in a burst kept winning the race and the waiter gave up after 2 s ("resume session: claim slack:…: filelock: timed out"), and a process killed while holding it left the file behind, blocking every write for 45 s. The lock is now the operating system's (flock on Unix, LockFileEx on Windows, on `settings.json.flock` / `credentials.json.flock`): the kernel releases it when its holder dies, SIGKILL included, waiters queue instead of polling, and they wait up to 2 minutes, enough for the longest legitimate hold (an OAuth token refresh). Older harness binaries sharing the same home stay safe: the old lock file is still taken too, and one orphaned by a new process is removed at once.
+
 ## [0.113.1] - 2026-11-21
 
 ### Added — ACP's `/info` shows the same panel as the TUI's
