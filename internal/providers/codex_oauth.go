@@ -21,13 +21,15 @@ import (
 
 // ── Constants ────────────────────────────────────────────────────────────
 
+// codexTokenURL is a variable so a test can point the refresh at a fake server.
+var codexTokenURL = "https://auth.openai.com/oauth/token"
+
 // The ChatGPT Codex backend — the only endpoint the OAuth (ChatGPT-plan)
 // token works against (api.openai.com rejects it; the standard openai
 // provider covers that route). The Responses dialect, NOT Chat Completions.
 const (
 	codexResponsesURL = "https://chatgpt.com/backend-api/codex/responses"
 	codexModelsURL    = "https://chatgpt.com/backend-api/codex/models"
-	codexTokenURL     = "https://auth.openai.com/oauth/token"
 	codexClientID     = "app_EMoamEEZ73f0CkXaXp7hrann" // Codex CLI's public PKCE client
 
 	// codexDefaultExpiresIn mirrors oauthflow's — used when the token
@@ -978,7 +980,10 @@ func (tm *codexTokenManager) getValidToken() (string, error) {
 				}
 				tm.creds = refreshed
 				accessToken = refreshed.AccessToken
-				return oauthProviderCredential(refreshed), true, nil
+				// codexProviderCredential, NOT claude's oauthProviderCredential:
+				// the latter has no AccountID and every refresh used to erase it
+				// from disk.
+				return codexProviderCredential(refreshed), true, nil
 			})
 		if updateErr != nil && !permanent {
 			return "", fmt.Errorf("token refresh: %w", updateErr)
@@ -1058,8 +1063,16 @@ func (tm *codexTokenManager) refresh(refreshToken string) (*types.Credentials, e
 	return &creds, nil
 }
 
+// codexCredFromDisk rebuilds the credential from the store. A stored credential
+// with no account id (every refresh before v0.112.0 erased it) recovers it from
+// the access token, a JWT that carries the same chatgpt_account_id claim; the
+// next refresh persists it again.
 func codexCredFromDisk(cred config.ProviderCredential) types.Credentials {
-	return types.OAuthCredentialsWithAccount(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType, cred.AccountID)
+	accountID := cred.AccountID
+	if accountID == "" {
+		accountID = oauthflow.ExtractChatGPTAccountID(cred.AccessToken)
+	}
+	return types.OAuthCredentialsWithAccount(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType, accountID)
 }
 
 func persistCodexCreds(creds *types.Credentials) {

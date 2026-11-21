@@ -2,8 +2,12 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gurcuff91/harness/internal/config"
@@ -186,4 +190,45 @@ func markAllSubscription(metas []types.ModelMeta) {
 	for i := range metas {
 		metas[i].IsSubscription = true
 	}
+}
+
+// rejectedKey reads a key-validation response: nil unless the provider refused
+// the key (401/403), in which case the error carries the provider's own reason
+// when its body has one ("invalid API key: api_key_expired") — what a bare
+// "invalid API key" hid. The body is closed.
+func rejectedKey(resp *http.Response) error {
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if reason := keyRejectionReason(body); reason != "" {
+		return fmt.Errorf("invalid API key: %s", reason)
+	}
+	return fmt.Errorf("invalid API key (HTTP %d)", resp.StatusCode)
+}
+
+// keyRejectionReason pulls a short reason out of an error body: the common
+// shapes {"error":"x"}, {"error":{"code":"x","type":"y","message":"z"}},
+// {"message":"x"}, {"type":"x"}. A specific code ("api_key_expired") wins
+// over a generic type ("authentication_error"). Empty when none is found.
+func keyRejectionReason(body []byte) string {
+	var v map[string]any
+	if json.Unmarshal(body, &v) != nil {
+		return ""
+	}
+	pick := func(m map[string]any, keys ...string) string {
+		for _, k := range keys {
+			if s, ok := m[k].(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+		return ""
+	}
+	if e, ok := v["error"].(map[string]any); ok {
+		if r := pick(e, "code", "type", "message"); r != "" {
+			return r
+		}
+	}
+	return pick(v, "error", "code", "type", "message")
 }

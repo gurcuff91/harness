@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.112.0] - 2026-11-21
+
+### Added — subscription usage per provider
+`GET /api/providers/{name}/quota` (`client.ProviderQuota(name, refresh)`) reports how much of a provider's subscription is used, in one format whatever the provider's own API looks like: `windows` (`name`, `label`, `scope`, `used_percent` 0-100, `resets_at` UTC) and, for providers that meter dollars, a `balance` (`remaining_usd`, `allowance_usd`, `resets_at`), plus `plan` when the provider names it. Supported: `claude-oauth` (5-hour session, weekly, weekly per model family), `codex-oauth` (the plan's windows and any additional limits), `minimax` (interval and weekly per bucket), `synthetic` (subscription requests, rolling weekly limit, hourly search), `opencode-go` (rolling, weekly, monthly) and `ollama-cloud` (dollar allowance; legacy session/weekly windows). Providers that report what remains are converted to what is used. Readings are cached in memory for 60 s; `?refresh=true` asks again, never more than once every 5 s. When a provider cannot be read (rate limited, failing) the last good reading is returned with `"stale": true` and the provider's `Retry-After` is honored. 404 unknown provider or no quota, 409 not connected, 502 no reading at all. Documented in the OpenAPI spec.
+
+### Fixed — codex-oauth lost its account id on every token refresh
+A token refresh stored the new credential without `account_id`, so every request after the first refresh went out without `ChatGPT-Account-ID`. The refresh now keeps it, and a credential already stored without one recovers it from the access token's `chatgpt_account_id` claim.
+
+### Fixed — a rejected API key says why
+`opencode-go` and `ollama-cloud` reported a rejected key as a bare "invalid API key" (or as a provider with no models). They now carry the provider's own reason, for example `invalid API key: api_key_expired`, or the HTTP status when the body gives none.
+
 ## [0.111.5] - 2026-11-20
 
 ### Changed — `SlackMessages` says which images it did not show

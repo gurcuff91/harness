@@ -148,6 +148,7 @@ func (s *Server) handler() http.Handler {
 	r.Get("/api/providers", s.handleProviders)
 	r.Post("/api/providers/{name}/connect", s.handleConnectProvider)
 	r.Post("/api/providers/{name}/disconnect", s.handleDisconnectProvider)
+	r.Get("/api/providers/{name}/quota", s.handleProviderQuota)
 	r.HandleFunc("/api/providers/{name}/proxy/*", s.handleProviderProxy)
 	r.Post("/api/oauth/{provider}", s.handleOAuth)
 	r.Get("/api/models", s.handleModels)
@@ -828,6 +829,7 @@ func (s *Server) handleConnectProvider(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	forgetQuota(name) // a reading of the previous account must not be served
 
 	writeStatus(w, http.StatusOK, "connected", fmt.Sprintf("%d models", len(target.Models())))
 }
@@ -852,6 +854,7 @@ func (s *Server) handleDisconnectProvider(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	forgetQuota(name)
 
 	writeStatus(w, http.StatusOK, "disconnected", "")
 }

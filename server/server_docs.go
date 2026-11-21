@@ -282,6 +282,24 @@ const openAPISpecTemplate = `{
         }
       }
     },
+    "/api/providers/{name}/quota": {
+      "get": {
+        "tags": ["providers"],
+        "summary": "Provider subscription usage",
+        "description": "The provider's subscription usage in ONE format, whatever its own API looks like: usage windows (used_percent 0-100 — providers that report what remains are converted — and resets_at, UTC) and, for providers that meter dollars, a balance. Supported: claude-oauth, codex-oauth, minimax, synthetic, opencode-go, ollama-cloud. Cached in memory per provider for 60 s; refresh=true asks the provider again, but never more than once every 5 s. When the provider cannot be read (rate limited, failing) and an earlier reading exists, that reading is returned with stale: true (fetched_at says how old it is) and a Retry-After header when the provider set one. 404 unknown provider, a provider that reports no quota, or an account without one; 409 not connected; 502 the provider could not be read and there is no earlier reading.",
+        "operationId": "providerQuota",
+        "parameters": [
+          { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "refresh", "in": "query", "required": false, "schema": { "type": "boolean" }, "description": "Bypass the 60 s cache (at most one provider call every 5 s)." }
+        ],
+        "responses": {
+          "200": { "description": "Usage", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Quota" } } } },
+          "404": { "description": "Unknown provider, or no quota for it / this account" },
+          "409": { "description": "Provider not connected" },
+          "502": { "description": "The provider could not be read and there is no earlier reading" }
+        }
+      }
+    },
     "/api/providers/{name}/proxy/{path}": {
       "post": {
         "tags": ["providers"],
@@ -674,6 +692,39 @@ const openAPISpecTemplate = `{
           "error":           { "type": "string", "description": "Why an ACTIVE provider has no models right now (its model fetch failed: expired token, unreachable, rejected key…) — what model_count 0 alone hides. Omitted when there is nothing to report." },
           "dialect":         { "type": "string", "enum": ["anthropic","openai","openai-responses","ollama"], "description": "Wire dialect of the provider's native API — what its proxy speaks." },
           "proxy_path":      { "type": "string", "example": "/api/providers/claude-oauth/proxy", "description": "The provider's transparent-proxy root on this server." }
+        }
+      },
+      "Quota": {
+        "type": "object",
+        "required": ["provider", "fetched_at", "windows"],
+        "properties": {
+          "provider":   { "type": "string", "example": "claude-oauth" },
+          "plan":       { "type": "string", "description": "Plan name the provider reports (free, plus, pro…); omitted when it says none." },
+          "fetched_at": { "type": "string", "format": "date-time", "description": "When this reading was taken from the provider." },
+          "stale":      { "type": "boolean", "description": "true when the provider could not be read just now and this is the last good reading." },
+          "windows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["name", "label", "used_percent"],
+              "properties": {
+                "name":         { "type": "string", "example": "weekly", "description": "Stable key, unique within the quota (session, weekly, weekly:<model>, general:interval…)." },
+                "label":        { "type": "string", "example": "Weekly (all models)" },
+                "scope":        { "type": "string", "description": "What the window is restricted to (a model family, a bucket such as video or search); omitted when it covers everything." },
+                "used_percent": { "type": "number", "minimum": 0, "maximum": 100 },
+                "resets_at":    { "type": "string", "format": "date-time", "description": "UTC; omitted when unknown." }
+              }
+            }
+          },
+          "balance": {
+            "type": "object",
+            "description": "A dollar allowance (ollama-cloud). Omitted for providers that meter percentages only.",
+            "properties": {
+              "remaining_usd": { "type": "number", "description": "Included plus purchased balance left." },
+              "allowance_usd": { "type": "number", "description": "The plan's included allowance for the period." },
+              "resets_at":     { "type": "string", "format": "date-time" }
+            }
+          }
         }
       },
       "ConnectRequest": {

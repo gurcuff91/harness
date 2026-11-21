@@ -229,6 +229,20 @@ func (c *Client) DisconnectProvider(name string) (*Status, error) {
 	return c.decodeStatus("POST", "/api/providers/"+name+"/disconnect", nil)
 }
 
+// ProviderQuota returns a provider's subscription usage (GET
+// /api/providers/{name}/quota) — windows with used_percent and resets_at, a
+// dollar balance where the provider meters one. The server caches it for 60 s;
+// refresh asks the provider again (at most once every 5 s). Stale is set when
+// the provider could not be read and this is the last good reading. A
+// 404/409/502 comes back as an *Error.
+func (c *Client) ProviderQuota(name string, refresh bool) (*types.Quota, error) {
+	path := "/api/providers/" + url.PathEscape(name) + "/quota"
+	if refresh {
+		path += "?refresh=true"
+	}
+	return ptr(decode[types.Quota](c, "GET", path, nil))
+}
+
 // ── Native OAuth (PKCE) login ────────────────────────────────────────────
 
 // StartOAuth begins a provider's native OAuth PKCE flow: returns the URL the

@@ -291,6 +291,22 @@ and `--url http://A:8080/api/providers/<name>/proxy` (note the difference: for
 `anthropic` the URL has no `/v1`, for `openai` it is the chat-completions base).
 The one dialect not yet consumable this way is `codex-oauth`'s (Responses).
 
+**Subscription usage.** `GET /api/providers/<name>/quota` (Go:
+`client.ProviderQuota(name, refresh)`) reports how much of a subscription is
+used, in one format for every provider: `windows` (`used_percent` 0–100 and
+`resets_at`, UTC) and, for providers that meter dollars, a `balance`.
+Supported: `claude-oauth`, `codex-oauth`, `minimax`, `synthetic`,
+`opencode-go`, `ollama-cloud`. Readings are cached for 60 s (`?refresh=true`
+asks again, at most once every 5 s); when the provider cannot be read the last
+good reading comes back with `"stale": true`.
+
+```
+$ curl -s localhost:8080/api/providers/claude-oauth/quota
+{"provider":"claude-oauth","fetched_at":"2026-11-21T14:15:01Z","windows":[
+  {"name":"session","label":"5-hour session","used_percent":23,"resets_at":"2026-11-21T18:20:00Z"},
+  {"name":"weekly","label":"Weekly (all models)","used_percent":31,"resets_at":"2026-11-26T17:00:00Z"}]}
+```
+
 SDK embedders can instead register one programmatically —
 `harness.NewOpenAIProvider(name, url, ...opts)` (or
 `harness.NewAnthropicProvider`) with

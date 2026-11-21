@@ -137,8 +137,8 @@ func (o *OpenCodeGo) ModelMeta(modelID string) *types.ModelMeta {
 
 func (o *OpenCodeGo) FetchModels() ([]types.ModelMeta, error) {
 	// /models is public on opencode.ai — validate key first via chat endpoint
-	if !o.validateKey() {
-		return nil, fmt.Errorf("invalid API key")
+	if err := o.validateKey(); err != nil {
+		return nil, err
 	}
 	metas, err := fetchOpenCodeGoModels(o.apiKey)
 	if err != nil {
@@ -159,7 +159,7 @@ func (o *OpenCodeGo) FetchModels() ([]types.ModelMeta, error) {
 	return metas, nil
 }
 
-func (o *OpenCodeGo) validateKey() bool {
+func (o *OpenCodeGo) validateKey() error {
 	body := strings.NewReader(`{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hi"}],"max_tokens":1}`)
 	req, _ := http.NewRequest("POST", openCodeGoURL+"/chat/completions", body)
 	req.Header.Set("Authorization", "Bearer "+o.apiKey)
@@ -167,10 +167,9 @@ func (o *OpenCodeGo) validateKey() bool {
 	req.Header.Set("x-opencode-session", o.session)
 	resp, err := llm.NewProviderClient(10 * time.Second).Do(req)
 	if err != nil {
-		return false
+		return nil // unreachable is not a bad key: the model fetch reports it
 	}
-	resp.Body.Close()
-	return resp.StatusCode != 401 && resp.StatusCode != 403
+	return rejectedKey(resp)
 }
 
 func (o *OpenCodeGo) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {

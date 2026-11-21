@@ -132,8 +132,8 @@ func (o *OllamaCloud) ModelMeta(modelID string) *types.ModelMeta {
 
 func (o *OllamaCloud) FetchModels() ([]types.ModelMeta, error) {
 	// Validate API key first — /models is public on ollama.com, doesn't require auth
-	if !o.validateKey() {
-		return nil, fmt.Errorf("invalid API key")
+	if err := o.validateKey(); err != nil {
+		return nil, err
 	}
 	req, _ := http.NewRequest("GET", o.baseURL+"/models", nil)
 	req.Header.Set("Authorization", "Bearer "+o.apiKey)
@@ -187,18 +187,17 @@ func (o *OllamaCloud) FetchModels() ([]types.ModelMeta, error) {
 }
 
 // validateKey checks the API key by hitting an auth-required endpoint.
-func (o *OllamaCloud) validateKey() bool {
+func (o *OllamaCloud) validateKey() error {
 	body := strings.NewReader(`{"model":"gemma3:4b","messages":[{"role":"user","content":"hi"}],"max_tokens":1}`)
 	req, _ := http.NewRequest("POST", o.baseURL+"/chat/completions", body)
 	req.Header.Set("Authorization", "Bearer "+o.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := o.client.Do(req)
 	if err != nil {
-		return false
+		return nil // unreachable is not a bad key: the model fetch reports it
 	}
-	resp.Body.Close()
-	// 401/403 = invalid key; anything else (200, 400, 429) = key is valid
-	return resp.StatusCode != 401 && resp.StatusCode != 403
+	// 401/403 = invalid key; anything else (200, 400, 402, 429) = key is valid
+	return rejectedKey(resp)
 }
 
 func (o *OllamaCloud) CompleteStream(ctx context.Context, req *types.Request, cb types.StreamCallback) (*types.Response, error) {
