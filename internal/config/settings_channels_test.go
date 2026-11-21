@@ -113,18 +113,18 @@ func TestConcurrentClaimsHaveOneWinner(t *testing.T) {
 // A rename reaches only a claim still held by the same (session, pid).
 func TestRenameChannelClaimOnlyTouchesOurOwnClaim(t *testing.T) {
 	m := channelsManager(t)
-	if _, err := m.ClaimChannel(ChannelClaim{Type: "colleague", ID: "x", Session: "s1", PID: 10, Name: "old"}, alwaysAlive); err != nil {
+	if _, err := m.ClaimChannel(ChannelClaim{Type: "colleague", ID: "x", Session: "s1", PID: 10, SessionName: "old"}, alwaysAlive); err != nil {
 		t.Fatal(err)
 	}
 	_ = m.RenameChannelClaim("colleague", "x", "s2", 10, "intruder")
 	_ = m.RenameChannelClaim("colleague", "x", "s1", 11, "other pid")
-	if got := m.ChannelClaims()[0].Name; got != "old" {
+	if got := m.ChannelClaims()[0].SessionName; got != "old" {
 		t.Fatalf("name = %q, a foreign rename must not apply", got)
 	}
 	if err := m.RenameChannelClaim("colleague", "x", "s1", 10, "new"); err != nil {
 		t.Fatal(err)
 	}
-	if got := m.ChannelClaims()[0].Name; got != "new" {
+	if got := m.ChannelClaims()[0].SessionName; got != "new" {
 		t.Fatalf("name = %q", got)
 	}
 	if err := m.RenameChannelClaim("colleague", "missing", "s1", 10, "n"); err != nil || len(m.ChannelClaims()) != 1 {

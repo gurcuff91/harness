@@ -168,7 +168,7 @@ func (a *Agent) prepareChannels(sessionID, cwd, sessionName string, reqs []types
 			continue // the same conversation asked twice (e.g. by id and by name)
 		}
 		owner, err := config.GetSettingsManager().ClaimChannel(config.ChannelClaim{
-			Type: typ, ID: id, Session: sessionID, PID: channelPID, Started: ownStart, CWD: cwd, Name: sessionName,
+			Type: typ, ID: id, Session: sessionID, PID: channelPID, Started: ownStart, CWD: cwd, SessionName: sessionName,
 		}, func(o config.ChannelClaim) bool { return ownerAlive(o.PID, o.Started, lookupProc) })
 		if err != nil {
 			sc.release()
@@ -370,8 +370,8 @@ type ChannelClaim struct {
 	ID      string
 	Session string
 	CWD     string
-	// Name is the owner session's display name (empty in older claims).
-	Name string
+	// SessionName is the owner session's display name (empty in older claims).
+	SessionName string
 }
 
 // LiveChannelClaims lists the claims on conversations of type typ whose owner
@@ -381,7 +381,7 @@ func LiveChannelClaims(typ string) []ChannelClaim {
 	var out []ChannelClaim
 	for _, c := range config.GetSettingsManager().ChannelClaims() {
 		if c.Type == typ && ownerAlive(c.PID, c.Started, lookupProc) {
-			out = append(out, ChannelClaim{Type: c.Type, ID: c.ID, Session: c.Session, CWD: c.CWD, Name: c.Name})
+			out = append(out, ChannelClaim{Type: c.Type, ID: c.ID, Session: c.Session, CWD: c.CWD, SessionName: c.SessionName})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })

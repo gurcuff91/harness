@@ -28,7 +28,7 @@ func (c *Channel) listTool(self string) atools.Tool {
 			}
 			list := []entry{}
 			for _, cl := range agent.LiveChannelClaims(Type) {
-				list = append(list, entry{ID: cl.ID, Session: cl.Name, CWD: cl.CWD, You: cl.ID == self})
+				list = append(list, entry{ID: cl.ID, Session: cl.SessionName, CWD: cl.CWD, You: cl.ID == self})
 			}
 			b, _ := json.MarshalIndent(list, "", "  ")
 			return string(b), nil

@@ -28,10 +28,11 @@ type ChannelClaim struct {
 	// in claims written before it existed, or where the OS cannot tell.
 	Started string `json:"started,omitempty"`
 	CWD     string `json:"cwd,omitempty"`
-	// Name is the owner session's display name, kept current on rename so a
-	// peer directory (ColleagueList) can show it. Empty in older claims.
-	Name      string `json:"name,omitempty"`
-	ClaimedAt string `json:"claimed_at"`
+	// SessionName is the owner session's display name, kept current on
+	// rename so a peer directory (ColleagueList) can show it. Empty in older
+	// claims.
+	SessionName string `json:"session_name,omitempty"`
+	ClaimedAt   string `json:"claimed_at"`
 }
 
 // ClaimChannel records c as the listener of (c.Type, c.ID) unless another LIVE
@@ -94,10 +95,10 @@ func (m *SettingsManager) RenameChannelClaim(typ, id, session string, pid int, n
 			return nil, false, nil
 		}
 		var cur ChannelClaim
-		if json.Unmarshal(raw, &cur) != nil || cur.Session != session || cur.PID != pid || cur.Name == name {
+		if json.Unmarshal(raw, &cur) != nil || cur.Session != session || cur.PID != pid || cur.SessionName == name {
 			return nil, false, nil
 		}
-		cur.Name = name
+		cur.SessionName = name
 		out, err := json.Marshal(cur)
 		if err != nil {
 			return nil, false, err

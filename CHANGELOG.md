@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.112.2] - 2026-11-21
+
+### Changed — the session name in a channel claim is stored as `session_name`
+0.112.1 stored it under `name`, which next to `session` (the id) read as the conversation's name. It is now `session_name`. A claim written by 0.112.1 simply shows no name until its session is opened again. `ColleagueList` still returns it as `session` (it exposes no session id, so there is nothing to confuse it with).
+
 ## [0.112.1] - 2026-11-21
 
 ### Added — `ColleagueList` shows each colleague's session name
