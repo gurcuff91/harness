@@ -39,4 +39,4 @@ in ONE format, whatever its own API looks like.
    is rejected reports it in `/api/providers` `error` instead of a silent
    "0 models".
 
-Out of scope: showing quotas in the TUI.
+TUI: `/info` shows the quota of the session's provider (added in 0.113.0, option A — the session's provider only).

@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.113.0] - 2026-11-21
+
+### Added — `/info` shows the subscription usage of the session's provider
+The TUI's `/info` panel has a quota section for the provider of the session's model: one bar per usage window (colored as it nears the limit: warning from 70 %, error above 90 %) with its percentage and the time until it resets, the plan when the provider names it, a dollar balance where the provider meters one, and a note when the reading is stale. A provider that reports no quota shows no section; one that cannot be read shows a single "unavailable" line, so the panel never fails because of it. It uses the server's 60 s cache.
+
 ## [0.112.2] - 2026-11-21
 
 ### Changed — the session name in a channel claim is stored as `session_name`

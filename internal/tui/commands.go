@@ -662,6 +662,15 @@ func (t *TUI) showInfo() {
 	}
 	b.WriteString(mut("cost", fmt.Sprintf("$%.4f", stats.CostUSD)))
 
+	// Quota of the session's provider (cached 60 s by the server). Omitted for
+	// a provider without one; a failure is one dimmed line.
+	if prov := providerOf(sess.Model); prov != "" {
+		q, qerr := t.client.ProviderQuota(prov, false)
+		if sec := quotaSection(prov, q, qerr, time.Now()); sec != "" {
+			b.WriteString("\n" + sec)
+		}
+	}
+
 	// Environment
 	b.WriteString("\n")
 	if info.OS != "" {
