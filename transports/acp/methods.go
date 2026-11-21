@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gurcuff91/harness/client"
+	"github.com/gurcuff91/harness/internal/infoview"
 	"github.com/gurcuff91/harness/internal/version"
 	"github.com/gurcuff91/harness/types"
 )
@@ -336,7 +337,13 @@ func (h *handler) formatSessionQuery(sessionID, cmd string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return formatInfoPlain(info), nil
+		// The quota of the session's provider (the server caches it 60 s).
+		var q *types.Quota
+		var qerr error
+		if prov := infoview.ProviderOf(info.Session.Model); prov != "" {
+			q, qerr = h.api.ProviderQuota(prov, false)
+		}
+		return formatInfoPlain(info, q, qerr, time.Now()), nil
 	case "context":
 		bd, err := h.api.GetSessionContext(sessionID)
 		if err != nil {

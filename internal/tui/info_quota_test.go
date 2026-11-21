@@ -81,36 +81,3 @@ func TestQuotaBarColorsAndRounding(t *testing.T) {
 		t.Error("clamped")
 	}
 }
-
-func TestShortWindowLabel(t *testing.T) {
-	for _, c := range []struct {
-		w            types.QuotaWindow
-		label, scope string
-	}{
-		{types.QuotaWindow{Name: "session", Label: "5-hour session"}, "session", ""},
-		{types.QuotaWindow{Name: "weekly", Label: "Weekly (all models)"}, "weekly", ""},
-		{types.QuotaWindow{Name: "weekly:Fable", Label: "Weekly (Fable)", Scope: "Fable"}, "Fable", ""},
-		{types.QuotaWindow{Name: "weekly:Very Long Model", Label: "Weekly (Very Long Model)", Scope: "Very Long Model"}, "weekly", "Very Long Model"},
-		{types.QuotaWindow{Name: "primary", Label: "30-day"}, "30-day", ""},
-		{types.QuotaWindow{Name: "general:weekly", Label: "Weekly (general)", Scope: "general"}, "weekly", "general"},
-		{types.QuotaWindow{Name: "requests", Label: "Subscription requests"}, "requests", ""},
-		{types.QuotaWindow{Name: "search:hourly", Label: "Hourly (search)", Scope: "search"}, "hourly", "search"},
-		{types.QuotaWindow{Name: "GPT-5.3-Codex-Spark:primary", Label: "5-hour (GPT-5.3-Codex-Spark)", Scope: "GPT-5.3-Codex-Spark"}, "5-hour", "GPT-5.3-Codex-Spark"},
-	} {
-		l, s := shortWindowLabel(c.w)
-		if l != c.label || s != c.scope {
-			t.Errorf("%s: got (%q, %q), want (%q, %q)", c.w.Name, l, s, c.label, c.scope)
-		}
-	}
-}
-
-func TestUntilAndProviderOf(t *testing.T) {
-	for d, want := range map[time.Duration]string{-time.Second: "now", 30 * time.Second: "30s", 45 * time.Minute: "45m", 4*time.Hour + 5*time.Minute: "4h 05m", 50 * time.Hour: "2d 02h"} {
-		if got := until(qNow.Add(d), qNow); got != want {
-			t.Errorf("until(%v) = %q, want %q", d, got, want)
-		}
-	}
-	if providerOf("synthetic/hf:zai-org/GLM-4.7") != "synthetic" || providerOf("") != "" {
-		t.Error("providerOf")
-	}
-}

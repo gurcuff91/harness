@@ -3,9 +3,11 @@ package acp
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/client"
+	"github.com/gurcuff91/harness/types"
 )
 
 // TestCommandsExcludedFromACPMatchesExpectedSet locks the exclusion list to
@@ -51,7 +53,7 @@ func TestFormatInfoPlainRendersKeyFields(t *testing.T) {
 		},
 		MCPConnected: 2,
 	}
-	text := formatInfoPlain(info)
+	text := formatInfoPlain(info, nil, nil, time.Now())
 	for _, want := range []string{"harness", "session", "model", "thinking", "iters", "mcps"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("formatInfoPlain: missing %q in output:\n%s", want, text)
@@ -63,7 +65,7 @@ func TestFormatInfoPlainRendersKeyFields(t *testing.T) {
 }
 
 func TestFormatInfoPlainNil(t *testing.T) {
-	if text := formatInfoPlain(nil); !strings.Contains(text, "No session info") {
+	if text := formatInfoPlain(nil, nil, nil, time.Now()); !strings.Contains(text, "No session info") {
 		t.Errorf("formatInfoPlain(nil) = %q, want a warning message", text)
 	}
 }
@@ -107,5 +109,62 @@ func TestFenceTrimsTrailingNewlineBeforeClosing(t *testing.T) {
 	want := "```\na\nb\n```\n"
 	if got != want {
 		t.Errorf("fence(%q) = %q, want %q", "a\nb\n", got, want)
+	}
+}
+
+// /info over ACP shows what the TUI's shows, minus the terminal: the id, the
+// system, the quota of the session's provider (with words instead of colors
+// for a window near its limit), the schedules and the channels.
+func TestFormatInfoPlainMatchesTheTUIPanel(t *testing.T) {
+	now := time.Date(2026, 11, 21, 14, 0, 0, 0, time.UTC)
+	info := &client.SessionInfo{
+		Version: "v0.113.1", OS: "darwin", Arch: "arm64", Terminal: "Herdr (t3)",
+		Session: client.Session{
+			SessionMeta: store.SessionMeta{ID: "abc-123-def", Name: "Parser", Model: "claude-oauth/claude-opus-4-8"},
+			Channels:    []client.ChannelInfo{{Type: "slack", ID: "C1", Name: "#prod"}, {Type: "slack", ID: "D2", Name: "@gus"}},
+		},
+		MCPConnected: 1,
+	}
+	q := &types.Quota{Provider: "claude-oauth", Plan: "max", FetchedAt: now, Windows: []types.QuotaWindow{
+		{Name: "session", Label: "5-hour session", UsedPercent: 23, ResetsAt: now.Add(4*time.Hour + 5*time.Minute)},
+		{Name: "weekly", Label: "Weekly (all models)", UsedPercent: 75, ResetsAt: now.Add(50 * time.Hour)},
+		{Name: "weekly:Fable", Label: "Weekly (Fable)", Scope: "Fable", UsedPercent: 95},
+	}}
+	text := formatInfoPlain(info, q, nil, now)
+	for _, want := range []string{
+		"id              abc-123-def\n",
+		"quota           claude-oauth · max\n",
+		"session         ██░░░░░░░░  23%   resets in 4h 05m\n",
+		"weekly          ████████░░  75%   resets in 2d 02h  ⚠ high\n",
+		"Fable           ██████████  95%  ⚠ almost out\n",
+		"system          darwin/arm64\n",
+		"schedules       0\n",
+		"slack           #prod, @gus\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "terminal") || strings.Contains(text, "Herdr") {
+		t.Errorf("ACP has no terminal row:\n%s", text)
+	}
+	if strings.Contains(text, "\x1b") {
+		t.Errorf("no ANSI inside the Markdown fence:\n%q", text)
+	}
+	// A provider without quota: no section. Any other failure: one row.
+	if text := formatInfoPlain(info, nil, &client.Error{Status: 404, Message: "none"}, now); strings.Contains(text, "quota") {
+		t.Errorf("a 404 shows a quota section:\n%s", text)
+	}
+	text = formatInfoPlain(info, nil, &client.Error{Status: 502, Message: "minimax usage endpoint: HTTP 500"}, now)
+	if !strings.Contains(text, "quota           unavailable (minimax usage endpoint: HTTP 500)\n") {
+		t.Errorf("a failure must be one unavailable row:\n%s", text)
+	}
+	// Ollama-style balance and a stale reading.
+	text = formatInfoPlain(info, &types.Quota{Provider: "ollama-cloud", Stale: true, FetchedAt: now.Add(-2 * time.Minute), Windows: []types.QuotaWindow{},
+		Balance: &types.QuotaBalance{RemainingUSD: 3, AllowanceUSD: 20, ResetsAt: now.Add(27 * time.Hour)}}, nil, now)
+	for _, want := range []string{"· stale (2m ago)\n", "balance         $3.00 of $20.00   resets in 1d 03h\n"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
 	}
 }

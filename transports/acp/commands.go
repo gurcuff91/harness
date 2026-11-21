@@ -3,8 +3,11 @@ package acp
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/gurcuff91/harness/client"
+	"github.com/gurcuff91/harness/internal/infoview"
+	"github.com/gurcuff91/harness/types"
 )
 
 // buildConfigOptions returns the session config options this transport
@@ -136,7 +139,7 @@ func buildAvailableCommands(c *client.Client, sessionID string) ([]availableComm
 	out = append(out,
 		availableCommand{
 			Name:        "info",
-			Description: "Show session info (model, thinking, tokens, cost, MCPs)",
+			Description: "Show session info (model, thinking, tokens, cost, quota, MCPs)",
 		},
 		availableCommand{
 			Name:        "context",
@@ -203,7 +206,12 @@ const infoContextFenceWidth = 16
 // wrapped its output in ``` for the exact same reason; this mirrors that,
 // adding a title + separator line since the code fence also drops Markdown
 // bold, which Slack's version used for the title instead.
-func formatInfoPlain(info *client.SessionInfo) string {
+//
+// It shows what the TUI's /info shows, minus the terminal (an editor starts
+// this transport; it never runs in one): identity, model, usage, the quota
+// of the session's provider (quota/qerr from GET /api/providers/{name}/quota;
+// nil and a 404 = no section), environment and channels.
+func formatInfoPlain(info *client.SessionInfo, quota *types.Quota, qerr error, now time.Time) string {
 	if info == nil {
 		return "⚠️ No session info available.\n"
 	}
@@ -223,6 +231,7 @@ func formatInfoPlain(info *client.SessionInfo) string {
 		name = sess.ID[:8]
 	}
 	b.WriteString(row("session", name))
+	b.WriteString(row("id", sess.ID))
 	b.WriteByte('\n')
 	b.WriteString(row("model", sess.Model))
 	thinking := sess.Thinking
@@ -243,10 +252,18 @@ func formatInfoPlain(info *client.SessionInfo) string {
 			compactNum(int64(stats.CacheRead)), compactNum(int64(stats.CacheWrite)))))
 	}
 	b.WriteString(row("cost", fmt.Sprintf("$%.4f", stats.CostUSD)))
+	if sec := quotaRows(infoview.ProviderOf(sess.Model), quota, qerr, now, row); sec != "" {
+		b.WriteByte('\n')
+		b.WriteString(sec)
+	}
 	b.WriteByte('\n')
+	if info.OS != "" {
+		b.WriteString(row("system", info.OS+"/"+info.Arch))
+	}
 	b.WriteString(row("mcps", fmt.Sprintf("%d connected", info.MCPConnected)))
-	if info.ScheduleCount > 0 {
-		b.WriteString(row("schedules", fmt.Sprintf("%d", info.ScheduleCount)))
+	b.WriteString(row("schedules", fmt.Sprintf("%d", info.ScheduleCount)))
+	for _, g := range infoview.ChannelGroups(sess.Channels) {
+		b.WriteString(row(g.Type, strings.Join(g.Names, ", ")))
 	}
 	if info.Busy {
 		queued := ""

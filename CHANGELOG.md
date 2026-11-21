@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.113.1] - 2026-11-21
+
+### Added — ACP's `/info` shows the same panel as the TUI's
+The `/info` command of the ACP transport (Zed and other editors) now shows what the TUI's does, except the terminal (an editor starts ACP; it runs in none): the session id, the quota of the session's provider (the same bars, percentages and reset times; a window near its limit is marked "⚠ high" from 70 % and "⚠ almost out" above 90 %, since the panel is plain text), the system, the schedules (also when there are none) and the channels the session listens to. The layout is shared by both frontends.
+
 ## [0.113.0] - 2026-11-21
 
 ### Added — `/info` shows the subscription usage of the session's provider

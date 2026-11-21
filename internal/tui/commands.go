@@ -12,6 +12,7 @@ import (
 
 	"github.com/gurcuff91/harness/client"
 	"github.com/gurcuff91/harness/internal/browseropen"
+	"github.com/gurcuff91/harness/internal/infoview"
 	"github.com/gurcuff91/harness/internal/tui/ansi"
 	"github.com/gurcuff91/harness/internal/tui/components"
 )
@@ -237,48 +238,21 @@ func originOf(text string) string {
 	return ""
 }
 
-// channelGroup is the conversations of one channel type, in binding order.
-type channelGroup struct {
-	typ   string
-	names []string
-}
-
-// channelGroups groups a session's channels by type, keeping the binding
-// order of both the types and the names (a channel with no name shows its id).
-func channelGroups(chs []client.ChannelInfo) []channelGroup {
-	var out []channelGroup
-	at := map[string]int{}
-	for _, c := range chs {
-		n := c.Name
-		if n == "" {
-			n = c.ID
-		}
-		i, ok := at[c.Type]
-		if !ok {
-			i = len(out)
-			at[c.Type] = i
-			out = append(out, channelGroup{typ: c.Type})
-		}
-		out[i].names = append(out[i].names, n)
-	}
-	return out
-}
-
 // channelsLabel is the status-line mark of the conversations the session
 // listens to, one bracketed group per channel type in binding order: full
 // ("[slack: #prod, @gus] [telegram: @bot]") and short, with only the count
 // ("[slack: 2] [telegram: 1]"); "" when none. Text only, like the rest of
 // that line.
 func channelsLabel(chs []client.ChannelInfo) (full, short string) {
-	groups := channelGroups(chs)
+	groups := infoview.ChannelGroups(chs)
 	if len(groups) == 0 {
 		return "", ""
 	}
 	fullParts := make([]string, 0, len(groups))
 	shortParts := make([]string, 0, len(groups))
 	for _, g := range groups {
-		fullParts = append(fullParts, "["+g.typ+": "+strings.Join(g.names, ", ")+"]")
-		shortParts = append(shortParts, fmt.Sprintf("[%s: %d]", g.typ, len(g.names)))
+		fullParts = append(fullParts, "["+g.Type+": "+strings.Join(g.Names, ", ")+"]")
+		shortParts = append(shortParts, fmt.Sprintf("[%s: %d]", g.Type, len(g.Names)))
 	}
 	return strings.Join(fullParts, " "), strings.Join(shortParts, " ")
 }
@@ -664,7 +638,7 @@ func (t *TUI) showInfo() {
 
 	// Quota of the session's provider (cached 60 s by the server). Omitted for
 	// a provider without one; a failure is one dimmed line.
-	if prov := providerOf(sess.Model); prov != "" {
+	if prov := infoview.ProviderOf(sess.Model); prov != "" {
 		q, qerr := t.client.ProviderQuota(prov, false)
 		if sec := quotaSection(prov, q, qerr, time.Now()); sec != "" {
 			b.WriteString("\n" + sec)
@@ -681,8 +655,8 @@ func (t *TUI) showInfo() {
 	}
 	b.WriteString(mut("mcps", fmt.Sprintf("%d connected", info.MCPConnected)))
 	b.WriteString(mut("schedules", fmt.Sprintf("%d", info.ScheduleCount)))
-	for _, g := range channelGroups(sess.Channels) {
-		b.WriteString(mut(g.typ, strings.Join(g.names, ", ")))
+	for _, g := range infoview.ChannelGroups(sess.Channels) {
+		b.WriteString(mut(g.Type, strings.Join(g.Names, ", ")))
 	}
 
 	// Runtime state

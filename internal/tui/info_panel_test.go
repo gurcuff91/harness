@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/client"
 	"github.com/gurcuff91/harness/internal/providers"
 	"github.com/gurcuff91/harness/types"
 )
@@ -44,15 +43,6 @@ func TestInfoPanelOmitsAnUnknownTerminal(t *testing.T) {
 	tu.showInfo()
 	if got := stripANSI(screenText(tu)); strings.Contains(got, "terminal  ") {
 		t.Errorf("a terminal line without a terminal:\n%s", got)
-	}
-}
-
-func TestChannelGroups(t *testing.T) {
-	g := channelGroups([]client.ChannelInfo{
-		{Type: "slack", ID: "C1", Name: "#a"}, {Type: "telegram", ID: "T1", Name: "@bot"}, {Type: "slack", ID: "D9"},
-	})
-	if len(g) != 2 || g[0].typ != "slack" || strings.Join(g[0].names, ",") != "#a,D9" || g[1].typ != "telegram" {
-		t.Errorf("groups = %+v", g)
 	}
 }
 
