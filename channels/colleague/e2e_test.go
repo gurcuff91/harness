@@ -15,6 +15,7 @@ import (
 
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/store"
+	atools "github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/configstore"
 	"github.com/gurcuff91/harness/internal/config"
 	"github.com/gurcuff91/harness/types"
@@ -332,4 +333,53 @@ func colleagueID(t *testing.T, s *agent.Session) string {
 	}
 	t.Fatal("the session is not a colleague")
 	return ""
+}
+
+// ColleagueList shows each colleague's session NAME, kept current on rename.
+func TestColleagueListShowsTheSessionName(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
+	model := newScriptedModel(t)
+	if err := agent.NewOpenAIProvider("scripted", model.srv.URL); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { agent.UnregisterCustomProvider("scripted") })
+	ch := New(WithRunDir(shortDir(t)))
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), Channels: []agent.Channel{ch}})
+	defer a.Close()
+	s1, err := a.NewSession(t.TempDir(), "scripted/m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2, err := a.NewSession(t.TempDir(), "scripted/m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s2.Rename("refactor del parser"); err != nil {
+		t.Fatal(err)
+	}
+	id1, id2 := colleagueID(t, s1), colleagueID(t, s2)
+	var list atools.Tool
+	for _, tl := range ch.Tools([]string{id1}) {
+		if tl.Def.Name == "ColleagueList" {
+			list = tl
+		}
+	}
+	out, err := list.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []struct {
+		ID, Session string
+	}
+	if err := json.Unmarshal([]byte(out), &entries); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, e := range entries {
+		got[e.ID] = e.Session
+	}
+	if got[id2] != "refactor del parser" || got[id1] != s1.Name() || s1.Name() == "" {
+		t.Fatalf("ColleagueList = %s", out)
+	}
 }

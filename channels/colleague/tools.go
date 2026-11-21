@@ -16,18 +16,19 @@ func (c *Channel) listTool(self string) atools.Tool {
 	return atools.Tool{
 		Def: types.ToolDef{
 			Name:        "ColleagueList",
-			Description: "List the colleagues online now — other agents on this machine, each a session working on its own project — with the id to use with ColleagueAsk and the project directory (cwd) it works in. Pick a colleague by its project.",
+			Description: "List the colleagues online now — other agents on this machine, each a session working on its own project — with the id to use with ColleagueAsk, its session name and the project directory (cwd) it works in. Pick a colleague by its project and session name.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 		},
 		Execute: func(context.Context, json.RawMessage) (string, error) {
 			type entry struct {
-				ID  string `json:"id"`
-				CWD string `json:"cwd"`
-				You bool   `json:"you,omitempty"`
+				ID      string `json:"id"`
+				Session string `json:"session,omitempty"`
+				CWD     string `json:"cwd"`
+				You     bool   `json:"you,omitempty"`
 			}
 			list := []entry{}
 			for _, cl := range agent.LiveChannelClaims(Type) {
-				list = append(list, entry{ID: cl.ID, CWD: cl.CWD, You: cl.ID == self})
+				list = append(list, entry{ID: cl.ID, Session: cl.Name, CWD: cl.CWD, You: cl.ID == self})
 			}
 			b, _ := json.MarshalIndent(list, "", "  ")
 			return string(b), nil

@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.112.1] - 2026-11-21
+
+### Added — `ColleagueList` shows each colleague's session name
+Each entry now has `session`, the colleague's session name (not its id), so a colleague can be picked by what it is working on and not only by its directory. The name is recorded when the session opens and kept current when it is renamed.
+
 ## [0.112.0] - 2026-11-21
 
 ### Added — subscription usage per provider

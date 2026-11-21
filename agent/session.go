@@ -1663,6 +1663,7 @@ func (s *Session) MaxTokens() int { return int(s.maxTokensVal.Load()) }
 // Rename sets a friendly display name.
 func (s *Session) Rename(name string) error {
 	s.name = name
+	s.channels.rename(name) // a peer directory (ColleagueList) shows it
 	meta := s.store.Meta()
 	meta.Name = name
 	return s.store.UpdateMeta(meta)
