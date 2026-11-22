@@ -306,19 +306,31 @@ func TestATrustedMessageIsAnsweredInItsChat(t *testing.T) {
 	}
 }
 
-// Anyone else is ignored before reaching the session, and gets no answer.
-func TestUntrustedUsersAreIgnoredSilently(t *testing.T) {
+// Anyone else never reaches the session, and is told ONCE (per chat and
+// user) how to be let in — without the allowed list being revealed.
+func TestUntrustedUsersGetOneNoticeAndNeverReachTheSession(t *testing.T) {
 	f := newFixture(t, "gus_test")
 	f.api.message(1, "stranger", "do something", nil)
+	f.api.message(1, "stranger", "again", nil)
 	f.api.message(2, "", "no username", nil)
 	f.api.message(3, "gus_test", "me", nil)
 	eventually(t, "the trusted reply", func() bool { return len(f.api.sentTo(3)) > 0 })
+	eventually(t, "the notices", func() bool { return len(f.api.sentTo(1)) > 0 && len(f.api.sentTo(2)) > 0 })
 	time.Sleep(100 * time.Millisecond)
 	if n := len(f.log.prompts()); n != 1 {
 		t.Errorf("%d prompts, want only the trusted one", n)
 	}
-	if len(f.api.sentTo(1)) != 0 || len(f.api.sentTo(2)) != 0 {
-		t.Error("an untrusted chat got an answer")
+	s1 := f.api.sentTo(1)
+	if len(s1) != 1 || !strings.Contains(s1[0].Text, "not allowed") || !strings.Contains(s1[0].Text, "`harness --telegram-allow @stranger`") {
+		t.Errorf("stranger's notices = %+v (want exactly one, naming the flag and their user)", s1)
+	}
+	if s2 := f.api.sentTo(2); len(s2) != 1 || !strings.Contains(s2[0].Text, "@username first") {
+		t.Errorf("no-username notice = %+v", s2)
+	}
+	for _, s := range append(s1, f.api.sentTo(2)...) {
+		if strings.Contains(s.Text, "gus") {
+			t.Errorf("a notice reveals the allowed users: %q", s.Text)
+		}
 	}
 }
 

@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.116.1] - 2026-11-22
+
+### Changed — the Telegram bot tells a sender who is not trusted
+A message from a Telegram user who is not on the session's `--telegram-allow` list was ignored silently, so to that person the bot looked switched off. It now answers once per chat and user, while the bot is listened to: "You are not allowed to use this bot. Ask its owner to add you: `harness --telegram-allow @their_username`" (or, without a username, to create one first). The notice never names the users who are allowed, and the message still never reaches the session.
+
 ## [0.116.0] - 2026-11-22
 
 ### Changed (breaking) — Telegram is an input channel

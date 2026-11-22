@@ -62,6 +62,9 @@ type Channel struct {
 
 	pubMu sync.Mutex
 	pubs  map[int64]*publisher // chat id → its reply pump
+	// warned: (chat, user) pairs already told they are not allowed, so a
+	// stranger gets ONE notice per listening run, not one per message.
+	warned map[string]bool
 	// current is the chat the running turn answers (from its prompt echo to
 	// turn_end); the session runs one turn at a time.
 	current int64
@@ -226,6 +229,7 @@ func (c *Channel) Listen(ctx context.Context, id string, deliver func(agent.Inbo
 			c.pubMu.Lock()
 			pubs := c.pubs
 			c.pubs = map[int64]*publisher{}
+			c.warned = nil
 			c.pubMu.Unlock()
 			for _, p := range pubs {
 				p.close() // waits for what is queued to be posted
@@ -293,8 +297,12 @@ func (c *Channel) handleMessage(ctx context.Context, m *Message) {
 	ok := user != "" && c.allowed[id][user]
 	deliver, view := c.deliver, c.view
 	c.mu.Unlock()
-	if !ok || deliver == nil {
+	if deliver == nil {
+		return
+	}
+	if !ok {
 		c.logger.Warn("telegram-channel", "ignored", "chat", m.Chat.ID, "user", "@"+m.From.Username, "reason", "not a trusted user")
+		c.notAllowed(ctx, m)
 		return
 	}
 	text := strings.TrimSpace(m.Text)
@@ -312,6 +320,34 @@ func (c *Channel) handleMessage(ctx context.Context, m *Message) {
 		return
 	}
 	c.deliverMessages(ctx, []*Message{m})
+}
+
+// notAllowed tells a sender who is not on the trusted list how to be let in
+// — once per (chat, user) while the bot is listened to. It never names the
+// users who ARE allowed, and nothing of the message reaches the session.
+func (c *Channel) notAllowed(ctx context.Context, m *Message) {
+	key := strconv.FormatInt(m.Chat.ID, 10) + "/" + strconv.FormatInt(m.From.ID, 10)
+	c.pubMu.Lock()
+	if c.warned == nil {
+		c.warned = map[string]bool{}
+	}
+	seen := c.warned[key]
+	c.warned[key] = true
+	c.pubMu.Unlock()
+	if seen {
+		return
+	}
+	pctx, cancel := context.WithTimeout(ctx, postTimeout)
+	defer cancel()
+	sendText(pctx, c, m.Chat.ID, notAllowedText(m.From.Username))
+}
+
+// notAllowedText is the notice a sender off the trusted list gets.
+func notAllowedText(username string) string {
+	if username == "" {
+		return "⛔ You are not allowed to use this bot. You need a Telegram @username first (Settings → Username); then ask its owner to add you with `harness --telegram-allow @your_username`."
+	}
+	return "⛔ You are not allowed to use this bot. Ask its owner to add you: `harness --telegram-allow @" + username + "`"
 }
 
 // deliverMessages makes ONE prompt of one message, or of an album's messages.

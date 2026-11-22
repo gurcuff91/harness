@@ -383,8 +383,8 @@ when creating or resuming a session. `harness slack login --status` checks the s
 **Telegram input channel.** `harness --telegram-allow @you` (repeatable, or comma-separated; or
 `TELEGRAM_ALLOW`) makes the session you open listen to a Telegram bot: messages from those trusted
 @usernames — in a private chat or a group — become prompts of THIS session, and its reply to each goes
-back to the chat it came from. Everyone else is ignored without an answer (a bot is public: anyone can
-find it). The bot token comes from `--telegram-token`, else `TELEGRAM_BOT_TOKEN`, else the one saved
+back to the chat it came from. Anyone else never reaches the session: they get one notice saying they are
+not allowed and how the owner can add them (a bot is public: anyone can find it). The bot token comes from `--telegram-token`, else `TELEGRAM_BOT_TOKEN`, else the one saved
 with `harness telegram token <tok>` (verified before it is saved; `--status` checks it, `--delete`
 removes it). Photos arrive as images and saved files, documents as files (`<telegram-attach>`), and
 the model sends files back with `<telegram-upload path="…"/>`. `/info` and `/context` are answered in
