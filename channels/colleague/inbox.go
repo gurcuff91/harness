@@ -2,6 +2,7 @@ package colleague
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -21,7 +22,10 @@ type inbox struct {
 	id      string
 	ln      net.Listener
 	deliver func(agent.Inbound)
-	wg      sync.WaitGroup
+	// sessionName reads the bound session's current name (agent.SessionName
+	// on the Listen ctx); answers a ping.
+	sessionName func() string
+	wg          sync.WaitGroup
 
 	mu     sync.Mutex
 	queue  []types.Event
@@ -36,8 +40,8 @@ type inbox struct {
 	err   string
 }
 
-func newInbox(c *Channel, id string, ln net.Listener, deliver func(agent.Inbound)) *inbox {
-	in := &inbox{c: c, id: id, ln: ln, deliver: deliver, wake: make(chan struct{}, 1), done: make(chan struct{})}
+func newInbox(c *Channel, id string, ln net.Listener, deliver func(agent.Inbound), sessionName func() string) *inbox {
+	in := &inbox{c: c, id: id, ln: ln, deliver: deliver, sessionName: sessionName, wake: make(chan struct{}, 1), done: make(chan struct{})}
 	go in.pump()
 	return in
 }
@@ -72,6 +76,14 @@ func (in *inbox) handle(conn net.Conn) {
 	}
 	var text string
 	switch m.Kind {
+	case kindPing:
+		a := ack{OK: true}
+		if in.sessionName != nil {
+			a.Name = in.sessionName()
+		}
+		line, _ := json.Marshal(a)
+		_, _ = conn.Write(append(line, '\n'))
+		return
 	case kindAsk:
 		text = wrap(m.From, false, m.Text)
 	case kindReply:

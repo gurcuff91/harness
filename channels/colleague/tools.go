@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/gurcuff91/harness/agent"
 	atools "github.com/gurcuff91/harness/agent/tools"
@@ -19,17 +20,35 @@ func (c *Channel) listTool(self string) atools.Tool {
 			Description: "List the colleagues online now — other agents on this machine, each a session working on its own project — with the id to use with ColleagueAsk, its session name and the project directory (cwd) it works in. Pick a colleague by its project and session name.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 		},
-		Execute: func(context.Context, json.RawMessage) (string, error) {
+		Execute: func(ctx context.Context, _ json.RawMessage) (string, error) {
 			type entry struct {
 				ID      string `json:"id"`
 				Session string `json:"session,omitempty"`
 				CWD     string `json:"cwd"`
 				You     bool   `json:"you,omitempty"`
 			}
-			list := []entry{}
-			for _, cl := range agent.LiveChannelClaims(Type) {
-				list = append(list, entry{ID: cl.ID, Session: cl.SessionName, CWD: cl.CWD, You: cl.ID == self})
+			claims := agent.LiveChannelClaims(Type)
+			list := make([]entry, len(claims))
+			// The name comes from each colleague itself (a ping over its
+			// socket, in parallel); one that does not answer is listed
+			// without it. A conversation this process listens to (ours
+			// included) is read directly.
+			var wg sync.WaitGroup
+			for i, cl := range claims {
+				list[i] = entry{ID: cl.ID, CWD: cl.CWD, You: cl.ID == self}
+				if in := c.inbox(cl.ID); in != nil {
+					if in.sessionName != nil {
+						list[i].Session = in.sessionName()
+					}
+					continue
+				}
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					list[i].Session = ping(ctx, c.socketPath(cl.ID), self)
+				}()
 			}
+			wg.Wait()
 			b, _ := json.MarshalIndent(list, "", "  ")
 			return string(b), nil
 		},

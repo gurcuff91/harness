@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.115.0] - 2026-11-21
+
+### Changed — `ColleagueList` asks each colleague for its session name
+The session name shown by `ColleagueList` (`session`) used to be written into the colleague's claim in `settings.json` (`session_name`) and rewritten on every rename. It is now asked to the colleague itself: `ColleagueList` sends each one a `ping` over its socket (in parallel, 300 ms each), and the colleague answers with its session's name as it is at that moment. A colleague that does not answer — gone, slow, or running a harness older than 0.115.0 — is listed without a name. The claim no longer carries the name: it is identity only again, and the name is right whatever session store the colleague's process uses.
+
+### Added — `agent.SessionName(ctx)` for channel implementations
+The context a `Channel`'s `Listen` receives now carries the session it is bound for, and `agent.SessionName(ctx)` returns that session's current name. The `Channel` interface itself is unchanged.
+
+### Removed (breaking, SDK)
+`agent.ChannelClaim.SessionName` (added in 0.112.1). Read a colleague's name with a ping instead (`ColleagueList`), or the bound session's own name with `agent.SessionName` in `Listen`.
+
 ## [0.114.0] - 2026-11-21
 
 ### Fixed — processes sharing `~/.harness` no longer fail with "filelock: timed out"

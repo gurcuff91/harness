@@ -31,9 +31,12 @@ import (
 //
 // All Prompt() calls are serialized via mu.
 type Session struct {
-	id   string
-	cwd  string
-	name string
+	id  string
+	cwd string
+	// name is the display name, lock-free like modelStr: Rename writes it
+	// and a channel reads it from its own goroutine (agent.SessionName, the
+	// colleague ping), so a plain string field would be a data race.
+	name atomic.Value // string
 	// createdAt is write-once at construction (never reassigned afterward,
 	// unlike name/thinkingLvl) — safe to read from ANYWHERE, including from
 	// inside a tool executor goroutine while promptSync holds s.mu for the
@@ -325,7 +328,6 @@ func newSession(storeInst *store.Session,
 	s := &Session{
 		id:            meta.ID,
 		cwd:           meta.CWD,
-		name:          meta.Name,
 		createdAt:     meta.CreatedAt,
 		store:         storeInst,
 		provider:      provider,
@@ -340,6 +342,7 @@ func newSession(storeInst *store.Session,
 		readSkill:     readSkill,
 		hasMemory:     hasMemory,
 	}
+	s.name.Store(meta.Name)
 	s.followCond = sync.NewCond(&s.followMu)
 	s.systemPromptVal.Store(systemPrompt)
 	s.toolsVal.Store(toolReg)
@@ -1631,7 +1634,10 @@ func (s *Session) applyPendingReconfigLocked() {
 func (s *Session) CreatedAt() time.Time { return s.createdAt }
 
 // Name returns the session's display name.
-func (s *Session) Name() string { return s.name }
+func (s *Session) Name() string {
+	n, _ := s.name.Load().(string)
+	return n
+}
 
 // MaxIterations returns the max ReAct iterations allowed per turn for this
 // session (AgentOptions.MaxIterations, default 50), reflecting any
@@ -1662,8 +1668,7 @@ func (s *Session) MaxTokens() int { return int(s.maxTokensVal.Load()) }
 
 // Rename sets a friendly display name.
 func (s *Session) Rename(name string) error {
-	s.name = name
-	s.channels.rename(name) // a peer directory (ColleagueList) shows it
+	s.name.Store(name)
 	meta := s.store.Meta()
 	meta.Name = name
 	return s.store.UpdateMeta(meta)

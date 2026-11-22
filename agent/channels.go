@@ -33,7 +33,8 @@ type Channel interface {
 	Resolve(ctx context.Context, ref string) (id string, err error)
 	// Listen starts delivering the messages of conversation id that are meant
 	// for the session. deliver must not block for long (it queues a prompt).
-	// stop ends it; it is called exactly once.
+	// stop ends it; it is called exactly once. ctx carries the session (see
+	// SessionName); its cancellation is not a stop signal — stop is.
 	Listen(ctx context.Context, id string, deliver func(Inbound)) (stop func(), err error)
 	// HandleEvent receives the events of the turns started by a prompt from
 	// conversation id — from the prompt's echo to turn_end — and publishes
@@ -92,6 +93,22 @@ var (
 	ErrChannelInvalid = errors.New("invalid channel")
 )
 
+// sessionCtxKey carries the bound session in the ctx a Channel's Listen gets.
+// Unexported: a channel can only read what SessionName exposes, never the
+// *Session itself.
+type sessionCtxKey struct{}
+
+// SessionName returns the CURRENT name of the session a channel's Listen ctx
+// belongs to — read when called, so a rename shows at once (the colleague
+// channel answers a ping with it). ok is false for any other ctx.
+func SessionName(ctx context.Context) (name string, ok bool) {
+	s, isSession := ctx.Value(sessionCtxKey{}).(*Session)
+	if !isSession || s == nil {
+		return "", false
+	}
+	return s.Name(), true
+}
+
 // ChannelOrigin is the prompt origin of a message from conversation id of a
 // channel of type typ.
 func ChannelOrigin(typ, id string) string { return typ + ":" + id }
@@ -141,7 +158,7 @@ var channelPID = os.Getpid()
 // sessionID. On any failure nothing stays claimed. The result carries the
 // directives and tools to add to the session; listening starts later
 // (start), once the session exists.
-func (a *Agent) prepareChannels(sessionID, cwd, sessionName string, reqs []types.InputChannel, existing []tools.Tool) (*sessionChannels, []string, []tools.Tool, error) {
+func (a *Agent) prepareChannels(sessionID, cwd string, reqs []types.InputChannel, existing []tools.Tool) (*sessionChannels, []string, []tools.Tool, error) {
 	if len(reqs) == 0 {
 		return nil, nil, nil, nil
 	}
@@ -168,7 +185,7 @@ func (a *Agent) prepareChannels(sessionID, cwd, sessionName string, reqs []types
 			continue // the same conversation asked twice (e.g. by id and by name)
 		}
 		owner, err := config.GetSettingsManager().ClaimChannel(config.ChannelClaim{
-			Type: typ, ID: id, Session: sessionID, PID: channelPID, Started: ownStart, CWD: cwd, SessionName: sessionName,
+			Type: typ, ID: id, Session: sessionID, PID: channelPID, Started: ownStart, CWD: cwd,
 		}, func(o config.ChannelClaim) bool { return ownerAlive(o.PID, o.Started, lookupProc) })
 		if err != nil {
 			sc.release()
@@ -242,10 +259,11 @@ func (a *Agent) prepareChannels(sessionID, cwd, sessionName string, reqs []types
 // start begins listening on every bound conversation, delivering into sess.
 // On failure everything is undone (listeners stopped, claims released).
 func (sc *sessionChannels) start(sess *Session) error {
+	ctx := context.WithValue(context.Background(), sessionCtxKey{}, sess)
 	for _, b := range sc.bound {
 		origin := ChannelOrigin(b.ch.Type(), b.id)
 		b := b
-		stop, err := b.ch.Listen(context.Background(), b.id, func(in Inbound) {
+		stop, err := b.ch.Listen(ctx, b.id, func(in Inbound) {
 			o := origin
 			if in.Origin != "" && strings.HasPrefix(in.Origin, b.ch.Type()+":") {
 				o = in.Origin
@@ -320,16 +338,6 @@ func (sc *sessionChannels) release() {
 	}
 }
 
-// rename records the session's new name in every claim it holds.
-func (sc *sessionChannels) rename(name string) {
-	if sc == nil {
-		return
-	}
-	for _, b := range sc.bound {
-		_ = config.GetSettingsManager().RenameChannelClaim(b.ch.Type(), b.id, sc.sessionID, channelPID, name)
-	}
-}
-
 // infos lists the bound conversations, in binding order.
 func (sc *sessionChannels) infos() []ChannelInfo {
 	if sc == nil {
@@ -370,8 +378,6 @@ type ChannelClaim struct {
 	ID      string
 	Session string
 	CWD     string
-	// SessionName is the owner session's display name (empty in older claims).
-	SessionName string
 }
 
 // LiveChannelClaims lists the claims on conversations of type typ whose owner
@@ -381,7 +387,7 @@ func LiveChannelClaims(typ string) []ChannelClaim {
 	var out []ChannelClaim
 	for _, c := range config.GetSettingsManager().ChannelClaims() {
 		if c.Type == typ && ownerAlive(c.PID, c.Started, lookupProc) {
-			out = append(out, ChannelClaim{Type: c.Type, ID: c.ID, Session: c.Session, CWD: c.CWD, SessionName: c.SessionName})
+			out = append(out, ChannelClaim{Type: c.Type, ID: c.ID, Session: c.Session, CWD: c.CWD})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })

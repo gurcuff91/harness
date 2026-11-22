@@ -28,6 +28,7 @@ type fakeChannel struct {
 
 	mu        sync.Mutex
 	listening map[string]func(Inbound)
+	ctxs      map[string]context.Context
 	stopped   []string
 	events    map[string][]types.Event
 }
@@ -43,11 +44,15 @@ func (f *fakeChannel) Resolve(_ context.Context, ref string) (string, error) {
 	}
 	return strings.ToUpper(strings.TrimPrefix(ref, "#")), nil // "#general" → "GENERAL"
 }
-func (f *fakeChannel) Listen(_ context.Context, id string, deliver func(Inbound)) (func(), error) {
+func (f *fakeChannel) Listen(ctx context.Context, id string, deliver func(Inbound)) (func(), error) {
 	if f.listenErr != nil {
 		return nil, f.listenErr
 	}
 	f.mu.Lock()
+	if f.ctxs == nil {
+		f.ctxs = map[string]context.Context{}
+	}
+	f.ctxs[id] = ctx
 	f.listening[id] = deliver
 	f.mu.Unlock()
 	return func() {
@@ -567,5 +572,41 @@ func TestAnAutoChannelJoinsEverySession(t *testing.T) {
 	}
 	if got := types(r); got != "auto:A3" {
 		t.Errorf("resumed session channels = %q (a fresh id on every open)", got)
+	}
+}
+
+// The Listen ctx carries the session: SessionName reads its CURRENT name
+// (a rename shows at once), and is safe against a concurrent rename.
+func TestListenCtxCarriesTheSessionName(t *testing.T) {
+	ch := newFakeChannel("fake")
+	a, model, _ := channelAgent(t, ch)
+	sess, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "one"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	ch.mu.Lock()
+	ctx := ch.ctxs["ONE"]
+	ch.mu.Unlock()
+	if n, ok := SessionName(ctx); !ok || n != sess.Name() || n == "" {
+		t.Fatalf("SessionName = %q, %v; want %q", n, ok, sess.Name())
+	}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range 200 {
+			SessionName(ctx) // concurrent with the renames below (-race)
+		}
+	}()
+	for i := range 200 {
+		_ = sess.Rename(fmt.Sprintf("name %d", i))
+	}
+	wg.Wait()
+	if n, _ := SessionName(ctx); n != "name 199" {
+		t.Fatalf("after rename: %q", n)
+	}
+	if _, ok := SessionName(context.Background()); ok {
+		t.Error("a ctx that is not a Listen ctx has no session")
 	}
 }

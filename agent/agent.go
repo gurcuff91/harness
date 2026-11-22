@@ -761,7 +761,7 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 	// sessRef doc comment for why the Subagent tool needs this indirection
 	// instead of the plain "model" string.
 	var sess *Session
-	chans, chDirectives, chTools, err := a.prepareChannels(sessionID, cwd, defaultSessionName(now), a.withSessionChannels(cfg.channels), cfg.tools)
+	chans, chDirectives, chTools, err := a.prepareChannels(sessionID, cwd, a.withSessionChannels(cfg.channels), cfg.tools)
 	if err != nil {
 		return nil, fmt.Errorf("new session: %w", err)
 	}
@@ -877,7 +877,7 @@ func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session
 	}
 
 	var sess *Session
-	chans, chDirectives, chTools, err := a.prepareChannels(meta.ID, cwd, meta.Name, a.withSessionChannels(cfg.channels), cfg.tools)
+	chans, chDirectives, chTools, err := a.prepareChannels(meta.ID, cwd, a.withSessionChannels(cfg.channels), cfg.tools)
 	if err != nil {
 		_ = storeInst.Close()
 		return nil, fmt.Errorf("resume session: %w", err)
@@ -1113,7 +1113,7 @@ func (a *Agent) ForkSession(sessionID string, opts ...SessionOption) (*Session, 
 	var sess *Session
 	// A fork listens to nothing of its parent's; it may be given channels of
 	// its own (opts), exactly like a new session.
-	chans, chDirectives, chTools, err := a.prepareChannels(meta.ID, cwd, meta.Name, a.withSessionChannels(cfg.channels), cfg.tools)
+	chans, chDirectives, chTools, err := a.prepareChannels(meta.ID, cwd, a.withSessionChannels(cfg.channels), cfg.tools)
 	if err != nil {
 		_ = forkStore.Close()
 		_ = a.store.DeleteSession(meta.ID)

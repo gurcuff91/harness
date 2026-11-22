@@ -26,13 +26,9 @@ type ChannelClaim struct {
 	// Started marks when the owner process started (opaque, OS-specific), so a
 	// later process that reuses the pid is not mistaken for the owner. Empty
 	// in claims written before it existed, or where the OS cannot tell.
-	Started string `json:"started,omitempty"`
-	CWD     string `json:"cwd,omitempty"`
-	// SessionName is the owner session's display name, kept current on
-	// rename so a peer directory (ColleagueList) can show it. Empty in older
-	// claims.
-	SessionName string `json:"session_name,omitempty"`
-	ClaimedAt   string `json:"claimed_at"`
+	Started   string `json:"started,omitempty"`
+	CWD       string `json:"cwd,omitempty"`
+	ClaimedAt string `json:"claimed_at"`
 }
 
 // ClaimChannel records c as the listener of (c.Type, c.ID) unless another LIVE
@@ -84,26 +80,6 @@ func (m *SettingsManager) ReleaseChannel(typ, id, session string, pid int) error
 			return nil, false, nil
 		}
 		return nil, true, nil // delete
-	})
-}
-
-// RenameChannelClaim sets the session name recorded in the claim on (typ, id),
-// only if the claim still belongs to (session, pid). Atomic.
-func (m *SettingsManager) RenameChannelClaim(typ, id, session string, pid int, name string) error {
-	return m.store.SwapValue(nsChannels, entryKey(typ, id), func(raw []byte, found bool) ([]byte, bool, error) {
-		if !found {
-			return nil, false, nil
-		}
-		var cur ChannelClaim
-		if json.Unmarshal(raw, &cur) != nil || cur.Session != session || cur.PID != pid || cur.SessionName == name {
-			return nil, false, nil
-		}
-		cur.SessionName = name
-		out, err := json.Marshal(cur)
-		if err != nil {
-			return nil, false, err
-		}
-		return out, true, nil
 	})
 }
 

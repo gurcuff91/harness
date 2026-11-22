@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -381,5 +382,141 @@ func TestColleagueListShowsTheSessionName(t *testing.T) {
 	}
 	if got[id2] != "refactor del parser" || got[id1] != s1.Name() || s1.Name() == "" {
 		t.Fatalf("ColleagueList = %s", out)
+	}
+}
+
+// listOf runs ColleagueList as session id of channel ch.
+func listOf(t *testing.T, ch *Channel, id string) map[string]string {
+	t.Helper()
+	var list atools.Tool
+	for _, tl := range ch.Tools([]string{id}) {
+		if tl.Def.Name == "ColleagueList" {
+			list = tl
+		}
+	}
+	out, err := list.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []struct {
+		ID      string
+		Session *string
+	}
+	if err := json.Unmarshal([]byte(out), &entries); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, e := range entries {
+		got[e.ID] = "<none>"
+		if e.Session != nil {
+			got[e.ID] = *e.Session
+		}
+	}
+	return got
+}
+
+// Across processes (two agents, two channels, one run dir): the name comes
+// from the OTHER colleague over its socket (a ping), live — a rename shows
+// at once, with nothing written to the claim.
+func TestColleagueListPingsOtherProcessesForTheName(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
+	model := newScriptedModel(t)
+	if err := agent.NewOpenAIProvider("scripted", model.srv.URL); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { agent.UnregisterCustomProvider("scripted") })
+	run := shortDir(t)
+	chA, chB := New(WithRunDir(run)), New(WithRunDir(run))
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), Channels: []agent.Channel{chA}})
+	defer a.Close()
+	b := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), Channels: []agent.Channel{chB}})
+	defer b.Close()
+	sa, err := a.NewSession(t.TempDir(), "scripted/m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sb, err := b.NewSession(t.TempDir(), "scripted/m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idA, idB := colleagueID(t, sa), colleagueID(t, sb)
+	if err := sb.Rename("refactor del parser"); err != nil {
+		t.Fatal(err)
+	}
+	got := listOf(t, chA, idA)
+	if got[idB] != "refactor del parser" || got[idA] != sa.Name() {
+		t.Fatalf("ColleagueList = %v", got)
+	}
+	if err := sb.Rename("otro nombre"); err != nil {
+		t.Fatal(err)
+	}
+	if got := listOf(t, chA, idA); got[idB] != "otro nombre" {
+		t.Fatalf("a rename must show at once: %v", got)
+	}
+	for _, cl := range config.GetSettingsManager().ChannelClaims() {
+		raw, _ := json.Marshal(cl)
+		if strings.Contains(string(raw), "otro nombre") || strings.Contains(string(raw), "session_name") {
+			t.Fatalf("the claim must not carry the name: %s", raw)
+		}
+	}
+}
+
+// A colleague that does not answer ping (an older harness: "unknown message
+// kind") is still listed, without a name, and does not slow the list down.
+func TestColleagueListWithAnOldColleague(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
+	run := shortDir(t)
+	ch := New(WithRunDir(run))
+	if err := os.MkdirAll(run, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The old colleague: a socket that answers every message the old way.
+	ln, err := net.Listen("unix", ch.socketPath("old-one"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			var m message
+			_ = readLine(conn, &m)
+			respond(conn, fmt.Errorf("unknown message kind %q", m.Kind))
+			conn.Close()
+		}
+	}()
+	// Two silent ones: accept and never answer (each bounded by pingTimeout;
+	// pinged in parallel, the list takes ~one timeout, not two).
+	for _, id := range []string{"silent-one", "silent-two"} {
+		l, err := net.Listen("unix", ch.socketPath(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { l.Close() })
+		go func() {
+			for {
+				if _, err := l.Accept(); err != nil {
+					return
+				}
+			}
+		}()
+	}
+	for _, id := range []string{"old-one", "silent-one", "silent-two"} {
+		if _, err := config.GetSettingsManager().ClaimChannel(config.ChannelClaim{Type: Type, ID: id, Session: "s-" + id, PID: os.Getpid()}, func(config.ChannelClaim) bool { return true }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := time.Now()
+	got := listOf(t, ch, "me")
+	if got["old-one"] != "<none>" || got["silent-one"] != "<none>" || got["silent-two"] != "<none>" {
+		t.Fatalf("got %v", got)
+	}
+	if d := time.Since(start); d >= 2*pingTimeout {
+		t.Errorf("the list took %v; pings run in parallel, bounded by %v", d, pingTimeout)
 	}
 }

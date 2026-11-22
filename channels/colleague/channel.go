@@ -145,7 +145,10 @@ func (c *Channel) Resolve(_ context.Context, ref string) (string, error) {
 // Listen implements agent.Channel: opens id's socket. The session already
 // holds the 1:1 claim on id, so a socket file left at that path belongs to a
 // dead owner and is removed first.
-func (c *Channel) Listen(_ context.Context, id string, deliver func(agent.Inbound)) (func(), error) {
+//
+// ctx carries the session (agent.SessionName): a ping is answered with its
+// name as it is at that moment.
+func (c *Channel) Listen(ctx context.Context, id string, deliver func(agent.Inbound)) (func(), error) {
 	if c.runDir == "" {
 		return nil, errors.New("no directory for the colleague socket (no home directory)")
 	}
@@ -166,7 +169,10 @@ func (c *Channel) Listen(_ context.Context, id string, deliver func(agent.Inboun
 	}
 	_ = os.Chmod(path, 0o600)
 
-	in := newInbox(c, id, ln, deliver)
+	in := newInbox(c, id, ln, deliver, func() string {
+		n, _ := agent.SessionName(ctx)
+		return n
+	})
 	c.mu.Lock()
 	c.bound[id] = in
 	c.mu.Unlock()
@@ -187,12 +193,16 @@ func (c *Channel) Listen(_ context.Context, id string, deliver func(agent.Inboun
 // HandleEvent implements agent.Channel: the events of a turn started by a
 // message to id go to its reply pump (never blocks).
 func (c *Channel) HandleEvent(id string, evt types.Event) {
-	c.mu.Lock()
-	in := c.bound[id]
-	c.mu.Unlock()
-	if in != nil {
+	if in := c.inbox(id); in != nil {
 		in.push(evt)
 	}
+}
+
+// inbox returns the inbox of a conversation this process listens to.
+func (c *Channel) inbox(id string) *inbox {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.bound[id]
 }
 
 // Tools implements agent.Channel: ColleagueList and ColleagueAsk, speaking as
