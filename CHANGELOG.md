@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.117.0] - 2026-11-22
+
+### Removed (breaking, SDK) — the "scheduled" prompt origin
+A fired schedule is already wrapped in `<scheduled slug="…">`, which is what tells the model it was not sent by a person, so it no longer carries an origin of its own: it fires with no origin (the session's own), or with the channel conversation it goes back to. `agent.OriginScheduled` and `agent.PromptWithOriginScheduled` are gone; use the wrapper, or `PromptWithOrigin` for an origin of your own. The TUI still shows a fired schedule with ◷: it recognizes the wrapper (and the `scheduled` origin that sessions saved before this version carry). API clients that told schedules by `origin: "scheduled"` should look for a prompt starting with `<scheduled `.
+
 ## [0.116.1] - 2026-11-22
 
 ### Changed — the Telegram bot tells a sender who is not trusted

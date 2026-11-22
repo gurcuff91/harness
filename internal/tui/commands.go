@@ -212,16 +212,26 @@ const (
 	userIcon     = "❯"
 )
 
-// promptIcon returns the echo icon for a prompt origin: three, no more —
-// the person at this terminal, a schedule, or anything that came from outside.
-func promptIcon(origin string) string {
+// promptIcon returns the echo icon of a prompt: three, no more — the person
+// at this terminal, a schedule, or anything that came from outside. A fired
+// schedule is told by its <scheduled slug="…"> wrapper (it has no origin of
+// its own, or the channel conversation it goes back to); "scheduled" is the
+// origin sessions saved before 0.117.0 carry. Display only: anyone can type
+// "<scheduled", and the icon grants nothing.
+func promptIcon(origin, text string) string {
+	if origin == "scheduled" || isScheduledPrompt(text) {
+		return scheduleIcon
+	}
 	switch origin {
 	case "", "user":
 		return userIcon
-	case "scheduled":
-		return scheduleIcon
 	}
 	return outsideIcon
+}
+
+// isScheduledPrompt reports whether text is a fired schedule's prompt.
+func isScheduledPrompt(text string) bool {
+	return strings.HasPrefix(strings.TrimLeft(text, " \t\r\n"), "<scheduled ")
 }
 
 // herdrOrigin is the origin of a prompt Herdr typed into this terminal.

@@ -215,7 +215,7 @@ type Session struct {
 type followUp struct {
 	text   string
 	images []types.ImageData
-	origin string // where the prompt came from ("user", "scheduled", …); default "user"
+	origin string // where the prompt came from ("user", "slack:C1", …); default "user"
 	// displayText, when non-empty, is what EventReceivedPrompt/EventFollowUpStart
 	// echo to transports INSTEAD of text — see PromptWithDisplayText's doc
 	// comment. The model always sees the full `text`; this only affects what
@@ -231,8 +231,7 @@ type followUp struct {
 // Origin constants tag where a prompt came from, so transports can render it
 // distinctly (e.g. a scheduled prompt with a clock icon).
 const (
-	OriginUser      = "user"
-	OriginScheduled = "scheduled"
+	OriginUser = "user"
 )
 
 // autoCompactThreshold is the fraction of the context window at which the
@@ -279,15 +278,9 @@ func PromptWithOriginUser() PromptOption {
 	return func(c *promptConfig) { c.origin = OriginUser }
 }
 
-// PromptWithOriginScheduled tags the prompt as fired by the scheduler, so
-// transports can render it with a scheduled indicator.
-func PromptWithOriginScheduled() PromptOption {
-	return func(c *promptConfig) { c.origin = OriginScheduled }
-}
-
 // PromptWithOrigin tags the prompt with any short origin string — a
 // transport's name ("telegram", "slack", "acp"), an SDK consumer's own
-// ("kaiban"), or the built-in OriginUser/OriginScheduled. It is echoed on
+// ("kaiban"), or the built-in OriginUser. It is echoed on
 // EventReceivedPrompt/EventFollowUpStart (Event.Origin) so frontends can
 // render where a prompt came from; live only, never stored in history. An
 // empty origin keeps the default (OriginUser).
@@ -418,8 +411,7 @@ func (s *Session) loadModelMeta(modelID string) {
 // Prompt sends a message to the session. If no turn is active, it starts
 // processing immediately; if a turn is running, the message is queued and
 // processed when the current turn finishes. Options attach images
-// (PromptWithImages) or tag the origin (PromptWithOriginUser/
-// PromptWithOriginScheduled; default user).
+// (PromptWithImages) or tag the origin (PromptWithOrigin; default user).
 func (s *Session) Prompt(ctx context.Context, text string, opts ...PromptOption) types.PromptStatus {
 	c := buildPromptConfig(opts)
 	s.followMu.Lock()

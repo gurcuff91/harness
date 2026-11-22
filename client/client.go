@@ -583,7 +583,7 @@ type PromptOption func(map[string]any)
 
 // WithOrigin tags the prompt with where it came from — any short string:
 // a transport's name ("telegram", "slack", "acp"), your own ("kaiban"), or
-// "user" (the default) / "scheduled". Echoed back on the session's
+// "user" (the default). Echoed back on the session's
 // received_prompt / follow_up_start events (Event.Origin) so every frontend
 // watching the session can render it ("via Slack"). Live only, not stored.
 func WithOrigin(origin string) PromptOption {

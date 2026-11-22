@@ -1423,8 +1423,8 @@ type promptRequest struct {
 	Text   string            `json:"text"`
 	Images []types.ImageData `json:"images,omitempty"`
 	// Origin tags where the prompt came from — any short string: "user"
-	// (default), "scheduled", a transport's name ("telegram", "slack",
-	// "acp"), or a caller's own. Echoed on received_prompt/follow_up_start.
+	// (default), a channel conversation ("slack:C1"), a transport's name
+	// ("acp"), or a caller's own. Echoed on received_prompt/follow_up_start.
 	Origin string `json:"origin,omitempty"`
 }
 

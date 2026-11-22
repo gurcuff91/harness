@@ -68,7 +68,7 @@ the channel never creates sessions.
    when the session listens to the turn's origin. `schedule.FireFunc` becomes
    `func(Schedule)` (breaking). `fireScheduledPrompt` ALWAYS wraps the prompt in
    `<scheduled slug="…">…</scheduled>` and uses `PromptWithOrigin(s.Origin)` when the
-   session listens to it, else `PromptWithOriginScheduled()`.
+   session listens to it, else no origin (0.117.0 removed the "scheduled" origin: the wrapper says it).
 7. TUI: `Telegram` in `channelToolPrefixes`.
 
 ## 4. Removal, migration, errors, tests

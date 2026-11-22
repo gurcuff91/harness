@@ -515,7 +515,7 @@ func (t *TUI) replayMessages(messages []types.Message, hidden int) {
 					if msg.Meta != nil {
 						origin = msg.Meta.Origin
 					}
-					t.addSection("user", ansi.Primary(promptIcon(origin)+" "+part.Text))
+					t.addSection("user", ansi.Primary(promptIcon(origin, part.Text)+" "+part.Text))
 				} else {
 					t.mu.Lock()
 					t.beginSection("text")

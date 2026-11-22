@@ -287,7 +287,7 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 				msg := evt.Text
 				origin := evt.Origin
 				if msg != "" {
-					t.addRaw(ansi.Primary(promptIcon(origin) + " " + msg))
+					t.addRaw(ansi.Primary(promptIcon(origin, msg) + " " + msg))
 				}
 				t.setSpinning(true)
 				t.status.Set(ansi.StatusWorking)
@@ -301,7 +301,7 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 					t.queueCount--
 				}
 				if msg != "" {
-					t.addRaw(ansi.Primary(promptIcon(origin) + " " + msg))
+					t.addRaw(ansi.Primary(promptIcon(origin, msg) + " " + msg))
 				}
 				t.setSpinning(true)
 				t.status.Set(ansi.StatusWorking)

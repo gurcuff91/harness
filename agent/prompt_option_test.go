@@ -39,15 +39,12 @@ func TestPromptWithImagesAppendsImages(t *testing.T) {
 	}
 }
 
-// TestPromptWithOriginUserAndScheduled verifies both origin-tagging options
-// (renamed from WithOriginUser/WithOriginScheduled) set the expected origin
-// constant.
-func TestPromptWithOriginUserAndScheduled(t *testing.T) {
+// TestPromptWithOriginUser verifies the user origin option. There is no
+// scheduled origin any more (0.117.0): a fired schedule is told by its
+// <scheduled> wrapper.
+func TestPromptWithOriginUser(t *testing.T) {
 	if c := buildPromptConfig([]PromptOption{PromptWithOriginUser()}); c.origin != OriginUser {
 		t.Errorf("PromptWithOriginUser: origin = %q, want %q", c.origin, OriginUser)
-	}
-	if c := buildPromptConfig([]PromptOption{PromptWithOriginScheduled()}); c.origin != OriginScheduled {
-		t.Errorf("PromptWithOriginScheduled: origin = %q, want %q", c.origin, OriginScheduled)
 	}
 }
 

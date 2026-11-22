@@ -12,6 +12,9 @@ import (
 
 // Three icons, no more: the person at this terminal, a schedule, and
 // everything that came from outside (any other origin, present or future).
+// A schedule is told by its <scheduled> wrapper, whatever its origin (none,
+// or the channel conversation it goes back to); "scheduled" is the origin of
+// sessions saved before 0.117.0.
 func TestPromptIconPerOrigin(t *testing.T) {
 	for origin, want := range map[string]string{
 		"":              userIcon,
@@ -24,9 +27,21 @@ func TestPromptIconPerOrigin(t *testing.T) {
 		"telegram":      outsideIcon,
 		"something-new": outsideIcon,
 	} {
-		if got := promptIcon(origin); got != want {
+		if got := promptIcon(origin, "hello"); got != want {
 			t.Errorf("promptIcon(%q) = %q, want %q", origin, got, want)
 		}
+	}
+	fired := "<scheduled slug=\"standup\">\npost it\n</scheduled>"
+	for _, origin := range []string{"", "user", "slack:C0123", "telegram:1:2"} {
+		if got := promptIcon(origin, fired); got != scheduleIcon {
+			t.Errorf("a fired schedule with origin %q = %q, want the schedule icon", origin, got)
+		}
+		if got := promptIcon(origin, "  \n"+fired); got != scheduleIcon {
+			t.Errorf("leading space: %q", got)
+		}
+	}
+	if got := promptIcon("", "talking about <scheduled slug=x> in a sentence"); got != userIcon {
+		t.Errorf("the wrapper must START the prompt: %q", got)
 	}
 	if outsideIcon == userIcon || outsideIcon == scheduleIcon || userIcon == scheduleIcon {
 		t.Error("the three icons must be distinct")
@@ -75,6 +90,34 @@ func TestTUIEchoesAColleaguePromptWithItsIcon(t *testing.T) {
 	}
 }
 
+// The live path for a fired schedule: no origin of its own, told by its
+// <scheduled> wrapper, echoed with the schedule icon (not as typed by the user).
+func TestTUIEchoesAFiredScheduleWithItsIcon(t *testing.T) {
+	f := newFallbackFixture(t)
+	tu := f.tui(f.sessionID)
+	tu.autoConnect(context.Background())
+	tu.takeSSECancel()()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	events, err := f.c.StreamEvents(ctx, f.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go tu.consumeEvents(ctx, events)
+	go f.c.Ask(f.sessionID, "<scheduled slug=\"standup\">\npost the standup\n</scheduled>", 20*time.Second) //nolint:errcheck
+	deadline := time.Now().Add(10 * time.Second)
+	var got string
+	for time.Now().Before(deadline) {
+		if got = screenText(tu); strings.Contains(got, "standup") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(got, scheduleIcon+" <scheduled slug=") {
+		t.Fatalf("the fired schedule was not echoed with %q:\n%s", scheduleIcon, got)
+	}
+}
+
 // A reloaded history keeps the distinction: the persisted origin picks the icon.
 // The messages are written the way the session writes them (Meta.Origin on the
 // user message), so this exercises the TUI's history rendering, not a model.
@@ -94,6 +137,8 @@ func TestTUIHistoryShowsPersistedOrigins(t *testing.T) {
 		types.NewAssistantToolCallMessage("answer two", "", "", nil),
 		user("fired by the scheduler", "scheduled"),
 		types.NewAssistantToolCallMessage("answer three", "", "", nil),
+		user("<scheduled slug=\"new\">\nfired since 0.117.0\n</scheduled>", ""),
+		types.NewAssistantToolCallMessage("answer four", "", "", nil),
 	} {
 		if err := f.store.AddMessage(m); err != nil {
 			t.Fatal(err)
@@ -103,7 +148,7 @@ func TestTUIHistoryShowsPersistedOrigins(t *testing.T) {
 	tu := f.tui(f.sessionID)
 	tu.autoConnect(context.Background())
 	got := screenText(tu)
-	for _, want := range []string{userIcon + " typed by the user", outsideIcon + " sent by a colleague", scheduleIcon + " fired by the scheduler"} {
+	for _, want := range []string{userIcon + " typed by the user", outsideIcon + " sent by a colleague", scheduleIcon + " fired by the scheduler", scheduleIcon + " <scheduled slug=\"new\">"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the reloaded history lacks %q:\n%s", want, got)
 		}

@@ -90,7 +90,8 @@ func TestScheduleOriginIsTheTurnsChannelConversation(t *testing.T) {
 
 // A schedule created from a channel conversation fires back INTO it (the
 // channel gets the turn), wrapped as scheduled; one without an origin, or
-// whose conversation the session no longer listens to, fires as "scheduled".
+// whose conversation the session no longer listens to, fires with the
+// session's own (default) origin — the <scheduled> wrapper says what it is.
 func TestAFiredScheduleGoesBackToItsChannel(t *testing.T) {
 	ch := newFakeChannel("fake")
 	a, model, _ := channelAgent(t, ch)
@@ -135,7 +136,7 @@ func TestAFiredScheduleGoesBackToItsChannel(t *testing.T) {
 	waitFor(t, "third fire", func() bool { return len(snapshot()) == 3 })
 	p = snapshot()
 	for _, e := range p[1:] {
-		if e.Origin != OriginScheduled || !strings.HasPrefix(e.Output, "<scheduled slug=") {
+		if e.Origin != OriginUser || !strings.HasPrefix(e.Output, "<scheduled slug=") {
 			t.Errorf("fallback prompt = %+v", e)
 		}
 	}

@@ -339,7 +339,9 @@ func isNilStore(s memory.Store) bool {
 //
 // A schedule created from a channel conversation the session still listens to
 // fires back INTO it (its origin), so the channel publishes the reply; else it
-// fires as "scheduled". Either way the prompt is wrapped in <scheduled>.
+// fires as the session's own (no origin). Either way the prompt is wrapped in
+// <scheduled slug="…">: that wrapper, not an origin, is what says a prompt was
+// fired by the scheduler (the model reads it; the TUI shows ◷ for it).
 //
 // In practice schedEngine.evaluate (see agent/schedule/engine.go) already
 // filters to only THIS engine's watched sessions before ever calling this
@@ -361,7 +363,7 @@ func (a *Agent) fireScheduledPrompt(sc schedule.Schedule) {
 		sess.Prompt(context.Background(), text, PromptWithOrigin(sc.Origin))
 		return
 	}
-	sess.Prompt(context.Background(), text, PromptWithOriginScheduled())
+	sess.Prompt(context.Background(), text)
 }
 
 // wrapScheduled marks a fired schedule's prompt, so the model knows nobody is

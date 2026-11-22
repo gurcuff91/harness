@@ -103,7 +103,7 @@ type Event struct {
 	Message       string         // error messages (EventError)
 	Details       map[string]any // structured error details, if any (EventError)
 	Summary       string         // compaction summary (EventCompactEnd)
-	Origin        string         // prompt source for EventReceivedPrompt/EventFollowUpStart ("user", "scheduled", …)
+	Origin        string         // prompt source for EventReceivedPrompt/EventFollowUpStart ("user", "slack:C1", "colleague:x", …)
 	// MessageIndex is the absolute index of the user message a
 	// EventReceivedPrompt/EventFollowUpStart echoes — already stored when the
 	// event fires, so clients can fetch it (or its images) immediately.

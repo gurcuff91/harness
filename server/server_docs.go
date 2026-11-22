@@ -906,7 +906,7 @@ const openAPISpecTemplate = `{
         "properties": {
           "text":   { "type": "string" },
           "images": { "type": "array", "items": { "$ref": "#/components/schemas/ImageData" } },
-          "origin": { "type": "string", "description": "Where the prompt came from — any short string: \"user\" (default), \"scheduled\", \"colleague:<id>\" (another agent's question through the colleague channel; \"colleague:<id>#reply\" for its answer to this session's), \"herdr\" (a message Herdr typed into the TUI), \"slack:<id>\" (an input channel), a transport (\"telegram\", \"acp\") or your own. Echoed on received_prompt/follow_up_start and stored with the message; frontends use it to pick an icon. The model never sees it." }
+          "origin": { "type": "string", "description": "Where the prompt came from — any short string: \"user\" (default; also a fired schedule, which is wrapped in <scheduled slug=\"…\"> instead of having an origin), \"colleague:<id>\" (another agent's question through the colleague channel; \"colleague:<id>#reply\" for its answer to this session's), \"herdr\" (a message Herdr typed into the TUI), \"slack:<id>\" (an input channel), a transport (\"telegram\", \"acp\") or your own. Echoed on received_prompt/follow_up_start and stored with the message; frontends use it to pick an icon. The model never sees it." }
         }
       },
       "AskResponse": {
