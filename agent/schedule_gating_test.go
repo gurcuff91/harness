@@ -3,6 +3,7 @@ package agent
 import (
 	"testing"
 
+	"github.com/gurcuff91/harness/agent/schedule"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/agent/tools"
 )
@@ -48,7 +49,7 @@ func TestFireScheduledPromptDropsInactiveOwnerWithoutResuming(t *testing.T) {
 	// resurrect it — resolveScheduledSession must still report nil
 	// afterward (fireScheduledPrompt has no side effect on activeSessions
 	// when the owner isn't found).
-	a.fireScheduledPrompt("some-slug", "do something", ownerID)
+	a.fireScheduledPrompt(schedule.Schedule{Slug: "some-slug", Prompt: "do something", Owner: ownerID})
 
 	if a.resolveScheduledSession(ownerID) != nil {
 		t.Error("fireScheduledPrompt must not auto-resume an inactive owner from disk — the prompt should simply be dropped")

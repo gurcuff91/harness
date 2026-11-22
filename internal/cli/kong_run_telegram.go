@@ -1,155 +1,59 @@
-// Run() methods for `harness telegram` and its nested subcommands
-// (pair/unpair/list/token). Each Run() below is a thin adapter over the
-// telegram.* package functions and telegram.Run.
+// Run() for `harness telegram token`: save, check or remove the bot token the
+// Telegram input channel uses (the bot itself is a channel since v0.116.0, see
+// channels/telegram).
 package cli
 
 import (
+	"errors"
 	"fmt"
 
-	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/internal/logx"
-	"github.com/gurcuff91/harness/transports/telegram"
+	telegramch "github.com/gurcuff91/harness/channels/telegram"
 )
 
-func (c *telegramRunCmd) Run() error {
-	// --with-colleagues / --with-scheduler decide the AGENT's own extras here — they are
-	// agent.AgentOptions concerns, not something telegram.Options carries (see its doc comment for why).
-	// No telegram.Directive here: the transport adds it to the sessions it
-	// creates/resumes (per-session directives), so it never leaks into other
-	// sessions of the same agent.
-	a, err := c.newAgent()
-	if err != nil {
-		return err
-	}
-	// agent → server → transport. The transport never closes the server or
-	// the agent; the CLI owns both (closing srv also closes a).
-	srv, err := startTransportServer(a, "telegram")
-	if err != nil {
-		a.Close()
-		return err
-	}
-	defer srv.Close()
-	ctx, cancel := signalContext()
-	defer cancel()
-
-	opts := []telegram.Option{
-		telegram.WithToken(c.Token),
-		telegram.WithLogger(logx.NewHarnessLogger()),
-	}
-	if c.Model != "" {
-		opts = append(opts, telegram.WithSessionModel(c.Model))
-	}
-	if c.Thinking != "" {
-		opts = append(opts, telegram.WithSessionThinking(c.Thinking))
-	}
-	if c.AllowUnpair {
-		opts = append(opts, telegram.WithAllowUnpair())
-	}
-	return telegram.Run(ctx, srv, opts...)
-}
-
-// newAgent builds the agent `harness telegram` runs (see serveCmd.newAgent: Run minus the network).
-func (c *telegramRunCmd) newAgent() (*agent.Agent, error) {
-	x, err := extrasOf(c.withFlags)
-	if err != nil {
-		return nil, err
-	}
-	return newInteractiveAgent(x), nil
-}
-
-func (c *telegramPairCmd) Run() error {
-	added, err := telegram.PairChat(c.ChatID)
-	if err != nil {
-		return err
-	}
-	if added {
-		fmt.Printf("Paired chat %d.\n", c.ChatID)
-	} else {
-		fmt.Printf("Chat %d was already paired.\n", c.ChatID)
-	}
-	return nil
-}
-
-func (c *telegramUnpairCmd) Run() error {
-	removed, err := telegram.UnpairChat(c.ChatID)
-	if err != nil {
-		return err
-	}
-	if removed {
-		fmt.Printf("Unpaired chat %d.\n", c.ChatID)
-	} else {
-		fmt.Printf("Chat %d was not paired.\n", c.ChatID)
-	}
-	return nil
-}
-
-func (c *telegramListCmd) Run() error {
-	ids, err := telegram.PairedChats()
-	if err != nil {
-		return err
-	}
-	if len(ids) == 0 {
-		fmt.Println("No paired chats. Run 'harness telegram pair <chat_id>'.")
-		return nil
-	}
-	fmt.Println("Paired chats:")
-	for _, id := range ids {
-		fmt.Printf("  %d\n", id)
-	}
-	return nil
-}
-
 func (c *telegramTokenCmd) Run() error {
-	if c.Status {
+	switch {
+	case c.Delete:
+		if err := telegramch.DeleteToken(); err != nil {
+			return err
+		}
+		fmt.Println("Telegram bot token removed.")
+		return nil
+	case c.Status:
 		return telegramTokenStatus()
+	case c.Token == "":
+		return errors.New("a token is required: pass one, or use --status / --delete")
 	}
-	if c.Token == "" {
-		return fmt.Errorf("a token is required — pass one, or use --status to check the saved one")
-	}
-
-	// Verify the token against the real Bot API BEFORE saving it — never
-	// persist a token that doesn't actually work. Without this, a typo'd or
-	// already-revoked token would sit in the credentials store until the next
-	// `harness telegram` launch fails, or until someone happens to run
-	// `harness telegram token --status` to notice.
 	ctx, cancel := signalContext()
 	defer cancel()
-	me, err := telegram.NewBot(c.Token).GetMe(ctx)
+	// Verified BEFORE saving: a token that does not work is never stored.
+	me, err := telegramch.VerifyToken(ctx, c.Token)
 	if err != nil {
-		return fmt.Errorf("token rejected by Telegram's API (%w) — not saved", err)
+		return fmt.Errorf("%w (not saved)", err)
 	}
-
-	if err := telegram.SaveToken(c.Token); err != nil {
+	if err := telegramch.SaveToken(c.Token); err != nil {
 		return fmt.Errorf("save token: %w", err)
 	}
-	fmt.Printf("✓ Token verified — bot: @%s\n", me.Username)
-	fmt.Println("Token saved. 'harness telegram' will use it automatically — no need to pass --token every time.")
+	fmt.Printf("✓ Token verified and saved: bot @%s\n", me.Username)
+	fmt.Println("  Listen to it from a session: harness --telegram-allow @your_username")
 	return nil
 }
 
-// telegramTokenStatus verifies the saved token against the real Bot API
-// (GetMe) rather than just reporting its presence — the same
-// "check it actually works" approach slackLoginStatus takes for Slack's
-// saved credentials, catching a revoked/invalid token immediately instead
-// of only at the next `harness telegram` launch.
+// telegramTokenStatus verifies the saved token against the Bot API instead of
+// only reporting that one exists.
 func telegramTokenStatus() error {
-	token, err := telegram.LoadToken()
-	if err != nil {
-		return fmt.Errorf("read saved token: %w", err)
-	}
+	token := telegramch.LoadToken()
 	if token == "" {
 		fmt.Println("No token saved. Run 'harness telegram token <token>' to save one.")
 		return nil
 	}
 	ctx, cancel := signalContext()
 	defer cancel()
-	bot := telegram.NewBot(token)
-	me, err := bot.GetMe(ctx)
+	me, err := telegramch.VerifyToken(ctx, token)
 	if err != nil {
-		fmt.Printf("✗ Saved token is invalid or unreachable: %s\n", err)
+		fmt.Printf("✗ Saved token: %s\n", err)
 		fmt.Println("  Run 'harness telegram token <token>' to save a new one.")
 		return nil
 	}
-	fmt.Printf("✓ Token valid — bot: @%s\n", me.Username)
+	fmt.Printf("✓ Token valid: bot @%s\n", me.Username)
 	return nil
 }

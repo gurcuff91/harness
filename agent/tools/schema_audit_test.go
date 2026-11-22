@@ -20,9 +20,9 @@ func (auditMemoryStore) Delete(cwd, slug string, global bool) (bool, error) { re
 
 type auditScheduleStore struct{}
 
-func (auditScheduleStore) Set(slug, cron, prompt, owner string) error { return nil }
-func (auditScheduleStore) Delete(slug, owner string) (bool, error)    { return false, nil }
-func (auditScheduleStore) Entries(owner string) []ScheduleEntry       { return nil }
+func (auditScheduleStore) Set(slug, cron, prompt, owner, origin string) error { return nil }
+func (auditScheduleStore) Delete(slug, owner string) (bool, error)            { return false, nil }
+func (auditScheduleStore) Entries(owner string) []ScheduleEntry               { return nil }
 
 // allBuiltinTools returns every tool the agent can register, built with
 // minimal mocks where a constructor needs a store/executor. This is the same
@@ -43,7 +43,7 @@ func allBuiltinTools() []Tool {
 		MemoWrite(auditMemoryStore{}, "/tmp"),
 		MemoSearch(auditMemoryStore{}, "/tmp"),
 		MemoDelete(auditMemoryStore{}, "/tmp"),
-		Schedule(auditScheduleStore{}, "owner"),
+		Schedule(auditScheduleStore{}, "owner", nil),
 		ScheduleList(auditScheduleStore{}, "owner"),
 		ScheduleDelete(auditScheduleStore{}, "owner"),
 		Subagent(func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {

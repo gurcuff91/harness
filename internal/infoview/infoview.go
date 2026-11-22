@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gurcuff91/harness/client"
+	"github.com/gurcuff91/harness/internal/providers"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -120,11 +121,16 @@ func Balance(b *types.QuotaBalance) string {
 	return fmt.Sprintf("$%.2f of $%.2f", b.RemainingUSD, b.AllowanceUSD)
 }
 
-// NoQuota reports whether a quota error means "this provider has none" (404):
+// NoQuota reports whether a quota error means "this provider has none" (an
+// API 404, or providers.ErrNoQuota / ErrProviderNotFound in process):
 // the panel then shows no section at all.
 func NoQuota(err error) bool {
 	var ce *client.Error
-	return errors.As(err, &ce) && ce.Status == 404
+	if errors.As(err, &ce) {
+		return ce.Status == 404
+	}
+	// In-process readers (agent.SessionView) get the providers' own errors.
+	return errors.Is(err, providers.ErrNoQuota) || errors.Is(err, providers.ErrProviderNotFound)
 }
 
 // Until formats the time left before t: "45m", "4h 05m", "5d 02h"; "now"

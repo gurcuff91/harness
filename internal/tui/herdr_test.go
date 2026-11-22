@@ -266,7 +266,7 @@ func TestOnlyTheTUIOwnsTheHerdrSection(t *testing.T) {
 	const tuiPkg = "github.com/gurcuff91/harness/internal/tui"
 	for _, pkg := range []string{
 		"github.com/gurcuff91/harness/transports/acp",
-		"github.com/gurcuff91/harness/transports/telegram",
+		"github.com/gurcuff91/harness/channels/telegram",
 		"github.com/gurcuff91/harness/channels/slack",
 		"github.com/gurcuff91/harness/server",
 		"github.com/gurcuff91/harness/agent",

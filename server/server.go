@@ -13,7 +13,6 @@ import (
 	"net/http/pprof"
 	"net/url"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -226,7 +225,7 @@ func (s *Server) Addr() string {
 // Start binds addr ("127.0.0.1:0" for loopback + an OS-assigned port; "" means
 // the same) and serves the agent in the background, returning once the
 // server is bound and accepting — so srv.Addr() is valid immediately, ready
-// to hand to transports (telegram.Run(ctx, srv), …), which all share it.
+// to hand to transports (acp.Run(ctx, srv), …), which all share it.
 // The caller owns the server: Close it when done (by default that also
 // closes the agent — see ServerOptions.KeepAgentOpen).
 func Start(a *agent.Agent, addr string, opts ServerOptions) (*Server, error) {
@@ -1607,49 +1606,21 @@ func (s *Server) handleSessionInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess := proxy.session
-
-	// MCP: count connected servers.
-	mcpConnected := 0
-	for _, st := range s.agent.MCPStatuses() {
-		if st.Connected {
-			mcpConnected++
-		}
-	}
-
-	// Schedules: count only those owned by this session (they're the ones that
-	// will actually fire into it — the honest count from this session's view).
-	scheduleCount := 0
-	if store := s.agent.Schedules(); store != nil {
-		for _, sc := range store.List() {
-			if sc.Owner == id {
-				scheduleCount++
-			}
-		}
-	}
-
-	// Meta() (the public, lock-free accessor) is deliberate here: this
-	// endpoint is documented as a fast, read-only snapshot, but the
-	// unexported syncMeta() takes s.mu — the SAME lock promptSync holds for
-	// the entire duration of a running turn — so a call against a busy
-	// session used to block until turn_end back when this endpoint called
-	// what was then the ONLY Meta() (confirmed live: 9.9s-60s+ depending on
-	// the turn). Meta() is built entirely from the same lock-free accessors
-	// (Model/Thinking/Stats/MaxIterations) the Subagent tool's executor
-	// already relies on to read live session state from inside a running
-	// turn — see its own doc comment for the full contract (including the
-	// one accepted trade-off: delegated Subagent/Fetch cost isn't drained
-	// here — that's what syncMeta()/syncStats() are for, internal-only).
+	// Snapshot() is built only from lock-free accessors: this read-only
+	// endpoint never blocks on a running turn (it used to, for the whole turn,
+	// when it took the session lock). The same snapshot backs a channel's
+	// agent.SessionView, so /info reads the same everywhere.
+	snap := proxy.session.Snapshot()
 	writeJSON(w, http.StatusOK, sessionInfoDTO{
-		Version:       version.Version,
-		Session:       liveDetail(sess),
-		Busy:          sess.IsBusy(),
-		QueueDepth:    sess.FollowUpCount(),
-		MCPConnected:  mcpConnected,
-		ScheduleCount: scheduleCount,
-		OS:            runtime.GOOS,
-		Arch:          runtime.GOARCH,
-		Terminal:      s.agent.Options().Terminal,
+		Version:       snap.Version,
+		Session:       liveDetail(proxy.session),
+		Busy:          snap.Busy,
+		QueueDepth:    snap.QueueDepth,
+		MCPConnected:  snap.MCPConnected,
+		ScheduleCount: snap.ScheduleCount,
+		OS:            snap.OS,
+		Arch:          snap.Arch,
+		Terminal:      snap.Terminal,
 	})
 }
 

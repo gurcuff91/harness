@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/gurcuff91/harness/agent"
 	colleaguech "github.com/gurcuff91/harness/channels/colleague"
 	slackch "github.com/gurcuff91/harness/channels/slack"
+	telegramch "github.com/gurcuff91/harness/channels/telegram"
 	"github.com/gurcuff91/harness/internal/logx"
 	"github.com/gurcuff91/harness/types"
 )
@@ -49,6 +52,57 @@ func slackInputChannels(refs []string, registered []agent.Channel) ([]types.Inpu
 		}
 	}
 	return nil, fmt.Errorf("%s", errNoSlackLogin)
+}
+
+// TelegramAllowEnv supplies --telegram-allow from the environment
+// (comma-separated): a flag only turns the channel on, like every switch.
+const TelegramAllowEnv = "TELEGRAM_ALLOW"
+
+// telegramChannels is the Telegram channel when a bot token exists: the flag,
+// else TELEGRAM_BOT_TOKEN, else the saved one (`harness telegram token`).
+// Registering opens nothing; a session binds the bot to listen.
+func telegramChannels(flagToken string, withLogger bool) []agent.Channel {
+	token := telegramch.ResolveToken(flagToken)
+	if token == "" {
+		return nil
+	}
+	var opts []telegramch.Option
+	if withLogger {
+		opts = append(opts, telegramch.WithLogger(logx.NewHarnessLogger()))
+	}
+	return []agent.Channel{telegramch.New(token, opts...)}
+}
+
+// telegramInputChannels turns --telegram-allow (and TELEGRAM_ALLOW) into the
+// Telegram channel request of the startup session, whose ref is the trusted
+// usernames. The rules, checked before anything opens: users without any bot
+// token, or an explicit --telegram-token without users, are errors.
+func telegramInputChannels(allow []string, flagToken string, registered []agent.Channel) ([]types.InputChannel, error) {
+	var users []string
+	for _, a := range allow {
+		users = append(users, a)
+	}
+	if len(users) == 0 {
+		if env := strings.TrimSpace(os.Getenv(TelegramAllowEnv)); env != "" {
+			users = append(users, env)
+		}
+	}
+	if len(users) == 0 {
+		if strings.TrimSpace(flagToken) != "" {
+			return nil, errors.New("--telegram-token needs --telegram-allow (the trusted @usernames the bot listens to)")
+		}
+		return nil, nil
+	}
+	list, err := telegramch.ParseAllowed(strings.Join(users, ","))
+	if err != nil {
+		return nil, fmt.Errorf("--telegram-allow: %w", err)
+	}
+	for _, ch := range registered {
+		if ch.Type() == telegramch.Type {
+			return []types.InputChannel{{Type: telegramch.Type, Ref: strings.Join(list, ",")}}, nil
+		}
+	}
+	return nil, fmt.Errorf("--telegram-allow: no Telegram bot token: pass --telegram-token, set %s or run harness telegram token", telegramch.TokenEnv)
 }
 
 // colleagueChannels is the colleague channel when --with-colleagues (or

@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.116.0] - 2026-11-22
+
+### Changed (breaking) — Telegram is an input channel
+The Telegram bot is no longer a separate frontend that created and owned one session per paired chat: like Slack, it is now an input channel a session listens to. `harness --telegram-allow @you` (repeatable, or comma-separated; or `TELEGRAM_ALLOW`) makes the session you open listen to the bot: messages from those trusted @usernames, in a private chat or a group, become its prompts, wrapped as `<telegram chat="…" user="@…">`, and its reply to each goes back to the chat it came from. Everyone else is ignored without an answer. The token comes from `--telegram-token`, else `TELEGRAM_BOT_TOKEN`, else the one saved with `harness telegram token`. One bot is listened to by one session at a time, across processes. `harness serve --telegram-token …` registers the channel, and a client binds it with `channels:[{"type":"telegram","ref":"you,friend"}]` (the ref is the list of trusted usernames). Photos arrive as images and saved files; documents of any type (up to 20 MB) as files; albums as one prompt; files go back with `<telegram-upload path="…"/>`. `/info` (with the provider quota) and `/context` are answered in the chat without the model; a chat cannot change the session's model, thinking or history.
+
+Migration:
+
+| Before | Now |
+|---|---|
+| `harness telegram` | `harness --telegram-allow @you` (a TUI session listens to the bot) |
+| `harness telegram pair/unpair/list` | the trusted users in `--telegram-allow` |
+| a bot on a server | `harness serve --telegram-token …` + `channels:[{"type":"telegram","ref":"you"}]` |
+| `harness.RunTelegram(...)` (SDK) | `harness.AgentWithChannels(telegram.New(token))` + `agent.WithSessionChannels(types.InputChannel{Type: "telegram", Ref: "you"})` |
+
+Removed: `transports/telegram`, `harness.RunTelegram`, `TelegramOption` and every `TelegramWith*`; the `harness telegram` bot and its `pair`, `unpair` and `list` commands (`--model`, `--thinking`, `--allow-unpair`); the `telegram_allowlist` and `telegram_sessions` settings (ignored if present). `harness telegram token` stays and gains `--delete`. Old Telegram sessions remain on disk and can be resumed (`--resume <id> --telegram-allow @you`).
+
+### Added — a schedule goes back to the conversation it was created from
+A schedule created from a Slack or Telegram conversation remembers it (`origin`), and when it fires while the session still listens there, its turn goes back to that conversation, so the reply is posted where it was asked for. Otherwise it fires as before. Every fired prompt is now wrapped in `<scheduled slug="…">`, so the model knows no person is waiting for it. SDK: `schedule.FireFunc` receives the whole `schedule.Schedule` (breaking), which gains `Origin`.
+
+### Added — `agent.SessionViewOf(ctx)` for channels
+The context of `Channel.Listen` carries a read-only view of the session (`Info`, `Context`, `Quota`) for a channel's own commands. Nothing on it changes the session. The quota cache moved into the provider layer so the view and `GET /api/providers/{name}/quota` share it, and the plain `/info` and `/context` panels are shared by ACP and Telegram.
+
 ## [0.115.0] - 2026-11-21
 
 ### Changed — `ColleagueList` asks each colleague for its session name

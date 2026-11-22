@@ -57,9 +57,9 @@ func TestRequiredFieldPresenceIsEnforced(t *testing.T) {
 		// same shared helper as every other tool for a consistent message ──
 		{"MemoWrite.slug", MemoWrite(auditMemoryStore{}, "/tmp"), `{"slug":"","content":"x"}`},
 		{"MemoWrite.content", MemoWrite(auditMemoryStore{}, "/tmp"), `{"slug":"x","content":""}`},
-		{"Schedule.slug", Schedule(auditScheduleStore{}, "owner"), `{"slug":"","cron":"@daily","prompt":"x"}`},
-		{"Schedule.cron", Schedule(auditScheduleStore{}, "owner"), `{"slug":"x","cron":"","prompt":"x"}`},
-		{"Schedule.prompt", Schedule(auditScheduleStore{}, "owner"), `{"slug":"x","cron":"@daily","prompt":""}`},
+		{"Schedule.slug", Schedule(auditScheduleStore{}, "owner", nil), `{"slug":"","cron":"@daily","prompt":"x"}`},
+		{"Schedule.cron", Schedule(auditScheduleStore{}, "owner", nil), `{"slug":"x","cron":"","prompt":"x"}`},
+		{"Schedule.prompt", Schedule(auditScheduleStore{}, "owner", nil), `{"slug":"x","cron":"@daily","prompt":""}`},
 	}
 
 	for _, c := range cases {

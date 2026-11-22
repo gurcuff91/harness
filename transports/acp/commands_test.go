@@ -7,6 +7,7 @@ import (
 
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/client"
+	"github.com/gurcuff91/harness/internal/infoview"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -105,7 +106,7 @@ func TestFormatContextPlainNil(t *testing.T) {
 // (the common case — every row-building helper in formatInfoPlain/
 // formatContextPlain ends its last line with \n).
 func TestFenceTrimsTrailingNewlineBeforeClosing(t *testing.T) {
-	got := fence("a\nb\n")
+	got := infoview.Fence("a\nb\n")
 	want := "```\na\nb\n```\n"
 	if got != want {
 		t.Errorf("fence(%q) = %q, want %q", "a\nb\n", got, want)

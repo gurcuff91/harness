@@ -234,7 +234,7 @@ func toolStyle(name string) (colorFn func(string) string, icon string) {
 // TUI knows: a channel's tools are all named after its type (enforced when a
 // session binds the channel: agent.prepareChannels), so the prefix is a fact,
 // not a guess. Add a prefix with each new channel type.
-var channelToolPrefixes = []string{"Slack"}
+var channelToolPrefixes = []string{"Slack", "Telegram"}
 
 func isChannelTool(name string) bool {
 	for _, p := range channelToolPrefixes {

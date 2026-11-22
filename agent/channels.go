@@ -295,10 +295,7 @@ func (sc *sessionChannels) tap(e types.Event) {
 		return
 	}
 	if e.Type == types.EventReceivedPrompt || e.Type == types.EventFollowUpStart {
-		sc.current = sc.byOrigin[e.Origin]
-		if sc.current == nil {
-			sc.current = sc.byPrompt[e.Origin]
-		}
+		sc.current = sc.routeLocked(e.Origin)
 	}
 	cur := sc.current
 	if e.Type == types.EventTurnEnd {
@@ -308,6 +305,42 @@ func (sc *sessionChannels) tap(e types.Event) {
 	if cur != nil {
 		cur.ch.HandleEvent(cur.id, e)
 	}
+}
+
+// routeLocked returns the bound conversation a turn of origin belongs to:
+// exactly its conversation ("slack:C1"), the conversation a channel delivered
+// it through (Inbound.Origin), or a conversation whose origin is a PREFIX of
+// it followed by ":" — a channel whose conversation has sub-conversations
+// (Telegram: the bot is claimed, "telegram:<bot>", and each turn carries its
+// chat, "telegram:<bot>:<chat>"). nil when none. Caller holds sc.mu.
+func (sc *sessionChannels) routeLocked(origin string) *boundChannel {
+	if origin == "" {
+		return nil
+	}
+	if b := sc.byOrigin[origin]; b != nil {
+		return b
+	}
+	if b := sc.byPrompt[origin]; b != nil {
+		return b
+	}
+	for o, b := range sc.byOrigin {
+		if strings.HasPrefix(origin, o+":") {
+			return b
+		}
+	}
+	return nil
+}
+
+// listensTo reports whether a turn of origin would reach one of the session's
+// channels — the rule the scheduler uses to send a fired prompt back to the
+// conversation it was created from.
+func (sc *sessionChannels) listensTo(origin string) bool {
+	if sc == nil {
+		return false
+	}
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	return !sc.closed && sc.routeLocked(origin) != nil
 }
 
 // close stops listening and releases every claim. Idempotent.

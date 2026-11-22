@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -608,5 +609,45 @@ func TestListenCtxCarriesTheSessionName(t *testing.T) {
 	}
 	if _, ok := SessionName(context.Background()); ok {
 		t.Error("a ctx that is not a Listen ctx has no session")
+	}
+}
+
+// The Listen ctx also carries a READ-ONLY view of the session: its info,
+// context breakdown and quota. Nothing on it can change the session.
+func TestListenCtxCarriesAReadOnlySessionView(t *testing.T) {
+	ch := newFakeChannel("fake")
+	a, model, _ := channelAgent(t, ch)
+	sess, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "one"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	ch.mu.Lock()
+	ctx := ch.ctxs["ONE"]
+	ch.mu.Unlock()
+	v, ok := SessionViewOf(ctx)
+	if !ok {
+		t.Fatal("no view on the Listen ctx")
+	}
+	info := v.Info()
+	if info.ID != sess.ID() || info.Model != model || info.Name != sess.Name() || len(info.Channels) != 1 || info.Channels[0].ID != "ONE" {
+		t.Fatalf("Info() = %+v", info)
+	}
+	if info.OS == "" || info.Version == "" {
+		t.Errorf("Info() lacks the environment: %+v", info)
+	}
+	if got := v.Context(); got.ContextWindow != sess.ContextBreakdown().ContextWindow {
+		t.Errorf("Context() = %+v", got)
+	}
+	// The fake provider reports no quota.
+	if _, err := v.Quota(context.Background()); !errors.Is(err, providers.ErrNoQuota) {
+		t.Errorf("Quota() err = %v, want ErrNoQuota", err)
+	}
+	if _, ok := SessionViewOf(context.Background()); ok {
+		t.Error("a ctx that is not a Listen ctx has no view")
+	}
+	// Read-only by construction: the interface has exactly these methods.
+	if n := reflect.TypeOf((*SessionView)(nil)).Elem().NumMethod(); n != 3 {
+		t.Errorf("SessionView has %d methods; adding one is a deliberate decision (it must stay read-only)", n)
 	}
 }

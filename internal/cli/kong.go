@@ -51,7 +51,7 @@ var CLI struct {
 
 	Serve serveCmd `cmd:"" help:"Start the HTTP/SSE server (headless transport)"`
 
-	Telegram telegramCmd `cmd:"" help:"Run as a Telegram bot (one session per chat)"`
+	Telegram telegramCmd `cmd:"" help:"Telegram bot token (a session listens to the bot with --telegram-allow)"`
 
 	Slack slackCmd `cmd:"" help:"Slack account for input channels (harness slack login)"`
 
@@ -92,8 +92,12 @@ type tuiCmd struct {
 	// name, repeatable): mentions there become its prompts, its replies are
 	// posted back. Uses the `harness slack login` account.
 	SlackChannels []string `name:"slack-channel" sep:"none" help:"Listen to a Slack channel or DM (id or name; repeatable): mentions there become prompts of this session and its replies are posted back. Needs harness slack login"`
-	Prompt        string   `short:"p" help:"Run a single-turn prompt instead of the interactive TUI"`
-	Output        string   `enum:"text,json,json-stream" default:"text" help:"Output mode (with --prompt/-p)"`
+	// TelegramAllow binds the startup session to the Telegram bot: messages
+	// of these users (repeatable, or comma-separated) become its prompts.
+	TelegramAllow     []string `name:"telegram-allow" help:"Listen to the Telegram bot: messages from these trusted @usernames (repeatable; commas also work; or TELEGRAM_ALLOW) become prompts of this session, and its replies go back to their chat. Needs a bot token (--telegram-token, TELEGRAM_BOT_TOKEN or harness telegram token)"`
+	telegramTokenFlag `embed:""`
+	Prompt            string `short:"p" help:"Run a single-turn prompt instead of the interactive TUI"`
+	Output            string `enum:"text,json,json-stream" default:"text" help:"Output mode (with --prompt/-p)"`
 
 	// Initial is an optional trailing positional: harness "fix the login bug" opens the interactive
 	// TUI with that message already submitted (what Herdr's tab.new --task and `hc run harness
@@ -117,8 +121,17 @@ func (c *tuiCmd) initialPrompt() string {
 // ── serve ────────────────────────────────────────────────────────────────
 
 type serveCmd struct {
-	Addr      string `arg:"" help:"Address to listen on (e.g. :8080)"`
-	withFlags `embed:""`
+	Addr              string `arg:"" help:"Address to listen on (e.g. :8080)"`
+	withFlags         `embed:""`
+	telegramTokenFlag `embed:""`
+}
+
+// telegramTokenFlag is the Telegram bot token a command registers the channel
+// with, shared by the TUI and serve so the name and help cannot drift. Not a
+// Kong env tag: an empty TELEGRAM_BOT_TOKEN must not fail the command
+// (channels/telegram.ResolveToken reads the environment itself).
+type telegramTokenFlag struct {
+	TelegramToken string `name:"telegram-token" help:"Telegram bot token for this process (instead of TELEGRAM_BOT_TOKEN or the saved one); a session listens to the bot with --telegram-allow (TUI) or channels:[{type:telegram, ref:<users>}] (API)"`
 }
 
 // ── acp ──────────────────────────────────────────────────────────────────
@@ -135,40 +148,17 @@ type acpCmd struct{}
 
 // ── telegram ─────────────────────────────────────────────────────────────
 
-// telegramCmd is a pure command group: no flags, no Run() of its own — only
-// the flags/action that actually run the bot live in telegramRunCmd (the
-// hidden default child), so they don't leak into pair/unpair/list's own
-// --help or re-fire after those subcommands run (see the parent-Run() note
-// atop this file).
+// telegramCmd is the Telegram bot token group. The bot itself is no longer a
+// command (v0.116.0): a session listens to it, as an input channel, with
+// --telegram-allow (TUI) or channels on the API (serve).
 type telegramCmd struct {
-	Run    telegramRunCmd    `cmd:"" default:"withargs" hidden:"" help:"Run as a Telegram bot (default)"`
-	Pair   telegramPairCmd   `cmd:"" help:"Allow a chat to use the bot"`
-	Unpair telegramUnpairCmd `cmd:"" help:"Revoke a chat"`
-	List   telegramListCmd   `cmd:"" help:"List paired chats"`
-	Token  telegramTokenCmd  `cmd:"" help:"Save the bot token (or check the saved one with --status)"`
+	Token telegramTokenCmd `cmd:"" help:"Save the bot token, check it (--status) or remove it (--delete)"`
 }
-
-type telegramRunCmd struct {
-	Token       string `env:"TELEGRAM_BOT_TOKEN" help:"Bot token (or set TELEGRAM_BOT_TOKEN)"`
-	Model       string `help:"Model override (provider/model)"`
-	Thinking    string `enum:",off,low,medium,high,xhigh,max" default:"" help:"Thinking level override"`
-	AllowUnpair bool   `name:"allow-unpair" help:"Accept any chat, auto-pairing on first contact"`
-	withFlags   `embed:""`
-}
-
-type telegramPairCmd struct {
-	ChatID int64 `arg:"" help:"Chat ID to allow"`
-}
-
-type telegramUnpairCmd struct {
-	ChatID int64 `arg:"" help:"Chat ID to revoke (also drops its session)"`
-}
-
-type telegramListCmd struct{}
 
 type telegramTokenCmd struct {
-	Token  string `arg:"" optional:"" help:"Bot token to save (omit with --status to check the saved one)"`
-	Status bool   `help:"Show whether a token is saved, instead of saving one"`
+	Token  string `arg:"" optional:"" help:"Bot token to verify and save"`
+	Status bool   `help:"Check the saved token instead of saving one"`
+	Delete bool   `help:"Remove the saved token"`
 }
 
 // ── slack ────────────────────────────────────────────────────────────────

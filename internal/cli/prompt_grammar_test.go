@@ -100,8 +100,7 @@ func TestEverySubcommandStillDispatchesToItself(t *testing.T) {
 		"memo":                    {[]string{"memo"}, "memo"},
 		"memo with a query":       {[]string{"memo", "needle"}, "memo <query>"},
 		"schedules":               {[]string{"schedules"}, "schedules"},
-		"telegram":                {[]string{"telegram"}, "telegram run"},
-		"telegram pair":           {[]string{"telegram", "pair", "123"}, "telegram pair <chat-id>"},
+		"telegram token":          {[]string{"telegram", "token", "--status"}, "telegram token"},
 		"slack login":             {[]string{"slack", "login"}, "slack login"},
 		"a flag before a name":    {[]string{"--model", "a/b", "sessions"}, "sessions"},
 	} {

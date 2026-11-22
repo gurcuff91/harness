@@ -79,7 +79,7 @@ func TestUpdateSchedule_SeesFreshestDiskStateAcrossInstances(t *testing.T) {
 	writer := storeAt(t, path)
 	reader := storeAt(t, path)
 
-	if err := writer.Set("standup", "@daily", "generate standup", "sess-A"); err != nil {
+	if err := writer.Set("standup", "@daily", "generate standup", "sess-A", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -107,12 +107,12 @@ func TestRecordRun_DoesNotClobberConcurrentEdit(t *testing.T) {
 	engineStore := storeAt(t, path) // simulates the --with-scheduler process
 	userStore := storeAt(t, path)   // simulates a different process's session
 
-	if err := engineStore.Set("standup", "@daily", "v1 prompt", "sess-A"); err != nil {
+	if err := engineStore.Set("standup", "@daily", "v1 prompt", "sess-A", ""); err != nil {
 		t.Fatal(err)
 	}
 	// The user's process edits the SAME schedule's prompt from elsewhere,
 	// persisting a change engineStore hasn't seen yet in memory.
-	if err := userStore.Set("standup", "@daily", "v2 prompt EDITED", "sess-A"); err != nil {
+	if err := userStore.Set("standup", "@daily", "v2 prompt EDITED", "sess-A", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -142,7 +142,7 @@ func TestRecordRun_NoopsIfDeletedConcurrently(t *testing.T) {
 	engineStore := storeAt(t, path)
 	userStore := storeAt(t, path)
 
-	if err := engineStore.Set("standup", "@daily", "hi", "sess-A"); err != nil {
+	if err := engineStore.Set("standup", "@daily", "hi", "sess-A", ""); err != nil {
 		t.Fatal(err)
 	}
 	if ok, err := userStore.Delete("standup", "sess-A"); err != nil || !ok {
@@ -195,14 +195,14 @@ func TestDelete_RacingSetResolvesDeterministically(t *testing.T) {
 	a := storeAt(t, path)
 	b := storeAt(t, path)
 
-	if err := a.Set("slug", "@daily", "hi", "sess-A"); err != nil {
+	if err := a.Set("slug", "@daily", "hi", "sess-A", ""); err != nil {
 		t.Fatal(err)
 	}
 
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); _, _ = a.Delete("slug", "sess-A") }()
-	go func() { defer wg.Done(); _ = b.Set("slug", "@daily", "hi again", "sess-A") }()
+	go func() { defer wg.Done(); _ = b.Set("slug", "@daily", "hi again", "sess-A", "") }()
 	wg.Wait()
 
 	// Either outcome (deleted, or present with the new value) is valid — the

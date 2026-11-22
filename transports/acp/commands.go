@@ -2,7 +2,6 @@ package acp
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/gurcuff91/harness/client"
@@ -176,146 +175,35 @@ func commandInputHint(d client.CommandDef) *availableCommandInput {
 	return &availableCommandInput{Hint: hint}
 }
 
-// compactNum formats a number with k/M suffixes for compact display.
-// Mirrors the same logic Slack's formatInfo/formatContext use.
-func compactNum(n int64) string {
-	switch {
-	case n >= 1_000_000:
-		f := fmt.Sprintf("%.1f", float64(n)/1_000_000)
-		return strings.TrimSuffix(f, ".0") + "M"
-	case n >= 1_000:
-		f := fmt.Sprintf("%.1f", float64(n)/1_000)
-		return strings.TrimSuffix(f, ".0") + "k"
-	default:
-		return fmt.Sprintf("%d", n)
-	}
-}
-
-// infoContextFenceWidth is the fixed column width label rows are padded to
-// in both formatInfoPlain and formatContextPlain — wide enough for the
-// longest label ("system prompt") plus a couple of spaces before the value.
-const infoContextFenceWidth = 16
-
-// formatInfoPlain renders SessionInfo as a fenced code block so Zed renders
-// it in a monospace font — WITHOUT this, the padded label/value columns
-// below only line up in the raw string; Zed's agent_message_chunk renders
-// plain text as Markdown in a proportional font, where fixed-width padding
-// is invisible (e.g. "harness" and "thinking" occupy different pixel widths,
-// so aligned columns in the source string look ragged on screen — this was
-// a real, reported rendering bug). Slack's formatInfo (slack.go) has always
-// wrapped its output in ``` for the exact same reason; this mirrors that,
-// adding a title + separator line since the code fence also drops Markdown
-// bold, which Slack's version used for the title instead.
-//
-// It shows what the TUI's /info shows, minus the terminal (an editor starts
-// this transport; it never runs in one): identity, model, usage, the quota
-// of the session's provider (quota/qerr from GET /api/providers/{name}/quota;
-// nil and a 404 = no section), environment and channels.
+// formatInfoPlain renders SessionInfo as the shared plain /info panel
+// (internal/infoview.InfoPlain): a fenced code block, so Zed renders it in a
+// monospace font — without the fence the padded columns are ragged in Zed's
+// proportional Markdown font (a real, reported rendering bug). It shows what
+// the TUI's /info shows minus the terminal (an editor starts this transport;
+// it never runs in one). quota/qerr come from GET /api/providers/{name}/quota
+// (a 404 = no section).
 func formatInfoPlain(info *client.SessionInfo, quota *types.Quota, qerr error, now time.Time) string {
 	if info == nil {
 		return "⚠️ No session info available.\n"
 	}
 	sess := info.Session
-	stats := sess.Stats
-
-	row := func(label, value string) string {
-		return fmt.Sprintf("%-*s%s\n", infoContextFenceWidth, label, value)
-	}
-
-	var b strings.Builder
-	b.WriteString("📊 Session info\n")
-	b.WriteString(strings.Repeat("━", 28) + "\n")
-	b.WriteString(row("harness", info.Version))
-	name := sess.Name
-	if name == "" {
-		name = sess.ID[:8]
-	}
-	b.WriteString(row("session", name))
-	b.WriteString(row("id", sess.ID))
-	b.WriteByte('\n')
-	b.WriteString(row("model", sess.Model))
-	thinking := sess.Thinking
-	if thinking == "" {
-		thinking = "off"
-	}
-	b.WriteString(row("thinking", thinking))
-	b.WriteString(row("iters", fmt.Sprintf("max %d", sess.MaxIterations)))
-	if stats.ContextWindow > 0 {
-		b.WriteString(row("context", fmt.Sprintf("%.1f%% of %s tokens",
-			stats.ContextUsage*100, compactNum(int64(stats.ContextWindow)))))
-	}
-	b.WriteByte('\n')
-	b.WriteString(row("tokens", fmt.Sprintf("↑%s ↓%s",
-		compactNum(int64(stats.InputTokens)), compactNum(int64(stats.OutputTokens)))))
-	if stats.CacheRead > 0 || stats.CacheWrite > 0 {
-		b.WriteString(row("cache", fmt.Sprintf("R%s W%s",
-			compactNum(int64(stats.CacheRead)), compactNum(int64(stats.CacheWrite)))))
-	}
-	b.WriteString(row("cost", fmt.Sprintf("$%.4f", stats.CostUSD)))
-	if sec := quotaRows(infoview.ProviderOf(sess.Model), quota, qerr, now, row); sec != "" {
-		b.WriteByte('\n')
-		b.WriteString(sec)
-	}
-	b.WriteByte('\n')
-	if info.OS != "" {
-		b.WriteString(row("system", info.OS+"/"+info.Arch))
-	}
-	b.WriteString(row("mcps", fmt.Sprintf("%d connected", info.MCPConnected)))
-	b.WriteString(row("schedules", fmt.Sprintf("%d", info.ScheduleCount)))
-	for _, g := range infoview.ChannelGroups(sess.Channels) {
-		b.WriteString(row(g.Type, strings.Join(g.Names, ", ")))
-	}
-	if info.Busy {
-		queued := ""
-		if info.QueueDepth > 0 {
-			queued = fmt.Sprintf(" (%d queued)", info.QueueDepth)
-		}
-		b.WriteString("\n⚙ busy" + queued + "\n")
-	}
-	return fence(b.String())
+	return infoview.InfoPlain(infoview.Info{
+		Version: info.Version, ID: sess.ID, Name: sess.Name, Model: sess.Model, Thinking: sess.Thinking,
+		MaxIterations: sess.MaxIterations, Stats: sess.Stats, Channels: sess.Channels,
+		Busy: info.Busy, QueueDepth: info.QueueDepth, MCPConnected: info.MCPConnected,
+		ScheduleCount: info.ScheduleCount, OS: info.OS, Arch: info.Arch,
+		Quota: quota, QuotaErr: qerr,
+	}, now)
 }
 
-// formatContextPlain renders ContextBreakdown as a fenced code block — same
-// monospace-alignment reasoning as formatInfoPlain's doc comment.
+// formatContextPlain renders ContextBreakdown as the shared plain /context panel.
 func formatContextPlain(bd *client.ContextBreakdown) string {
 	if bd == nil {
 		return "⚠️ No context data available.\n"
 	}
-	win := bd.ContextWindow
-	cn := func(n int) string { return compactNum(int64(n)) }
-
-	row := func(label, value string) string {
-		return fmt.Sprintf("%-*s%s\n", infoContextFenceWidth, label, value)
-	}
-	sub := func(label, value string) string {
-		return fmt.Sprintf("  %-*s%s\n", infoContextFenceWidth-2, label, value)
-	}
-
-	var b strings.Builder
-	b.WriteString("📐 Context breakdown\n")
-	b.WriteString(strings.Repeat("━", 28) + "\n")
-	b.WriteString(row("system prompt", cn(bd.System)+" tokens"))
-	b.WriteString(row("tools", cn(bd.Tools)+" tokens"))
-	b.WriteString(row("conversation", cn(bd.Conversation)+" tokens"))
-	b.WriteString(strings.Repeat("─", 28) + "\n")
-	b.WriteString(row("estimated", "~"+cn(bd.EstimatedTotal)+" tokens"))
-	if bd.LastRealTotal > 0 && win > 0 {
-		pct := float64(bd.LastRealTotal) / float64(win) * 100
-		b.WriteString(row("actual", cn(bd.LastRealTotal)+fmt.Sprintf(" tokens (%.1f%%)", pct)))
-		b.WriteString(sub("free", cn(bd.FreeSpace)+" of "+cn(win)))
-	} else {
-		b.WriteString("(no turn yet)\n")
-	}
-	return fence(b.String())
-}
-
-// fence wraps text in a Markdown fenced code block, trimming the trailing
-// newline first so the closing "```" lands on its own clean line instead of
-// leaving a blank line before it.
-func fence(text string) string {
-	var b strings.Builder
-	b.WriteString("```\n")
-	b.WriteString(strings.TrimRight(text, "\n"))
-	b.WriteString("\n```\n")
-	return b.String()
+	return infoview.ContextPlain(infoview.Context{
+		System: bd.System, Tools: bd.Tools, Conversation: bd.Conversation,
+		EstimatedTotal: bd.EstimatedTotal, LastRealTotal: bd.LastRealTotal,
+		ContextWindow: bd.ContextWindow, FreeSpace: bd.FreeSpace,
+	})
 }

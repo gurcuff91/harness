@@ -75,9 +75,7 @@ func quotaServerURL(t *testing.T, ps ...providers.Provider) (*client.Client, str
 // shortQuotaRules shrinks the cache rules for a test.
 func shortQuotaRules(t *testing.T, ttl, minInterval, backoff time.Duration) {
 	t.Helper()
-	pt, pm, pb := quotaTTL, quotaMinInterval, quotaBackoff429
-	quotaTTL, quotaMinInterval, quotaBackoff429 = ttl, minInterval, backoff
-	t.Cleanup(func() { quotaTTL, quotaMinInterval, quotaBackoff429 = pt, pm, pb })
+	t.Cleanup(providers.SetQuotaRulesForTest(ttl, minInterval, backoff))
 }
 
 func TestQuotaEndpointStatusCodes(t *testing.T) {

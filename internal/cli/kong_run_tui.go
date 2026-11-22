@@ -26,11 +26,17 @@ func (c *tuiCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	chans := storedChannels(slackch.LoadCredentials, false) // never log to the terminal the TUI draws on
+	// never log to the terminal the TUI draws on
+	chans := append(storedChannels(slackch.LoadCredentials, false), telegramChannels(c.TelegramToken, false)...)
 	inputs, err := slackInputChannels(c.SlackChannels, chans)
 	if err != nil {
 		return err
 	}
+	tgInputs, err := telegramInputChannels(c.TelegramAllow, c.TelegramToken, chans)
+	if err != nil {
+		return err
+	}
+	inputs = append(inputs, tgInputs...)
 	a := c.newTUIAgent(x, chans...)
 	defer a.Close()
 

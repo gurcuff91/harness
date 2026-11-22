@@ -38,10 +38,10 @@ func storeAt(t *testing.T, path string) *Store {
 
 func TestStoreUpsertAndList(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.Set("standup", "0 9 * * 1-5", "Generate standup", "sess-A"); err != nil {
+	if err := s.Set("standup", "0 9 * * 1-5", "Generate standup", "sess-A", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Set("cleanup", "@daily", "Clean logs", "sess-A"); err != nil {
+	if err := s.Set("cleanup", "@daily", "Clean logs", "sess-A", ""); err != nil {
 		t.Fatal(err)
 	}
 	list := s.List()
@@ -55,7 +55,7 @@ func TestStoreUpsertAndList(t *testing.T) {
 
 	// Edit preserves audit.
 	s.RecordRun("standup", "sess-A", time.Now().UnixMilli())
-	s.Set("standup", "0 10 * * 1-5", "Updated", "sess-A") // edit
+	s.Set("standup", "0 10 * * 1-5", "Updated", "sess-A", "") // edit
 	for _, sc := range s.List() {
 		if sc.Slug == "standup" {
 			if sc.Runs != 1 {
@@ -70,17 +70,17 @@ func TestStoreUpsertAndList(t *testing.T) {
 
 func TestStoreInvalidCron(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.Set("bad", "not a cron", "x", "sess-A"); err == nil {
+	if err := s.Set("bad", "not a cron", "x", "sess-A", ""); err == nil {
 		t.Error("invalid cron should error")
 	}
-	if err := s.Set("bad", "99 99 * * *", "x", "sess-A"); err == nil {
+	if err := s.Set("bad", "99 99 * * *", "x", "sess-A", ""); err == nil {
 		t.Error("out-of-range cron should error")
 	}
 }
 
 func TestStoreDelete(t *testing.T) {
 	s := newTestStore(t)
-	s.Set("x", "@hourly", "p", "sess-A")
+	s.Set("x", "@hourly", "p", "sess-A", "")
 	ok, _ := s.Delete("x", "sess-A")
 	if !ok {
 		t.Error("delete should report existed")
@@ -94,7 +94,7 @@ func TestStoreDelete(t *testing.T) {
 func TestStorePersistence(t *testing.T) {
 	path := fileBackedPath(t)
 	s1 := storeAt(t, path)
-	s1.Set("x", "@daily", "prompt", "sess-A")
+	s1.Set("x", "@daily", "prompt", "sess-A", "")
 	// Reopen and verify it loaded.
 	s2 := storeAt(t, path)
 	if len(s2.List()) != 1 {
@@ -105,10 +105,10 @@ func TestStorePersistence(t *testing.T) {
 // Two sessions can each own a schedule with the same slug — no collision.
 func TestStoreSameSlugDifferentOwners(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.Set("daily", "@daily", "sess-A standup", "sess-A"); err != nil {
+	if err := s.Set("daily", "@daily", "sess-A standup", "sess-A", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Set("daily", "@daily", "sess-B standup", "sess-B"); err != nil {
+	if err := s.Set("daily", "@daily", "sess-B standup", "sess-B", ""); err != nil {
 		t.Fatal(err)
 	}
 	list := s.List()
@@ -128,9 +128,9 @@ func TestStoreSameSlugDifferentOwners(t *testing.T) {
 
 func TestEngineStandardCronFires(t *testing.T) {
 	s := newTestStore(t)
-	s.Set("minutely", "* * * * *", "run", "sess-A") // every minute
+	s.Set("minutely", "* * * * *", "run", "sess-A", "") // every minute
 	var fired []string
-	eng := NewEngine(s, func(slug, prompt, owner string) { fired = append(fired, slug) })
+	eng := NewEngine(s, func(sc Schedule) { fired = append(fired, sc.Slug) })
 	eng.AddSession("sess-A") // must be watched — see TestEngineIgnoresUnwatchedSessions
 
 	// Engine started at 09:00:30, never run. By 09:01:05 the 09:01:00 tick has
@@ -156,9 +156,9 @@ func TestEngineStandardCronFires(t *testing.T) {
 // moving cursor) is what makes it fire.
 func TestEngineEveryFires(t *testing.T) {
 	s := newTestStore(t)
-	s.Set("tick", "@every 1m", "run", "sess-A")
+	s.Set("tick", "@every 1m", "run", "sess-A", "")
 	var fired []string
-	eng := NewEngine(s, func(slug, prompt, owner string) { fired = append(fired, slug) })
+	eng := NewEngine(s, func(sc Schedule) { fired = append(fired, sc.Slug) })
 	eng.AddSession("sess-A")
 
 	start := time.Date(2026, 1, 1, 9, 0, 0, 0, time.Local)
@@ -178,9 +178,9 @@ func TestEngineEveryFires(t *testing.T) {
 // can route the fired prompt to the right session.
 func TestEngineFiresWithOwner(t *testing.T) {
 	s := newTestStore(t)
-	s.Set("tick", "* * * * *", "run", "session-abc")
+	s.Set("tick", "* * * * *", "run", "session-abc", "")
 	var gotOwner string
-	eng := NewEngine(s, func(slug, prompt, owner string) { gotOwner = owner })
+	eng := NewEngine(s, func(sc Schedule) { gotOwner = sc.Owner })
 	eng.AddSession("session-abc")
 	start := time.Date(2026, 1, 1, 9, 0, 30, 0, time.Local)
 	eng.evaluate(start, time.Date(2026, 1, 1, 9, 1, 5, 0, time.Local))
@@ -193,7 +193,7 @@ func TestEngineFiresWithOwner(t *testing.T) {
 func TestStoreOwnerPersists(t *testing.T) {
 	path := fileBackedPath(t)
 	s1 := storeAt(t, path)
-	s1.Set("x", "@daily", "prompt", "owner-42")
+	s1.Set("x", "@daily", "prompt", "owner-42", "")
 	s2 := storeAt(t, path)
 	for _, sc := range s2.List() {
 		if sc.Slug == "x" && sc.Owner != "owner-42" {
@@ -205,7 +205,7 @@ func TestStoreOwnerPersists(t *testing.T) {
 func TestEngineReadsFreshEachEval(t *testing.T) {
 	s := newTestStore(t)
 	var fired []string
-	eng := NewEngine(s, func(slug, prompt, owner string) { fired = append(fired, slug) })
+	eng := NewEngine(s, func(sc Schedule) { fired = append(fired, sc.Slug) })
 	eng.AddSession("sess-A")
 
 	start := time.Date(2026, 1, 1, 9, 0, 30, 0, time.Local)
@@ -218,7 +218,7 @@ func TestEngineReadsFreshEachEval(t *testing.T) {
 	}
 
 	// Add one WITHOUT restarting the engine → next evaluate picks it up.
-	s.Set("added-live", "* * * * *", "run", "sess-A")
+	s.Set("added-live", "* * * * *", "run", "sess-A", "")
 	eng.evaluate(start, now)
 	if len(fired) != 1 || fired[0] != "added-live" {
 		t.Errorf("a schedule added at runtime should fire, got %v", fired)
@@ -235,7 +235,7 @@ func TestEngineReadsFreshEachEval(t *testing.T) {
 
 func TestEngineStartStop(t *testing.T) {
 	s := newTestStore(t)
-	eng := NewEngine(s, func(slug, prompt, owner string) {})
+	eng := NewEngine(s, func(Schedule) {})
 	ctx := context.Background()
 	eng.Start(ctx)
 	eng.Stop() // must not panic / deadlock
@@ -260,8 +260,8 @@ func TestValidateMinInterval(t *testing.T) {
 // and Delete refuses (no-op) a slug owned by another session.
 func TestAdapterOwnerIsolation(t *testing.T) {
 	s := newTestStore(t)
-	s.Set("mine", "@daily", "p", "sess-A")
-	s.Set("theirs", "@daily", "p", "sess-B")
+	s.Set("mine", "@daily", "p", "sess-A", "")
+	s.Set("theirs", "@daily", "p", "sess-B", "")
 	a := NewToolAdapter(s)
 
 	// A sees only its own.

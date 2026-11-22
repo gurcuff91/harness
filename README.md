@@ -39,7 +39,7 @@ Providers can also be connected from inside the TUI command palette.
 - **Persistent memory** — project-scoped + global memories (SQLite + FTS5), recalled across sessions
 - **Scheduled prompts** — cron-scheduled prompts that fire back into the session that created them
 - **Colleagues** — every session started with `--with-colleagues` gets a name (`scorpion-hero`) and can ask the other sessions on the machine, which answer asynchronously
-- **Multiple frontends** — interactive TUI, one-shot CLI, HTTP/SSE server, Telegram bot, ACP agent (Zed), and Slack input channels
+- **Multiple frontends** — interactive TUI, one-shot CLI, HTTP/SSE server, ACP agent (Zed), and input channels (Slack, Telegram) that let a session listen to a conversation
 - **Vision** — image support via file paths or clipboard image paste (Ctrl+V in the TUI)
 - **Pure-Go TUI** — from-scratch terminal UI, zero external TUI libraries
 - **Auto-detection** — Ollama local auto-connects, models fetched from provider APIs
@@ -59,7 +59,7 @@ the essentials, and the binary lives in `cmd/harness/`.
 ```
 harness/
 ├── harness.go                # 🔓 SDK facade: NewAgent + AgentWith* (construction),
-│                             #    RunServer/RunTelegram/RunAcp + their
+│                             #    RunServer/RunAcp + their
 │                             #    XxxWith* (transport runners), Client/NewClient
 ├── cmd/harness/main.go       # Executable entry point (package main) — calls cli.Main
 │
@@ -80,9 +80,11 @@ harness/
 ├── server/                   # 🔓 HTTP/SSE backend — the API all clients talk to
 │   └── server.go / sse.go / proxy.go / run.go
 ├── transports/               # 🔓 Interactive session frontends (each runs on server)
-│   ├── telegram/             # Telegram bot (stdlib Bot API; one session per chat)
 │   └── acp/                  # Agent Client Protocol agent (Zed and other ACP clients)
-├── channels/slack/           # 🔓 Slack input channel + the Slack login (agent.Channel)
+├── channels/                 # 🔓 Input channels (agent.Channel): a session listens to a conversation
+│   ├── slack/                # Slack conversations + the Slack login
+│   ├── telegram/             # A Telegram bot (trusted @usernames) + the bot token
+│   └── colleague/            # The other agents of this machine (--with-colleagues)
 ├── logx/                     # 🔓 Logger contract (interface) + NewNilLogger
 ├── types/                    # 🔓 Shared types (Event, Message, ModelMeta)
 │
@@ -235,15 +237,11 @@ defer cancel()
 // HTTP/SSE server:
 harness.RunServer(ctx, a, harness.ServerWithAddr(":8080"))
 
-// …or a Telegram bot:
-harness.RunTelegram(ctx, a, harness.TelegramWithToken(token))
-
 // …or an ACP agent (RunAcp).
 ```
 
 Each `RunX` is a thin alias over its package's own `Run`. A runner's options
-configure only the **transport** (listen address, bot credentials, per-session
-model/thinking overrides) — the agent itself is already fully configured by the
+configure only the **transport** (listen address and the like) — the agent itself is already fully configured by the
 time it's passed in.
 
 ## Providers
@@ -329,8 +327,7 @@ harness --with-scheduler      — Run the TUI with the cron scheduler engine
 **Light by default; extras on request.** The agent every command builds has the base tools (Bash, Read,
 Write, Edit, Fetch, SessionInfo, Subagent, memory, Skill) and WebSearch, and nothing else. Two extras are
 opt-in because each adds to every request whether it is used or not (colleagues about 2.5 KB of system
-prompt and 3 KB of tool definitions): `--with-colleagues` and `--with-scheduler`, on the TUI, `serve`
-and `telegram`. Each can also be switched on by an environment variable, either one being enough:
+prompt and 3 KB of tool definitions): `--with-colleagues` and `--with-scheduler`, on the TUI and `serve`. Each can also be switched on by an environment variable, either one being enough:
 `HARNESS_WITH_COLLEAGUES=1` and `HARNESS_WITH_SCHEDULER=1` (`1`/`true`/`yes` on, `0`/`false`/`no` or empty
 off; any other value is an error that names the variable). `harness acp` is started by an editor and takes
 no flags, so for it the variables are the only way. `-p` never has the extras.
@@ -383,6 +380,21 @@ fails naming the first. Explicit and never saved: `/new`, `/resume` and `--resum
 listen to nothing. Over the API (`harness serve`), pass `channels: [{"type":"slack","ref":"…"}]`
 when creating or resuming a session. `harness slack login --status` checks the saved login.
 
+**Telegram input channel.** `harness --telegram-allow @you` (repeatable, or comma-separated; or
+`TELEGRAM_ALLOW`) makes the session you open listen to a Telegram bot: messages from those trusted
+@usernames — in a private chat or a group — become prompts of THIS session, and its reply to each goes
+back to the chat it came from. Everyone else is ignored without an answer (a bot is public: anyone can
+find it). The bot token comes from `--telegram-token`, else `TELEGRAM_BOT_TOKEN`, else the one saved
+with `harness telegram token <tok>` (verified before it is saved; `--status` checks it, `--delete`
+removes it). Photos arrive as images and saved files, documents as files (`<telegram-attach>`), and
+the model sends files back with `<telegram-upload path="…"/>`. `/info` and `/context` are answered in
+the chat without the model; nothing in a chat can change the session's settings. One bot is listened
+to by one session at a time, across processes. A schedule created from a Telegram (or Slack)
+conversation fires back into it while the session listens there. Over the API (`harness serve
+--telegram-token …`), pass `channels: [{"type":"telegram","ref":"you,friend"}]`: the ref is the list
+of trusted usernames. From the SDK: `harness.AgentWithChannels(telegram.New(token))`, then
+`agent.WithSessionChannels(types.InputChannel{Type: "telegram", Ref: "you"})`.
+
 A command name wins over a message: `harness sessions` lists sessions. To send a message that is
 exactly a command name, put it after `--`: `harness -- serve`.
 
@@ -395,11 +407,8 @@ message (`harness OK`, `harness fix the login bug`). To send a word that looks l
 
 ```
 harness serve <addr>          — HTTP/SSE server (headless transport)
-harness telegram              — Run as a Telegram bot (one session per chat)
-harness telegram pair <id>    — Allow a chat to use the bot
-harness telegram unpair <id>  — Revoke a chat
-harness telegram list         — List paired chats
-harness telegram token [tok]  — Save the bot token (or check it with --status)
+harness --telegram-allow @you — Listen to the Telegram bot (trusted users; --telegram-token to pick the bot)
+harness telegram token [tok]  — Save the bot token (--status checks it, --delete removes it)
 harness slack login           — Save the Slack account input channels listen with (--status checks it)
 harness acp                   — Run as an Agent Client Protocol agent over stdio (for Zed)
 
@@ -446,7 +455,8 @@ SYNTHETIC_API_KEY       — Synthetic (synthetic.new) API key
 OLLAMA_CLOUD_API_KEY    — Ollama Cloud API key
 MINIMAX_API_KEY         — MiniMax API key
 OLLAMA_URL              — Ollama server URL (default: localhost:11434)
-TELEGRAM_BOT_TOKEN      — Telegram bot token (for `harness telegram`)
+TELEGRAM_BOT_TOKEN      — Telegram bot token (the TUI and serve; --telegram-token wins over it)
+TELEGRAM_ALLOW          — Trusted Telegram @usernames, comma-separated (like --telegram-allow)
 ```
 
 Model and thinking level are set via `harness settings set model|thinking <value>`
@@ -463,7 +473,7 @@ All data stored in `~/.harness/`:
 │                              "telegram": {"bot_token": ...}, "slack": {"session": {xoxc, xoxd}}}
 ├── settings.json           — Everything non-sensitive, one namespace per domain:
 │                              core (active_model, thinking_level), mcp, provider,
-│                              schedules (cron prompts), telegram_allowlist, telegram_sessions,
+│                              schedules (cron prompts),
 │                              slack (workspace/user/team), channels (input-channel claims)
 └── agent/
     ├── sessions/<cwd>/     — Session history (JSONL, partitioned by project)

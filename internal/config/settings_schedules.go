@@ -28,6 +28,10 @@ type ScheduleEntry struct {
 	Prompt  string `json:"prompt"`             // the prompt text to run
 	Runs    int    `json:"runs,omitempty"`     // how many times it has fired
 	LastRun int64  `json:"last_run,omitempty"` // Unix ms of the last run
+	// Origin is the input-channel conversation the schedule was created from
+	// ("slack:C0123", "telegram:<bot>:<chat>"); a fired prompt goes back there
+	// when the session still listens to it. Empty = created elsewhere.
+	Origin string `json:"origin,omitempty"`
 }
 
 // Schedules returns every schedule across all owners, sorted by slug then

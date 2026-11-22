@@ -18,8 +18,8 @@ type runConfig struct {
 
 // WithAddr sets the listen address (e.g. "127.0.0.1:8080" or ":8080" for all
 // interfaces). Default: "127.0.0.1:0" — loopback only, OS-assigned ephemeral
-// port, exactly like every in-process server a transport starts for itself
-// (see transports/telegram, transports/acp).
+// port, exactly like the in-process server a transport starts for itself
+// (see transports/acp).
 func WithAddr(addr string) Option {
 	return func(c *runConfig) { c.addr = addr }
 }

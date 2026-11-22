@@ -15,9 +15,9 @@ import (
 // actually watches that owner.
 func TestEngineIgnoresUnwatchedSessions(t *testing.T) {
 	s := newTestStore(t)
-	s.Set("tick", "* * * * *", "run", "sess-A")
+	s.Set("tick", "* * * * *", "run", "sess-A", "")
 	var fired []string
-	eng := NewEngine(s, func(slug, prompt, owner string) { fired = append(fired, slug) })
+	eng := NewEngine(s, func(sc Schedule) { fired = append(fired, sc.Slug) })
 	// Deliberately never call eng.AddSession("sess-A").
 
 	start := time.Date(2026, 1, 1, 9, 0, 30, 0, time.Local)
@@ -40,10 +40,10 @@ func TestEngineIgnoresUnwatchedSessions(t *testing.T) {
 // fires, the other is left untouched for someone else.
 func TestEngineFiresOnlyWatchedAmongMultiple(t *testing.T) {
 	s := newTestStore(t)
-	s.Set("a-tick", "* * * * *", "run", "sess-A")
-	s.Set("b-tick", "* * * * *", "run", "sess-B")
+	s.Set("a-tick", "* * * * *", "run", "sess-A", "")
+	s.Set("b-tick", "* * * * *", "run", "sess-B", "")
 	var fired []string
-	eng := NewEngine(s, func(slug, prompt, owner string) { fired = append(fired, slug) })
+	eng := NewEngine(s, func(sc Schedule) { fired = append(fired, sc.Slug) })
 	eng.AddSession("sess-A") // sess-B deliberately not watched
 
 	start := time.Date(2026, 1, 1, 9, 0, 30, 0, time.Local)
@@ -59,9 +59,9 @@ func TestEngineFiresOnlyWatchedAmongMultiple(t *testing.T) {
 // very next evaluate — no restart needed.
 func TestEngineDelSessionStopsFiring(t *testing.T) {
 	s := newTestStore(t)
-	s.Set("tick", "* * * * *", "run", "sess-A")
+	s.Set("tick", "* * * * *", "run", "sess-A", "")
 	var fired []string
-	eng := NewEngine(s, func(slug, prompt, owner string) { fired = append(fired, slug) })
+	eng := NewEngine(s, func(sc Schedule) { fired = append(fired, sc.Slug) })
 	eng.AddSession("sess-A")
 
 	start := time.Date(2026, 1, 1, 9, 0, 30, 0, time.Local)
@@ -85,10 +85,10 @@ func TestEngineDelSessionStopsFiring(t *testing.T) {
 // to its initial do-nothing state, even with multiple sessions watched.
 func TestEngineClearSessionsStopsAll(t *testing.T) {
 	s := newTestStore(t)
-	s.Set("a-tick", "* * * * *", "run", "sess-A")
-	s.Set("b-tick", "* * * * *", "run", "sess-B")
+	s.Set("a-tick", "* * * * *", "run", "sess-A", "")
+	s.Set("b-tick", "* * * * *", "run", "sess-B", "")
 	var fired []string
-	eng := NewEngine(s, func(slug, prompt, owner string) { fired = append(fired, slug) })
+	eng := NewEngine(s, func(sc Schedule) { fired = append(fired, sc.Slug) })
 	eng.AddSession("sess-A")
 	eng.AddSession("sess-B")
 
@@ -107,7 +107,7 @@ func TestEngineClearSessionsStopsAll(t *testing.T) {
 // store.go) — AddSession("") must be a no-op, not a wildcard.
 func TestEngineAddSessionIgnoresEmptyString(t *testing.T) {
 	s := newTestStore(t)
-	eng := NewEngine(s, func(slug, prompt, owner string) {})
+	eng := NewEngine(s, func(Schedule) {})
 	eng.AddSession("")
 	if eng.Watching("") {
 		t.Error("AddSession(\"\") must not make the empty owner watched")
@@ -120,9 +120,9 @@ func TestEngineAddSessionIgnoresEmptyString(t *testing.T) {
 // initial state.
 func TestNewEngineStartsWithNoWatchedSessions(t *testing.T) {
 	s := newTestStore(t)
-	s.Set("tick", "* * * * *", "run", "sess-A")
+	s.Set("tick", "* * * * *", "run", "sess-A", "")
 	var fired []string
-	eng := NewEngine(s, func(slug, prompt, owner string) { fired = append(fired, slug) })
+	eng := NewEngine(s, func(sc Schedule) { fired = append(fired, sc.Slug) })
 
 	start := time.Date(2026, 1, 1, 9, 0, 30, 0, time.Local)
 	now := time.Date(2026, 1, 1, 9, 1, 5, 0, time.Local)
@@ -147,12 +147,12 @@ func TestNewEngineStartsWithNoWatchedSessions(t *testing.T) {
 // own watched owner's schedule.
 func TestTwoEnginesOnSameStoreOnlyFireForTheirOwnWatchedSessions(t *testing.T) {
 	s := newTestStore(t)
-	s.Set("khan-greeting", "* * * * *", "run", "sess-khan")
-	s.Set("slack-standup", "* * * * *", "run", "sess-slack")
+	s.Set("khan-greeting", "* * * * *", "run", "sess-khan", "")
+	s.Set("slack-standup", "* * * * *", "run", "sess-slack", "")
 
 	var firedA, firedB []string
-	engA := NewEngine(s, func(slug, prompt, owner string) { firedA = append(firedA, slug) })
-	engB := NewEngine(s, func(slug, prompt, owner string) { firedB = append(firedB, slug) })
+	engA := NewEngine(s, func(sc Schedule) { firedA = append(firedA, sc.Slug) })
+	engB := NewEngine(s, func(sc Schedule) { firedB = append(firedB, sc.Slug) })
 	engA.AddSession("sess-khan")  // process A only has sess-khan live
 	engB.AddSession("sess-slack") // process B only has sess-slack live
 
@@ -190,9 +190,9 @@ func TestTwoEnginesOnSameStoreOnlyFireForTheirOwnWatchedSessions(t *testing.T) {
 func TestEngineWatchMutationsAreRaceSafeDuringEvaluate(t *testing.T) {
 	s := newTestStore(t)
 	for i := 0; i < 10; i++ {
-		s.Set("tick", "* * * * *", "run", "sess-A")
+		s.Set("tick", "* * * * *", "run", "sess-A", "")
 	}
-	eng := NewEngine(s, func(slug, prompt, owner string) {})
+	eng := NewEngine(s, func(Schedule) {})
 
 	start := time.Now()
 	var wg sync.WaitGroup

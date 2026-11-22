@@ -24,6 +24,9 @@ type Schedule struct {
 	Owner   string // session id the fired prompt is routed to
 	Runs    int    // audit: how many times it has fired
 	LastRun int64  // audit: Unix ms of the last run
+	// Origin is the input-channel conversation the schedule was created from
+	// (see config.ScheduleEntry.Origin); empty when created elsewhere.
+	Origin string
 }
 
 // parser accepts standard 5-field cron plus @daily/@hourly/@every descriptors.
@@ -107,8 +110,9 @@ func (s *Store) UpdateSchedule(
 
 // Set upserts a schedule under (owner, slug) after validating the cron
 // expression. owner is the session id the fired prompt is routed to (empty for
-// single-session transports). Runs and LastRun are preserved across edits.
-func (s *Store) Set(slug, spec, prompt, owner string) error {
+// single-session transports); origin is the channel conversation it was created
+// from ("" for none). Runs and LastRun are preserved across edits.
+func (s *Store) Set(slug, spec, prompt, owner, origin string) error {
 	if slug == "" {
 		return fmt.Errorf("schedule: slug is required")
 	}
@@ -119,7 +123,7 @@ func (s *Store) Set(slug, spec, prompt, owner string) error {
 		return fmt.Errorf("schedule: invalid cron %q: %w", spec, err)
 	}
 	return s.UpdateSchedule(owner, slug, func(cur Schedule, ok bool) (Schedule, UpdateAction, error) {
-		next := Schedule{Cron: spec, Prompt: prompt}
+		next := Schedule{Cron: spec, Prompt: prompt, Origin: origin}
 		if ok {
 			next.Runs = cur.Runs // preserve audit on edit
 			next.LastRun = cur.LastRun
@@ -164,9 +168,9 @@ func (s *Store) RecordRun(slug, owner string, at int64) error {
 }
 
 func fromEntry(e config.ScheduleEntry) Schedule {
-	return Schedule{Slug: e.Slug, Cron: e.Cron, Prompt: e.Prompt, Owner: e.Owner, Runs: e.Runs, LastRun: e.LastRun}
+	return Schedule{Slug: e.Slug, Cron: e.Cron, Prompt: e.Prompt, Owner: e.Owner, Runs: e.Runs, LastRun: e.LastRun, Origin: e.Origin}
 }
 
 func toEntry(s Schedule) config.ScheduleEntry {
-	return config.ScheduleEntry{Owner: s.Owner, Slug: s.Slug, Cron: s.Cron, Prompt: s.Prompt, Runs: s.Runs, LastRun: s.LastRun}
+	return config.ScheduleEntry{Owner: s.Owner, Slug: s.Slug, Cron: s.Cron, Prompt: s.Prompt, Runs: s.Runs, LastRun: s.LastRun, Origin: s.Origin}
 }

@@ -128,66 +128,6 @@ func TestSwapScheduleConcurrentIncrementsAcrossProcesses(t *testing.T) {
 	}
 }
 
-// ── Telegram ─────────────────────────────────────────────────────────────
-
-func TestTelegramAllowlist(t *testing.T) {
-	m := memSettings()
-	if added, _ := m.PairTelegram(-100123); !added {
-		t.Error("first pair should report added")
-	}
-	if added, _ := m.PairTelegram(-100123); added {
-		t.Error("second pair should report already present")
-	}
-	m.PairTelegram(42)
-	if got := m.TelegramAllowlist(); len(got) != 2 || got[0] != -100123 || got[1] != 42 {
-		t.Errorf("allowlist = %v, want [-100123 42] (sorted, negatives kept)", got)
-	}
-	if !m.TelegramAllowed(42) || m.TelegramAllowed(7) {
-		t.Error("TelegramAllowed wrong")
-	}
-}
-
-func TestTelegramSessionsScopedByCWDAndUnpairDropsAll(t *testing.T) {
-	m := memSettings()
-	m.PairTelegram(42)
-	m.BindTelegram("/proj/a", 42, "sess-a")
-	m.BindTelegram("/proj/b", 42, "sess-b")
-	m.BindTelegram("/proj/a", 7, "sess-other")
-
-	if id, ok := m.TelegramSession("/proj/a", 42); !ok || id != "sess-a" {
-		t.Errorf("session in /proj/a = %q, %v", id, ok)
-	}
-	if got := m.TelegramSessions("/proj/a"); len(got) != 2 || got[42] != "sess-a" || got[7] != "sess-other" {
-		t.Errorf("sessions in /proj/a = %v", got)
-	}
-
-	if removed, err := m.UnbindTelegram("/proj/a", 42); err != nil || !removed {
-		t.Fatalf("UnbindTelegram = %v, %v; want true, nil", removed, err)
-	}
-	if removed, err := m.UnbindTelegram("/proj/a", 42); err != nil || removed {
-		t.Fatalf("second UnbindTelegram = %v, %v; want false, nil (idempotent)", removed, err)
-	}
-	if _, ok := m.TelegramSession("/proj/a", 42); ok {
-		t.Error("unbind left the binding in place")
-	}
-	if _, ok := m.TelegramSession("/proj/b", 42); !ok {
-		t.Error("unbind in /proj/a removed the binding in /proj/b")
-	}
-
-	if removed, _ := m.UnpairTelegram(42); !removed {
-		t.Error("unpair should report removed")
-	}
-	if m.TelegramAllowed(42) {
-		t.Error("chat still allowed after unpair")
-	}
-	if _, ok := m.TelegramSession("/proj/b", 42); ok {
-		t.Error("unpair must drop the chat's bindings in every project")
-	}
-	if _, ok := m.TelegramSession("/proj/a", 7); !ok {
-		t.Error("unpair of chat 42 removed another chat's binding")
-	}
-}
-
 // ── Slack ────────────────────────────────────────────────────────────────
 
 func TestSlackConfig(t *testing.T) {

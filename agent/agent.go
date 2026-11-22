@@ -334,11 +334,12 @@ func isNilStore(s memory.Store) bool {
 // engine still records the run via RecordRun, so no catch-up pileup). This
 // is deliberate, not a gap: an instance should fire only into sessions IT
 // itself has live — never resurrect an arbitrary session from disk on the
-// engine's own initiative. A transport that wants its sessions to keep
-// receiving scheduled prompts across restarts (Telegram) is
-// responsible for keeping them active itself (see prewarmPumps in
-// transports/telegram), not this engine reaching into the
-// store behind the transport's back.
+// engine's own initiative: whoever opens the session (the TUI, a client of
+// serve) keeps it live to receive its schedules.
+//
+// A schedule created from a channel conversation the session still listens to
+// fires back INTO it (its origin), so the channel publishes the reply; else it
+// fires as "scheduled". Either way the prompt is wrapped in <scheduled>.
 //
 // In practice schedEngine.evaluate (see agent/schedule/engine.go) already
 // filters to only THIS engine's watched sessions before ever calling this
@@ -348,10 +349,38 @@ func isNilStore(s memory.Store) bool {
 // existed. Several harness processes, each running --with-scheduler and each
 // watching only their own live sessions, is now a safe, intended
 // deployment shape — see Engine's own doc comment for the full story.
-func (a *Agent) fireScheduledPrompt(slug, prompt, owner string) {
-	if sess := a.resolveScheduledSession(owner); sess != nil {
-		sess.Prompt(context.Background(), prompt, PromptWithOriginScheduled())
+func (a *Agent) fireScheduledPrompt(sc schedule.Schedule) {
+	sess := a.resolveScheduledSession(sc.Owner)
+	if sess == nil {
+		return
 	}
+	text := wrapScheduled(sc.Slug, sc.Prompt)
+	if sc.Origin != "" && sess.channels.listensTo(sc.Origin) {
+		// Created from a channel conversation the session still listens to:
+		// the turn goes back there, and the channel publishes its reply.
+		sess.Prompt(context.Background(), text, PromptWithOrigin(sc.Origin))
+		return
+	}
+	sess.Prompt(context.Background(), text, PromptWithOriginScheduled())
+}
+
+// wrapScheduled marks a fired schedule's prompt, so the model knows nobody is
+// waiting at the other end and no person sent it — also when its turn is
+// routed to a channel conversation.
+func wrapScheduled(slug, prompt string) string {
+	return `<scheduled slug="` + slug + `">` + "\n" + strings.TrimSpace(prompt) + "\n</scheduled>"
+}
+
+// scheduleOrigin is the origin a schedule created now records: the current
+// turn's, when it comes from a channel conversation the session listens to
+// (Slack, Telegram); "" otherwise (the person at the TUI, a colleague, another
+// schedule — a colleague's turn never gets one: no turns are sent back to it).
+func (s *Session) scheduleOrigin() string {
+	o, _ := s.turnOrigin.Load().(string)
+	if o == "" || strings.HasPrefix(o, "colleague:") || !s.channels.listensTo(o) {
+		return ""
+	}
+	return o
 }
 
 // resolveScheduledSession returns the active session a fired schedule targets —
@@ -692,7 +721,7 @@ func WithSessionProfiles(names ...string) SessionOption {
 // WithSessionDirectives appends instruction blocks to THIS session's system
 // prompt, after the Agent-wide AgentOptions.Directives. Unlike those, they
 // apply only to the session being created/resumed — e.g. a transport adding
-// its own capabilities (telegram.Directive, slack.Directive) to the sessions
+// its own capabilities (a server.Profile's directive) to the sessions
 // it drives, while the same Agent's other sessions don't see them.
 //
 // Not persisted: they live on the in-memory session object, so whoever drives
@@ -1361,7 +1390,12 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 	if adapter := a.scheduleAdapter(); adapter != nil {
 		if a.isToolAllowed(tools.ToolSchedule) {
 			// owner = this session's id: the engine routes a fired prompt back here.
-			reg.Register(tools.Schedule(adapter, sessionID))
+			reg.Register(tools.Schedule(adapter, sessionID, func() string {
+				if *sessRef == nil {
+					return ""
+				}
+				return (*sessRef).scheduleOrigin()
+			}))
 		}
 		if a.isToolAllowed(tools.ToolScheduleList) {
 			// owner = this session: it only sees its own schedules.

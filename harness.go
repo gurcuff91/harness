@@ -21,7 +21,7 @@
 // harness is layered: agent (core) → server (the HTTP/SSE API: sessions,
 // events, commands) → transports (pure translation layers). Build ONE agent,
 // wrap it in ONE server with [StartServer], and hand that same server to any
-// number of transports — [RunTelegram], [RunAcp] — and your own
+// number of transports — [RunAcp] — and your own
 // clients. Every session lives in exactly one place, and every frontend can
 // watch and drive the same session at once. Transports never close the
 // server or the agent; you do:
@@ -29,8 +29,7 @@
 //	srv, err := harness.StartServer(a, "127.0.0.1:0", server.ServerOptions{})
 //	if err != nil { log.Fatal(err) }
 //	defer srv.Close() // also closes the agent
-//	go harness.RunAcp(ctx, srv)
-//	err = harness.RunTelegram(ctx, srv, harness.TelegramWithCWD(dir))
+//	err = harness.RunAcp(ctx, srv)
 //
 // [RunServer] is the standalone blocking variant (serve an agent until ctx is
 // cancelled, then close everything).
@@ -46,11 +45,11 @@
 //   - agent/memory     — the persistent memory store internals
 //   - server           — the HTTP/SSE backend every transport (including this
 //     facade's RunServer) runs on top of
-//   - transports/{telegram,acp} — the runners RunTelegram/RunAcp wrap, and
-//     their Option types
-//   - channels/slack, channels/colleague — the input channels (see
-//     [AgentWithChannels]; registering the colleague channel makes every
-//     session a colleague)
+//   - transports/acp   — the runner RunAcp wraps, and its Option type
+//   - channels/slack, channels/telegram, channels/colleague — the input
+//     channels (see [AgentWithChannels]; a session listens to one with
+//     agent.WithSessionChannels; registering the colleague channel makes
+//     every session a colleague)
 //   - client           — typed HTTP/SSE client for a running harness server
 //   - types            — Event, Message, ModelMeta and other shared types
 //
@@ -68,11 +67,10 @@ import (
 	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/server"
 	"github.com/gurcuff91/harness/transports/acp"
-	"github.com/gurcuff91/harness/transports/telegram"
 	"github.com/gurcuff91/harness/types"
 )
 
-// Logger is the structured logging contract RunServer/RunTelegram
+// Logger is the structured logging contract RunServer and the channels
 // accept via their WithLogger option — implement it to route harness's
 // backend logs anywhere (RunAcp has no WithLogger of its own: it never logs
 // anything itself). See [logx.Logger].
@@ -355,42 +353,6 @@ var ServerWithAddr = server.WithAddr
 // ServerWithLogger sets the Logger that receives request/lifecycle log
 // lines. Default: [NewNilLogger] (silent). See [server.WithLogger].
 var ServerWithLogger = server.WithLogger
-
-// RunTelegram runs the Telegram bot on a running (possibly shared) server and
-// blocks until ctx is cancelled. See [telegram.Run].
-var RunTelegram = telegram.Run
-
-// TelegramOption configures a [RunTelegram] call. See [telegram.Option].
-type TelegramOption = telegram.Option
-
-// TelegramWithToken sets the bot token (required). See [telegram.WithToken].
-var TelegramWithToken = telegram.WithToken
-
-// TelegramWithSessionModel overrides the model for sessions this transport
-// creates. See [telegram.WithSessionModel].
-var TelegramWithSessionModel = telegram.WithSessionModel
-
-// TelegramWithSessionThinking overrides the thinking level for sessions
-// this transport creates. See [telegram.WithSessionThinking].
-var TelegramWithSessionThinking = telegram.WithSessionThinking
-
-// TelegramWithAllowUnpair enables auto-pairing: any chat is accepted on
-// first contact instead of requiring `harness telegram pair <chat_id>`
-// first. See [telegram.WithAllowUnpair].
-var TelegramWithAllowUnpair = telegram.WithAllowUnpair
-
-// TelegramWithCWD sets the working directory the bot's chat sessions are
-// created in and bound under (default: the process's cwd). See
-// [telegram.WithCWD].
-var TelegramWithCWD = telegram.WithCWD
-
-// TelegramWithKeepSessionsOnStop leaves the bot's sessions open when it
-// stops. See [telegram.WithKeepSessionsOnStop].
-var TelegramWithKeepSessionsOnStop = telegram.WithKeepSessionsOnStop
-
-// TelegramWithLogger sets the Logger this transport uses for its own log
-// lines. Default: [NewNilLogger] (silent). See [telegram.WithLogger].
-var TelegramWithLogger = telegram.WithLogger
 
 // RunAcp runs the Agent Client Protocol bridge (Zed and other ACP clients) on
 // a running (possibly shared) server, over stdin/stdout, and blocks until ctx

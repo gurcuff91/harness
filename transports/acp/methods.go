@@ -546,8 +546,7 @@ func internalErr(action string, err error) *rpcError {
 // resolveDefaultModel picks the model a new session should start with —
 // the persisted active model if it's still available, else the first
 // connected provider's first model. Mirrors the same fallback every other
-// transport uses (internal/cli/cli.go's Run, transports/telegram's
-// resolveModel) since CreateSession requires a non-empty model and ACP's
+// frontend uses (internal/cli/cli.go's Run) since CreateSession requires a non-empty model and ACP's
 // session/new carries none of its own.
 func resolveDefaultModel(c *client.Client) (string, error) {
 	models, err := c.ListModels()
@@ -568,8 +567,7 @@ func resolveDefaultModel(c *client.Client) (string, error) {
 }
 
 // acpSessionName returns the default name for sessions created via the ACP
-// transport, e.g. "Acp 2026-08-01 18:30" — mirrors telegramSessionName/
-// slackSessionName so `harness sessions`/the TUI can tell at a glance which
+// transport, e.g. "Acp 2026-08-01 18:30", so `harness sessions`/the TUI can tell at a glance which
 // transport/protocol a session came from.
 func acpSessionName() string {
 	return "Acp " + time.Now().Format("2006-01-02 15:04")

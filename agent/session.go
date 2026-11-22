@@ -152,6 +152,11 @@ type Session struct {
 	// us a safe, consistent snapshot without any lock contention.
 	modelStr atomic.Value // string
 
+	// turnOrigin is the origin of the turn running now (set from its prompt
+	// echo, cleared at turn_end), lock-free for the same reason as modelStr:
+	// the Schedule tool reads it from inside the turn.
+	turnOrigin atomic.Value // string
+
 	// thinkingStr mirrors modelStr's exact reasoning, for the exact same
 	// reason: SessionInfo's tool executor needs to read the CURRENT
 	// thinking level from inside a tool call (promptSync holds s.mu for the
@@ -2264,6 +2269,12 @@ func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 }
 
 func (s *Session) emit(e types.Event) {
+	switch e.Type {
+	case types.EventReceivedPrompt, types.EventFollowUpStart:
+		s.turnOrigin.Store(e.Origin)
+	case types.EventTurnEnd:
+		s.turnOrigin.Store("")
+	}
 	if s.channels != nil {
 		s.channels.tap(e)
 	}

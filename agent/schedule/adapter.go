@@ -10,8 +10,8 @@ type ToolAdapter struct{ s *Store }
 // NewToolAdapter returns an adapter exposing the store as a tools.ScheduleStore.
 func NewToolAdapter(s *Store) *ToolAdapter { return &ToolAdapter{s: s} }
 
-func (a *ToolAdapter) Set(slug, cron, prompt, owner string) error {
-	return a.s.Set(slug, cron, prompt, owner)
+func (a *ToolAdapter) Set(slug, cron, prompt, owner, origin string) error {
+	return a.s.Set(slug, cron, prompt, owner, origin)
 }
 
 // Delete removes the schedule only if it belongs to owner. Because the store is

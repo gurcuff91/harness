@@ -6,10 +6,10 @@ import (
 	"time"
 )
 
-// FireFunc is invoked by the engine when a schedule is due. It receives the
-// schedule's slug, prompt, and owner (the session id to route the prompt to;
-// empty for single-session transports).
-type FireFunc func(slug, prompt, owner string)
+// FireFunc is invoked by the engine when a schedule is due, with the whole
+// schedule: Slug, Prompt, Owner (the session id to route the prompt to) and
+// Origin (the channel conversation it was created from, if any).
+type FireFunc func(Schedule)
 
 // tickInterval is how often the engine re-evaluates schedules. It's sub-minute
 // (the finest cron granularity is 1 minute) so no minute is ever skipped; the
@@ -167,7 +167,7 @@ func (e *Engine) evaluate(startedAt, now time.Time) {
 		}
 		next := sched.Next(anchor)
 		if !next.After(now) { // due: its next run from the anchor has arrived
-			e.fire(sc.Slug, sc.Prompt, sc.Owner)
+			e.fire(sc)
 			_ = e.store.RecordRun(sc.Slug, sc.Owner, now.UnixMilli())
 		}
 	}

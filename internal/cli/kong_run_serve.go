@@ -31,5 +31,6 @@ func (c *serveCmd) newAgent() (*agent.Agent, error) {
 	// Clients bind sessions to conversations through the API (channels on
 	// create/resume); serve itself takes no channel flag.
 	opts.Channels = append(opts.Channels, storedChannels(slackch.LoadCredentials, true)...)
+	opts.Channels = append(opts.Channels, telegramChannels(c.TelegramToken, true)...)
 	return agent.New(opts), nil
 }

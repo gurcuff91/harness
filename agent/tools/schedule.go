@@ -22,7 +22,9 @@ type ScheduleEntry struct {
 // (package schedule) is injected by the agent, keeping this package free of the
 // storage/cron dependency.
 type ScheduleStore interface {
-	Set(slug, cron, prompt, owner string) error
+	// Set upserts a schedule; origin is the channel conversation it was
+	// created from ("" for none — see Schedule's origin argument).
+	Set(slug, cron, prompt, owner, origin string) error
 	// Delete removes a schedule only if it belongs to owner; a slug owned by
 	// another session is treated as absent (false, nil) — no cross-session deletes.
 	Delete(slug, owner string) (bool, error)
@@ -34,8 +36,10 @@ type ScheduleStore interface {
 // Schedule upserts a cron-scheduled prompt (create or edit by slug). owner is the
 // id of the session this tool belongs to; the engine routes a fired prompt back
 // to that session (empty for single-session transports). It's captured here, not
-// exposed to the model.
-func Schedule(store ScheduleStore, owner string) Tool {
+// exposed to the model. origin, when not nil, returns the input-channel
+// conversation the current turn came from ("" for none): a schedule created
+// from a Slack or Telegram conversation fires back into it.
+func Schedule(store ScheduleStore, owner string, origin func() string) Tool {
 	return Tool{
 		Def: types.ToolDef{
 			Name:        ToolSchedule,
@@ -58,7 +62,11 @@ func Schedule(store ScheduleStore, owner string) Tool {
 			// cron expression itself (ValidateCron) — that business validation
 			// stays there; requireFields above only closes the presence gap
 			// the tool itself never checked before this migration.
-			if err := store.Set(p.Slug, p.Cron, p.Prompt, owner); err != nil {
+			from := ""
+			if origin != nil {
+				from = origin()
+			}
+			if err := store.Set(p.Slug, p.Cron, p.Prompt, owner, from); err != nil {
 				return "", err
 			}
 			return fmt.Sprintf("Scheduled %q (%s).", p.Slug, p.Cron), nil
