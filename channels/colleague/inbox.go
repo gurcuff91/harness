@@ -116,6 +116,13 @@ func kindOrigin(kind, from string) string {
 	return Type + ":" + from
 }
 
+// OwnsOrigin implements agent.SenderOrigins: a colleague's QUESTION
+// ("colleague:<sender>") belongs to this conversation, also when it was not
+// delivered in this run — a schedule that colleague asked for fires back with
+// it, and its answer is sent to the colleague. A reply never does (its turn
+// sends nothing back, so nothing may be scheduled to it).
+func (c *Channel) OwnsOrigin(_, origin string) bool { return askerOf(origin) != "" }
+
 // replySuffix marks the origin of a reply's turn (display stays "colleague:…").
 const replySuffix = "#reply"
 

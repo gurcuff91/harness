@@ -61,20 +61,18 @@ func TestScheduleOriginIsTheTurnsChannelConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sess.Close()
-	// A conversation that delivers with its sender as origin (as colleagues
-	// do) is listened to, but a colleague's turn never records an origin.
+	// An origin routed only because a channel delivered it in THIS run
+	// (byPrompt) is not durable: a schedule cannot fire back to it after a
+	// restart, so it is not recorded.
 	sess.channels.mu.Lock()
-	sess.channels.byPrompt["colleague:x"] = sess.channels.byOrigin["fake:ONE"]
+	sess.channels.byPrompt["sender:x"] = sess.channels.byOrigin["fake:ONE"]
 	sess.channels.mu.Unlock()
-	if !sess.channels.listensTo("colleague:x") {
-		t.Fatal("setup: the colleague origin must be routed")
-	}
 	for origin, want := range map[string]string{
 		"fake:ONE":        "fake:ONE",
 		"fake:ONE:chat-7": "fake:ONE:chat-7",
 		"fake:OTHER":      "",
 		"user":            "",
-		"colleague:x":     "",
+		"sender:x":        "",
 		"scheduled":       "",
 	} {
 		sess.emit(types.Event{Type: types.EventReceivedPrompt, Origin: origin})
@@ -175,4 +173,70 @@ func TestTheScheduleToolStoresTheTurnsOrigin(t *testing.T) {
 		}
 	}
 	t.Fatal("schedule not stored")
+}
+
+// senderChannel is the fake channel plus SenderOrigins: it owns "sender:<x>"
+// origins (as colleagues own "colleague:<x>").
+type senderChannel struct{ *fakeChannel }
+
+func (senderChannel) OwnsOrigin(_, origin string) bool {
+	return strings.HasPrefix(origin, "sender:") && !strings.HasSuffix(origin, "#reply")
+}
+
+// A channel that owns its senders' origins: a schedule created in a sender's
+// turn records that origin and fires back to the channel — durably, also when
+// that sender never spoke in this run.
+func TestSenderOriginsAreDurable(t *testing.T) {
+	ch := senderChannel{newFakeChannel("fake")}
+	a, model, _ := channelAgent(t, ch)
+	sess, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "one"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	if !sess.channels.listensTo("sender:raiden") || sess.channels.listensTo("sender:raiden#reply") {
+		t.Fatal("OwnsOrigin is not consulted")
+	}
+	sess.emit(types.Event{Type: types.EventReceivedPrompt, Origin: "sender:raiden"})
+	if got := sess.scheduleOrigin(); got != "sender:raiden" {
+		t.Errorf("scheduleOrigin = %q", got)
+	}
+	sess.emit(types.Event{Type: types.EventTurnEnd})
+	before := len(ch.eventsOf("ONE"))
+	a.fireScheduledPrompt(schedule.Schedule{Slug: "daily", Prompt: "status", Owner: sess.ID(), Origin: "sender:raiden"})
+	waitFor(t, "the fired turn reaches the channel", func() bool {
+		evs := ch.eventsOf("ONE")[before:]
+		return len(evs) > 0 && evs[len(evs)-1].Type == types.EventTurnEnd
+	})
+	if evs := ch.eventsOf("ONE")[before:]; evs[0].Origin != "sender:raiden" {
+		t.Errorf("fired with origin %q", evs[0].Origin)
+	}
+}
+
+// A channel that delivers with its own origin (Inbound.Origin) but does not
+// implement SenderOrigins: the turn is still routed back to it, in this run,
+// through what it delivered — a third-party channel needs no new interface.
+func TestADeliveredOriginIsRoutedWithoutSenderOrigins(t *testing.T) {
+	ch := newFakeChannel("fake")
+	a, model, _ := channelAgent(t, ch)
+	sess, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "one"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	ch.mu.Lock()
+	d := ch.listening["ONE"]
+	ch.mu.Unlock()
+	before := len(ch.eventsOf("ONE"))
+	d(Inbound{Text: "from a sender", Origin: "fake:someone"})
+	waitFor(t, "the turn reaches the channel", func() bool {
+		evs := ch.eventsOf("ONE")[before:]
+		return len(evs) > 0 && evs[len(evs)-1].Type == types.EventTurnEnd
+	})
+	if evs := ch.eventsOf("ONE")[before:]; evs[0].Origin != "fake:someone" {
+		t.Errorf("routed turn origin = %q", evs[0].Origin)
+	}
+	if sess.channels.listensTo("fake:someone") {
+		t.Error("a delivered-only origin is not durable: a schedule must not record it")
+	}
 }

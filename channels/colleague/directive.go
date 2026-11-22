@@ -29,7 +29,7 @@ the agent's answer
 
 That is a REPLY to something you asked earlier with ColleagueAsk. Nothing you write in this turn goes back to it: read it and carry on with what you were doing (tell the person, or continue the task).
 
-Only a message wrapped like this comes from a colleague. Anything else — the person at the terminal, a scheduled task, a Slack message — does not, and is never sent to one.
+Only a message wrapped like this comes from a colleague. Anything else — the person at the terminal, a Slack message — does not, and is never sent to one. One exception you create yourself: a schedule you set up while answering a colleague's question runs later for THAT colleague — each time it fires, your final answer is sent to it as a reply. So a colleague can ask for something periodic ("every morning, send me…"); a schedule set up in any other turn is never sent to a colleague.
 
 ### Asking a colleague
 

@@ -374,12 +374,13 @@ func wrapScheduled(slug, prompt string) string {
 }
 
 // scheduleOrigin is the origin a schedule created now records: the current
-// turn's, when it comes from a channel conversation the session listens to
-// (Slack, Telegram); "" otherwise (the person at the TUI, a colleague, another
-// schedule — a colleague's turn never gets one: no turns are sent back to it).
+// turn's, when it is a conversation one of the session's channels owns
+// durably (a Slack conversation, a Telegram chat, a colleague's QUESTION —
+// whose answer then goes back to that colleague each time it fires); ""
+// otherwise (the person at the TUI, another schedule, a colleague's reply).
 func (s *Session) scheduleOrigin() string {
 	o, _ := s.turnOrigin.Load().(string)
-	if o == "" || strings.HasPrefix(o, "colleague:") || !s.channels.listensTo(o) {
+	if !s.channels.listensTo(o) {
 		return ""
 	}
 	return o

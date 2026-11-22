@@ -55,6 +55,17 @@ type Channel interface {
 	Tools(ids []string) []tools.Tool
 }
 
+// SenderOrigins is implemented by a channel whose turns carry the SENDER in
+// their origin (Inbound.Origin) instead of the conversation's — colleagues:
+// a question from raiden is "colleague:raiden" on the conversation
+// "colleague:<me>". OwnsOrigin says whether a turn of origin belongs to
+// conversation id, so it is routed there also when it was not delivered in
+// this run (a schedule a colleague asked for, fired back after a restart).
+// Optional: a channel whose origins are its conversations' needs none.
+type SenderOrigins interface {
+	OwnsOrigin(id, origin string) bool
+}
+
 // ChannelInfo describes one conversation a session listens to.
 type ChannelInfo struct {
 	Type string `json:"type"`
@@ -317,10 +328,19 @@ func (sc *sessionChannels) routeLocked(origin string) *boundChannel {
 	if origin == "" {
 		return nil
 	}
-	if b := sc.byOrigin[origin]; b != nil {
+	if b := sc.byPrompt[origin]; b != nil {
 		return b
 	}
-	if b := sc.byPrompt[origin]; b != nil {
+	return sc.durableRouteLocked(origin)
+}
+
+// durableRouteLocked is routeLocked without what a channel delivered in this
+// run (byPrompt): the routes that hold across restarts — the conversation
+// itself, a sub-conversation by prefix, or an origin a channel owns
+// (SenderOrigins). What a schedule may record and fire back to. Caller holds
+// sc.mu.
+func (sc *sessionChannels) durableRouteLocked(origin string) *boundChannel {
+	if b := sc.byOrigin[origin]; b != nil {
 		return b
 	}
 	for o, b := range sc.byOrigin {
@@ -328,19 +348,25 @@ func (sc *sessionChannels) routeLocked(origin string) *boundChannel {
 			return b
 		}
 	}
+	for _, b := range sc.bound {
+		if so, ok := b.ch.(SenderOrigins); ok && so.OwnsOrigin(b.id, origin) {
+			return b
+		}
+	}
 	return nil
 }
 
-// listensTo reports whether a turn of origin would reach one of the session's
-// channels — the rule the scheduler uses to send a fired prompt back to the
-// conversation it was created from.
+// listensTo reports whether a turn of origin reaches one of the session's
+// channels by a DURABLE route (durableRouteLocked) — the rule the scheduler
+// uses both to record a schedule's origin and to fire it back there, so the
+// two agree even across restarts.
 func (sc *sessionChannels) listensTo(origin string) bool {
-	if sc == nil {
+	if sc == nil || origin == "" {
 		return false
 	}
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
-	return !sc.closed && sc.routeLocked(origin) != nil
+	return !sc.closed && sc.durableRouteLocked(origin) != nil
 }
 
 // close stops listening and releases every claim. Idempotent.

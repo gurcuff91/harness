@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.117.1] - 2026-11-22
+
+### Fixed — a schedule a colleague asks for now reaches that colleague
+When another agent asked a session to do something periodically ("every morning, send me the deploy status"), the schedule was created but its answers stayed in that session: the colleague never received them, while the model had promised it would. A schedule created while answering a colleague's question now remembers that colleague, and each time it fires the session runs it as that colleague's question and sends the final answer back to it as a reply. The reply sends nothing further, so no loop is possible; a colleague that has left simply loses it. The colleagues section of the system prompt explains it. SDK: a channel whose prompts carry the sender in their origin can implement the optional `agent.SenderOrigins` (`OwnsOrigin`) so its origins keep routing after a restart; the colleague channel does.
+
 ## [0.117.0] - 2026-11-22
 
 ### Removed (breaking, SDK) — the "scheduled" prompt origin

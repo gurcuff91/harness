@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/agent/schedule"
 	"github.com/gurcuff91/harness/agent/store"
 	atools "github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/configstore"
@@ -82,6 +83,16 @@ func newScriptedModel(t *testing.T) *scriptedModel {
 			call, _ := json.Marshal(map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": "c1", "type": "function",
 				"function": map[string]any{"name": "ColleagueAsk", "arguments": string(args)}}}})
 			chunk(string(call))
+		case lastRole == "tool" && strings.Contains(fmt.Sprint(req.Messages), "SCHEDULE "):
+			text("scheduled it")
+		case strings.Contains(last, "SCHEDULE "): // "SCHEDULE <slug>" in a colleague's question
+			slug := strings.Fields(last[strings.Index(last, "SCHEDULE ")+9:])[0]
+			args, _ := json.Marshal(map[string]string{"slug": slug, "cron": "@daily", "prompt": "REPORT STATUS"})
+			call, _ := json.Marshal(map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": "s1", "type": "function",
+				"function": map[string]any{"name": "Schedule", "arguments": string(args)}}}})
+			chunk(string(call))
+		case strings.Contains(last, "REPORT STATUS"):
+			text("STATUS IS GREEN")
 		case strings.Contains(last, "reply>"):
 			text("THANKS")
 		case strings.HasPrefix(last, "<colleague from="):
@@ -518,5 +529,86 @@ func TestColleagueListWithAnOldColleague(t *testing.T) {
 	}
 	if d := time.Since(start); d >= 2*pingTimeout {
 		t.Errorf("the list took %v; pings run in parallel, bounded by %v", d, pingTimeout)
+	}
+}
+
+// A colleague asks for something periodic: the schedule created while
+// answering its question fires back TO it — the colleague gets the answer as a
+// reply each time — and that reply sends nothing back (no loop).
+func TestAScheduleAColleagueAskedForAnswersThatColleague(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
+	model := newScriptedModel(t)
+	if err := agent.NewOpenAIProvider("scripted", model.srv.URL); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { agent.UnregisterCustomProvider("scripted") })
+	ch := New(WithRunDir(shortDir(t)))
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), Channels: []agent.Channel{ch}, EnableScheduler: true})
+	defer a.Close()
+	open := func() (*agent.Session, *eventLog) {
+		s, err := a.NewSession(t.TempDir(), "scripted/m")
+		if err != nil {
+			t.Fatal(err)
+		}
+		l := &eventLog{}
+		s.Subscribe(l.add)
+		return s, l
+	}
+	scorpion, sl := open()
+	raiden, rl := open()
+	sID, rID := colleagueID(t, scorpion), colleagueID(t, raiden)
+	slug := "tg-" + strings.ReplaceAll(t.Name(), "/", "")[:8]
+	t.Cleanup(func() { _, _ = a.Schedules().Delete(slug, scorpion.ID()) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	// raiden asks scorpion to schedule something.
+	if _, err := raiden.PromptAndWait(ctx, "ASK "+sID+": SCHEDULE "+slug+" every day"); err != nil {
+		t.Fatal(err)
+	}
+	var stored schedule.Schedule
+	eventually(t, "the schedule exists with the colleague's origin", func() bool {
+		for _, sc := range a.Schedules().List() {
+			if sc.Slug == slug && sc.Owner == scorpion.ID() {
+				stored = sc
+				return true
+			}
+		}
+		return false
+	})
+	if stored.Origin != "colleague:"+rID {
+		t.Fatalf("schedule origin = %q, want colleague:%s", stored.Origin, rID)
+	}
+	eventually(t, "the scheduling turn is over on both sides", func() bool {
+		return !scorpion.IsBusy() && !raiden.IsBusy() && len(rl.prompts()) >= 1
+	})
+	repliesBefore := len(rl.prompts())
+
+	// It fires: scorpion runs it as raiden's question, and raiden gets the answer.
+	a.FireScheduleForTest(stored)
+	eventually(t, "raiden receives the scheduled answer", func() bool {
+		for _, p := range rl.prompts()[repliesBefore:] {
+			if p.Origin == "colleague:"+sID+"#reply" && strings.Contains(p.Output, "STATUS IS GREEN") {
+				return true
+			}
+		}
+		return false
+	})
+	var fired types.Event
+	for _, p := range sl.prompts() {
+		if strings.HasPrefix(strings.TrimSpace(p.Output), "<scheduled slug=") {
+			fired = p
+		}
+	}
+	if fired.Origin != "colleague:"+rID {
+		t.Errorf("the fired turn's origin = %q, want the colleague's", fired.Origin)
+	}
+	// No loop: raiden's reply turn sends nothing back.
+	eventually(t, "settled", func() bool { return !scorpion.IsBusy() && !raiden.IsBusy() })
+	n := len(sl.prompts())
+	time.Sleep(300 * time.Millisecond)
+	if len(sl.prompts()) != n {
+		t.Errorf("scorpion got more prompts after the reply: a loop")
 	}
 }
