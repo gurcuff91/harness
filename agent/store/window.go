@@ -152,7 +152,7 @@ func readJSONLWindow(path string, size int64, w MessageWindow) (msgs []types.Mes
 		return adv, tok, err
 	}
 	sc := bufio.NewScanner(io.LimitReader(f, size))
-	sc.Buffer(make([]byte, 1024*1024), 10*1024*1024) // 10MB max line, as readJSONLFrom
+	sc.Buffer(make([]byte, 1024*1024), maxLogLine)
 	sc.Split(counting)
 
 	line := 0
@@ -196,7 +196,7 @@ func readJSONLWindow(path string, size int64, w MessageWindow) (msgs []types.Mes
 	}
 	msgs = []types.Message{}
 	sc = bufio.NewScanner(io.LimitReader(f, size-cut.offset))
-	sc.Buffer(make([]byte, 1024*1024), 10*1024*1024)
+	sc.Buffer(make([]byte, 1024*1024), maxLogLine)
 	for sc.Scan() {
 		var msg types.Message
 		if err := json.Unmarshal(sc.Bytes(), &msg); err != nil {

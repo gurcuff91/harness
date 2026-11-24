@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -546,6 +547,82 @@ func (c *Client) ForkSession(id string, opts ...SessionOption) (*Session, error)
 	s, err := decode[Session](c, "POST", "/api/sessions/"+id+"/fork", body)
 	if err != nil {
 		return nil, err
+	}
+	return &s, nil
+}
+
+// ExportSession streams session id as a JSONL export (GET
+// /api/sessions/{id}/export: a header line, then every message) into w, and
+// returns the file name the server proposes for it
+// ("<name>-<id8>.export.jsonl") and how many bytes were written. The session
+// may be open or closed. A missing session is an *Error with status 404.
+func (c *Client) ExportSession(id string, w io.Writer) (filename string, n int64, err error) {
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodGet, c.baseURL+"/api/sessions/"+url.PathEscape(id)+"/export", nil)
+	if err != nil {
+		return "", 0, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", 0, fmt.Errorf("request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		if ae := parseError(data, resp.StatusCode); ae != nil {
+			return "", 0, ae
+		}
+		return "", 0, fmt.Errorf("export: HTTP %d", resp.StatusCode)
+	}
+	if _, params, err := mime.ParseMediaType(resp.Header.Get("Content-Disposition")); err == nil {
+		filename = params["filename"]
+	}
+	n, err = io.Copy(w, resp.Body)
+	return filename, n, err
+}
+
+// ImportSession uploads a session export read from r (POST
+// /api/sessions/import) and returns the NEW session it was opened as — the
+// same conversation under a new id; nothing existing is touched. cwd is the
+// project the new session belongs to ("" = the exported session's);
+// WithChannels binds it to channels (none are inherited). An invalid export is
+// an *Error with status 400, one over the server's limit (1 GiB by default)
+// 413.
+func (c *Client) ImportSession(r io.Reader, cwd string, opts ...SessionOption) (*Session, error) {
+	o := applyClientSessionOptions(opts)
+	q := url.Values{}
+	if cwd != "" {
+		q.Set("cwd", cwd)
+	}
+	for _, ch := range o.channels {
+		q.Add("channel", ch.Type+":"+ch.Ref)
+	}
+	u := c.baseURL + "/api/sessions/import"
+	if len(q) > 0 {
+		u += "?" + q.Encode()
+	}
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, u, r)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-ndjson")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request: %w", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		if ae := parseError(data, resp.StatusCode); ae != nil {
+			return nil, ae
+		}
+		return nil, fmt.Errorf("import: HTTP %d", resp.StatusCode)
+	}
+	var s Session
+	if err := json.Unmarshal(data, &s); err != nil {
+		return nil, fmt.Errorf("import: decode: %w", err)
 	}
 	return &s, nil
 }

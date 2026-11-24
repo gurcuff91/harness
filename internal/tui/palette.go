@@ -408,7 +408,7 @@ func (t *TUI) sessionsForCWD(excludeActive bool) []components.SelectItem {
 	var items []components.SelectItem
 	for _, s := range sessions {
 		id := s.ID
-		if excludeActive && id == t.sessionID {
+		if excludeActive && id == t.view().sessionID {
 			continue
 		}
 		name := s.Name

@@ -115,16 +115,12 @@ func (t *TUI) autoConnect(ctx context.Context) error {
 			}
 			thinking = t.overrideThinking
 		}
-		t.sessionID = sess.ID
-		t.channelInfos = sess.Channels
+		t.switchView(sess.ID, model, thinking, sess.MaxIterations, sess.Channels)
 		t.setSessionName(sess.Name)
-		t.model = model
-		t.thinking = thinking
-		t.maxIterations = sess.MaxIterations
 		t.refreshSubscriptionFlag() // the model may differ from the one resolved above (fallback or --model)
 		t.loadStatsFromSession(sess)
 		t.loadSessionCommands()
-		t.addRaw(ansi.Dimmed(fmt.Sprintf("── resumed: %s ──", t.sessionName)))
+		t.addRaw(ansi.Dimmed(fmt.Sprintf("── resumed: %s ──", t.view().sessionName)))
 		t.noteModelFallback(sess)
 		t.renderHistory()
 		t.updateInfo()
@@ -140,7 +136,7 @@ func (t *TUI) autoConnect(ctx context.Context) error {
 	if model == "" {
 		// No model could be resolved (server unreachable / no active providers) — the banner
 		// explains why; nothing left to do without one.
-		t.thinking = thinking
+		t.withView(func() { t.thinking = thinking })
 		t.addRaw(t.welcomeBanner(warnings...))
 		t.keepInitialPrompt()
 		return nil
@@ -154,7 +150,7 @@ func (t *TUI) autoConnect(ctx context.Context) error {
 			// model. The wording is the server's, the same as `-p` prints.
 			return fmt.Errorf("create session: %w", err)
 		}
-		t.model, t.thinking, t.isSubscription = model, thinking, subscription
+		t.withView(func() { t.model, t.thinking, t.isSubscription = model, thinking, subscription })
 		t.addRaw(t.welcomeBanner(warnings...))
 		t.showWarn(fmt.Sprintf("Failed to create session: %s", err.Error()))
 		t.keepInitialPrompt()
@@ -173,12 +169,10 @@ func (t *TUI) autoConnect(ctx context.Context) error {
 		}
 		thinking = t.overrideThinking
 	}
-	t.model, t.thinking, t.isSubscription = model, thinking, subscription
+	t.withView(func() { t.isSubscription = subscription })
+	t.switchView(sess.ID, model, thinking, sess.MaxIterations, sess.Channels)
 	t.addRaw(t.welcomeBanner(warnings...))
-	t.sessionID = sess.ID
-	t.channelInfos = sess.Channels
 	t.setSessionName(sess.Name)
-	t.maxIterations = sess.MaxIterations
 	t.loadStatsFromSession(sess)
 	t.loadSessionCommands()
 	t.updateInfo()
@@ -203,7 +197,7 @@ func (t *TUI) autoConnect(ctx context.Context) error {
 func (t *TUI) sendInitialPrompt() {
 	text := t.initialPrompt
 	t.initialPrompt = ""
-	if text == "" || t.sessionID == "" {
+	if text == "" || t.view().sessionID == "" {
 		return
 	}
 	t.awaitStream()
@@ -230,8 +224,8 @@ func (t *TUI) keepInitialPrompt() {
 func (t *TUI) resumeInPlace(sessID string) {
 	// Stop the current stream and close the active session (flush to disk).
 	t.stopSSE()
-	if t.sessionID != "" && t.sessionID != sessID {
-		t.client.CloseSession(t.sessionID) //nolint:errcheck
+	if t.view().sessionID != "" && t.view().sessionID != sessID {
+		t.client.CloseSession(t.view().sessionID) //nolint:errcheck
 	}
 
 	sess, err := t.client.ResumeSession(sessID)
@@ -243,17 +237,13 @@ func (t *TUI) resumeInPlace(sessID string) {
 	// Reset state + scrollback for the incoming session.
 	t.resetForNewSession()
 
-	t.sessionID = sess.ID
-	t.channelInfos = sess.Channels
+	t.switchView(sess.ID, sess.Model, sess.Thinking, sess.MaxIterations, sess.Channels)
 	t.setSessionName(sess.Name)
-	t.model = sess.Model
-	t.thinking = sess.Thinking
-	t.maxIterations = sess.MaxIterations
 	t.refreshSubscriptionFlag()
 	t.loadStatsFromSession(sess)
 	t.loadSessionCommands()
 
-	t.addRaw(ansi.Dimmed(fmt.Sprintf("── resumed: %s ──", t.sessionName)))
+	t.addRaw(ansi.Dimmed(fmt.Sprintf("── resumed: %s ──", t.view().sessionName)))
 	t.noteModelFallback(sess)
 	t.renderHistory()
 	t.updateInfo()
@@ -282,12 +272,12 @@ func (t *TUI) noteModelFallback(sess *client.Session) {
 // here, it's just nothing to close before creating the new one.
 func (t *TUI) newSessionInPlace() {
 	t.stopSSE()
-	if t.sessionID != "" {
-		t.client.CloseSession(t.sessionID) //nolint:errcheck
+	if t.view().sessionID != "" {
+		t.client.CloseSession(t.view().sessionID) //nolint:errcheck
 	}
 
 	cwd, _ := os.Getwd()
-	sess, err := t.client.CreateSession(t.model, cwd, "")
+	sess, err := t.client.CreateSession(t.view().model, cwd, "")
 	if err != nil {
 		t.showWarn(fmt.Sprintf("Failed to create session: %s", err.Error()))
 		return
@@ -296,18 +286,17 @@ func (t *TUI) newSessionInPlace() {
 	// Reset state + scrollback for the incoming session.
 	t.resetForNewSession()
 
-	t.sessionID = sess.ID
-	t.channelInfos = sess.Channels
-	t.setSessionName(sess.Name)
+	thinking := t.view().thinking
 	if sess.Thinking != "" {
-		t.thinking = sess.Thinking
+		thinking = sess.Thinking
 	}
-	t.maxIterations = sess.MaxIterations
+	t.switchView(sess.ID, t.view().model, thinking, sess.MaxIterations, sess.Channels)
+	t.setSessionName(sess.Name)
 	t.refreshSubscriptionFlag()
 	t.loadStatsFromSession(sess)
 	t.loadSessionCommands()
 
-	t.addRaw(ansi.Dimmed(fmt.Sprintf("── new session: %s ──", t.sessionName)))
+	t.addRaw(ansi.Dimmed(fmt.Sprintf("── new session: %s ──", t.view().sessionName)))
 	t.updateInfo()
 	t.startSSE(t.baseCtx)
 }
@@ -345,7 +334,7 @@ func (t *TUI) takeSSECancel() context.CancelFunc {
 // setSessionName records the session's name and publishes it as the terminal title. Every place
 // that changes the name goes through here, so the title cannot fall behind the footer.
 func (t *TUI) setSessionName(name string) {
-	t.sessionName = name
+	t.withView(func() { t.sessionName = name })
 	t.status.SetTitle(name)
 }
 
@@ -359,7 +348,7 @@ func (t *TUI) setSessionName(name string) {
 // session may already have a turn in flight, whose working would otherwise be overwritten by a
 // late idle. No session (startup could not create one) means nothing is reported.
 func (t *TUI) startSSE(ctx context.Context) {
-	if t.sessionID == "" {
+	if t.view().sessionID == "" {
 		return
 	}
 	t.status.Set(ansi.StatusIdle)
@@ -400,11 +389,11 @@ func (t *TUI) resetForNewSession() {
 
 // loadSessionCommands fetches the dynamic command list for the session.
 func (t *TUI) loadSessionCommands() {
-	if t.sessionID == "" {
+	if t.view().sessionID == "" {
 		return
 	}
 	t.refreshBadges() // footer status counts (MCP connected, schedule jobs)
-	cmds, err := t.client.ListCommands(t.sessionID)
+	cmds, err := t.client.ListCommands(t.view().sessionID)
 	if err != nil {
 		return
 	}
@@ -416,6 +405,8 @@ func (t *TUI) loadSessionCommands() {
 // shouldn't clobber anything already shown).
 func (t *TUI) loadStatsFromSession(sess *client.Session) {
 	stats := sess.Stats
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if stats.InputTokens > 0 {
 		t.stats.input = stats.InputTokens
 	}
@@ -462,7 +453,7 @@ const resumeCompactions = 2
 // shape the live stream produces — so we render each into the block history.
 // Thinking is intentionally skipped (not persisted). Mirrors v1's renderHistory.
 func (t *TUI) renderHistory() {
-	messages, hidden, _, err := t.client.GetMessagesWith(t.sessionID, client.MessagesOptions{Compactions: resumeCompactions})
+	messages, hidden, _, err := t.client.GetMessagesWith(t.view().sessionID, client.MessagesOptions{Compactions: resumeCompactions})
 	if err != nil {
 		return
 	}

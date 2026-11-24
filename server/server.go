@@ -51,7 +51,8 @@ type Server struct {
 	transport string      // name of the calling transport
 	keepAgent bool        // Close leaves the agent open (it belongs to the caller)
 
-	proxyMaxBody int64 // request-body cap of /api/providers/{name}/proxy/*; 0 = DefaultProxyMaxBodyBytes
+	proxyMaxBody  int64 // request-body cap of /api/providers/{name}/proxy/*; 0 = DefaultProxyMaxBodyBytes
+	importMaxBody int64 // request-body cap of POST /api/sessions/import; 0 = DefaultImportMaxBodyBytes
 
 	// openMu serializes session create/resume so a session can never get a
 	// second proxy (two concurrent resumes of the same id used to both miss
@@ -91,6 +92,11 @@ type ServerOptions struct {
 	// (/api/providers/{name}/proxy/*); a larger one is answered 413. Zero means
 	// DefaultProxyMaxBodyBytes (32 MiB).
 	ProxyMaxBodyBytes int64
+
+	// ImportMaxBodyBytes caps the body of POST /api/sessions/import (a whole
+	// session export); a larger one is answered 413. Zero means
+	// DefaultImportMaxBodyBytes (1 GiB).
+	ImportMaxBodyBytes int64
 }
 
 // NewServer creates an HTTP server wrapping the agent.
@@ -104,13 +110,14 @@ func NewServer(a *agent.Agent, opts ServerOptions) *Server {
 		logger = logx.NewNilLogger()
 	}
 	return &Server{
-		agent:        a,
-		logger:       logger,
-		transport:    transport,
-		keepAgent:    opts.KeepAgentOpen,
-		proxyMaxBody: opts.ProxyMaxBodyBytes,
-		sessions:     make(map[string]*SessionProxy),
-		profiles:     make(map[string]Profile),
+		agent:         a,
+		logger:        logger,
+		transport:     transport,
+		keepAgent:     opts.KeepAgentOpen,
+		proxyMaxBody:  opts.ProxyMaxBodyBytes,
+		importMaxBody: opts.ImportMaxBodyBytes,
+		sessions:      make(map[string]*SessionProxy),
+		profiles:      make(map[string]Profile),
 	}
 }
 
@@ -159,6 +166,8 @@ func (s *Server) handler() http.Handler {
 	r.Post("/api/sessions/{id}/close", s.handleCloseSession)
 	r.Post("/api/sessions/{id}/resume", s.handleResumeSession)
 	r.Post("/api/sessions/{id}/fork", s.handleForkSession)
+	r.Get("/api/sessions/{id}/export", s.handleExportSession)
+	r.Post("/api/sessions/import", s.handleImportSession)
 	r.Post("/api/sessions/{id}/prompt", s.handlePrompt)
 	r.Post("/api/sessions/{id}/ask", s.handleAsk)
 	r.Get("/api/sessions/{id}/events", s.handleEvents)
@@ -1735,6 +1744,18 @@ var commands = []commandDef{
 		Description: "Wipe the session history and stats, starting fresh (preserves model, thinking, and name)",
 		Params:      []paramDef{},
 	},
+	{
+		Name:        "export",
+		Description: "Export the session (its whole conversation) to ~/.harness/exports/<name>-<id>.export.jsonl",
+		Params:      []paramDef{},
+	},
+	{
+		Name:        "import",
+		Description: "Import a session export (.export.jsonl) as a NEW session; the session the command runs on is untouched",
+		Params: []paramDef{
+			{Name: "path", Type: "string", Required: true},
+		},
+	},
 }
 
 func (s *Server) handleListCommands(w http.ResponseWriter, r *http.Request) {
@@ -1909,6 +1930,28 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeStatus(w, http.StatusOK, "ok", "")
+
+	case "export":
+		msg, err := s.commandExport(proxy.session)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeStatus(w, http.StatusOK, "ok", msg)
+
+	case "import":
+		path, _ := req.Params["path"].(string)
+		if path == "" {
+			writeError(w, http.StatusBadRequest, "param 'path' is required", nil)
+			return
+		}
+		id, err := s.commandImport(proxy.session, path)
+		if err != nil {
+			s.writeImportErr(w, err, 0)
+			return
+		}
+		// The message IS the new session's id: the caller switches to it.
+		writeStatus(w, http.StatusCreated, "ok", id)
 
 	default:
 		// Check if it's a skill command: skill:<name>

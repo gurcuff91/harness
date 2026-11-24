@@ -50,8 +50,8 @@ func (t *TUI) welcomeBanner(warnings ...string) string {
 	}
 	add("")
 	tagline := "  " + ansi.Muted("fast terminal agent") + ansi.Dimmed(" · "+version.Version) + ansi.Dimmed(" · ")
-	if t.model != "" {
-		tagline += ansi.Muted(shortModel(t.model))
+	if t.view().model != "" {
+		tagline += ansi.Muted(shortModel(t.view().model))
 	} else {
 		tagline += ansi.Muted("-")
 	}

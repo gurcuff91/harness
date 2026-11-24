@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.118.0] - 2026-11-24
+
+### Added — export and import sessions
+A session's whole conversation can be written to a file and opened again as a new session.
+- **TUI:** `/export` writes `~/.harness/exports/<name>-<id>.export.jsonl` and says where; `/import <file>` (`~` and relative paths work) opens it as a NEW session, an exact copy like a fork, and switches to it. The session you were in is never touched.
+- **File:** JSONL; the first line is a header (`format`, `version`, `exported_at`, `harness`, the session's meta), then every message of the session exactly as stored. An import validates it and says which line is wrong; nothing is created when it is invalid.
+- **API:** `GET /api/sessions/{id}/export` streams an export; `POST /api/sessions/import` takes one as the body (`?cwd=` for the project; up to 1 GB by default, `ServerOptions.ImportMaxBodyBytes`) and returns the new session. `client.ExportSession` and `client.ImportSession`. The session commands `export` and `import` (what the TUI uses) work on files on the server's own machine.
+- **Large sessions** stream both ways: measured on a real 643 MB session with 136 891 messages, the export took 1.4 s with 16 MB of memory and the import 5 s, byte-identical. SDK: optional `store.MessageStreamer` / `store.MessageImporter` capabilities make it fast; any `SessionStore` works without them.
+
+### Fixed
+- A message carrying an image larger than about 10 MB made its whole session unreadable ("token too long"); messages up to 64 MB are read now.
+- A fork whose model was unavailable left its copy behind on disk.
+- The TUI's footer and status lines read the session state while a session switch or a command result was writing it (a data race): it is now guarded.
+
 ## [0.117.1] - 2026-11-22
 
 ### Fixed — a schedule a colleague asks for now reaches that colleague

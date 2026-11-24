@@ -1105,18 +1105,28 @@ func (a *Agent) ForkSession(sessionID string, opts ...SessionOption) (*Session, 
 		return nil, err
 	}
 
-	// Build a live agent.Session on top of the fork store.
-	meta := forkStore.Meta()
+	return a.openStoredCopy(forkStore, cfg, "fork")
+}
+
+// openStoredCopy opens a live session over a session store that was just
+// written as a COPY (a fork, an import): the model (with ResumeSession's
+// fallback), its tools, prompt and channels, registered on the agent. On any
+// failure the copy is deleted, so nothing half-made is left. what prefixes the
+// errors ("fork", "import").
+func (a *Agent) openStoredCopy(copyStore *store.Session, cfg sessionConfig, what string) (*Session, error) {
+	meta := copyStore.Meta()
 	// Same rule as ResumeSession: an unavailable provider falls back to the default
 	// model rather than making the (copied) history unreachable.
 	provider, modelID, fallback, err := resolveSessionModel(meta.Model)
 	if err != nil {
-		return nil, fmt.Errorf("fork: %w", err)
+		_ = a.store.DeleteSession(meta.ID)
+		return nil, fmt.Errorf("%s: %w", what, err)
 	}
 	if fallback != nil {
 		meta.Model = fallback.To
-		if err := forkStore.UpdateMeta(meta); err != nil {
-			return nil, fmt.Errorf("fork: persist model fallback: %w", err)
+		if err := copyStore.UpdateMeta(meta); err != nil {
+			_ = a.store.DeleteSession(meta.ID)
+			return nil, fmt.Errorf("%s: persist model fallback: %w", what, err)
 		}
 	}
 
@@ -1147,13 +1157,13 @@ func (a *Agent) ForkSession(sessionID string, opts ...SessionOption) (*Session, 
 	// its own (opts), exactly like a new session.
 	chans, chDirectives, chTools, err := a.prepareChannels(meta.ID, cwd, a.withSessionChannels(cfg.channels), cfg.tools)
 	if err != nil {
-		_ = forkStore.Close()
+		_ = copyStore.Close()
 		_ = a.store.DeleteSession(meta.ID)
-		return nil, fmt.Errorf("fork: %w", err)
+		return nil, fmt.Errorf("%s: %w", what, err)
 	}
 	forkTools, tl := a.buildSessionTools(meta.ID, cwd, &sess, res, loader, append(append([]tools.Tool(nil), cfg.tools...), chTools...)...)
 	forkPrompt, pl := a.buildSystemPrompt(cwd, res, append(append([]string(nil), cfg.directives...), chDirectives...)...)
-	sess = newSession(forkStore,
+	sess = newSession(copyStore,
 		provider, modelID, thinkingLvl,
 		forkTools, tl, forkPrompt, pl,
 		maxIterations, maxTokens,
@@ -1162,9 +1172,9 @@ func (a *Agent) ForkSession(sessionID string, opts ...SessionOption) (*Session, 
 	sess.agent = a
 	sess.modelFallback = fallback
 	if err := sess.attachChannels(chans); err != nil {
-		_ = forkStore.Close()
+		_ = copyStore.Close()
 		_ = a.store.DeleteSession(meta.ID)
-		return nil, fmt.Errorf("fork: %w", err)
+		return nil, fmt.Errorf("%s: %w", what, err)
 	}
 	a.registerSession(sess)
 	return sess, nil

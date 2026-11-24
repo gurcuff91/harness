@@ -20,7 +20,7 @@ func (t *TUI) streamEvents(ctx context.Context) { t.streamEventsReady(ctx, nil) 
 // opened — subscribed on the server, or failed — and before the first event is consumed. It is the
 // signal sendInitialPrompt waits for.
 func (t *TUI) streamEventsReady(ctx context.Context, ready chan<- struct{}) {
-	events, err := t.client.StreamEvents(ctx, t.sessionID)
+	events, err := t.client.StreamEvents(ctx, t.view().sessionID)
 	if ready != nil {
 		close(ready)
 	}
@@ -93,7 +93,7 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 				// this transport used to maintain by hand (currTurn++ on every
 				// loop_start), which could drift from the agent's real count.
 				// +1 for the footer's "(turn/max_iterations)" 1-based display.
-				t.currTurn = evt.Loop + 1
+				t.withView(func() { t.currTurn = evt.Loop + 1 })
 				t.updateInfo()
 
 			case "thinking":
@@ -251,13 +251,13 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 				// Only the context gauge (%/window) is live-context data: it
 				// shrinks after a compaction, which is exactly what it should
 				// report.
-				t.stats.input = evt.TotalInput
-				t.stats.output = evt.TotalOutput
-				t.stats.cacheRead = evt.CacheRead
-				t.stats.cacheWrite = evt.CacheWrite
-				t.stats.cost = evt.CostUSD
-				t.stats.contextPct = evt.ContextUsage
-				t.stats.contextWin = evt.ContextWindow
+				t.mu.Lock()
+				t.stats = tokensInfo{
+					input: evt.TotalInput, output: evt.TotalOutput,
+					cacheRead: evt.CacheRead, cacheWrite: evt.CacheWrite,
+					cost: evt.CostUSD, contextPct: evt.ContextUsage, contextWin: evt.ContextWindow,
+				}
+				t.mu.Unlock()
 				t.updateInfo()
 
 			case "turn_end":
@@ -270,10 +270,11 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 				thinkBlk, thinkBuf, thinkingFrozen = nil, "", false
 				// A follow_up_start (if queued work remains) re-arms the spinner and
 				// echoes the next prompt. If nothing is queued, stop the spinner.
-				if t.queueCount == 0 {
+				queued := t.queued()
+				if queued == 0 {
 					t.setSpinning(false)
 				}
-				if state, ok := reportTurnEnd(t.outcome.get(), t.queueCount); ok {
+				if state, ok := reportTurnEnd(t.outcome.get(), queued); ok {
 					t.status.Set(state)
 				}
 				// Hide the "(turn/max_iterations)" footer indicator now that this turn is
@@ -297,9 +298,11 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 				// prompt now (single source of truth for queued prompts).
 				msg := evt.Text
 				origin := evt.Origin
-				if t.queueCount > 0 {
-					t.queueCount--
-				}
+				t.withView(func() {
+					if t.queueCount > 0 {
+						t.queueCount--
+					}
+				})
 				if msg != "" {
 					t.addRaw(ansi.Primary(promptIcon(origin, msg) + " " + msg))
 				}

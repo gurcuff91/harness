@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gurcuff91/harness/client"
 	"github.com/gurcuff91/harness/internal/tui/ansi"
 	"github.com/gurcuff91/harness/internal/tui/components"
 )
@@ -65,15 +66,16 @@ func (t *TUI) refreshBadges() {
 	if t.client == nil {
 		return
 	}
-	// MCP: count connected servers.
-	t.mcpConnected = 0
+	// MCP: count connected servers (counted first, published under viewMu).
+	n := 0
 	if statuses, err := t.client.GetMCPStatus(); err == nil {
 		for _, s := range statuses {
 			if s.Connected {
-				t.mcpConnected++
+				n++
 			}
 		}
 	}
+	t.withView(func() { t.mcpConnected = n })
 	t.refreshScheduleBadge()
 }
 
@@ -81,17 +83,16 @@ func (t *TUI) refreshBadges() {
 // engine runs). Split out so a Schedule/ScheduleDelete tool result can refresh
 // the badge without also re-querying MCP status.
 func (t *TUI) refreshScheduleBadge() {
-	if t.client == nil || !t.schedulerOn {
-		t.scheduleJobs = 0
-		return
-	}
-	t.scheduleJobs = 0
+	n := 0
 	// Count only the schedules owned by this session — the ones that will actually
 	// fire here. A schedule only ever runs in its owner session, so a global count
 	// would be dishonest for this session's footer.
-	if jobs, err := t.client.GetSchedules(t.sessionID); err == nil {
-		t.scheduleJobs = len(jobs)
+	if t.client != nil && t.schedulerOn {
+		if jobs, err := t.client.GetSchedules(t.view().sessionID); err == nil {
+			n = len(jobs)
+		}
 	}
+	t.withView(func() { t.scheduleJobs = n })
 }
 
 // updateInfo refreshes the info and footer status lines.
@@ -101,7 +102,8 @@ func (t *TUI) updateInfo() {
 	if branch := gitBranch(cwd); branch != "" {
 		loc += " (" + branch + ")"
 	}
-	name := t.sessionName
+	v := t.view()
+	name := v.sessionName
 	if name == "" {
 		name = "No session"
 	}
@@ -111,49 +113,50 @@ func (t *TUI) updateInfo() {
 	// maxIterations > 0 guard covers a session whose info hasn't loaded
 	// max_iterations yet (e.g. very first render before autoConnect resolves).
 	turn := ""
-	if t.isSpinning() && t.maxIterations > 0 {
-		turn = fmt.Sprintf(" (%d/%d)", t.currTurn, t.maxIterations)
+	if t.isSpinning() && v.maxIterations > 0 {
+		turn = fmt.Sprintf(" (%d/%d)", v.currTurn, v.maxIterations)
 	}
 	queue := ""
-	if t.queueCount > 0 {
-		queue = fmt.Sprintf(" [%d queued]", t.queueCount)
+	if v.queueCount > 0 {
+		queue = fmt.Sprintf(" [%d queued]", v.queueCount)
 	}
 	t.info.SetText(ansi.Dimmed(fmt.Sprintf("%s • %s%s%s", loc, name, turn, queue)))
 	// The channels get a line of their own above, only while there are any.
 	if t.channelsLine == nil {
 		// a TUI built without the full layout (tests): nothing to update
-	} else if full, short := channelsLabel(t.channelInfos); full != "" {
+	} else if full, short := channelsLabel(v.channelInfos); full != "" {
 		t.channelsLine.SetTexts(ansi.Dimmed("channels "+full), ansi.Dimmed("channels "+short))
 	} else {
 		t.channelsLine.SetText("")
 	}
 
-	if t.model == "" {
+	if v.model == "" {
 		t.footer.SetText("")
 		t.tui.RequestRender(false)
 		return
 	}
 	thinking := ""
-	if t.thinking != "" && t.thinking != "off" {
-		thinking = " (" + t.thinking + ")"
+	if v.thinking != "" && v.thinking != "off" {
+		thinking = " (" + v.thinking + ")"
 	}
+	st := t.statsSnapshot()
 	cache := ""
-	if t.stats.cacheRead > 0 || t.stats.cacheWrite > 0 {
-		cache = fmt.Sprintf(" R%s W%s", compactNum(t.stats.cacheRead), compactNum(t.stats.cacheWrite))
+	if st.cacheRead > 0 || st.cacheWrite > 0 {
+		cache = fmt.Sprintf(" R%s W%s", compactNum(st.cacheRead), compactNum(st.cacheWrite))
 	}
-	price := fmt.Sprintf("$%.3f", t.stats.cost)
-	if t.isSubscription {
+	price := fmt.Sprintf("$%.3f", st.cost)
+	if v.isSubscription {
 		price += " (sub)"
 	}
 	stats := ansi.Dimmed(fmt.Sprintf(
 		"↑%s ↓%s%s %s %.1f%%/%s %s%s",
-		compactNum(t.stats.input),
-		compactNum(t.stats.output),
+		compactNum(st.input),
+		compactNum(st.output),
 		cache,
 		price,
-		t.stats.contextPct*100,
-		compactNum(t.stats.contextWin),
-		t.model,
+		st.contextPct*100,
+		compactNum(st.contextWin),
+		v.model,
 		thinking,
 	))
 	t.footer.SetText(stats + t.statusBadges())
@@ -165,19 +168,22 @@ func (t *TUI) updateInfo() {
 // Each is shown only when it has something to report.
 func (t *TUI) statusBadges() string {
 	var parts []string
-	if t.mcpConnected > 0 {
+	t.viewMu.Lock()
+	mcp, jobs := t.mcpConnected, t.scheduleJobs
+	t.viewMu.Unlock()
+	if mcp > 0 {
 		word := "mcps"
-		if t.mcpConnected == 1 {
+		if mcp == 1 {
 			word = "mcp"
 		}
-		parts = append(parts, badge(fmt.Sprintf("%d %s", t.mcpConnected, word)))
+		parts = append(parts, badge(fmt.Sprintf("%d %s", mcp, word)))
 	}
-	if t.schedulerOn && t.scheduleJobs > 0 {
+	if t.schedulerOn && jobs > 0 {
 		word := "schedules"
-		if t.scheduleJobs == 1 {
+		if jobs == 1 {
 			word = "schedule"
 		}
-		parts = append(parts, badge(fmt.Sprintf("%d %s", t.scheduleJobs, word)))
+		parts = append(parts, badge(fmt.Sprintf("%d %s", jobs, word)))
 	}
 	if len(parts) == 0 {
 		return ""
@@ -387,4 +393,55 @@ func relativeTime(t time.Time) string {
 	default:
 		return t.Format("Jan 2")
 	}
+}
+
+// statsSnapshot copies the footer's token stats under t.mu: they are written
+// by the SSE consumer, by a session switch and by /reset, each on its own
+// goroutine, while updateInfo reads them on yet another.
+func (t *TUI) statsSnapshot() tokensInfo {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stats
+}
+
+// sessionView is a consistent copy of what the status lines show.
+type sessionView struct {
+	sessionID, sessionName, model, thinking string
+	isSubscription                          bool
+	maxIterations, currTurn, queueCount     int
+	channelInfos                            []client.ChannelInfo
+}
+
+// view copies the session state under viewMu (see TUI.viewMu).
+func (t *TUI) view() sessionView {
+	t.viewMu.Lock()
+	defer t.viewMu.Unlock()
+	return sessionView{
+		sessionID: t.sessionID, sessionName: t.sessionName, model: t.model, thinking: t.thinking,
+		isSubscription: t.isSubscription, maxIterations: t.maxIterations,
+		currTurn: t.currTurn, queueCount: t.queueCount,
+		channelInfos: append([]client.ChannelInfo(nil), t.channelInfos...),
+	}
+}
+
+// withView runs fn with viewMu held: every write of the session state goes
+// through it (or setSessionName).
+func (t *TUI) withView(fn func()) {
+	t.viewMu.Lock()
+	defer t.viewMu.Unlock()
+	fn()
+}
+
+// switchView sets the whole session state at once (a switch to another session).
+func (t *TUI) switchView(id, model, thinking string, maxIter int, chans []client.ChannelInfo) {
+	t.withView(func() {
+		t.sessionID, t.model, t.thinking, t.maxIterations, t.channelInfos = id, model, thinking, maxIter, chans
+	})
+}
+
+// queued is how many prompts wait behind the running turn (under viewMu).
+func (t *TUI) queued() int {
+	t.viewMu.Lock()
+	defer t.viewMu.Unlock()
+	return t.queueCount
 }

@@ -366,7 +366,7 @@ func readJSONLFrom(path string, startLine int) ([]types.Message, error) {
 	}
 	var messages []types.Message
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024) // 10MB max line
+	scanner.Buffer(make([]byte, 1024*1024), maxLogLine)
 	lineNum := 0
 	for scanner.Scan() {
 		if lineNum < startLine {

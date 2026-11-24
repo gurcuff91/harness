@@ -449,6 +449,37 @@ const openAPISpecTemplate = `{
         }
       }
     },
+    "/api/sessions/{id}/export": {
+      "get": {
+        "tags": ["sessions"],
+        "summary": "Export a session",
+        "description": "Streams the session (open or closed) as a JSONL export: line 1 is a header {format: \"harness-session-export\", version: 1, exported_at, harness, meta}, every following line is one message of its log, exactly as stored. Content-Disposition carries the proposed file name (<name>-<id8>.export.jsonl). 404 when the session does not exist.",
+        "operationId": "exportSession",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "description": "The export", "content": { "application/x-ndjson": { "schema": { "type": "string" } } } },
+          "404": { "description": "No such session" }
+        }
+      }
+    },
+    "/api/sessions/import": {
+      "post": {
+        "tags": ["sessions"],
+        "summary": "Import a session export",
+        "description": "The body is a session export (what GET /api/sessions/{id}/export returns). It is opened as a NEW session — a new id, created now, the same conversation, name, model (falling back like a resume when unavailable), thinking, compaction state and stats; nothing existing is touched. 400 when the body is not a valid export (the message names the line; nothing is created), 413 when it exceeds the server's limit (1 GiB by default).",
+        "operationId": "importSession",
+        "parameters": [
+          { "name": "cwd", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Project directory of the new session (default: the exported one's)." },
+          { "name": "channel", "in": "query", "required": false, "schema": { "type": "string" }, "description": "type:ref of an input channel to bind (repeatable); none is inherited." }
+        ],
+        "requestBody": { "required": true, "content": { "application/x-ndjson": { "schema": { "type": "string" } } } },
+        "responses": {
+          "201": { "description": "The new session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SessionDetail" } } } },
+          "400": { "description": "Not a valid session export" },
+          "413": { "description": "Body over the import limit" }
+        }
+      }
+    },
     "/api/sessions/{id}/fork": {
       "post": {
         "tags": ["sessions"],
@@ -964,7 +995,7 @@ const openAPISpecTemplate = `{
         "type": "object",
         "required": ["command"],
         "properties": {
-          "command": { "type": "string", "example": "compact", "enum": ["compact","reset","rename","model","thinking","max-iter","skill:<name>"] },
+          "command": { "type": "string", "example": "compact", "enum": ["compact","reset","rename","model","thinking","max-iter","export","import","skill:<name>"] },
           "params":  { "type": "object", "additionalProperties": true }
         }
       },

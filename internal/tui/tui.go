@@ -67,10 +67,17 @@ type TUI struct {
 	initialPrompt string
 
 	// Status badges (footer): counts loaded at connect time.
-	mcpConnected int // MCP servers currently connected
-	scheduleJobs int // schedules configured (shown only when schedulerOn)
+	mcpConnected int // MCP servers currently connected (under viewMu)
+	scheduleJobs int // schedules configured, shown only when schedulerOn (under viewMu)
 
-	// Session state.
+	// Session state. sessionID, sessionName, model, thinking, isSubscription,
+	// maxIterations and channelInfos are what the footer and status lines
+	// show (updateInfo): every session switch (/resume, /fork, /new, /import,
+	// a command result) writes them on its own goroutine while updateInfo
+	// reads them on another, so they are written under viewMu (setView and
+	// friends) and read by updateInfo through view(). Code on the same
+	// goroutine as the writer may still read the fields directly.
+	viewMu         sync.Mutex
 	sessionID      string
 	sessionName    string
 	model          string
@@ -123,8 +130,8 @@ type TUI struct {
 	// Stats + flow.
 	stats        tokensInfo
 	spinning     bool
-	queueCount   int
-	currTurn     int // 1-based ReAct iteration for the footer display, set from each loop_start event's own Loop index (+1) — see events.go
+	queueCount   int // under viewMu
+	currTurn     int // under viewMu; 1-based ReAct iteration for the footer display, set from each loop_start event's own Loop index (+1) — see events.go
 	compactStart time.Time
 	lastTurnText strings.Builder
 
@@ -170,9 +177,9 @@ func New(a *agent.Agent) *TUI {
 // conversation — which is exactly why resumed sessions came back empty.
 func (t *TUI) quit() {
 	t.quitOnce.Do(func() {
-		if t.sessionID != "" {
-			t.lastSessionID = t.sessionID
-			t.client.CloseSession(t.sessionID) //nolint:errcheck
+		if t.view().sessionID != "" {
+			t.lastSessionID = t.view().sessionID
+			t.client.CloseSession(t.view().sessionID) //nolint:errcheck
 		}
 		if cancel := t.takeSSECancel(); cancel != nil {
 			cancel()

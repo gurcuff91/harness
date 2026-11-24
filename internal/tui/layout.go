@@ -210,8 +210,8 @@ func (t *TUI) onEscape() {
 		t.tui.RequestRender(false)
 		return
 	}
-	if t.isSpinning() && t.sessionID != "" {
-		go t.client.StopSession(t.sessionID) //nolint:errcheck
+	if t.isSpinning() && t.view().sessionID != "" {
+		go t.client.StopSession(t.view().sessionID) //nolint:errcheck
 	}
 	t.editor.Clear()
 	t.tui.RequestRender(false)

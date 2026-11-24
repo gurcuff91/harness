@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -62,13 +64,13 @@ func (t *TUI) handleSubmit(text string) {
 // switches the TUI to the fork in-place, and prints a one-line notice.
 // The history stays on screen unchanged — the fork shares the same content.
 func (t *TUI) cmdFork() {
-	if t.sessionID == "" {
+	if t.view().sessionID == "" {
 		t.showWarn("No active session.")
 		return
 	}
-	parentName := t.sessionName
+	parentName := t.view().sessionName
 
-	fork, err := t.client.ForkSession(t.sessionID)
+	fork, err := t.client.ForkSession(t.view().sessionID)
 	if err != nil {
 		t.showWarn("fork: " + err.Error())
 		return
@@ -81,15 +83,11 @@ func (t *TUI) cmdFork() {
 	t.stopSSE()
 	// Close the parent session on the server (flush to disk). The fork is a
 	// separate session — it stays alive independently.
-	t.client.CloseSession(t.sessionID) //nolint:errcheck
+	t.client.CloseSession(t.view().sessionID) //nolint:errcheck
 
 	// Switch TUI state to the fork.
-	t.sessionID = fork.ID
-	t.channelInfos = fork.Channels // a fork listens to nothing
+	t.switchView(fork.ID, fork.Model, fork.Thinking, fork.MaxIterations, fork.Channels) // a fork listens to nothing
 	t.setSessionName(fork.Name)
-	t.model = fork.Model
-	t.thinking = fork.Thinking
-	t.maxIterations = fork.MaxIterations
 	t.refreshSubscriptionFlag()
 	t.loadStatsFromSession(fork)
 	t.loadSessionCommands()
@@ -268,7 +266,7 @@ func channelsLabel(chs []client.ChannelInfo) (full, short string) {
 }
 
 func (t *TUI) submitPrompt(text string) {
-	if t.sessionID == "" {
+	if t.view().sessionID == "" {
 		t.showWarn("No active session.")
 		return
 	}
@@ -279,7 +277,7 @@ func (t *TUI) submitPrompt(text string) {
 	// with the icon matching the prompt's origin. This unifies user and scheduled
 	// prompts through one path (the ~ms round-trip is imperceptible).
 	if t.isSpinning() {
-		t.queueCount++
+		t.withView(func() { t.queueCount++ })
 		t.updateInfo()
 	}
 
@@ -288,7 +286,7 @@ func (t *TUI) submitPrompt(text string) {
 		if o := originOf(text); o != "" {
 			opts = append(opts, client.WithOrigin(o))
 		}
-		if _, err := t.client.SendPrompt(t.sessionID, text, opts...); err != nil {
+		if _, err := t.client.SendPrompt(t.view().sessionID, text, opts...); err != nil {
 			t.addRaw(ansi.Err("✘ " + err.Error()))
 			t.setSpinning(false)
 		}
@@ -467,8 +465,8 @@ func (t *TUI) refreshSubscriptionFlag() {
 		return
 	}
 	for _, m := range models {
-		if m.Model == t.model {
-			t.isSubscription = m.IsSubscription
+		if m.Model == t.view().model {
+			t.withView(func() { t.isSubscription = m.IsSubscription })
 			return
 		}
 	}
@@ -476,7 +474,7 @@ func (t *TUI) refreshSubscriptionFlag() {
 
 // execSessionCommand maps a session command to its API exec call.
 func (t *TUI) execSessionCommand(cmd string, args []string) {
-	if t.sessionID == "" {
+	if t.view().sessionID == "" {
 		t.showWarn("No active session.")
 		return
 	}
@@ -497,9 +495,16 @@ func (t *TUI) execSessionCommand(cmd string, args []string) {
 	if len(def.Params) > 0 && len(args) > 0 {
 		params[def.Params[0].Name] = strings.Join(args, " ")
 	}
+	// /import <path>: the server reads the path, so the TUI resolves what only
+	// it knows — "~" and a path relative to where the person is.
+	if cmd == "import" {
+		if p, ok := params["path"].(string); ok {
+			params["path"] = expandPath(p)
+		}
+	}
 
 	go func() {
-		status, err := t.client.ExecCommand(t.sessionID, cmd, params)
+		status, err := t.client.ExecCommand(t.view().sessionID, cmd, params)
 		if err != nil {
 			t.showWarn(err.Error())
 			return
@@ -517,15 +522,23 @@ func (t *TUI) applyCommandResult(cmd string, args []string, status *client.Statu
 	argVal := strings.Join(args, " ")
 	confirm := ""
 	switch cmd {
+	case "import":
+		// The message is the NEW session's id: switch to it like /resume (its
+		// history is shown); the session the command ran on is untouched.
+		if status != nil && status.Message != "" {
+			t.resumeInPlace(status.Message)
+			t.addRaw(ansi.Accent("⇣ ") + ansi.Dimmed("imported from "+argVal))
+		}
+		return
 	case "model":
 		if argVal != "" {
-			t.model = argVal
+			t.withView(func() { t.model = argVal })
 			t.refreshSubscriptionFlag()
 			confirm = "model → " + argVal
 		}
 	case "thinking":
 		if argVal != "" {
-			t.thinking = argVal
+			t.withView(func() { t.thinking = argVal })
 			confirm = "thinking → " + argVal
 		}
 	case "rename":
@@ -536,7 +549,7 @@ func (t *TUI) applyCommandResult(cmd string, args []string, status *client.Statu
 	case "max-iter":
 		if argVal != "" {
 			if n, err := strconv.Atoi(argVal); err == nil {
-				t.maxIterations = n
+				t.withView(func() { t.maxIterations = n })
 				confirm = "max iterations → " + argVal
 			}
 		}
@@ -545,9 +558,10 @@ func (t *TUI) applyCommandResult(cmd string, args []string, status *client.Statu
 	// matches the now-empty session store.
 	if cmd == "reset" {
 		t.history.Clear()
+		t.mu.Lock()
 		t.stats = tokensInfo{}
-		t.currTurn = 0
-		t.queueCount = 0
+		t.mu.Unlock()
+		t.withView(func() { t.currTurn, t.queueCount = 0, 0 })
 		t.liveMD = nil
 		t.mu.Lock()
 		t.toolBlk = make(map[string]*components.RawBlock)
@@ -586,11 +600,11 @@ func (t *TUI) applyCommandResult(cmd string, args []string, status *client.Statu
 // Matches the same data the TUI footer shows live, but as a readable panel —
 // useful when the footer is too compressed to read, or to capture a snapshot.
 func (t *TUI) showInfo() {
-	if t.sessionID == "" {
+	if t.view().sessionID == "" {
 		t.showWarn("No active session.")
 		return
 	}
-	info, err := t.client.GetSessionInfo(t.sessionID)
+	info, err := t.client.GetSessionInfo(t.view().sessionID)
 	if err != nil {
 		t.showWarn("info: " + err.Error())
 		return
@@ -688,11 +702,11 @@ func (t *TUI) showInfo() {
 // counts as a full cell), so even a tiny component always shows at least 1 cell.
 // Order: system prompt → tools → conversation → free.
 func (t *TUI) showContext() {
-	if t.sessionID == "" {
+	if t.view().sessionID == "" {
 		t.showWarn("No active session.")
 		return
 	}
-	bd, err := t.client.GetSessionContext(t.sessionID)
+	bd, err := t.client.GetSessionContext(t.view().sessionID)
 	if err != nil {
 		t.showWarn("context: " + err.Error())
 		return
@@ -825,4 +839,21 @@ func (t *TUI) showContext() {
 	}
 
 	t.addRaw(strings.TrimRight(b.String(), "\n") + "\n")
+}
+
+// expandPath resolves a path the person typed: "~" (their home) and a path
+// relative to the TUI's working directory, made absolute for the server.
+func expandPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			p = filepath.Join(home, strings.TrimPrefix(p, "~"))
+		}
+	}
+	if !filepath.IsAbs(p) {
+		if cwd, err := os.Getwd(); err == nil {
+			p = filepath.Join(cwd, p)
+		}
+	}
+	return filepath.Clean(p)
 }

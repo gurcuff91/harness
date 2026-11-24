@@ -435,6 +435,14 @@ harness memo --global         — Only global (cross-project) memories
 harness schedules             — List cron-scheduled prompts (read-only)
 ```
 
+**Export and import a session.** `/export` in the TUI writes the session's whole conversation to
+`~/.harness/exports/<name>-<id>.export.jsonl` (the first line describes the session, every other
+line is one of its messages); `/import <file>` opens such a file as a NEW session — an exact copy,
+like a fork — and switches to it, leaving the session you were in untouched. Over the API,
+`GET /api/sessions/{id}/export` downloads an export and `POST /api/sessions/import` (the file as the
+body, `?cwd=` optional) creates the session from one; `client.ExportSession` / `client.ImportSession`
+wrap them. Sessions of hundreds of MB stream both ways.
+
 Memories are also fully manageable over the HTTP API (`harness serve`, docs at
 `/api/docs`) and the Go SDK client: `GET /api/memories` lists/searches
 (`client.SearchMemories`), and `GET`/`PUT`/`DELETE /api/memories/{slug}?cwd=…`
