@@ -50,7 +50,7 @@ func (s *Server) handleImportSession(w http.ResponseWriter, r *http.Request) {
 	var opts []agent.SessionOption
 	for _, raw := range r.URL.Query()["channel"] {
 		typ, ref, _ := strings.Cut(raw, ":")
-		opts = append(opts, agent.WithSessionChannels(types.InputChannel{Type: typ, Ref: ref}))
+		opts = append(opts, agent.SessionWithChannels(types.InputChannel{Type: typ, Ref: ref}))
 	}
 	sess, err := s.agent.ImportSession(http.MaxBytesReader(w, r.Body, limit), r.URL.Query().Get("cwd"), opts...)
 	if err != nil {

@@ -145,7 +145,7 @@ func TestEndToEndAMentionInAThread(t *testing.T) {
 	ch := New(f.srv.URL, "xoxc-1", "xoxd-1")
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), Channels: []agent.Channel{ch}, EnableScheduler: true})
 	defer a.Close()
-	sess, err := a.NewSession(t.TempDir(), "threadmodel/m", agent.WithSessionChannels(types.InputChannel{Type: Type, Ref: "C111"}))
+	sess, err := a.NewSession(t.TempDir(), "threadmodel/m", agent.SessionWithChannels(types.InputChannel{Type: Type, Ref: "C111"}))
 	if err != nil {
 		t.Fatal(err)
 	}

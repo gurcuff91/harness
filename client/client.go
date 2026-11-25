@@ -485,34 +485,34 @@ type sessionOptions struct {
 	channels   []types.InputChannel
 }
 
-// WithSessionChannels makes the session listen to these external conversations
+// SessionWithChannels makes the session listen to these external conversations
 // while it is open (e.g. {Type: "slack", Ref: "C0123"} or a channel name).
 // Never persisted: pass them on every Create/ResumeSession that should listen.
 // A conversation another live session listens to is a 409; an unknown type or
 // an unresolvable ref a 400.
-func WithSessionChannels(chs ...types.InputChannel) SessionOption {
+func SessionWithChannels(chs ...types.InputChannel) SessionOption {
 	return func(o *sessionOptions) { o.channels = append(o.channels, chs...) }
 }
 
-// WithSessionProfiles binds the session to the agent's registered profiles by name
+// SessionWithProfiles binds the session to the agent's registered profiles by name
 // (profiles.Profile — e.g. "slack"): their directives and tools apply to it,
 // and the binding is persisted, so every later open of the session — by any
 // client, with or without options — gets them again. The names REPLACE the
 // session's binding (on Resume and Fork too): not passing the option leaves it
 // unchanged, and passing it with no names removes every profile. An unknown
 // name is a 400 error.
-func WithSessionProfiles(names ...string) SessionOption {
+func SessionWithProfiles(names ...string) SessionOption {
 	return func(o *sessionOptions) {
 		n := append([]string{}, names...)
 		o.profiles = &n
 	}
 }
 
-// WithSessionDirectives adds instruction blocks to THIS session's system prompt only
-// (the server's agent.WithSessionDirectives) — the agent's other sessions
+// SessionWithDirectives adds instruction blocks to THIS session's system prompt only
+// (the server's agent.SessionWithDirectives) — the agent's other sessions
 // don't see them. Not persisted: pass them on every Create/ResumeSession. On
 // ResumeSession they're ignored if the session is already active.
-func WithSessionDirectives(directives ...string) SessionOption {
+func SessionWithDirectives(directives ...string) SessionOption {
 	return func(o *sessionOptions) { o.directives = append(o.directives, directives...) }
 }
 
@@ -626,7 +626,7 @@ func (c *Client) ExportSession(id string, w io.Writer) (filename string, n int64
 // /api/sessions/import) and returns the NEW session it was opened as — the
 // same conversation under a new id; nothing existing is touched. cwd is the
 // project the new session belongs to ("" = the exported session's);
-// WithSessionChannels binds it to channels (none are inherited). An invalid export is
+// SessionWithChannels binds it to channels (none are inherited). An invalid export is
 // an *Error with status 400, one over the server's limit (1 GiB by default)
 // 413.
 func (c *Client) ImportSession(r io.Reader, cwd string, opts ...SessionOption) (*Session, error) {
@@ -815,7 +815,7 @@ func (c *Client) GetMessageImage(sessionID string, index, n int) (data []byte, m
 // GetSystemPrompt returns the full system prompt an active session sends to
 // the provider (GET /api/sessions/{id}/sysprompt) — base prompt, skills,
 // project context and every directive, including the session's own
-// (WithSessionDirectives) — as the raw markdown text.
+// (SessionWithDirectives) — as the raw markdown text.
 func (c *Client) GetSystemPrompt(sessionID string) (string, error) {
 	data, err := c.do("GET", "/api/sessions/"+sessionID+"/sysprompt", nil)
 	if err != nil {

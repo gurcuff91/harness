@@ -82,7 +82,7 @@ type AgentOptions struct {
 
 	// ── Profiles ─────────────────────────────────────────────────────────
 	// Profiles are named bundles of directives and tools that SOME sessions
-	// can be bound to (WithSessionProfiles) — see package profiles. More can be
+	// can be bound to (SessionWithProfiles) — see package profiles. More can be
 	// added, replaced or removed live with Agent.RegisterProfile.
 	Profiles map[string]profiles.Profile
 
@@ -132,7 +132,7 @@ type AgentOptions struct {
 	Terminal string
 
 	// Channels are the external-conversation implementations (Slack, …) a
-	// session can be bound to with WithSessionChannels. Registering one opens
+	// session can be bound to with SessionWithChannels. Registering one opens
 	// nothing: a channel listens only for the sessions bound to it. The agent
 	// does not own them beyond that (each session stops its own listeners).
 	Channels []Channel
@@ -717,7 +717,7 @@ type sessionConfig struct {
 	directives []string
 	tools      []tools.Tool
 	profiles   []string
-	// setProfile: WithSessionProfiles was passed, even with no names. It is the
+	// setProfile: SessionWithProfiles was passed, even with no names. It is the
 	// difference between "leave the session's profiles as they are" and "none".
 	setProfile bool
 	channels   []types.InputChannel
@@ -726,7 +726,7 @@ type sessionConfig struct {
 	err error
 }
 
-// WithSessionProfiles binds the session to the named profiles (package
+// SessionWithProfiles binds the session to the named profiles (package
 // profiles; defined with AgentOptions.Profiles or Agent.RegisterProfile): their
 // directives and tools apply to it, and the names are stored in the session, so
 // every later open — by any frontend — applies them again. It works on
@@ -735,14 +735,14 @@ type sessionConfig struct {
 //   - not passed: the session keeps the profiles it has (a new one has none; a
 //     fork keeps its parent's);
 //   - one or more names: exactly those;
-//   - passed with no names, WithSessionProfiles(): none.
+//   - passed with no names, SessionWithProfiles(): none.
 //
 // A name that is not registered fails NewSession (and ResumeSession/ForkSession
 // when passed here): nothing is opened. A STORED name that is no longer
 // registered is skipped when a session opens — it stays usable, the name is
 // kept for when it is registered again, and Session.MissingProfiles reports
 // it. A blank name is an error.
-func WithSessionProfiles(names ...string) SessionOption {
+func SessionWithProfiles(names ...string) SessionOption {
 	return func(c *sessionConfig) {
 		c.setProfile = true
 		c.profiles = append([]string(nil), names...)
@@ -754,7 +754,7 @@ func WithSessionProfiles(names ...string) SessionOption {
 	}
 }
 
-// WithSessionDirectives appends instruction blocks to THIS session's system
+// SessionWithDirectives appends instruction blocks to THIS session's system
 // prompt, after the Agent-wide AgentOptions.Directives. Unlike those, they
 // apply only to the session being created/resumed — e.g. a transport adding
 // its own capabilities (a server.Profile's directive) to the sessions
@@ -764,21 +764,21 @@ func WithSessionProfiles(names ...string) SessionOption {
 // a session passes them again on every NewSession/ResumeSession. Ignored when
 // ResumeSession returns an already-active session (its prompt was built by
 // whoever opened it; see ResumeSession).
-func WithSessionDirectives(directives ...string) SessionOption {
+func SessionWithDirectives(directives ...string) SessionOption {
 	return func(c *sessionConfig) { c.directives = append(c.directives, directives...) }
 }
 
-// WithSessionTools adds tools to THIS session's registry only, after the
+// SessionWithTools adds tools to THIS session's registry only, after the
 // Agent-wide ones (AgentOptions.Tools) — e.g. a transport's own tools
 // (Slack's SlackPost, …) for the sessions it drives, which the same Agent's
 // other sessions must never get. Still filtered by AgentOptions.DisallowedTools;
 // a session tool with the same name as an Agent-wide one replaces it in this
 // session.
 //
-// Not persisted, exactly like WithSessionDirectives: pass them again on every
+// Not persisted, exactly like SessionWithDirectives: pass them again on every
 // NewSession/ResumeSession; ignored when ResumeSession returns an
 // already-active session; ForkSession doesn't inherit them.
-func WithSessionTools(ts ...tools.Tool) SessionOption {
+func SessionWithTools(ts ...tools.Tool) SessionOption {
 	return func(c *sessionConfig) { c.tools = append(c.tools, ts...) }
 }
 
@@ -795,7 +795,7 @@ func applySessionOptions(opts []SessionOption) sessionConfig {
 // NewSession creates a fresh session for the given working directory and model.
 // model is required in "provider/model" format (e.g. "anthropic/claude-sonnet-4").
 // Returns error if the provider is not active or the model doesn't exist.
-// opts configure this session only (see WithSessionDirectives).
+// opts configure this session only (see SessionWithDirectives).
 func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, error) {
 	cfg := applySessionOptions(opts)
 	// The profiles it is bound to (none unless asked), checked BEFORE anything
@@ -877,7 +877,7 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 // existing handle without reloading from disk — making this idempotent and safe
 // to call from multiple paths (transport reconnect, scheduler auto-resume, …).
 //
-// opts configure the reopened session (see WithSessionDirectives). They are
+// opts configure the reopened session (see SessionWithDirectives). They are
 // IGNORED on that already-active fast path: the live session keeps the
 // system prompt it was opened with, so two frontends sharing a session never
 // overwrite each other's prompt.
@@ -1008,8 +1008,8 @@ func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session
 
 // ReconfigureSession rebuilds a LIVE session's system prompt and tool
 // registry — from the profiles it is bound to (registered now) plus the
-// session options given (WithSessionDirectives/WithSessionTools, and
-// WithSessionProfiles, which also rebinds it) — and applies them at the
+// session options given (SessionWithDirectives/SessionWithTools, and
+// SessionWithProfiles, which also rebinds it) — and applies them at the
 // session's next turn boundary, never mid-turn; if the session is idle they
 // apply immediately. This is how a session that was already active picks up a
 // changed configuration (a profile registered, replaced, removed or bound
@@ -1056,7 +1056,7 @@ func (a *Agent) ReconfigureSession(sessionID string, opts ...SessionOption) erro
 // (store.SessionMeta.Profiles), replacing them — nil or empty removes them all.
 // It only changes the STORED names, on an active or an inactive session alike:
 // an active one applies them at its next ReconfigureSession (ResumeSession and
-// WithSessionProfiles do both).
+// SessionWithProfiles do both).
 func (a *Agent) SetSessionProfiles(sessionID string, profiles []string) error {
 	a.sessMu.Lock()
 	sess, ok := a.activeSessions[sessionID]
@@ -1162,7 +1162,7 @@ func (a *Agent) SessionProfiles(sessionID string) []string {
 // moment: same CWD, model, thinking, compaction state, stats, and full message
 // history. The fork gets a new ID and fresh timestamps. The parent is unchanged.
 // Returns ErrBusy (via the store layer) if the parent turn is in flight.
-// Session-scoped directives and tools (WithSessionDirectives/WithSessionTools)
+// Session-scoped directives and tools (SessionWithDirectives/SessionWithTools)
 // are not persisted, so the fork does not inherit the parent's — only the
 // Agent-wide ones.
 func (a *Agent) ForkSession(sessionID string, opts ...SessionOption) (*Session, error) {
@@ -1218,7 +1218,7 @@ func (a *Agent) openStoredCopy(copyStore *store.Session, cfg sessionConfig, what
 	}
 
 	// Profiles: the copy keeps the names it came with (a fork: the parent's; an
-	// import: the export's); WithSessionProfiles replaces them. A stored name
+	// import: the export's); SessionWithProfiles replaces them. A stored name
 	// that is not registered is skipped and reported, an explicit one fails.
 	profNames, cfg, missingProfiles, err := a.profilesFor(meta.Profiles, cfg)
 	if err != nil {
@@ -1450,7 +1450,7 @@ func (a *Agent) buildFetchSummarizer(cwd string, loader resources.ResourceLoader
 }
 
 // buildSessionTools assembles one session's tool registry. sessionTools
-// (WithSessionTools) are registered right after the Agent-wide registry, under
+// (SessionWithTools) are registered right after the Agent-wide registry, under
 // the same DisallowedTools filter.
 func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res *resources.Resources, loader resources.ResourceLoader, sessionTools ...tools.Tool) (*tools.Registry, toolLens) {
 	reg := tools.NewRegistry()
@@ -1754,7 +1754,7 @@ type promptLens struct {
 }
 
 // buildSystemPrompt assembles a session's system prompt. sessionDirectives
-// (WithSessionDirectives) go last, after the Agent-wide directives.
+// (SessionWithDirectives) go last, after the Agent-wide directives.
 func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources, sessionDirectives ...string) (string, promptLens) {
 	var b strings.Builder
 
@@ -1823,7 +1823,7 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources, sessionD
 
 	// Caller-supplied directives (e.g. a transport's capabilities). Appended last
 	// so they can reference everything above.
-	// Session-scoped directives (WithSessionDirectives) after them. A block
+	// Session-scoped directives (SessionWithDirectives) after them. A block
 	// identical to one already appended is skipped, so a caller that still
 	// passes the same directive at both levels doesn't get it twice.
 	seen := map[string]bool{}

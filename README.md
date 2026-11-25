@@ -404,7 +404,7 @@ to by one session at a time, across processes. A schedule created from a Telegra
 conversation fires back into it while the session listens there. Over the API (`harness serve
 --telegram-token …`), pass `channels: [{"type":"telegram","ref":"you,friend"}]`: the ref is the list
 of trusted usernames. From the SDK: `harness.AgentWithChannels(telegram.New(token))`, then
-`agent.WithSessionChannels(types.InputChannel{Type: "telegram", Ref: "you"})`.
+`agent.SessionWithChannels(types.InputChannel{Type: "telegram", Ref: "you"})`.
 
 A command name wins over a message: `harness sessions` lists sessions. To send a message that is
 exactly a command name, put it after `--`: `harness -- serve`.

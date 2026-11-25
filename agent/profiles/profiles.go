@@ -4,7 +4,7 @@
 //
 // A Profile is defined once (agent.AgentOptions.Profiles, or live with
 // Agent.RegisterProfile) and a session is bound to it by NAME
-// (agent.WithSessionProfiles): the names are stored in the session, and every
+// (agent.SessionWithProfiles): the names are stored in the session, and every
 // time it is opened — by any frontend — the agent applies the directives and
 // tools of whichever of its profiles are registered at that moment.
 package profiles

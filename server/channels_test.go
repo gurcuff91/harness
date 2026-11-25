@@ -65,7 +65,7 @@ func statusOf(err error) int {
 func TestSessionChannelsOverTheAPI(t *testing.T) {
 	c := channelServer(t)
 	cwd := t.TempDir()
-	s1, err := c.CreateSession("chsrv/m", cwd, "", client.WithSessionChannels(types.InputChannel{Type: "stub", Ref: "c1"}))
+	s1, err := c.CreateSession("chsrv/m", cwd, "", client.SessionWithChannels(types.InputChannel{Type: "stub", Ref: "c1"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,17 +84,17 @@ func TestSessionChannelsOverTheAPI(t *testing.T) {
 		"unknown type": {types.InputChannel{Type: "nope", Ref: "x"}, http.StatusBadRequest},
 		"unresolvable": {types.InputChannel{Type: "stub", Ref: "missing"}, http.StatusBadRequest},
 	} {
-		_, err := c.CreateSession("chsrv/m", cwd, "", client.WithSessionChannels(tc.ch))
+		_, err := c.CreateSession("chsrv/m", cwd, "", client.SessionWithChannels(tc.ch))
 		if statusOf(err) != tc.want {
 			t.Errorf("%s: err=%v status=%d, want %d", name, err, statusOf(err), tc.want)
 		}
 	}
 
 	// Resume of an open session asking for a channel it lacks → 400; the same → ok.
-	if _, err := c.ResumeSession(s1.ID, client.WithSessionChannels(types.InputChannel{Type: "stub", Ref: "c2"})); statusOf(err) != http.StatusBadRequest {
+	if _, err := c.ResumeSession(s1.ID, client.SessionWithChannels(types.InputChannel{Type: "stub", Ref: "c2"})); statusOf(err) != http.StatusBadRequest {
 		t.Errorf("rebind open session: %v", err)
 	}
-	if _, err := c.ResumeSession(s1.ID, client.WithSessionChannels(types.InputChannel{Type: "stub", Ref: "c1"})); err != nil {
+	if _, err := c.ResumeSession(s1.ID, client.SessionWithChannels(types.InputChannel{Type: "stub", Ref: "c1"})); err != nil {
 		t.Errorf("same channel on open session: %v", err)
 	}
 	// Closed then resumed: without channels it listens to none; with them, it binds.
@@ -107,10 +107,10 @@ func TestSessionChannelsOverTheAPI(t *testing.T) {
 	}
 	_, _ = c.CloseSession(s1.ID)
 	// A resume that fails on a channel is a 400, not a 404 ("not found" in the text).
-	if _, err := c.ResumeSession(s1.ID, client.WithSessionChannels(types.InputChannel{Type: "stub", Ref: "missing"})); statusOf(err) != http.StatusBadRequest {
+	if _, err := c.ResumeSession(s1.ID, client.SessionWithChannels(types.InputChannel{Type: "stub", Ref: "missing"})); statusOf(err) != http.StatusBadRequest {
 		t.Errorf("unresolvable on resume: status %d (%v)", statusOf(err), err)
 	}
-	r, err = c.ResumeSession(s1.ID, client.WithSessionChannels(types.InputChannel{Type: "stub", Ref: "c2"}))
+	r, err = c.ResumeSession(s1.ID, client.SessionWithChannels(types.InputChannel{Type: "stub", Ref: "c2"}))
 	if err != nil || len(r.Channels) != 1 || r.Channels[0].ID != "C2" || r.Channels[0].Name != "#c2" {
 		t.Fatalf("resume with channel: %v %v", r, err)
 	}

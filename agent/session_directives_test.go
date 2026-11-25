@@ -38,7 +38,7 @@ const tgDirective = "## Telegram\n\nYou are talking over Telegram."
 func TestSessionDirectivesAreScopedToTheSession(t *testing.T) {
 	a, model := directivesTestAgent(t, store.NewInMemoryStore(), AgentOptions{})
 
-	tg, err := a.NewSession("/tg", model, WithSessionDirectives(tgDirective))
+	tg, err := a.NewSession("/tg", model, SessionWithDirectives(tgDirective))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestSessionDirectivesAreScopedToTheSession(t *testing.T) {
 // both levels appears once.
 func TestSessionDirectivesOrderAndDedup(t *testing.T) {
 	a, model := directivesTestAgent(t, store.NewInMemoryStore(), AgentOptions{Directives: []string{"## Agent wide", tgDirective}})
-	s, err := a.NewSession("/p", model, WithSessionDirectives(tgDirective, "## Session only"))
+	s, err := a.NewSession("/p", model, SessionWithDirectives(tgDirective, "## Session only"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestSessionDirectivesOrderAndDedup(t *testing.T) {
 func TestSessionDirectivesOnResumeAfterRestart(t *testing.T) {
 	st := store.NewInMemoryStore()
 	a1, model := directivesTestAgent(t, st, AgentOptions{})
-	s, err := a1.NewSession("/tg", model, WithSessionDirectives(tgDirective))
+	s, err := a1.NewSession("/tg", model, SessionWithDirectives(tgDirective))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestSessionDirectivesOnResumeAfterRestart(t *testing.T) {
 
 	a2 := New(AgentOptions{Store: st, ResourceLoader: resources.NilLoader{}})
 	defer a2.Close()
-	resumed, err := a2.ResumeSession(id, WithSessionDirectives(tgDirective))
+	resumed, err := a2.ResumeSession(id, SessionWithDirectives(tgDirective))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestResumeActiveSessionIgnoresDirectives(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	same, err := a.ResumeSession(s.ID(), WithSessionDirectives(tgDirective))
+	same, err := a.ResumeSession(s.ID(), SessionWithDirectives(tgDirective))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestResumeActiveSessionIgnoresDirectives(t *testing.T) {
 	}
 }
 
-// WithSessionTools: scoped to the session, filtered by DisallowedTools,
+// SessionWithTools: scoped to the session, filtered by DisallowedTools,
 // replaces an agent-wide tool of the same name in that session only, and is
 // not persisted.
 func TestSessionToolsScopedFilteredAndNotPersisted(t *testing.T) {
@@ -144,7 +144,7 @@ func TestSessionToolsScopedFilteredAndNotPersisted(t *testing.T) {
 		return out
 	}
 
-	s, err := a.NewSession("/p", model, WithSessionTools(mk("Mine", "x"), mk("Blocked", "x"), mk("Shared", "session")))
+	s, err := a.NewSession("/p", model, SessionWithTools(mk("Mine", "x"), mk("Blocked", "x"), mk("Shared", "session")))
 	if err != nil {
 		t.Fatal(err)
 	}

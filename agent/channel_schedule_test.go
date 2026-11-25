@@ -16,7 +16,7 @@ import (
 func TestTapRoutesSubConversationsByPrefix(t *testing.T) {
 	ch := newFakeChannel("fake")
 	a, model, _ := channelAgent(t, ch)
-	sess, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "one"}))
+	sess, err := a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "one"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestTapRoutesSubConversationsByPrefix(t *testing.T) {
 func TestScheduleOriginIsTheTurnsChannelConversation(t *testing.T) {
 	ch := newFakeChannel("fake")
 	a, model, _ := channelAgent(t, ch)
-	sess, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "one"}))
+	sess, err := a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "one"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestScheduleOriginIsTheTurnsChannelConversation(t *testing.T) {
 func TestAFiredScheduleGoesBackToItsChannel(t *testing.T) {
 	ch := newFakeChannel("fake")
 	a, model, _ := channelAgent(t, ch)
-	sess, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "one"}))
+	sess, err := a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "one"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestTheScheduleToolStoresTheTurnsOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.schedStore = st
-	sess, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "one"}))
+	sess, err := a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "one"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func (senderChannel) OwnsOrigin(_, origin string) bool {
 func TestSenderOriginsAreDurable(t *testing.T) {
 	ch := senderChannel{newFakeChannel("fake")}
 	a, model, _ := channelAgent(t, ch)
-	sess, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "one"}))
+	sess, err := a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "one"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestSenderOriginsAreDurable(t *testing.T) {
 func TestADeliveredOriginIsRoutedWithoutSenderOrigins(t *testing.T) {
 	ch := newFakeChannel("fake")
 	a, model, _ := channelAgent(t, ch)
-	sess, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "one"}))
+	sess, err := a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "one"}))
 	if err != nil {
 		t.Fatal(err)
 	}

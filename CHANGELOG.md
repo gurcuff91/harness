@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.125.0] - 2026-11-26
+
+### Changed — session options are `SessionWith*` (BREAKING)
+Every option now starts with WHAT it configures: `AgentWith*`, `SessionWith*`, `PromptWith*`, `ProviderWith*`. The session options were the odd ones out (`WithSession*`): `agent.SessionWithDirectives`, `SessionWithTools`, `SessionWithChannels`, `SessionWithProfiles`, and the same three in `client` (`SessionWithChannels`, `SessionWithProfiles`, `SessionWithDirectives`). So `harness.AgentWithDirectives` (every session) and `agent.SessionWithDirectives` (that one session) tell themselves apart at a glance. Packages with a single kind of option keep plain `With*` (`server`, `acp`, `channels/*`, `client.WithContext`/`WithSecret`).
+
 ## [0.124.0] - 2026-11-26
 
 ### Changed — `client` option names match `agent` (BREAKING)

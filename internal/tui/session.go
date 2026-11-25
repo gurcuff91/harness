@@ -572,5 +572,5 @@ func (t *TUI) channelOptions() []client.SessionOption {
 	if len(t.channels) == 0 {
 		return nil
 	}
-	return []client.SessionOption{client.WithSessionChannels(t.channels...)}
+	return []client.SessionOption{client.SessionWithChannels(t.channels...)}
 }

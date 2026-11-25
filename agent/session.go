@@ -1547,7 +1547,7 @@ func (s *Session) CWD() string { return s.cwd }
 
 // SystemPrompt returns the full system prompt this session sends — base
 // prompt, skills, project context, and every directive (agent-wide plus this
-// session's own, see WithSessionDirectives). Built once when the session is
+// session's own, see SessionWithDirectives). Built once when the session is
 // created/resumed and immutable afterwards, so it's lock-free like CWD().
 func (s *Session) SystemPrompt() string { return s.systemPromptVal.Load().(string) }
 

@@ -48,7 +48,7 @@
 //   - acp              — the runner RunAcp wraps, and its Option type
 //   - channels/slack, channels/telegram, channels/colleague — the input
 //     channels (see [AgentWithChannels]; a session listens to one with
-//     agent.WithSessionChannels; registering the colleague channel makes
+//     agent.SessionWithChannels; registering the colleague channel makes
 //     every session a colleague)
 //   - client           — typed HTTP/SSE client for a running harness server
 //   - types            — Event, Message, ModelMeta and other shared types
@@ -224,7 +224,7 @@ func AgentWithScheduler() AgentOption {
 
 // AgentWithChannels registers external-conversation implementations (e.g.
 // channels/slack.New(...)) that sessions can be bound to with
-// agent.WithSessionChannels. Registering opens nothing: a channel listens only
+// agent.SessionWithChannels. Registering opens nothing: a channel listens only
 // for the sessions bound to it, and a conversation is listened to by at most
 // one session at a time, across processes.
 func AgentWithChannels(chs ...agent.Channel) AgentOption {
@@ -233,7 +233,7 @@ func AgentWithChannels(chs ...agent.Channel) AgentOption {
 
 // AgentWithProfiles registers named bundles of per-session directives and
 // tools (see agent/profiles). A session is bound to profiles by name with
-// agent.WithSessionProfiles; more can be registered or removed at any time
+// agent.SessionWithProfiles; more can be registered or removed at any time
 // with Agent.RegisterProfile / UnregisterProfile.
 func AgentWithProfiles(ps map[string]profiles.Profile) AgentOption {
 	return func(o *agent.AgentOptions) {

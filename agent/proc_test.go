@@ -86,7 +86,7 @@ func TestAClaimWithAReusedPidIsTakenOver(t *testing.T) {
 	sm := config.GetSettingsManager()
 	_, _ = sm.ClaimChannel(config.ChannelClaim{Type: "fake", ID: "C1", Session: "before-the-deploy", PID: os.Getpid(), Started: "an-older-process"},
 		func(config.ChannelClaim) bool { return true })
-	s, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
+	s, err := a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
 	if err != nil {
 		t.Fatalf("a claim with a reused pid blocked the channel: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestAClaimWithAReusedPidIsTakenOver(t *testing.T) {
 		t.Errorf("claims = %+v", cl)
 	}
 	// And the live owner's claim (same pid, same marker) still blocks.
-	_, err = a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
+	_, err = a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
 	if !errors.Is(err, ErrChannelTaken) {
 		t.Errorf("a live owner's claim did not block: %v", err)
 	}

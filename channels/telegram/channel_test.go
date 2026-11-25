@@ -262,7 +262,7 @@ func newFixture(t *testing.T, allow string) *fixture {
 	ch := New(botToken)
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), Channels: []agent.Channel{ch}})
 	t.Cleanup(func() { a.Close() })
-	sess, err := a.NewSession(t.TempDir(), name+"/m", agent.WithSessionChannels(types.InputChannel{Type: Type, Ref: allow}))
+	sess, err := a.NewSession(t.TempDir(), name+"/m", agent.SessionWithChannels(types.InputChannel{Type: Type, Ref: allow}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -482,7 +482,7 @@ func TestPlainTextFallback(t *testing.T) {
 // The bot is ONE conversation: a second session (any process) cannot bind it.
 func TestTheBotIsOneConversation(t *testing.T) {
 	f := newFixture(t, "gus_test")
-	_, err := f.agent.NewSession(t.TempDir(), f.sess.Model(), agent.WithSessionChannels(types.InputChannel{Type: Type, Ref: "ana_test"}))
+	_, err := f.agent.NewSession(t.TempDir(), f.sess.Model(), agent.SessionWithChannels(types.InputChannel{Type: Type, Ref: "ana_test"}))
 	if err == nil {
 		t.Fatal("a second session bound the same bot")
 	}
@@ -493,7 +493,7 @@ func TestBindingErrors(t *testing.T) {
 	bad := New("0:WRONG")
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), Channels: []agent.Channel{bad}})
 	defer a.Close()
-	if _, err := a.NewSession(t.TempDir(), f.sess.Model(), agent.WithSessionChannels(types.InputChannel{Type: Type, Ref: "gus_test"})); err == nil {
+	if _, err := a.NewSession(t.TempDir(), f.sess.Model(), agent.SessionWithChannels(types.InputChannel{Type: Type, Ref: "gus_test"})); err == nil {
 		t.Error("a rejected token must fail the open")
 	}
 	for _, ref := range []string{"", " , ", "@ab", "bad name!"} {

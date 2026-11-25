@@ -21,7 +21,7 @@ import (
 //
 // Implementations are registered on the agent (AgentOptions.Channels /
 // harness.AgentWithChannels) and bound per session, explicitly, with
-// WithSessionChannels on NewSession/ResumeSession. A conversation is listened
+// SessionWithChannels on NewSession/ResumeSession. A conversation is listened
 // to by at most ONE session at a time, across processes (see the claim
 // registry in internal/config).
 type Channel interface {
@@ -124,11 +124,11 @@ func SessionName(ctx context.Context) (name string, ok bool) {
 // channel of type typ.
 func ChannelOrigin(typ, id string) string { return typ + ":" + id }
 
-// WithSessionChannels binds the session being created or resumed to the given
+// SessionWithChannels binds the session being created or resumed to the given
 // conversations. Explicit and never persisted: a session listens only while
 // the handle opened with these options is open, and a later resume without
 // them listens to nothing. Every channel is honored or the open fails.
-func WithSessionChannels(chs ...types.InputChannel) SessionOption {
+func SessionWithChannels(chs ...types.InputChannel) SessionOption {
 	return func(c *sessionConfig) { c.channels = append(c.channels, chs...) }
 }
 

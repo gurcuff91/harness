@@ -167,7 +167,7 @@ func hasEvent(evs []types.Event, typ types.EventType) bool {
 func TestChannelTurnsGoToTheirConversationOnly(t *testing.T) {
 	ch := newFakeChannel("fake")
 	a, model, _ := channelAgent(t, ch)
-	sess, err := a.NewSession(t.TempDir(), model, WithSessionChannels(
+	sess, err := a.NewSession(t.TempDir(), model, SessionWithChannels(
 		types.InputChannel{Type: "fake", Ref: "#one"}, types.InputChannel{Type: "fake", Ref: "two"}))
 	if err != nil {
 		t.Fatal(err)
@@ -243,11 +243,11 @@ func TestChannelTurnsGoToTheirConversationOnly(t *testing.T) {
 func TestAConversationHasOneListener(t *testing.T) {
 	ch := newFakeChannel("fake")
 	a, model, _ := channelAgent(t, ch)
-	s1, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
+	s1, err := a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "#C1"}))
+	_, err = a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "#C1"}))
 	if !errors.Is(err, ErrChannelTaken) || !strings.Contains(err.Error(), s1.ID()) {
 		t.Fatalf("second listener: err=%v, want ErrChannelTaken naming %s", err, s1.ID())
 	}
@@ -260,7 +260,7 @@ func TestAConversationHasOneListener(t *testing.T) {
 	if ch.isListening("C1") || len(config.GetSettingsManager().ChannelClaims()) != 0 {
 		t.Fatal("closing the session did not stop listening and release the claim")
 	}
-	s2, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
+	s2, err := a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
 	if err != nil {
 		t.Fatalf("after release: %v", err)
 	}
@@ -277,13 +277,13 @@ func TestAClaimFromAnotherProcess(t *testing.T) {
 	// pid 1 does not exist on Windows.
 	other := os.Getppid()
 	_, _ = sm.ClaimChannel(config.ChannelClaim{Type: "fake", ID: "C1", Session: "elsewhere", PID: other, CWD: "/other"}, alive)
-	_, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
+	_, err := a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
 	if !errors.Is(err, ErrChannelTaken) || !strings.Contains(err.Error(), "/other") {
 		t.Fatalf("live foreign claim: err=%v", err)
 	}
 	_ = sm.ReleaseChannel("fake", "C1", "elsewhere", other)
 	_, _ = sm.ClaimChannel(config.ChannelClaim{Type: "fake", ID: "C1", Session: "dead", PID: 999999999}, alive)
-	s, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
+	s, err := a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
 	if err != nil {
 		t.Fatalf("dead foreign claim must be taken over: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestAFailedOpenLeavesNothing(t *testing.T) {
 			}
 			a, model, st := channelAgent(t, ch)
 			_, _ = config.GetSettingsManager().ClaimChannel(config.ChannelClaim{Type: "fake", ID: "HELD", Session: "x", PID: os.Getppid()}, func(config.ChannelClaim) bool { return true })
-			_, err := a.NewSession(t.TempDir(), model, WithSessionChannels(tc.req...))
+			_, err := a.NewSession(t.TempDir(), model, SessionWithChannels(tc.req...))
 			if err == nil {
 				t.Fatal("open succeeded")
 			}
@@ -340,16 +340,16 @@ func TestAFailedOpenLeavesNothing(t *testing.T) {
 func TestResumeBindsOnlyWhatItIsGiven(t *testing.T) {
 	ch := newFakeChannel("fake")
 	a, model, _ := channelAgent(t, ch)
-	s, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
+	s, err := a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	id := s.ID()
 	// Already open: the same channel again is fine (no-op), a new one is refused.
-	if _, err := a.ResumeSession(id, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "#c1"})); err != nil {
+	if _, err := a.ResumeSession(id, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "#c1"})); err != nil {
 		t.Errorf("same channel on an open session: %v", err)
 	}
-	if _, err := a.ResumeSession(id, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "c2"})); !errors.Is(err, ErrChannelInvalid) {
+	if _, err := a.ResumeSession(id, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "c2"})); !errors.Is(err, ErrChannelInvalid) {
 		t.Errorf("new channel on an open session: err=%v", err)
 	}
 	s.Close()
@@ -362,7 +362,7 @@ func TestResumeBindsOnlyWhatItIsGiven(t *testing.T) {
 		t.Fatal("a resume without channels listens")
 	}
 	r.Close()
-	r, err = a.ResumeSession(id, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "c2"}))
+	r, err = a.ResumeSession(id, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "c2"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +380,7 @@ func TestAgentCloseReleasesEverything(t *testing.T) {
 	ch := newFakeChannel("fake")
 	a, model, _ := channelAgent(t, ch)
 	for i := 0; i < 3; i++ {
-		if _, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: fmt.Sprint("c", i)})); err != nil {
+		if _, err := a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: fmt.Sprint("c", i)})); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -438,12 +438,12 @@ func TestTapFollowsEachTurnsOrigin(t *testing.T) {
 func TestReconfigureKeepsTheChannel(t *testing.T) {
 	ch := newFakeChannel("fake")
 	a, model, _ := channelAgent(t, ch)
-	s, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
+	s, err := a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "c1"}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if err := a.ReconfigureSession(s.ID(), WithSessionDirectives("## OTHER")); err != nil {
+	if err := a.ReconfigureSession(s.ID(), SessionWithDirectives("## OTHER")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.PromptAndWait(context.Background(), "x"); err != nil { // applies at the turn boundary
@@ -472,7 +472,7 @@ func TestAChannelToolNameClashFailsTheOpen(t *testing.T) {
 	providers.AddForTest(&echoProvider{fakeThinkingProbeProvider{name: name, lastThinking: &thinking}})
 	a := New(AgentOptions{Store: store.NewInMemoryStore(), Channels: []Channel{ch}, Tools: ch.Tools(nil)})
 	defer a.Close()
-	_, err := a.NewSession(t.TempDir(), name+"/fake-model", WithSessionChannels(types.InputChannel{Type: "fake", Ref: "a"}))
+	_, err := a.NewSession(t.TempDir(), name+"/fake-model", SessionWithChannels(types.InputChannel{Type: "fake", Ref: "a"}))
 	if !errors.Is(err, ErrChannelInvalid) || !strings.Contains(err.Error(), "already in the session") {
 		t.Fatalf("err = %v", err)
 	}
@@ -502,13 +502,13 @@ func TestAChannelToolClashesWithABuiltinTheSessionHas(t *testing.T) {
 	providers.AddForTest(&echoProvider{fakeThinkingProbeProvider{name: name, lastThinking: &thinking}})
 	a := New(AgentOptions{Store: store.NewInMemoryStore(), Channels: []Channel{ch}, EnableWebSearch: true})
 	defer a.Close()
-	_, err := a.NewSession(t.TempDir(), name+"/fake-model", WithSessionChannels(types.InputChannel{Type: "web", Ref: "x"}))
+	_, err := a.NewSession(t.TempDir(), name+"/fake-model", SessionWithChannels(types.InputChannel{Type: "web", Ref: "x"}))
 	if !errors.Is(err, ErrChannelInvalid) || !strings.Contains(err.Error(), "WebSearch") {
 		t.Fatalf("err = %v", err)
 	}
 	b := New(AgentOptions{Store: store.NewInMemoryStore(), Channels: []Channel{ch}})
 	defer b.Close()
-	if _, err := b.NewSession(t.TempDir(), name+"/fake-model", WithSessionChannels(types.InputChannel{Type: "web", Ref: "y"})); err != nil {
+	if _, err := b.NewSession(t.TempDir(), name+"/fake-model", SessionWithChannels(types.InputChannel{Type: "web", Ref: "y"})); err != nil {
 		t.Fatalf("without WebSearch: %v", err)
 	}
 }
@@ -581,7 +581,7 @@ func TestAnAutoChannelJoinsEverySession(t *testing.T) {
 func TestListenCtxCarriesTheSessionName(t *testing.T) {
 	ch := newFakeChannel("fake")
 	a, model, _ := channelAgent(t, ch)
-	sess, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "one"}))
+	sess, err := a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "one"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -617,7 +617,7 @@ func TestListenCtxCarriesTheSessionName(t *testing.T) {
 func TestListenCtxCarriesAReadOnlySessionView(t *testing.T) {
 	ch := newFakeChannel("fake")
 	a, model, _ := channelAgent(t, ch)
-	sess, err := a.NewSession(t.TempDir(), model, WithSessionChannels(types.InputChannel{Type: "fake", Ref: "one"}))
+	sess, err := a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "one"}))
 	if err != nil {
 		t.Fatal(err)
 	}

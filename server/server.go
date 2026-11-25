@@ -319,14 +319,14 @@ type createSessionRequest struct {
 	CWD   string `json:"cwd"`
 	Name  string `json:"name,omitempty"` // optional initial name; default: "New Session <date>"
 	// Directives are optional instruction blocks for THIS session's system
-	// prompt only (agent.WithSessionDirectives) — not persisted.
+	// prompt only (agent.SessionWithDirectives) — not persisted.
 	Directives []string `json:"directives,omitempty"`
 	// Profiles binds the new session to registered profiles by name
 	// (persisted in its meta — see profiles.Profile). Unknown names → 400.
 	// Absent = none; [] = none too.
 	Profiles *[]string `json:"profiles,omitempty"`
 	// Channels are the external conversations the session listens to while it
-	// is open (agent.WithSessionChannels) — never persisted. A conversation
+	// is open (agent.SessionWithChannels) — never persisted. A conversation
 	// another live session already listens to → 409; an unregistered type or
 	// an unresolvable ref → 400.
 	Channels []types.InputChannel `json:"channels,omitempty"`
@@ -335,7 +335,7 @@ type createSessionRequest struct {
 // resumeSessionRequest is the OPTIONAL body of POST /api/sessions/{id}/resume.
 type resumeSessionRequest struct {
 	// Directives for the reopened session's system prompt
-	// (agent.WithSessionDirectives), not persisted. Ignored when the session
+	// (agent.SessionWithDirectives), not persisted. Ignored when the session
 	// is already active.
 	Directives []string `json:"directives,omitempty"`
 	// Profiles REPLACES the session's persisted binding: absent or null =
@@ -961,12 +961,12 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := []agent.SessionOption{agent.WithSessionDirectives(req.Directives...)}
+	opts := []agent.SessionOption{agent.SessionWithDirectives(req.Directives...)}
 	if req.Profiles != nil {
-		opts = append(opts, agent.WithSessionProfiles(*req.Profiles...))
+		opts = append(opts, agent.SessionWithProfiles(*req.Profiles...))
 	}
 	if len(req.Channels) > 0 {
-		opts = append(opts, agent.WithSessionChannels(req.Channels...))
+		opts = append(opts, agent.SessionWithChannels(req.Channels...))
 	}
 	sess, err := s.agent.NewSession(req.CWD, req.Model, opts...)
 	if err != nil {
@@ -1250,10 +1250,10 @@ func (s *Server) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	}
 	var opts []agent.SessionOption
 	if req.Profiles != nil {
-		opts = append(opts, agent.WithSessionProfiles(*req.Profiles...))
+		opts = append(opts, agent.SessionWithProfiles(*req.Profiles...))
 	}
 	if len(req.Channels) > 0 {
-		opts = append(opts, agent.WithSessionChannels(req.Channels...))
+		opts = append(opts, agent.SessionWithChannels(req.Channels...))
 	}
 	sess, err := s.agent.ForkSession(id, opts...)
 	if err != nil {
@@ -1323,12 +1323,12 @@ func (s *Server) openSession(id string, profileNames *[]string, extraDirectives 
 	s.openMu.Lock()
 	defer s.openMu.Unlock()
 
-	opts := []agent.SessionOption{agent.WithSessionDirectives(extraDirectives...)}
+	opts := []agent.SessionOption{agent.SessionWithDirectives(extraDirectives...)}
 	if profileNames != nil {
-		opts = append(opts, agent.WithSessionProfiles(*profileNames...))
+		opts = append(opts, agent.SessionWithProfiles(*profileNames...))
 	}
 	if len(channels) > 0 {
-		opts = append(opts, agent.WithSessionChannels(channels...))
+		opts = append(opts, agent.SessionWithChannels(channels...))
 	}
 	sess, err := s.agent.ResumeSession(id, opts...)
 	if err != nil {
@@ -1648,7 +1648,7 @@ func (s *Server) handleSessionContext(w http.ResponseWriter, r *http.Request) {
 // handleSessionSystemPrompt handles GET /api/sessions/{id}/sysprompt: the
 // full system prompt the session sends to the provider — base prompt, skills,
 // project context, memory block and every directive (agent-wide plus the
-// session's own, see agent.WithSessionDirectives) — as raw markdown
+// session's own, see agent.SessionWithDirectives) — as raw markdown
 // (text/markdown), not JSON. Built when the session was created/resumed and
 // immutable afterwards, so Session.SystemPrompt() is lock-free: safe against
 // a busy session, like /info and /context. Only valid for active sessions.
