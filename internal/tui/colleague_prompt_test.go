@@ -73,7 +73,7 @@ func TestTUIEchoesAColleaguePromptWithItsIcon(t *testing.T) {
 	go tu.consumeEvents(ctx, events)
 
 	// A colleague prompts the session the TUI holds (the colleague channel's origin).
-	go f.c.Ask(f.sessionID, "colleague says hi", 20*time.Second, client.WithOrigin("colleague:raiden-god")) //nolint:errcheck
+	go f.c.Ask(f.sessionID, "colleague says hi", 20*time.Second, client.PromptWithOrigin("colleague:raiden-god")) //nolint:errcheck
 	deadline := time.Now().Add(10 * time.Second)
 	var got string
 	for time.Now().Before(deadline) {

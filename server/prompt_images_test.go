@@ -106,7 +106,7 @@ func TestLivePromptImagesResolveAtEventTime(t *testing.T) {
 		for _, b := range tc.images {
 			datas = append(datas, types.ImageData{MimeType: "image/png", Base64: base64.StdEncoding.EncodeToString(b)})
 		}
-		if _, err := c.SendPromptWithImages(sess.ID, tc.name, datas, client.WithOrigin("telegram")); err != nil {
+		if _, err := c.SendPromptWithImages(sess.ID, tc.name, datas, client.PromptWithOrigin("telegram")); err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
 
@@ -221,7 +221,7 @@ func TestPromptOriginPersisted(t *testing.T) {
 	ev, _ := c.StreamEvents(ctx, sess.ID)
 
 	for _, o := range []string{"slack", "", "kaiban"} {
-		c.SendPrompt(sess.ID, "via "+o, client.WithOrigin(o))
+		c.SendPrompt(sess.ID, "via "+o, client.PromptWithOrigin(o))
 		collect(t, ev)
 	}
 	msgs, err := c.GetMessages(sess.ID)

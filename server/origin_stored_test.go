@@ -13,7 +13,7 @@ func TestThePromptOriginIsStoredWithTheMessage(t *testing.T) {
 	srv, _, model := sharedServer(t, nil)
 	c := client.New(srv.Addr())
 	s, _ := c.CreateSession(model, "/p", "")
-	if _, err := c.Ask(s.ID, "from a colleague", 10*time.Second, client.WithOrigin("colleague:raiden-god")); err != nil {
+	if _, err := c.Ask(s.ID, "from a colleague", 10*time.Second, client.PromptWithOrigin("colleague:raiden-god")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.Ask(s.ID, "from the user", 10*time.Second); err != nil {

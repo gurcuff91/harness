@@ -284,7 +284,7 @@ func (t *TUI) submitPrompt(text string) {
 	go func() {
 		var opts []client.PromptOption
 		if o := originOf(text); o != "" {
-			opts = append(opts, client.WithOrigin(o))
+			opts = append(opts, client.PromptWithOrigin(o))
 		}
 		if _, err := t.client.SendPrompt(t.view().sessionID, text, opts...); err != nil {
 			t.addRaw(ansi.Err("✘ " + err.Error()))

@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.124.0] - 2026-11-26
+
+### Changed — `client` option names match `agent` (BREAKING)
+The session options are `WithSessionChannels`, `WithSessionProfiles`, `WithSessionDirectives` (were `WithChannels`, `WithProfiles`, `WithDirectives`) and the prompt option is `PromptWithOrigin` (was `WithOrigin`), the same vocabulary as `agent.WithSession*` / `agent.PromptWith*`. `client.WithContext` / `client.WithSecret` (they configure the client itself) keep their names.
+
 ## [0.123.0] - 2026-11-26
 
 ### Changed — profiles live in the agent (BREAKING)

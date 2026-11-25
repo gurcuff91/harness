@@ -146,7 +146,7 @@ func TestTwoClientsOneSessionBothGetEveryEvent(t *testing.T) {
 	}
 	time.Sleep(100 * time.Millisecond) // let both SSE subscriptions register
 
-	if _, err := transport.SendPrompt(sess.ID, "hi", client.WithOrigin("slack")); err != nil {
+	if _, err := transport.SendPrompt(sess.ID, "hi", client.PromptWithOrigin("slack")); err != nil {
 		t.Fatal(err)
 	}
 	gotT, gotU := collect(t, evT), collect(t, evU)
@@ -158,7 +158,7 @@ func TestTwoClientsOneSessionBothGetEveryEvent(t *testing.T) {
 	}
 
 	// A prompt typed from the UI (caller-defined origin) reaches the transport too.
-	if _, err := ui.SendPrompt(sess.ID, "from ui", client.WithOrigin("kaiban")); err != nil {
+	if _, err := ui.SendPrompt(sess.ID, "from ui", client.PromptWithOrigin("kaiban")); err != nil {
 		t.Fatal(err)
 	}
 	if o := eventOrigin(collect(t, evT)); o != "kaiban" {
@@ -244,7 +244,7 @@ func TestProfilesBindPersistAndApply(t *testing.T) {
 	})
 	c := client.New(srv.Addr())
 
-	bound, err := c.CreateSession(model, "/p", "", client.WithProfiles("chat"))
+	bound, err := c.CreateSession(model, "/p", "", client.WithSessionProfiles("chat"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,10 +287,10 @@ func TestProfilesBindPersistAndApply(t *testing.T) {
 	}
 
 	// Unknown name → 400.
-	if _, err := c.CreateSession(model, "/p", "", client.WithProfiles("nope")); err == nil || !strings.Contains(err.Error(), "unknown profile") {
+	if _, err := c.CreateSession(model, "/p", "", client.WithSessionProfiles("nope")); err == nil || !strings.Contains(err.Error(), "unknown profile") {
 		t.Fatalf("unknown profile = %v, want a 400 unknown-profile error", err)
 	}
-	if _, err := c.ResumeSession(bound.ID, client.WithProfiles("nope")); err == nil {
+	if _, err := c.ResumeSession(bound.ID, client.WithSessionProfiles("nope")); err == nil {
 		t.Fatal("unknown profile on resume must fail")
 	}
 }
@@ -330,7 +330,7 @@ func TestRebindActiveSessionAppliesAtTurnBoundary(t *testing.T) {
 	waitFor(func() bool { llm.mu.Lock(); defer llm.mu.Unlock(); return len(llm.seen) == 1 }) // turn 1 in flight
 
 	// Mid-turn: bind the profile.
-	if _, err := c.ResumeSession(sess.ID, client.WithProfiles("late")); err != nil {
+	if _, err := c.ResumeSession(sess.ID, client.WithSessionProfiles("late")); err != nil {
 		t.Fatal(err)
 	}
 	live, _ := a.ResumeSession(sess.ID)
@@ -368,7 +368,7 @@ func TestProfilesPatchSemanticsOverTheAPI(t *testing.T) {
 		srv.RegisterProfile(n, Profile{Directives: []string{"## " + n}})
 	}
 	c := client.New(srv.Addr())
-	s, err := c.CreateSession(model, "/p", "", client.WithProfiles("one"))
+	s, err := c.CreateSession(model, "/p", "", client.WithSessionProfiles("one"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,27 +377,27 @@ func TestProfilesPatchSemanticsOverTheAPI(t *testing.T) {
 	if _, err := c.ResumeSession(s.ID); err != nil || !slices.Equal(a.SessionProfiles(s.ID), []string{"one"}) {
 		t.Fatalf("absent must keep: %v %v", err, a.SessionProfiles(s.ID))
 	}
-	if _, err := c.ResumeSession(s.ID, client.WithProfiles("two")); err != nil || !slices.Equal(a.SessionProfiles(s.ID), []string{"two"}) {
+	if _, err := c.ResumeSession(s.ID, client.WithSessionProfiles("two")); err != nil || !slices.Equal(a.SessionProfiles(s.ID), []string{"two"}) {
 		t.Fatalf("names must replace: %v %v", err, a.SessionProfiles(s.ID))
 	}
 	f, err := c.ForkSession(s.ID)
 	if err != nil || !slices.Equal(a.SessionProfiles(f.ID), []string{"two"}) {
 		t.Fatalf("fork inherits: %v %v", err, a.SessionProfiles(f.ID))
 	}
-	f2, err := c.ForkSession(s.ID, client.WithProfiles("one"))
+	f2, err := c.ForkSession(s.ID, client.WithSessionProfiles("one"))
 	if err != nil || !slices.Equal(a.SessionProfiles(f2.ID), []string{"one"}) {
 		t.Fatalf("fork replaces: %v %v", err, a.SessionProfiles(f2.ID))
 	}
-	_, err = c.ForkSession(s.ID, client.WithProfiles("nope"))
+	_, err = c.ForkSession(s.ID, client.WithSessionProfiles("nope"))
 	var ce *client.Error
 	if !errors.As(err, &ce) || ce.Status != 400 {
 		t.Fatalf("fork unknown = %v, want 400", err)
 	}
-	_, err = c.ResumeSession(s.ID, client.WithProfiles("nope"))
+	_, err = c.ResumeSession(s.ID, client.WithSessionProfiles("nope"))
 	if !errors.As(err, &ce) || ce.Status != 400 {
 		t.Fatalf("resume unknown = %v, want 400", err)
 	}
-	_, err = c.CreateSession(model, "/p", "", client.WithProfiles("nope"))
+	_, err = c.CreateSession(model, "/p", "", client.WithSessionProfiles("nope"))
 	if !errors.As(err, &ce) || ce.Status != 400 {
 		t.Fatalf("create unknown = %v, want 400", err)
 	}
@@ -407,7 +407,7 @@ func TestProfilesPatchSemanticsOverTheAPI(t *testing.T) {
 	if err != nil || !slices.Equal(r.MissingProfiles, []string{"two"}) {
 		t.Fatalf("missing_profiles = %v (%v)", r, err)
 	}
-	r, err = c.ResumeSession(s.ID, client.WithProfiles())
+	r, err = c.ResumeSession(s.ID, client.WithSessionProfiles())
 	if err != nil || len(r.MissingProfiles) != 0 || len(a.SessionProfiles(s.ID)) != 0 {
 		t.Fatalf("[] must remove all: %v %v", err, a.SessionProfiles(s.ID))
 	}

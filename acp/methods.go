@@ -311,9 +311,9 @@ func (h *handler) handlePrompt(ctx context.Context, c *conn, p promptParams) (pr
 
 	var sendErr error
 	if len(images) > 0 {
-		_, sendErr = h.api.SendPromptWithImages(p.SessionID, text, images, client.WithOrigin("acp"))
+		_, sendErr = h.api.SendPromptWithImages(p.SessionID, text, images, client.PromptWithOrigin("acp"))
 	} else {
-		_, sendErr = h.api.SendPrompt(p.SessionID, text, client.WithOrigin("acp"))
+		_, sendErr = h.api.SendPrompt(p.SessionID, text, client.PromptWithOrigin("acp"))
 	}
 	if sendErr != nil {
 		return promptResult{}, internalErr("send prompt", sendErr)

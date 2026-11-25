@@ -38,7 +38,7 @@ func TestSessionDirectivesOverHTTP(t *testing.T) {
 	c := client.New(ts.URL)
 	const d = "## Only for this session"
 
-	with, err := c.CreateSession("srv-directives-fake/m", "/a", "", client.WithDirectives(d))
+	with, err := c.CreateSession("srv-directives-fake/m", "/a", "", client.WithSessionDirectives(d))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestSessionDirectivesOverHTTP(t *testing.T) {
 
 	// Resume after the session is closed: body with directives, then none.
 	c.CloseSession(with.ID)
-	if _, err := c.ResumeSession(with.ID, client.WithDirectives(d+" (resumed)")); err != nil {
+	if _, err := c.ResumeSession(with.ID, client.WithSessionDirectives(d+" (resumed)")); err != nil {
 		t.Fatalf("resume with directives: %v", err)
 	}
 	if !strings.Contains(prompt(with.ID), d+" (resumed)") {
@@ -93,7 +93,7 @@ func TestSessionSystemPromptEndpoint(t *testing.T) {
 	c := client.New(ts.URL)
 
 	const d = "## Sysprompt marker\n\nOnly here."
-	sess, err := c.CreateSession("srv-sysprompt-fake/m", "/p", "", client.WithDirectives(d))
+	sess, err := c.CreateSession("srv-sysprompt-fake/m", "/p", "", client.WithSessionDirectives(d))
 	if err != nil {
 		t.Fatal(err)
 	}
