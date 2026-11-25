@@ -14,6 +14,7 @@ import (
 
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/memory"
+	"github.com/gurcuff91/harness/agent/profiles"
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/client"
@@ -610,5 +611,14 @@ func TestAgentWithTerminalAndChannelsSetTheirOptions(t *testing.T) {
 	AgentWithTerminal("Ghostty")(&o)
 	if o.Terminal != "Ghostty" {
 		t.Errorf("Terminal = %q", o.Terminal)
+	}
+}
+
+func TestAgentWithProfilesRegistersThem(t *testing.T) {
+	var o agent.AgentOptions
+	AgentWithProfiles(map[string]profiles.Profile{"a": {Directives: []string{"A"}}})(&o)
+	AgentWithProfiles(map[string]profiles.Profile{"b": {}})(&o)
+	if len(o.Profiles) != 2 || o.Profiles["a"].Directives[0] != "A" {
+		t.Fatalf("profiles = %v", o.Profiles)
 	}
 }

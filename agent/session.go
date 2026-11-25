@@ -141,6 +141,11 @@ type Session struct {
 	// so reading it needs no lock.
 	modelFallback *ModelFallback
 
+	// missingProfiles: the profiles the session is bound to that were not
+	// registered at its last open/reconfigure (see MissingProfiles). Lock-free:
+	// read by API handlers while a turn may be running.
+	missingProfiles atomic.Value // []string
+
 	// modelStr is the session's active "provider/model" string, stored in an
 	// atomic.Value so it can be read lock-free from Model(). The value
 	// is written under s.mu (in newSession and SwitchModel — the same lock

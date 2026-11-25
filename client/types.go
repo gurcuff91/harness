@@ -100,6 +100,9 @@ type Session struct {
 	// Channels are the external conversations a live session listens to.
 	// Empty when none.
 	Channels []ChannelInfo `json:"channels,omitempty"`
+	// MissingProfiles are bound profiles that are not registered right now:
+	// skipped, their names kept. Empty when none.
+	MissingProfiles []string `json:"missing_profiles,omitempty"`
 }
 
 // ModelFallback says a session was reopened on another model: From is what it

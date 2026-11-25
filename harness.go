@@ -61,6 +61,7 @@ import (
 	"github.com/gurcuff91/harness/acp"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/memory"
+	"github.com/gurcuff91/harness/agent/profiles"
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/agent/tools"
@@ -228,6 +229,21 @@ func AgentWithScheduler() AgentOption {
 // one session at a time, across processes.
 func AgentWithChannels(chs ...agent.Channel) AgentOption {
 	return func(o *agent.AgentOptions) { o.Channels = append(o.Channels, chs...) }
+}
+
+// AgentWithProfiles registers named bundles of per-session directives and
+// tools (see agent/profiles). A session is bound to profiles by name with
+// agent.WithSessionProfiles; more can be registered or removed at any time
+// with Agent.RegisterProfile / UnregisterProfile.
+func AgentWithProfiles(ps map[string]profiles.Profile) AgentOption {
+	return func(o *agent.AgentOptions) {
+		if o.Profiles == nil {
+			o.Profiles = map[string]profiles.Profile{}
+		}
+		for n, p := range ps {
+			o.Profiles[n] = p
+		}
+	}
 }
 
 // AgentWithWebSearch enables the built-in WebSearch tool. The tool owns its

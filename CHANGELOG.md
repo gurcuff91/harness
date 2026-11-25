@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.123.0] - 2026-11-26
+
+### Changed — profiles live in the agent (BREAKING)
+A profile (a named bundle of directives and tools a session is bound to) used to exist only inside `server`; an agent without a server could not use one. Now it is an agent feature:
+- **New package `agent/profiles`**: `Profile`, `Registry`. `server.Profile` is now an alias of `profiles.Profile`; `server.RegisterProfile` returns an `error` (blank name) and delegates to the agent.
+- **SDK**: `AgentOptions.Profiles` / `harness.AgentWithProfiles`, `Agent.RegisterProfile` / `UnregisterProfile` / `ProfileNames`, and the session option `agent.WithSessionProfiles(names...)` on `NewSession`, `ResumeSession`, `ForkSession` and `ImportSession`.
+- **Binding semantics (breaking):** the option REPLACES the session's profile names — not passing it leaves them unchanged (a new session: none; a fork: the parent's; an import: the export's), passing it with no names removes every profile. Resume used to ADD names.
+- **An unknown name fails** the open (`ErrUnknownProfile`, HTTP 400) and leaves nothing behind. A stored name that is no longer registered is skipped and its name kept; the session reports it (`Session.MissingProfiles()`, `missing_profiles` in the API) and the TUI warns on resume. Registering or unregistering a profile reconfigures the sessions bound to it that are open.
+- **API:** `profiles` on create/resume/fork (`POST /api/sessions/{id}/fork` now accepts it); on resume `null`/absent = unchanged, `[]` = remove all, names = replace. `client.WithProfiles()` with no names now means "remove all".
+
 ## [0.122.0] - 2026-11-25
 
 ### Added — Slack threads

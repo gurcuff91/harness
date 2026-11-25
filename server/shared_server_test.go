@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -355,5 +356,59 @@ func TestRebindActiveSessionAppliesAtTurnBoundary(t *testing.T) {
 	}
 	if strings.Contains(fmt.Sprint(llm.seen[0]["messages"]), "## Late directive") {
 		t.Error("the first (in-flight) turn's request must not")
+	}
+}
+
+// The API's profiles field is PATCH-like on resume and fork: absent keeps the
+// binding, names replace it, [] removes every profile; a stored name that is no
+// longer registered is reported as missing_profiles.
+func TestProfilesPatchSemanticsOverTheAPI(t *testing.T) {
+	srv, a, model := sharedServer(t, nil)
+	for _, n := range []string{"one", "two"} {
+		srv.RegisterProfile(n, Profile{Directives: []string{"## " + n}})
+	}
+	c := client.New(srv.Addr())
+	s, err := c.CreateSession(model, "/p", "", client.WithProfiles("one"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.CloseSession(s.ID)
+
+	if _, err := c.ResumeSession(s.ID); err != nil || !slices.Equal(a.SessionProfiles(s.ID), []string{"one"}) {
+		t.Fatalf("absent must keep: %v %v", err, a.SessionProfiles(s.ID))
+	}
+	if _, err := c.ResumeSession(s.ID, client.WithProfiles("two")); err != nil || !slices.Equal(a.SessionProfiles(s.ID), []string{"two"}) {
+		t.Fatalf("names must replace: %v %v", err, a.SessionProfiles(s.ID))
+	}
+	f, err := c.ForkSession(s.ID)
+	if err != nil || !slices.Equal(a.SessionProfiles(f.ID), []string{"two"}) {
+		t.Fatalf("fork inherits: %v %v", err, a.SessionProfiles(f.ID))
+	}
+	f2, err := c.ForkSession(s.ID, client.WithProfiles("one"))
+	if err != nil || !slices.Equal(a.SessionProfiles(f2.ID), []string{"one"}) {
+		t.Fatalf("fork replaces: %v %v", err, a.SessionProfiles(f2.ID))
+	}
+	_, err = c.ForkSession(s.ID, client.WithProfiles("nope"))
+	var ce *client.Error
+	if !errors.As(err, &ce) || ce.Status != 400 {
+		t.Fatalf("fork unknown = %v, want 400", err)
+	}
+	_, err = c.ResumeSession(s.ID, client.WithProfiles("nope"))
+	if !errors.As(err, &ce) || ce.Status != 400 {
+		t.Fatalf("resume unknown = %v, want 400", err)
+	}
+	_, err = c.CreateSession(model, "/p", "", client.WithProfiles("nope"))
+	if !errors.As(err, &ce) || ce.Status != 400 {
+		t.Fatalf("create unknown = %v, want 400", err)
+	}
+
+	srv.UnregisterProfile("two")
+	r, err := c.ResumeSession(s.ID)
+	if err != nil || !slices.Equal(r.MissingProfiles, []string{"two"}) {
+		t.Fatalf("missing_profiles = %v (%v)", r, err)
+	}
+	r, err = c.ResumeSession(s.ID, client.WithProfiles())
+	if err != nil || len(r.MissingProfiles) != 0 || len(a.SessionProfiles(s.ID)) != 0 {
+		t.Fatalf("[] must remove all: %v %v", err, a.SessionProfiles(s.ID))
 	}
 }

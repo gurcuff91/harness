@@ -61,7 +61,6 @@ type Server struct {
 	openMu sync.Mutex
 
 	profMu   sync.RWMutex
-	profiles map[string]Profile
 	addr     string // resolved listen address (set in Serve)
 	mu       sync.RWMutex
 	sessions map[string]*SessionProxy
@@ -126,7 +125,6 @@ func NewServer(a *agent.Agent, opts ServerOptions) *Server {
 		proxyMaxBody:  opts.ProxyMaxBodyBytes,
 		importMaxBody: opts.ImportMaxBodyBytes,
 		sessions:      make(map[string]*SessionProxy),
-		profiles:      make(map[string]Profile),
 	}
 }
 
@@ -324,8 +322,9 @@ type createSessionRequest struct {
 	// prompt only (agent.WithSessionDirectives) — not persisted.
 	Directives []string `json:"directives,omitempty"`
 	// Profiles binds the new session to registered profiles by name
-	// (persisted in its meta — see Profile). Unknown names → 400.
-	Profiles []string `json:"profiles,omitempty"`
+	// (persisted in its meta — see profiles.Profile). Unknown names → 400.
+	// Absent = none; [] = none too.
+	Profiles *[]string `json:"profiles,omitempty"`
 	// Channels are the external conversations the session listens to while it
 	// is open (agent.WithSessionChannels) — never persisted. A conversation
 	// another live session already listens to → 409; an unregistered type or
@@ -339,10 +338,11 @@ type resumeSessionRequest struct {
 	// (agent.WithSessionDirectives), not persisted. Ignored when the session
 	// is already active.
 	Directives []string `json:"directives,omitempty"`
-	// Profiles to ADD to the session's persisted binding (additive — never
-	// removes another frontend's). Unknown names → 400. If the session is
-	// already active, a changed binding is applied at its next turn boundary.
-	Profiles []string `json:"profiles,omitempty"`
+	// Profiles REPLACES the session's persisted binding: absent or null =
+	// unchanged, [] = remove them all, names = exactly those. Unknown names
+	// → 400. If the session is already active, a changed binding is applied
+	// at its next turn boundary.
+	Profiles *[]string `json:"profiles,omitempty"`
 	// Channels to listen to while the reopened session is open (see
 	// createSessionRequest.Channels). Asking an already-open session for
 	// channels it does not listen to → 400.
@@ -961,18 +961,20 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.validateProfiles(req.Profiles); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
+	opts := []agent.SessionOption{agent.WithSessionDirectives(req.Directives...)}
+	if req.Profiles != nil {
+		opts = append(opts, agent.WithSessionProfiles(*req.Profiles...))
 	}
-	profiles, _ := mergeProfiles(nil, req.Profiles)
-	opts := append(s.profileOptions(profiles, req.Directives), agent.WithSessionProfiles(profiles...))
 	if len(req.Channels) > 0 {
 		opts = append(opts, agent.WithSessionChannels(req.Channels...))
 	}
 	sess, err := s.agent.NewSession(req.CWD, req.Model, opts...)
 	if err != nil {
-		writeErr(w, channelErrStatus(err, http.StatusInternalServerError), err)
+		def := http.StatusInternalServerError
+		if errors.Is(err, agent.ErrUnknownProfile) {
+			def = http.StatusBadRequest
+		}
+		writeErr(w, channelErrStatus(err, def), err)
 		return
 	}
 
@@ -1236,14 +1238,20 @@ func (s *Server) handleForkSession(w http.ResponseWriter, r *http.Request) {
 
 	// The body is optional: {"channels": [...]} binds the fork to channels of
 	// its own (it never inherits its parent's).
+	// "profiles" REPLACES the profile names the fork inherits (absent or null
+	// = keep the parent's, [] = none).
 	var req struct {
 		Channels []types.InputChannel `json:"channels,omitempty"`
+		Profiles *[]string            `json:"profiles,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
 		return
 	}
 	var opts []agent.SessionOption
+	if req.Profiles != nil {
+		opts = append(opts, agent.WithSessionProfiles(*req.Profiles...))
+	}
 	if len(req.Channels) > 0 {
 		opts = append(opts, agent.WithSessionChannels(req.Channels...))
 	}
@@ -1253,6 +1261,8 @@ func (s *Server) handleForkSession(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case channelErrStatus(err, 0) != 0:
 			status = channelErrStatus(err, 0)
+		case errors.Is(err, agent.ErrUnknownProfile):
+			status = http.StatusBadRequest
 		case errors.Is(err, agent.ErrNoModelAvailable):
 			status = http.StatusConflict // nothing to run the copy on: connect a provider
 		case strings.Contains(err.Error(), "not found"):
@@ -1280,16 +1290,14 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.validateProfiles(req.Profiles); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
 	sess, err := s.openSession(id, req.Profiles, req.Directives, req.Channels...)
 	if err != nil {
 		status := http.StatusInternalServerError
 		switch {
 		case channelErrStatus(err, 0) != 0:
 			status = channelErrStatus(err, 0)
+		case errors.Is(err, agent.ErrUnknownProfile):
+			status = http.StatusBadRequest
 		case errors.Is(err, agent.ErrNoModelAvailable):
 			// Neither the session's model nor any fallback is usable: not a
 			// server fault — the operator must connect a provider.
@@ -1307,58 +1315,29 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 
 // openSession resumes session id in this server — idempotent and atomic, so
 // a session has at most ONE proxy here no matter how many clients open it
-// concurrently (openMu). addProfiles are merged into its persisted binding
-// (additive). The session is (re)built from its stored binding: on a fresh
-// open, with the registered profiles' directives/tools (plus extra one-off
-// directives); if it's already active — in this server or in the agent (the
-// scheduler, a colleague, …) — and the binding changed, it's reconfigured at
-// its next turn boundary, never mid-turn.
-func (s *Server) openSession(id string, addProfiles, extraDirectives []string, channels ...types.InputChannel) (*agent.Session, error) {
+// concurrently (openMu). profiles, when non-nil, REPLACE the session's
+// persisted binding (an empty one removes them all); the agent applies it —
+// on a fresh open and on a session that is already active (at its next turn
+// boundary, never mid-turn).
+func (s *Server) openSession(id string, profileNames *[]string, extraDirectives []string, channels ...types.InputChannel) (*agent.Session, error) {
 	s.openMu.Lock()
 	defer s.openMu.Unlock()
 
-	bound := s.agent.SessionProfiles(id)
-	merged, changed := mergeProfiles(bound, addProfiles)
-	if changed {
-		if err := s.agent.SetSessionProfiles(id, merged); err != nil {
-			return nil, err
-		}
+	opts := []agent.SessionOption{agent.WithSessionDirectives(extraDirectives...)}
+	if profileNames != nil {
+		opts = append(opts, agent.WithSessionProfiles(*profileNames...))
 	}
-
-	s.mu.RLock()
-	proxy, inServer := s.sessions[id]
-	s.mu.RUnlock()
-	if inServer {
-		if len(channels) > 0 {
-			// Same rule as the agent's fast path: an open session is not
-			// rebound, and an explicit channel is never ignored.
-			if _, err := s.agent.ResumeSession(id, agent.WithSessionChannels(channels...)); err != nil {
-				return nil, err
-			}
-		}
-		if changed {
-			_ = s.agent.ReconfigureSession(id, s.profileOptions(merged, nil)...)
-		}
-		return proxy.session, nil
-	}
-
-	// Not in this server: resume through the agent. If the agent already has
-	// it live (opened outside the server), this returns that same object and
-	// ignores the options — so reconfigure it explicitly when the binding
-	// changed.
-	resumeOpts := s.profileOptions(merged, extraDirectives)
 	if len(channels) > 0 {
-		resumeOpts = append(resumeOpts, agent.WithSessionChannels(channels...))
+		opts = append(opts, agent.WithSessionChannels(channels...))
 	}
-	sess, err := s.agent.ResumeSession(id, resumeOpts...)
+	sess, err := s.agent.ResumeSession(id, opts...)
 	if err != nil {
 		return nil, err
 	}
-	if changed {
-		_ = s.agent.ReconfigureSession(id, s.profileOptions(merged, extraDirectives)...)
-	}
 	s.mu.Lock()
-	s.sessions[id] = newSessionProxy(sess, s.logger)
+	if _, ok := s.sessions[id]; !ok {
+		s.sessions[id] = newSessionProxy(sess, s.logger)
+	}
 	s.mu.Unlock()
 	return sess, nil
 }
@@ -1379,6 +1358,10 @@ type sessionDetailDTO struct {
 	// is then the model it runs on now (and is saved with from now on); this
 	// says what it was and why it changed. Omitted in the normal case.
 	ModelFallback *agent.ModelFallback `json:"model_fallback,omitempty"`
+	// MissingProfiles are bound profiles that are not registered right now:
+	// skipped (the session works without them), their names kept. Omitted
+	// when none.
+	MissingProfiles []string `json:"missing_profiles,omitempty"`
 	// Channels are the external conversations the live session listens to.
 	// Omitted when none (and for a persisted session: channels are never
 	// stored).
@@ -1387,7 +1370,7 @@ type sessionDetailDTO struct {
 
 // liveDetail is the detail DTO of an active session.
 func liveDetail(sess *agent.Session) sessionDetailDTO {
-	return sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations(), MaxTokens: sess.MaxTokens(), ModelFallback: sess.ModelFallback(), Channels: sess.Channels()}
+	return sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations(), MaxTokens: sess.MaxTokens(), ModelFallback: sess.ModelFallback(), Channels: sess.Channels(), MissingProfiles: sess.MissingProfiles()}
 }
 
 // channelErrStatus maps a session-open failure caused by a channel to its HTTP

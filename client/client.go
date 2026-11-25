@@ -481,7 +481,7 @@ type SessionOption func(*sessionOptions)
 
 type sessionOptions struct {
 	directives []string
-	profiles   []string
+	profiles   *[]string // nil = not passed (unchanged); empty = remove all
 	channels   []types.InputChannel
 }
 
@@ -494,13 +494,18 @@ func WithChannels(chs ...types.InputChannel) SessionOption {
 	return func(o *sessionOptions) { o.channels = append(o.channels, chs...) }
 }
 
-// WithProfiles binds the session to the server's registered profiles by name
-// (server.Profile — e.g. "slack"): their directives and tools apply to it,
+// WithProfiles binds the session to the agent's registered profiles by name
+// (profiles.Profile — e.g. "slack"): their directives and tools apply to it,
 // and the binding is persisted, so every later open of the session — by any
-// client, with or without options — gets them again. On ResumeSession the
-// names are ADDED to the existing binding. An unknown name is a 400 error.
+// client, with or without options — gets them again. The names REPLACE the
+// session's binding (on Resume and Fork too): not passing the option leaves it
+// unchanged, and passing it with no names removes every profile. An unknown
+// name is a 400 error.
 func WithProfiles(names ...string) SessionOption {
-	return func(o *sessionOptions) { o.profiles = append(o.profiles, names...) }
+	return func(o *sessionOptions) {
+		n := append([]string{}, names...)
+		o.profiles = &n
+	}
 }
 
 // WithDirectives adds instruction blocks to THIS session's system prompt only
@@ -532,8 +537,8 @@ func (c *Client) CreateSession(model, cwd, name string, opts ...SessionOption) (
 	if len(o.directives) > 0 {
 		body["directives"] = o.directives
 	}
-	if len(o.profiles) > 0 {
-		body["profiles"] = o.profiles
+	if o.profiles != nil {
+		body["profiles"] = *o.profiles
 	}
 	if len(o.channels) > 0 {
 		body["channels"] = o.channels
@@ -571,8 +576,15 @@ func (c *Client) CloseSession(id string) (*Status, error) {
 func (c *Client) ForkSession(id string, opts ...SessionOption) (*Session, error) {
 	o := applyClientSessionOptions(opts)
 	var body any
-	if len(o.channels) > 0 {
-		body = map[string]any{"channels": o.channels}
+	if len(o.channels) > 0 || o.profiles != nil {
+		m := map[string]any{}
+		if len(o.channels) > 0 {
+			m["channels"] = o.channels
+		}
+		if o.profiles != nil {
+			m["profiles"] = *o.profiles
+		}
+		body = m
 	}
 	s, err := decode[Session](c, "POST", "/api/sessions/"+id+"/fork", body)
 	if err != nil {
@@ -664,13 +676,13 @@ func (c *Client) ImportSession(r io.Reader, cwd string, opts ...SessionOption) (
 func (c *Client) ResumeSession(id string, opts ...SessionOption) (*Session, error) {
 	o := applyClientSessionOptions(opts)
 	var body any
-	if len(o.directives) > 0 || len(o.profiles) > 0 || len(o.channels) > 0 {
+	if len(o.directives) > 0 || o.profiles != nil || len(o.channels) > 0 {
 		m := map[string]any{}
 		if len(o.directives) > 0 {
 			m["directives"] = o.directives
 		}
-		if len(o.profiles) > 0 {
-			m["profiles"] = o.profiles
+		if o.profiles != nil {
+			m["profiles"] = *o.profiles
 		}
 		if len(o.channels) > 0 {
 			m["channels"] = o.channels

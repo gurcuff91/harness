@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/gurcuff91/harness/agent/profiles"
 	"reflect"
 	"runtime"
 	"strings"
@@ -32,6 +33,7 @@ import (
 // The caller is responsible for ensuring the provider is active before NewSession().
 type Agent struct {
 	opts            AgentOptions // original opts — used by Subagent tool to clone
+	profiles        *profiles.Registry
 	toolReg         *tools.Registry
 	disallowedTools []string
 	store           store.SessionStore
@@ -77,6 +79,12 @@ type AgentOptions struct {
 	Directives    []string // extra instruction blocks appended to the system prompt (e.g. transport-specific capabilities)
 	MaxIterations int      // max ReAct iterations per turn — default: 50 (defaultMaxIterations)
 	MaxTokens     int      // max output tokens — default: model's MaxTokens from ModelMeta
+
+	// ── Profiles ─────────────────────────────────────────────────────────
+	// Profiles are named bundles of directives and tools that SOME sessions
+	// can be bound to (WithSessionProfiles) — see package profiles. More can be
+	// added, replaced or removed live with Agent.RegisterProfile.
+	Profiles map[string]profiles.Profile
 
 	// ── Tools ────────────────────────────────────────────────────────────
 	Tools           []tools.Tool // additional tools (defaults always included)
@@ -249,8 +257,13 @@ func New(opts AgentOptions) *Agent {
 		reg.Register(t)
 	}
 
+	profs := profiles.NewRegistry()
+	for name, p := range opts.Profiles {
+		_ = profs.Register(name, p) // a blank name cannot be registered: skipped
+	}
 	a := &Agent{
 		opts:            opts,
+		profiles:        profs,
 		toolReg:         reg,
 		disallowedTools: opts.DisallowedTools,
 		store:           opts.Store,
@@ -704,20 +717,40 @@ type sessionConfig struct {
 	directives []string
 	tools      []tools.Tool
 	profiles   []string
+	// setProfile: WithSessionProfiles was passed, even with no names. It is the
+	// difference between "leave the session's profiles as they are" and "none".
 	setProfile bool
 	channels   []types.InputChannel
+	// err: an option that could not be validated on its own (a blank profile
+	// name); NewSession/ResumeSession/ForkSession return it before opening.
+	err error
 }
 
-// WithSessionProfiles sets the profile names stored in a NEW session's meta
-// (store.SessionMeta.Profiles) — the server's profile binding, written in
-// the same SaveMeta that creates the session. The agent only stores the
-// names; resolving them to directives/tools is the server's job (it passes
-// those via WithSessionDirectives/WithSessionTools). Ignored by
-// ResumeSession — rebind an existing session with SetSessionProfiles.
+// WithSessionProfiles binds the session to the named profiles (package
+// profiles; defined with AgentOptions.Profiles or Agent.RegisterProfile): their
+// directives and tools apply to it, and the names are stored in the session, so
+// every later open — by any frontend — applies them again. It works on
+// NewSession, ResumeSession and ForkSession, and it REPLACES, like a PATCH:
+//
+//   - not passed: the session keeps the profiles it has (a new one has none; a
+//     fork keeps its parent's);
+//   - one or more names: exactly those;
+//   - passed with no names, WithSessionProfiles(): none.
+//
+// A name that is not registered fails NewSession (and ResumeSession/ForkSession
+// when passed here): nothing is opened. A STORED name that is no longer
+// registered is skipped when a session opens — it stays usable, the name is
+// kept for when it is registered again, and Session.MissingProfiles reports
+// it. A blank name is an error.
 func WithSessionProfiles(names ...string) SessionOption {
 	return func(c *sessionConfig) {
-		c.profiles = append(c.profiles, names...)
 		c.setProfile = true
+		c.profiles = append([]string(nil), names...)
+		for _, n := range names {
+			if err := profiles.ValidName(n); err != nil && c.err == nil {
+				c.err = err
+			}
+		}
 	}
 }
 
@@ -765,6 +798,12 @@ func applySessionOptions(opts []SessionOption) sessionConfig {
 // opts configure this session only (see WithSessionDirectives).
 func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, error) {
 	cfg := applySessionOptions(opts)
+	// The profiles it is bound to (none unless asked), checked BEFORE anything
+	// is created: an unknown one fails the open.
+	profileNames, cfg, missingProfiles, err := a.profilesFor(nil, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("new session: %w", err)
+	}
 	// Resolve provider — validates active + model exists
 	provider, modelID, err := providers.Resolve(model)
 	if err != nil {
@@ -806,7 +845,7 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 		Name:         defaultSessionName(now),
 		Model:        model,
 		Thinking:     a.thinkingLevel,
-		Profiles:     cfg.profiles,
+		Profiles:     profileNames,
 		CreatedAt:    now,
 		LastActiveAt: now,
 	}
@@ -823,6 +862,7 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 		res.Skills, loader.ReadSkill,
 		a.memStore != nil)
 	sess.agent = a
+	sess.missingProfiles.Store(missingProfiles)
 	if err := sess.attachChannels(chans); err != nil {
 		_ = storeInst.Close()
 		_ = a.store.DeleteSession(sessionID)
@@ -843,10 +883,27 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 // overwrite each other's prompt.
 func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session, error) {
 	cfg := applySessionOptions(opts)
+	if cfg.err != nil {
+		return nil, fmt.Errorf("resume session: %w", cfg.err)
+	}
 	// Fast path: already active — return the live handle.
 	a.sessMu.Lock()
 	if live, ok := a.activeSessions[sessionID]; ok {
 		a.sessMu.Unlock()
+		// Profiles are the one option that DOES apply to an already-open
+		// session (the rest are ignored here): passing them rebinds it, and it
+		// picks them up at its next turn boundary.
+		if cfg.setProfile {
+			if err := a.checkProfileNames(cfg.profiles); err != nil {
+				return nil, fmt.Errorf("resume session: %w", err)
+			}
+			if err := a.SetSessionProfiles(sessionID, cfg.profiles); err != nil {
+				return nil, fmt.Errorf("resume session: %w", err)
+			}
+			if err := a.ReconfigureSession(sessionID); err != nil {
+				return nil, fmt.Errorf("resume session: %w", err)
+			}
+		}
 		if len(cfg.channels) > 0 && !live.hasChannels(cfg.channels) {
 			// Channels are bound when a session opens; an already-open session
 			// is not rebound behind its owner's back (and an explicit channel
@@ -866,6 +923,22 @@ func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session
 	}
 
 	meta := storeInst.Meta()
+
+	// The profiles it ends up bound to: the stored ones, or the ones asked for
+	// (which REPLACE them and are saved). A stored one that is no longer
+	// registered is skipped and reported, never an error.
+	profileNames, cfg, missingProfiles, err := a.profilesFor(meta.Profiles, cfg)
+	if err != nil {
+		_ = storeInst.Close()
+		return nil, fmt.Errorf("resume session: %w", err)
+	}
+	if cfg.setProfile {
+		meta.Profiles = profileNames
+		if err := storeInst.UpdateMeta(meta); err != nil {
+			_ = storeInst.Close()
+			return nil, fmt.Errorf("resume session: save profiles: %w", err)
+		}
+	}
 
 	// Restore provider+model. Models are scoped per session, so the saved one
 	// comes first; if its provider is gone (disconnected, credentials removed, model
@@ -924,6 +997,7 @@ func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session
 		a.memStore != nil)
 	sess.agent = a
 	sess.modelFallback = fallback
+	sess.missingProfiles.Store(missingProfiles)
 	if err := sess.attachChannels(chans); err != nil {
 		_ = storeInst.Close()
 		return nil, fmt.Errorf("resume session: %w", err)
@@ -933,12 +1007,14 @@ func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session
 }
 
 // ReconfigureSession rebuilds a LIVE session's system prompt and tool
-// registry with new session options (WithSessionDirectives/WithSessionTools)
-// and applies them at the session's next turn boundary — never mid-turn; if
-// the session is idle they apply immediately. This is how a session that was
-// already active picks up a changed configuration (e.g. a server profile
-// bound to it after it was opened). Returns an error if the session isn't
-// active in this agent.
+// registry — from the profiles it is bound to (registered now) plus the
+// session options given (WithSessionDirectives/WithSessionTools, and
+// WithSessionProfiles, which also rebinds it) — and applies them at the
+// session's next turn boundary, never mid-turn; if the session is idle they
+// apply immediately. This is how a session that was already active picks up a
+// changed configuration (a profile registered, replaced, removed or bound
+// after it was opened). Returns an error if the session isn't active in this
+// agent.
 func (a *Agent) ReconfigureSession(sessionID string, opts ...SessionOption) error {
 	a.sessMu.Lock()
 	sess, ok := a.activeSessions[sessionID]
@@ -947,6 +1023,16 @@ func (a *Agent) ReconfigureSession(sessionID string, opts ...SessionOption) erro
 		return fmt.Errorf("session %s is not active", sessionID)
 	}
 	cfg := applySessionOptions(opts)
+	names, cfg, missing, err := a.profilesFor(sess.store.Meta().Profiles, cfg)
+	if err != nil {
+		return err
+	}
+	if cfg.setProfile {
+		if err := a.SetSessionProfiles(sessionID, names); err != nil {
+			return err
+		}
+	}
+	sess.missingProfiles.Store(missing)
 	cwd := sess.CWD()
 	loader := a.newLoader(cwd)
 	res, err := loader.Load()
@@ -966,10 +1052,11 @@ func (a *Agent) ReconfigureSession(sessionID string, opts ...SessionOption) erro
 	return nil
 }
 
-// SetSessionProfiles persists the names of the server profiles bound to a
-// session (store.SessionMeta.Profiles) — see server.Profile. Works on active
-// and inactive sessions alike; the agent itself only stores the names, the
-// server resolves them to directives/tools.
+// SetSessionProfiles persists the names of the profiles bound to a session
+// (store.SessionMeta.Profiles), replacing them — nil or empty removes them all.
+// It only changes the STORED names, on an active or an inactive session alike:
+// an active one applies them at its next ReconfigureSession (ResumeSession and
+// WithSessionProfiles do both).
 func (a *Agent) SetSessionProfiles(sessionID string, profiles []string) error {
 	a.sessMu.Lock()
 	sess, ok := a.activeSessions[sessionID]
@@ -1130,6 +1217,24 @@ func (a *Agent) openStoredCopy(copyStore *store.Session, cfg sessionConfig, what
 		}
 	}
 
+	// Profiles: the copy keeps the names it came with (a fork: the parent's; an
+	// import: the export's); WithSessionProfiles replaces them. A stored name
+	// that is not registered is skipped and reported, an explicit one fails.
+	profNames, cfg, missingProfiles, err := a.profilesFor(meta.Profiles, cfg)
+	if err != nil {
+		_ = copyStore.Close()
+		_ = a.store.DeleteSession(meta.ID)
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+	if cfg.setProfile {
+		meta.Profiles = profNames
+		if err := copyStore.UpdateMeta(meta); err != nil {
+			_ = copyStore.Close()
+			_ = a.store.DeleteSession(meta.ID)
+			return nil, fmt.Errorf("%s: persist profiles: %w", what, err)
+		}
+	}
+
 	thinkingLvl := meta.Thinking
 
 	// Same restore-over-default logic as ResumeSession: Fork already copies
@@ -1171,6 +1276,7 @@ func (a *Agent) openStoredCopy(copyStore *store.Session, cfg sessionConfig, what
 		a.memStore != nil)
 	sess.agent = a
 	sess.modelFallback = fallback
+	sess.missingProfiles.Store(missingProfiles)
 	if err := sess.attachChannels(chans); err != nil {
 		_ = copyStore.Close()
 		_ = a.store.DeleteSession(meta.ID)

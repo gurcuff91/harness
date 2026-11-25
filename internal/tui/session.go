@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gurcuff91/harness/client"
@@ -255,7 +256,13 @@ func (t *TUI) resumeInPlace(sessID string) {
 // server fell back to the harness default. Never silent: the new model changes
 // cost, capabilities and context window.
 func (t *TUI) noteModelFallback(sess *client.Session) {
-	if sess == nil || sess.ModelFallback == nil {
+	if sess == nil {
+		return
+	}
+	if len(sess.MissingProfiles) > 0 {
+		t.addRaw(ansi.Warn(fmt.Sprintf("⚠ profiles not registered here, skipped: %s", strings.Join(sess.MissingProfiles, ", "))))
+	}
+	if sess.ModelFallback == nil {
 		return
 	}
 	f := sess.ModelFallback
