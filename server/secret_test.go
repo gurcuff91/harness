@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -251,6 +252,91 @@ func TestOpenPathsAreExact(t *testing.T) {
 	for _, p := range []string{"/api/server/anything", "/api/docs/other", "/api/server2", "/api/docs/openapi.json/x"} {
 		if s := status(t, "GET", base+p, nil); s != http.StatusUnauthorized {
 			t.Errorf("GET %s without a secret = %d, want 401 (only the exact open paths are open)", p, s)
+		}
+	}
+}
+
+// The OpenAPI spec describes the secret the way the server really enforces it:
+// the two schemes (header and bearer), required globally as alternatives, and
+// lifted (security: []) exactly on the paths the middleware leaves open.
+func TestOpenAPISpecDocumentsTheSecret(t *testing.T) {
+	var spec struct {
+		Security []map[string][]string                 `json:"security"`
+		Paths    map[string]map[string]json.RawMessage `json:"paths"`
+		Comp     struct {
+			Schemes map[string]struct {
+				Type   string `json:"type"`
+				In     string `json:"in"`
+				Name   string `json:"name"`
+				Scheme string `json:"scheme"`
+			} `json:"securitySchemes"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal([]byte(openAPISpecJSON("127.0.0.1:0")), &spec); err != nil {
+		t.Fatal(err)
+	}
+	hs, ok := spec.Comp.Schemes["HarnessSecret"]
+	if !ok || hs.Type != "apiKey" || hs.In != "header" || hs.Name != SecretHeader {
+		t.Errorf("HarnessSecret = %+v, want an apiKey in the %s header", hs, SecretHeader)
+	}
+	bs, ok := spec.Comp.Schemes["BearerSecret"]
+	if !ok || bs.Type != "http" || bs.Scheme != "bearer" {
+		t.Errorf("BearerSecret = %+v, want http bearer", bs)
+	}
+	// Required globally, either one (two entries = alternatives).
+	if len(spec.Security) != 2 {
+		t.Fatalf("global security = %v, want the two schemes as alternatives", spec.Security)
+	}
+	have := map[string]bool{}
+	for _, req := range spec.Security {
+		for name := range req {
+			have[name] = true
+		}
+	}
+	if !have["HarnessSecret"] || !have["BearerSecret"] {
+		t.Errorf("global security = %v", spec.Security)
+	}
+	// Every scheme the security list names is defined.
+	for name := range have {
+		if _, ok := spec.Comp.Schemes[name]; !ok {
+			t.Errorf("security names the undefined scheme %q", name)
+		}
+	}
+	// The spec and the middleware agree on what is open: every documented path
+	// the middleware leaves open says security: [] ...
+	openInSpec := map[string]bool{}
+	for path, methods := range spec.Paths {
+		for method, raw := range methods {
+			var op struct {
+				Security *[]map[string][]string `json:"security"`
+			}
+			_ = json.Unmarshal(raw, &op)
+			lifted := op.Security != nil && len(*op.Security) == 0
+			if lifted {
+				openInSpec[method+" "+path] = true
+			}
+			if isOpenPath(path) && !lifted {
+				t.Errorf("%s %s is open in the server but the spec still asks for the secret", method, path)
+			}
+			if !isOpenPath(path) && lifted {
+				t.Errorf("%s %s is documented as open but the server protects it", method, path)
+			}
+		}
+	}
+	// ... and the server answers a documented-open path without the secret.
+	if !openInSpec["get /api/server"] {
+		t.Errorf("GET /api/server must be documented as open (security: []): %v", openInSpec)
+	}
+	// The description tells a reader how to authenticate.
+	var info struct {
+		Info struct {
+			Description string `json:"description"`
+		} `json:"info"`
+	}
+	_ = json.Unmarshal([]byte(openAPISpecJSON("127.0.0.1:0")), &info)
+	for _, want := range []string{"X-Harness-Sec", "Bearer", "401", "Without TLS the secret travels in the clear"} {
+		if !strings.Contains(info.Info.Description, want) {
+			t.Errorf("the API description does not mention %q", want)
 		}
 	}
 }
