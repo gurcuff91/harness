@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.121.0] - 2026-11-25
+
+### Added — a secret for `harness serve`
+The server can require a secret on every request but `GET /api/server` and the API docs: in the `X-Harness-Sec` header or as `Authorization: Bearer <secret>`; anything else is a 401. Without TLS the secret travels in the clear, so it keeps casual callers out, not someone who can read the network.
+- **CLI:** `harness gen-secret` prints a new secret (`hs_` and 64 hex characters). `harness serve --secret <s>` (or the `HARNESS_SECRET` environment variable, better since a flag shows in the process list) turns it on. Without a secret on localhost the server starts and logs a warning; **listening beyond localhost without one is refused** unless `--insecure` is passed. The TUI and ACP need nothing: their internal server only listens on localhost.
+- **SDK:** `server.WithSecret(secret)` and `ServerOptions.Secret`, `server.GenerateServerSec()`, and `client.WithSecret(secret)`, which sends the header on every request (JSON calls, event streams, the provider proxy, export/import).
+- **Sharing a subscription** between machines now needs the secret on the instance that serves it, and the other instance sends it: `harness provider add … --header X-Harness-Sec:hs_…`.
+- `client.StreamEvents` returns an `*Error` carrying the HTTP status (a 401 for a missing secret, a 400 for a session that is not open), like the other methods.
+- The provider proxy never forwards the secret (`X-Harness-Sec`, nor the `Authorization` header that may carry it) to the provider.
+- The OpenAPI spec declares the two security schemes.
+
 ## [0.120.0] - 2026-11-25
 
 ### Changed (breaking) — `harness serve :8080` listens on this machine only

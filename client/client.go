@@ -34,6 +34,7 @@ import (
 type Client struct {
 	baseURL string
 	http    *http.Client
+	secret  string // sent as X-Harness-Sec on every request (WithSecret)
 	// ctx is the PARENT context every request this client makes derives
 	// from — do()/decode() use it directly; Ask/AskWithImages layer their
 	// own timeout on top of it via context.WithTimeout (see askCtx). Never
@@ -60,6 +61,28 @@ func WithContext(ctx context.Context) Option {
 	return func(c *Client) { c.ctx = ctx }
 }
 
+// WithSecret makes the client send secret (the server's WithSecret /
+// ServerOptions.Secret / `harness serve --secret`) in the X-Harness-Sec header
+// of EVERY request it makes: the JSON calls, the event streams, the provider
+// proxy and the session export/import alike. Without TLS the secret travels in
+// the clear: use an https:// address when the server is not on this machine.
+func WithSecret(secret string) Option {
+	return func(c *Client) { c.secret = secret }
+}
+
+// secretTransport adds the secret header to every request of the wrapped
+// transport — one place, so no call (present or future) can forget it.
+type secretTransport struct {
+	base   http.RoundTripper
+	secret string
+}
+
+func (t secretTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Set("X-Harness-Sec", t.secret)
+	return t.base.RoundTrip(req)
+}
+
 // New creates a client for the given server target. Accepts either a bare
 // address ("127.0.0.1:8080", assumed http://) or a full URL with scheme
 // ("http://127.0.0.1:8080", "https://harness.example.com") — what a
@@ -77,6 +100,13 @@ func New(addr string, opts ...Option) *Client {
 	}
 	for _, opt := range opts {
 		opt(c)
+	}
+	if c.secret != "" {
+		base := c.http.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		c.http.Transport = secretTransport{base: base, secret: c.secret}
 	}
 	return c
 }

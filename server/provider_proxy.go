@@ -187,7 +187,10 @@ var dropFromRequest = map[string]bool{
 	"Host": true, "Content-Length": true, "Accept-Encoding": true,
 	"Authorization": true, "X-Api-Key": true, "Api-Key": true, "Cookie": true,
 	"Chatgpt-Account-Id": true,
-	"Origin":             true, "Referer": true,
+	// The server's own secret (Authorization, above, may carry it too): it
+	// authenticates the caller TO harness and must never reach a provider.
+	"X-Harness-Sec": true,
+	"Origin":        true, "Referer": true,
 	"Forwarded": true, "X-Forwarded-For": true, "X-Forwarded-Host": true,
 	"X-Forwarded-Proto": true, "X-Real-Ip": true,
 }

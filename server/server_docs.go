@@ -36,12 +36,13 @@ const openAPISpecTemplate = `{
   "openapi": "3.0.3",
   "info": {
     "title": "Harness API",
-    "description": "HTTP/SSE API for the Harness AI agent — sessions, providers, models, schedules, memory, and MCP.",
+    "description": "HTTP/SSE API for the Harness AI agent — sessions, providers, models, schedules, memory, and MCP. A server started with a secret (harness serve --secret, server.WithSecret) requires it on every request but GET /api/server and these docs: send it in the X-Harness-Sec header or as Authorization: Bearer; the answer otherwise is 401. Without TLS the secret travels in the clear.",
     "version": "{{VERSION}}"
   },
   "servers": [
     { "url": "http://{{ADDR}}", "description": "Local in-process server" }
   ],
+  "security": [ { "HarnessSecret": [] }, { "BearerSecret": [] } ],
   "tags": [
     { "name": "server",    "description": "Server metadata" },
     { "name": "settings",  "description": "Configuration management" },
@@ -59,6 +60,7 @@ const openAPISpecTemplate = `{
         "summary": "Server info",
         "description": "Returns harness version, transport, URL, and process metadata.",
         "operationId": "getServerInfo",
+        "security": [],
         "responses": {
           "200": { "description": "Server info", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ServerInfo" } } } }
         }
@@ -677,6 +679,10 @@ const openAPISpecTemplate = `{
     }
   },
   "components": {
+    "securitySchemes": {
+      "HarnessSecret": { "type": "apiKey", "in": "header", "name": "X-Harness-Sec", "description": "The server's secret, when it was started with one." },
+      "BearerSecret":  { "type": "http", "scheme": "bearer", "description": "The same secret as an Authorization: Bearer token." }
+    },
     "schemas": {
       "Status": {
         "type": "object",

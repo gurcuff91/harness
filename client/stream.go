@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -53,7 +54,14 @@ func (c *Client) streamEvents(ctx context.Context, sessionID string) (<-chan Eve
 		return nil, fmt.Errorf("SSE connect: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		resp.Body.Close()
+		// The standard error shape (a 401 for a missing secret, a 400 for a
+		// session that is not open) as an *Error with its status, like every
+		// other method; anything else keeps the plain message.
+		if ae := parseError(data, resp.StatusCode); ae != nil {
+			return nil, ae
+		}
 		return nil, fmt.Errorf("SSE: status %d", resp.StatusCode)
 	}
 

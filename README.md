@@ -270,15 +270,27 @@ is rejected for them — so any auth the gateway needs (a bearer token, an
 request. Once added, `<name>/<model>` works exactly like any built-in
 provider — no further setup needed.
 
+**Securing `harness serve`.** The server runs the agent's tools (Bash included) and holds your connected
+providers, so a secret keeps others off it. `harness gen-secret` prints a new one (`hs_` and 64 hex
+characters); `harness serve :8080 --secret hs_…` (or, better, the `HARNESS_SECRET` environment
+variable: a flag shows in the process list) makes every request but `GET /api/server` and the API
+docs carry it, in the `X-Harness-Sec` header or as `Authorization: Bearer <secret>` (401 otherwise).
+Listening beyond this machine (`0.0.0.0:8080`) without a secret is refused unless you add
+`--insecure`; on localhost without one the server starts and logs a warning. Clients: `client.New(addr,
+client.WithSecret(secret))` sends it on every request; from the SDK, `server.WithSecret(secret)` /
+`ServerOptions.Secret`, and `server.GenerateServerSec()` makes one. The TUI and ACP start their own
+internal server on localhost and need no secret. Without TLS the secret travels in the clear: it keeps
+casual callers out, not someone who can read the network; for that, put the server behind HTTPS.
+
 **Sharing a subscription between harness instances.** Every provider is also
 served by the server's transparent proxy (`/api/providers/<name>/proxy`), and a
 custom provider can point at it. Instance A has `claude-oauth` connected and
-runs `harness serve 0.0.0.0:8080` (exposed to the network on purpose: `:8080` alone listens on
-A only); instance B (another machine, another TUI) does
+runs `harness serve 0.0.0.0:8080 --secret hs_…` (exposed to the network on purpose: `:8080` alone
+listens on A only); instance B (another machine, another TUI) does
 
 ```
 harness provider add shared-claude --type anthropic \
-  --url http://A:8080/api/providers/claude-oauth/proxy
+  --url http://A:8080/api/providers/claude-oauth/proxy --header X-Harness-Sec:hs_…
 ```
 
 and uses `shared-claude/<model>` exactly like the native provider — no
@@ -405,7 +417,8 @@ message (`harness OK`, `harness fix the login bug`). To send a word that looks l
 `harness help <command>`, `harness version` and `-v/--version` do what you would expect.
 
 ```
-harness serve <addr>          — HTTP/SSE server: :8080 = this machine only; 0.0.0.0:8080 exposes it (no auth)
+harness serve <addr>          — HTTP/SSE server: :8080 = this machine only; 0.0.0.0:8080 exposes it (needs --secret)
+harness gen-secret            — Print a new secret for harness serve --secret
 harness --telegram-allow @you — Listen to the Telegram bot (trusted users; --telegram-token to pick the bot)
 harness telegram token [tok]  — Save the bot token (--status checks it, --delete removes it)
 harness slack login           — Save the Slack account input channels listen with (--status checks it)
@@ -463,6 +476,7 @@ OLLAMA_CLOUD_API_KEY    — Ollama Cloud API key
 MINIMAX_API_KEY         — MiniMax API key
 OLLAMA_URL              — Ollama server URL (default: localhost:11434)
 TELEGRAM_BOT_TOKEN      — Telegram bot token (the TUI and serve; --telegram-token wins over it)
+HARNESS_SECRET          — The secret harness serve requires on every request (--secret wins over it)
 TELEGRAM_ALLOW          — Trusted Telegram @usernames, comma-separated (like --telegram-allow)
 ```
 

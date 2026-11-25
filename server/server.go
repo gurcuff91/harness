@@ -51,8 +51,9 @@ type Server struct {
 	transport string      // name of the calling transport
 	keepAgent bool        // Close leaves the agent open (it belongs to the caller)
 
-	proxyMaxBody  int64 // request-body cap of /api/providers/{name}/proxy/*; 0 = DefaultProxyMaxBodyBytes
-	importMaxBody int64 // request-body cap of POST /api/sessions/import; 0 = DefaultImportMaxBodyBytes
+	secret        string // when set, every request but the open paths must carry it (see secretMiddleware)
+	proxyMaxBody  int64  // request-body cap of /api/providers/{name}/proxy/*; 0 = DefaultProxyMaxBodyBytes
+	importMaxBody int64  // request-body cap of POST /api/sessions/import; 0 = DefaultImportMaxBodyBytes
 
 	// openMu serializes session create/resume so a session can never get a
 	// second proxy (two concurrent resumes of the same id used to both miss
@@ -93,6 +94,13 @@ type ServerOptions struct {
 	// DefaultProxyMaxBodyBytes (32 MiB).
 	ProxyMaxBodyBytes int64
 
+	// Secret, when not empty, makes the server require it on every request but
+	// GET /api/server and the API docs: in the X-Harness-Sec header or as an
+	// "Authorization: Bearer" token (401 otherwise). Empty = no authentication
+	// (what an in-process server listening on localhost for its own frontend
+	// uses). GenerateServerSec makes a good one.
+	Secret string
+
 	// ImportMaxBodyBytes caps the body of POST /api/sessions/import (a whole
 	// session export); a larger one is answered 413. Zero means
 	// DefaultImportMaxBodyBytes (1 GiB).
@@ -114,6 +122,7 @@ func NewServer(a *agent.Agent, opts ServerOptions) *Server {
 		logger:        logger,
 		transport:     transport,
 		keepAgent:     opts.KeepAgentOpen,
+		secret:        opts.Secret,
 		proxyMaxBody:  opts.ProxyMaxBodyBytes,
 		importMaxBody: opts.ImportMaxBodyBytes,
 		sessions:      make(map[string]*SessionProxy),
@@ -131,6 +140,9 @@ func (s *Server) handler() http.Handler {
 	// doc comment for why this simplification is safe).
 	r.Use(requestLogger(s.logger))
 	r.Use(corsMiddleware)
+	if s.secret != "" {
+		r.Use(secretMiddleware(s.secret))
+	}
 
 	// Routes
 	r.Get("/api/server", s.handleServerInfo)
@@ -2037,7 +2049,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Harness-Sec")
 		// Without this a browser client can't read GET /messages' paging headers.
 		w.Header().Set("Access-Control-Expose-Headers", "X-Messages-From, X-Messages-Total")
 

@@ -858,3 +858,31 @@ func TestEveryProviderAllowsModelRetrieve(t *testing.T) {
 		}
 	}
 }
+
+// The server's secret authenticates the caller TO harness: it must never reach
+// the provider, whichever header it came in.
+func TestTheServerSecretNeverReachesTheProvider(t *testing.T) {
+	up := newFakeUpstream(t, func(w http.ResponseWriter, r *http.Request, body []byte) {
+		w.WriteHeader(200)
+		w.Write([]byte(`{}`))
+	})
+	const sec = "hs_must-not-leak"
+	srv, name := proxyEnv(t, up, ServerOptions{Secret: sec})
+	for hdr, val := range map[string]string{"X-Harness-Sec": sec, "Authorization": "Bearer " + sec} {
+		resp, _ := do(t, "POST", proxyURL(srv, name, "/chat/completions"), `{}`, map[string]string{"Content-Type": "application/json", hdr: val})
+		if resp.StatusCode != 200 {
+			t.Fatalf("via %s: status %d", hdr, resp.StatusCode)
+		}
+		got := up.last(t)
+		for k, vs := range got.Header {
+			for _, v := range vs {
+				if strings.Contains(v, sec) {
+					t.Errorf("the secret (sent as %s) reached the provider in %s: %q", hdr, k, v)
+				}
+			}
+		}
+		if got.Header.Get("X-Harness-Sec") != "" {
+			t.Errorf("X-Harness-Sec reached the provider (sent as %s)", hdr)
+		}
+	}
+}

@@ -51,6 +51,8 @@ var CLI struct {
 
 	Serve serveCmd `cmd:"" help:"Start the HTTP/SSE server (headless transport)"`
 
+	GenSecret genSecretCmd `name:"gen-secret" cmd:"" help:"Print a new secret for harness serve --secret (or HARNESS_SECRET)"`
+
 	Telegram telegramCmd `cmd:"" help:"Telegram bot token (a session listens to the bot with --telegram-allow)"`
 
 	Slack slackCmd `cmd:"" help:"Slack account for input channels (harness slack login)"`
@@ -124,7 +126,17 @@ type serveCmd struct {
 	Addr              string `arg:"" help:"Address to listen on: :8080 or 127.0.0.1:8080 listen on this machine only (localhost); 0.0.0.0:8080 exposes it to the network (no authentication: anyone who reaches it can use your sessions, providers and tools)"`
 	withFlags         `embed:""`
 	telegramTokenFlag `embed:""`
+
+	// Secret protects the server: every request but GET /api/server and the API docs must
+	// carry it (X-Harness-Sec header or Authorization: Bearer). It is not a Kong env tag for the
+	// same reason as the Telegram token: an empty HARNESS_SECRET must not fail the command
+	// (serveSecret reads the environment itself).
+	Secret   string `name:"secret" help:"Require this secret on every request (X-Harness-Sec header or Authorization: Bearer); make one with harness gen-secret. Prefer the HARNESS_SECRET environment variable: a flag is visible in the process list. Without TLS it travels in the clear"`
+	Insecure bool   `name:"insecure" help:"Allow listening beyond localhost WITHOUT a secret (anyone who reaches the port can use your sessions, providers and tools)"`
 }
+
+// genSecretCmd prints a new server secret.
+type genSecretCmd struct{}
 
 // telegramTokenFlag is the Telegram bot token a command registers the channel
 // with, shared by the TUI and serve so the name and help cannot drift. Not a

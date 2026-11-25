@@ -14,6 +14,17 @@ type Option func(*runConfig)
 type runConfig struct {
 	addr   string
 	logger logx.Logger
+	secret string
+}
+
+// WithSecret makes the server require a secret on every request but GET
+// /api/server and the API docs: in the X-Harness-Sec header or as an
+// "Authorization: Bearer" token. Default: none. GenerateServerSec makes a good
+// one. Without TLS the secret travels in the clear — it keeps casual callers
+// out, not someone who can read the network; for that, put the server behind
+// HTTPS.
+func WithSecret(secret string) Option {
+	return func(c *runConfig) { c.secret = secret }
 }
 
 // WithAddr sets the listen address (e.g. "127.0.0.1:8080" or ":8080" for all
@@ -58,7 +69,7 @@ func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
 		return err
 	}
 
-	srv := NewServer(a, ServerOptions{Logger: cfg.logger, Transport: "server"})
+	srv := NewServer(a, ServerOptions{Logger: cfg.logger, Transport: "server", Secret: cfg.secret})
 
 	// srv.Serve blocks until the listener closes, so Close() must be
 	// triggered from elsewhere on ctx cancellation. Close() itself calls
