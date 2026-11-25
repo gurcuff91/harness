@@ -273,7 +273,8 @@ provider — no further setup needed.
 **Sharing a subscription between harness instances.** Every provider is also
 served by the server's transparent proxy (`/api/providers/<name>/proxy`), and a
 custom provider can point at it. Instance A has `claude-oauth` connected and
-runs `harness serve :8080`; instance B (another machine, another TUI) does
+runs `harness serve 0.0.0.0:8080` (exposed to the network on purpose: `:8080` alone listens on
+A only); instance B (another machine, another TUI) does
 
 ```
 harness provider add shared-claude --type anthropic \
@@ -404,7 +405,7 @@ message (`harness OK`, `harness fix the login bug`). To send a word that looks l
 `harness help <command>`, `harness version` and `-v/--version` do what you would expect.
 
 ```
-harness serve <addr>          — HTTP/SSE server (headless transport)
+harness serve <addr>          — HTTP/SSE server: :8080 = this machine only; 0.0.0.0:8080 exposes it (no auth)
 harness --telegram-allow @you — Listen to the Telegram bot (trusted users; --telegram-token to pick the bot)
 harness telegram token [tok]  — Save the bot token (--status checks it, --delete removes it)
 harness slack login           — Save the Slack account input channels listen with (--status checks it)

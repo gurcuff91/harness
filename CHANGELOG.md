@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.120.0] - 2026-11-25
+
+### Changed (breaking) — `harness serve :8080` listens on this machine only
+`harness serve :PORT` used to listen on every network interface, as Go reads an address without a host — and the server has no authentication: anyone who could reach the port could use the sessions, the connected providers and the tools. A missing host now means `127.0.0.1`. To expose the server on purpose, name the host: `harness serve 0.0.0.0:8080` (or `[::]:8080`, or a specific address). A bare port (`8080`) is rejected with a message saying both forms. Sharing a subscription between machines (README) therefore needs `0.0.0.0:8080` on the instance that serves it. The SDK is unchanged: `server.WithAddr` passes the address as given, and `server.Run` still defaults to `127.0.0.1:0`.
+
 ## [0.119.0] - 2026-11-24
 
 ### Changed (breaking, SDK) — `transports/acp` is now `acp`; one `logx`

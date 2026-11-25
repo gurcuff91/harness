@@ -383,6 +383,10 @@ The session the footer and status lines show — `sessionID`, `sessionName`, `mo
 - **SessionInfo** reports `os`, `arch` (runtime), `channels` (`[{type, id, name}]`, always an array) and `terminal` — the latter ONLY when the agent says it runs in one (`AgentOptions.Terminal` / `harness.AgentWithTerminal`): the TUI sets it from `tui.TerminalName()` (best effort from the environment; Herdr FIRST because it also sets `TERM_PROGRAM=ghostty` → `Herdr (<id>)`, then TERM_PROGRAM, WT_SESSION, KITTY_WINDOW_ID, ALACRITTY_*, KONSOLE_VERSION, VTE_VERSION, JetBrains, else `Generic terminal`). serve, SDK, Telegram, ACP and `-p` leave it empty: they would only report their launcher's terminal. No hostname and no user name, on purpose (a Slack turn can call the tool).
 - **Every logged message has `created_at`** (`types.Message.CreatedAt`, UTC, ms), stamped in ONE place: `store.Session.AppendMessage`/`AddCompactionSummary` (`stamp`), unless the caller set it. `Message.MarshalJSON` has its own wire struct — a new field must be added THERE too (a test caught it missing). Older messages have none (`omitzero`). It never reaches a provider (providers build from `parts`; `internal/providers/created_at_wire_test.go` checks every dialect). A fork copies the log, times included.
 
+### `harness serve` listens on localhost unless told otherwise
+
+`harness serve :8080` means **127.0.0.1:8080** (`serveAddr` in `internal/cli/kong_run_serve.go`): a missing host is THIS machine, not every interface as Go reads it, because the server has no authentication (whoever reaches it gets the sessions, the providers through the proxy, and the tools — Bash included). Exposing it takes an explicit host: `0.0.0.0:8080`, `[::]:8080` or a real address. A bare port (`8080`) is an error. This is the CLI's rule only: `server.WithAddr` (SDK) passes the address to `net.Listen` as given, and `server.Run`'s own default is `127.0.0.1:0`.
+
 ### Adding a New Tool
 
 1. Create `agent/tools/<name>.go`

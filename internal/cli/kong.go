@@ -121,7 +121,7 @@ func (c *tuiCmd) initialPrompt() string {
 // ── serve ────────────────────────────────────────────────────────────────
 
 type serveCmd struct {
-	Addr              string `arg:"" help:"Address to listen on (e.g. :8080)"`
+	Addr              string `arg:"" help:"Address to listen on: :8080 or 127.0.0.1:8080 listen on this machine only (localhost); 0.0.0.0:8080 exposes it to the network (no authentication: anyone who reaches it can use your sessions, providers and tools)"`
 	withFlags         `embed:""`
 	telegramTokenFlag `embed:""`
 }
