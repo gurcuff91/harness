@@ -14,10 +14,11 @@ import (
 // bound to the channel's own bot. SlackAsk is deliberately absent (see the
 // design doc).
 //
-// answering reports whether conversation id is the one the session's running
-// turn came from (its answer is published there automatically): SlackPost
-// refuses it, so a reply is never posted twice.
-func slackTools(bot *Bot, myID string, answering func(id string) bool) []atools.Tool {
+// answering reports whether (conversation id, thread) is where the session's
+// running turn's answer is published automatically ("" = the channel itself):
+// SlackPost refuses it, so a reply is never posted twice; another thread of
+// the same channel is not refused.
+func slackTools(bot *Bot, myID string, answering func(id, thread string) bool) []atools.Tool {
 	return []atools.Tool{
 		slackListChannelsTool(bot),
 		slackListUsersTool(bot),
@@ -119,20 +120,22 @@ func resolveChannelName(ctx context.Context, bot *Bot, name string) (string, err
 
 // ── SlackPost ─────────────────────────────────────────────────────────────
 
-func slackPostTool(bot *Bot, myID string, answering func(id string) bool) atools.Tool {
+func slackPostTool(bot *Bot, myID string, answering func(id, thread string) bool) atools.Tool {
 	return atools.Tool{
 		Def: types.ToolDef{
 			Name: "SlackPost",
 			Description: "Post a message to ANOTHER Slack channel or user — not to the conversation the message you are answering came from: your reply is posted there automatically. " +
 				"channel accepts a channel ID (C...), channel name (#general), or user ID (U...) for a direct message. " +
+				"Pass thread (the ts of a thread's root message) to reply inside that thread instead of posting in the channel. " +
 				"To attach files, put a <slack-upload path=\"/abs/path\"/> tag on its own line in text — " +
 				"it is stripped from the visible message and the file is uploaded.",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{"channel":{"type":"string","description":"Channel ID (C...), channel name (#general), or user ID (U...) for DM"},"text":{"type":"string","description":"Message text. Put <slack-upload path=\"/abs/path\"/> tags on their own lines to attach files."}},"required":["channel","text"]}`),
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"channel":{"type":"string","description":"Channel ID (C...), channel name (#general), or user ID (U...) for DM"},"text":{"type":"string","description":"Message text. Put <slack-upload path=\"/abs/path\"/> tags on their own lines to attach files."},"thread":{"type":"string","description":"ts of the root message of the thread to reply in (optional; default: the channel itself)"}},"required":["channel","text"]}`),
 		},
 		Execute: func(ctx context.Context, input json.RawMessage) (string, error) {
 			var args struct {
 				Channel string `json:"channel"`
 				Text    string `json:"text"`
+				Thread  string `json:"thread"`
 			}
 			if err := json.Unmarshal(input, &args); err != nil {
 				return "", fmt.Errorf("invalid arguments: %w", err)
@@ -140,6 +143,7 @@ func slackPostTool(bot *Bot, myID string, answering func(id string) bool) atools
 			if args.Channel == "" {
 				return "", fmt.Errorf("channel is required")
 			}
+			args.Thread = strings.TrimSpace(args.Thread)
 
 			// Resolve channel name (#name) → channel ID.
 			channelID, err := resolveChannelID(ctx, bot, args.Channel)
@@ -158,8 +162,12 @@ func slackPostTool(bot *Bot, myID string, answering func(id string) bool) atools
 
 			// The conversation this turn answers gets the turn's text by itself:
 			// posting there too would say everything twice.
-			if answering != nil && answering(channelID) {
-				return "", fmt.Errorf("not posted: the message you are answering came from %s, and your reply is posted there automatically — just write your answer instead of calling SlackPost", channelID)
+			if answering != nil && answering(channelID, args.Thread) {
+				where := channelID
+				if args.Thread != "" {
+					where += " (thread " + args.Thread + ")"
+				}
+				return "", fmt.Errorf("not posted: the message you are answering came from %s, and your reply is posted there automatically — just write your answer instead of calling SlackPost", where)
 			}
 
 			// Extract <slack-upload/> tags — the same mechanism as replies.
@@ -171,7 +179,7 @@ func slackPostTool(bot *Bot, myID string, answering func(id string) bool) atools
 					if i == 0 {
 						comment = toMrkdwn(cleanText)
 					}
-					if err := bot.UploadFile(ctx, channelID, path, comment); err != nil {
+					if err := bot.UploadFileInThread(ctx, channelID, args.Thread, path, comment); err != nil {
 						return "", fmt.Errorf("upload %s: %w", path, err)
 					}
 				}
@@ -183,7 +191,7 @@ func slackPostTool(bot *Bot, myID string, answering func(id string) bool) atools
 			}
 
 			// Text-only post.
-			if err := bot.PostMessage(ctx, channelID, toMrkdwn(cleanText)); err != nil {
+			if err := bot.PostMessageInThread(ctx, channelID, args.Thread, toMrkdwn(cleanText)); err != nil {
 				return "", fmt.Errorf("post message: %w", err)
 			}
 			return fmt.Sprintf("Message posted to %s.", args.Channel), nil
@@ -212,12 +220,17 @@ type historyFile struct {
 }
 
 type historyMessage struct {
-	User    string        `json:"user,omitempty"`
-	Text    string        `json:"text"`
-	TS      string        `json:"ts"`
-	Subtype string        `json:"subtype,omitempty"`
-	BotID   string        `json:"bot_id,omitempty"`
-	Files   []historyFile `json:"files,omitempty"`
+	User    string `json:"user,omitempty"`
+	Text    string `json:"text"`
+	TS      string `json:"ts"`
+	Subtype string `json:"subtype,omitempty"`
+	BotID   string `json:"bot_id,omitempty"`
+	// Thread is the ts of the thread's root when the message belongs to one
+	// (pass it as SlackMessages' thread to read it); ReplyCount, on a root,
+	// says it has that many replies to read.
+	Thread     string        `json:"thread,omitempty"`
+	ReplyCount int           `json:"reply_count,omitempty"`
+	Files      []historyFile `json:"files,omitempty"`
 }
 
 func slackMessagesTool(bot *Bot) atools.Tool {
@@ -226,15 +239,18 @@ func slackMessagesTool(bot *Bot) atools.Tool {
 			Name: "SlackMessages",
 			Description: "Read recent messages posted in a Slack channel, as JSON — useful to catch up on what the group has been discussing beyond messages sent directly to you. " +
 				"Each entry has the sender's user ID (resolve names with SlackListUsers), text, timestamp, subtype (empty for a normal message; otherwise an event like channel_join/channel_leave/channel_topic), and its attached files by name and size. " +
+				"The channel listing holds only the channel's own messages: the replies inside a thread are NOT in it — a message with reply_count has a thread to read. " +
+				"Pass thread (the ts of a thread's root message, e.g. the thread attribute of the message you are answering) to read that thread instead: its messages in order, the root first (the most recent ones, with a note of how many earlier ones were left out, when it is long). " +
 				"Pass files: true to also download those files: each gets a local path (read it with the tool its format needs), and images are shown to you as well (up to 8 per call). " +
 				"Files are private to the Slack session: a file URL cannot be fetched any other way.",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{"channel":{"type":"string","description":"Channel ID (C...), DM ID (D...) or channel name (#general)"},"limit":{"type":"integer","description":"Maximum messages to return (default 50, max 200)","minimum":1,"maximum":200},"files":{"type":"boolean","description":"Download the messages' attachments (default false): each gets a local path, images are also shown to you"}},"required":["channel"]}`),
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"channel":{"type":"string","description":"Channel ID (C...), DM ID (D...) or channel name (#general)"},"limit":{"type":"integer","description":"Maximum messages to return (default 50, max 200)","minimum":1,"maximum":200},"files":{"type":"boolean","description":"Download the messages' attachments (default false): each gets a local path, images are also shown to you"},"thread":{"type":"string","description":"ts of a thread's root message: read that thread (root first) instead of the channel's own messages"}},"required":["channel"]}`),
 		},
 		ExecuteRich: func(ctx context.Context, input json.RawMessage) (string, []types.ImageData, error) {
 			var args struct {
 				Channel string `json:"channel"`
 				Limit   int    `json:"limit"`
 				Files   bool   `json:"files"`
+				Thread  string `json:"thread"`
 			}
 			if err := json.Unmarshal(input, &args); err != nil {
 				return "", nil, fmt.Errorf("invalid arguments: %w", err)
@@ -246,7 +262,14 @@ func slackMessagesTool(bot *Bot) atools.Tool {
 			if err != nil {
 				return "", nil, err
 			}
-			messages, err := bot.GetChannelHistory(ctx, channelID, args.Limit)
+			var messages []SlackMessage
+			omitted := 0
+			thread := strings.TrimSpace(args.Thread)
+			if thread != "" {
+				messages, omitted, err = bot.GetThreadReplies(ctx, channelID, thread, args.Limit)
+			} else {
+				messages, err = bot.GetChannelHistory(ctx, channelID, args.Limit)
+			}
 			if err != nil {
 				return "", nil, err
 			}
@@ -257,7 +280,7 @@ func slackMessagesTool(bot *Bot) atools.Tool {
 			totalImages := 0
 			out := make([]historyMessage, 0, len(messages))
 			for _, m := range messages {
-				hm := historyMessage{User: m.User, Text: m.Text, TS: m.TS, Subtype: m.Subtype, BotID: m.BotID}
+				hm := historyMessage{User: m.User, Text: m.Text, TS: m.TS, Subtype: m.Subtype, BotID: m.BotID, Thread: m.ThreadTS, ReplyCount: m.ReplyCount}
 				for _, f := range m.Files {
 					hf := historyFile{Name: f.Name, Size: f.Size}
 					if hf.Name == "" {
@@ -285,6 +308,9 @@ func slackMessagesTool(bot *Bot) atools.Tool {
 				return "", nil, fmt.Errorf("format messages: %w", err)
 			}
 			text := string(b)
+			if omitted > 0 {
+				text = fmt.Sprintf("Thread %s: %d earlier message(s) left out; showing the root and the %d most recent.\n\n", thread, omitted, len(messages)-1) + text
+			}
 			switch {
 			case totalImages > len(images):
 				text += fmt.Sprintf("\n\n%d of %d images shown, in message order (marked \"shown\"); the other %d are only at their path — open them with Read.",

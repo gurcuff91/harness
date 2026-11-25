@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,10 @@ var typingInterval = 4 * time.Second
 type publisher struct {
 	c  *Channel
 	id string
+	// thread is the ts of the thread this publisher answers ("" = the channel
+	// itself): everything it posts — text, uploads, errors, notices — goes
+	// there, so a turn's whole answer stays where it was asked.
+	thread string
 
 	mu     sync.Mutex
 	queue  []types.Event
@@ -33,8 +38,8 @@ type publisher struct {
 	typingCancel context.CancelFunc
 }
 
-func newPublisher(c *Channel, id string) *publisher {
-	p := &publisher{c: c, id: id, wake: make(chan struct{}, 1), done: make(chan struct{})}
+func newPublisher(c *Channel, id, thread string) *publisher {
+	p := &publisher{c: c, id: id, thread: thread, wake: make(chan struct{}, 1), done: make(chan struct{})}
 	go p.run()
 	return p
 }
@@ -142,7 +147,7 @@ func (p *publisher) flush(ctx context.Context) {
 		if i == 0 {
 			c = comment
 		}
-		if err := p.c.bot.UploadFile(ctx, p.id, path, c); err != nil {
+		if err := p.uploadFile(ctx, path, c); err != nil {
 			p.c.logger.Error("slack-channel", "upload_file", "channel", p.id, "path", path, "error", err.Error())
 			if i == 0 && comment != "" {
 				p.post(ctx, clean)
@@ -158,8 +163,8 @@ func (p *publisher) post(ctx context.Context, text string) {
 		return
 	}
 	for _, chunk := range splitMessage(toMrkdwn(text)) {
-		if err := p.c.bot.PostMessage(ctx, p.id, chunk); err != nil {
-			p.c.logger.Error("slack-channel", "post", "channel", p.id, "error", err.Error())
+		if err := p.postChunk(ctx, chunk); err != nil {
+			p.c.logger.Error("slack-channel", "post", "channel", p.id, "thread", p.thread, "error", err.Error())
 		}
 	}
 	p.c.logger.Info("slack-channel", "reply", "channel", p.id, "text", oneLine(text, 200))
@@ -191,4 +196,27 @@ func (p *publisher) stopTyping() {
 		p.typingCancel()
 		p.typingCancel = nil
 	}
+}
+
+// postChunk posts one chunk in the thread of this publisher. A thread that no
+// longer exists (its root was deleted) must not swallow the answer: it goes to
+// the channel instead, and the line in the log says so.
+func (p *publisher) postChunk(ctx context.Context, text string) error {
+	err := p.c.bot.PostMessageInThread(ctx, p.id, p.thread, text)
+	if err != nil && p.thread != "" && errors.Is(err, ErrThreadNotFound) {
+		p.c.logger.Warn("slack-channel", "thread_gone", "channel", p.id, "thread", p.thread, "action", "posting in the channel")
+		return p.c.bot.PostMessage(ctx, p.id, text)
+	}
+	return err
+}
+
+// uploadFile uploads a file into the thread of this publisher, with the same
+// fallback to the channel.
+func (p *publisher) uploadFile(ctx context.Context, path, comment string) error {
+	err := p.c.bot.UploadFileInThread(ctx, p.id, p.thread, path, comment)
+	if err != nil && p.thread != "" && errors.Is(err, ErrThreadNotFound) {
+		p.c.logger.Warn("slack-channel", "thread_gone", "channel", p.id, "thread", p.thread, "action", "uploading to the channel")
+		return p.c.bot.UploadFile(ctx, p.id, path, comment)
+	}
+	return err
 }

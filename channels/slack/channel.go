@@ -56,14 +56,19 @@ type Channel struct {
 	typingSeq int64
 
 	pubMu sync.Mutex
-	pubs  map[string]*publisher // conversation id → its reply pump
+	pubs  map[string]*publisher // "<conversation>" or "<conversation>:<thread_ts>" → its reply pump
 
-	// inTurn: conversations whose turn is running right now (from its prompt
-	// echo to turn_end, as HandleEvent sees them — before any tool of that
-	// turn runs). SlackPost refuses to post into such a conversation: the turn's
-	// answer is published there already (see slackPostTool).
+	// inTurn: conversation → the thread its running turn answers ("" = the
+	// channel itself), from its prompt echo to turn_end, as HandleEvent sees
+	// them — before any tool of that turn runs. SlackPost refuses to post into
+	// that very channel and thread: the turn's answer is published there
+	// already (see slackPostTool).
 	turnMu sync.Mutex
-	inTurn map[string]bool
+	inTurn map[string]string
+	// current: the thread the running turn answers (set from the echo, cleared
+	// at turn_end; the session runs one turn at a time).
+	curMu   sync.Mutex
+	current threadRef
 }
 
 var _ agent.Channel = (*Channel)(nil)
@@ -79,7 +84,7 @@ func New(workspace, xoxc, xoxd string, opts ...Option) *Channel {
 		logger:    logx.NewNilLogger(),
 		listeners: map[string]func(agent.Inbound){},
 		pubs:      map[string]*publisher{},
-		inTurn:    map[string]bool{},
+		inTurn:    map[string]string{},
 	}
 	for _, o := range opts {
 		if o != nil {
@@ -178,10 +183,15 @@ func (c *Channel) Listen(ctx context.Context, id string, deliver func(agent.Inbo
 			}
 			c.mu.Unlock()
 			c.pubMu.Lock()
-			p := c.pubs[id]
-			delete(c.pubs, id)
+			var closing []*publisher
+			for k, p := range c.pubs {
+				if k == id || strings.HasPrefix(k, id+":") {
+					closing = append(closing, p)
+					delete(c.pubs, k)
+				}
+			}
 			c.pubMu.Unlock()
-			if p != nil {
+			for _, p := range closing {
 				p.close() // waits for what is queued to be posted
 			}
 			if cancel != nil {
@@ -257,7 +267,9 @@ func (c *Channel) readLoop(ctx context.Context, conn *websocket.Conn) error {
 // its conversation — only a person's message that mentions us (in a DM, any
 // message: there is no mention there).
 func (c *Channel) handleEvent(ctx context.Context, evt *RTMEvent) {
-	if evt.Type != "message" || evt.Channel == "" || evt.BotID != "" || evt.SubType != "" {
+	// A thread reply also sent to the channel ("thread_broadcast") is a real
+	// message of a person: it is kept; every other subtype is not a message.
+	if evt.Type != "message" || evt.Channel == "" || evt.BotID != "" || (evt.SubType != "" && evt.SubType != "thread_broadcast") {
 		return
 	}
 	c.idMu.Lock()
@@ -288,23 +300,30 @@ func (c *Channel) handleEvent(ctx context.Context, evt *RTMEvent) {
 	if text == "" && len(images) == 0 && len(atts) == 0 {
 		return
 	}
-	c.logger.Info("slack-channel", "prompt", "channel", evt.Channel, "user", evt.User,
+	c.logger.Info("slack-channel", "prompt", "channel", evt.Channel, "thread", evt.ThreadTS, "user", evt.User,
 		"text", oneLine(text, 200), "images", len(images), "files", len(atts))
-	deliver(agent.Inbound{Text: buildPrompt(evt.User, evt.Channel, text, atts), Images: images})
+	thread := ""
+	origin := ""
+	if evt.InThread() {
+		thread = evt.ThreadTS
+		origin = agent.ChannelOrigin(Type, evt.Channel+":"+thread)
+	}
+	deliver(agent.Inbound{Text: buildPrompt(evt.User, evt.Channel, thread, text, atts), Images: images, Origin: origin})
 }
 
 // sendTyping shows the typing indicator in a conversation (Slack clears it
 // after ~5 s; callers repeat it).
 func (c *Channel) sendTyping(id string) {
+	// connMu is held for the WRITE too: gorilla/websocket allows ONE writer at
+	// a time, and the publishers of several threads of a channel (and of
+	// several channels) type concurrently.
 	c.connMu.Lock()
-	conn := c.conn
-	c.typingSeq++
-	seq := c.typingSeq
-	c.connMu.Unlock()
-	if conn == nil {
+	defer c.connMu.Unlock()
+	if c.conn == nil {
 		return
 	}
-	_ = conn.WriteJSON(map[string]any{"id": seq, "type": "typing", "channel": id})
+	c.typingSeq++
+	_ = c.conn.WriteJSON(map[string]any{"id": c.typingSeq, "type": "typing", "channel": id})
 }
 
 // HandleEvent implements agent.Channel: the events of a turn started from
@@ -312,19 +331,34 @@ func (c *Channel) sendTyping(id string) {
 func (c *Channel) HandleEvent(id string, evt types.Event) {
 	switch evt.Type {
 	case types.EventReceivedPrompt, types.EventFollowUpStart:
+		thread := threadOf(evt.Origin, id)
 		c.turnMu.Lock()
-		c.inTurn[id] = true
+		c.inTurn[id] = thread
 		c.turnMu.Unlock()
-	case types.EventTurnEnd:
+		c.curMu.Lock()
+		c.current = threadRef{id: id, thread: thread}
+		c.curMu.Unlock()
+	}
+	c.curMu.Lock()
+	cur := c.current
+	if evt.Type == types.EventTurnEnd {
+		c.current = threadRef{}
+	}
+	c.curMu.Unlock()
+	if evt.Type == types.EventTurnEnd {
 		c.turnMu.Lock()
 		delete(c.inTurn, id)
 		c.turnMu.Unlock()
 	}
+	if cur.id == "" {
+		cur = threadRef{id: id} // an event outside a turn: the channel itself
+	}
 	c.pubMu.Lock()
-	p := c.pubs[id]
+	key := cur.key()
+	p := c.pubs[key]
 	if p == nil {
-		p = newPublisher(c, id)
-		c.pubs[id] = p
+		p = newPublisher(c, cur.id, cur.thread)
+		c.pubs[key] = p
 	}
 	c.pubMu.Unlock()
 	p.push(evt)
@@ -341,13 +375,17 @@ func (c *Channel) Tools(ids []string) []atools.Tool {
 	for _, id := range ids {
 		own[id] = true
 	}
-	answering := func(id string) bool {
+	// answering: is (channel, thread) where the running turn's answer is
+	// published? Same channel AND same thread ("" is the channel itself), so
+	// another thread of the same channel stays open to SlackPost.
+	answering := func(id, thread string) bool {
 		if !own[id] {
 			return false
 		}
 		c.turnMu.Lock()
 		defer c.turnMu.Unlock()
-		return c.inTurn[id]
+		t, running := c.inTurn[id]
+		return running && t == thread
 	}
 	return slackTools(c.bot, me, answering)
 }
@@ -371,4 +409,25 @@ func (c *Channel) Name(ctx context.Context, id string) string {
 		return "#" + info.Name
 	}
 	return id
+}
+
+// threadRef is a conversation and, inside it, a thread ("" = the channel itself).
+type threadRef struct{ id, thread string }
+
+// key is the publisher's key: "<conversation>" or "<conversation>:<thread_ts>".
+func (r threadRef) key() string {
+	if r.thread == "" {
+		return r.id
+	}
+	return r.id + ":" + r.thread
+}
+
+// threadOf reads the thread out of a turn's origin "slack:<id>:<thread_ts>"
+// for conversation id; "" for "slack:<id>" (a channel message) or any other.
+func threadOf(origin, id string) string {
+	rest, ok := strings.CutPrefix(origin, Type+":"+id+":")
+	if !ok {
+		return ""
+	}
+	return rest
 }

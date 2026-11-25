@@ -385,7 +385,7 @@ that Slack conversation with the account saved by `harness slack login`: a menti
 there (in a DM, any message) becomes a prompt of THIS session, which has your project's context, and
 everything it writes while answering is posted back in that conversation. Your own turns in the TUI
 are never posted. The session gets the Slack tools (`SlackListChannels`, `SlackListUsers`,
-`SlackPost`, `SlackMessages`) and a `## Slack` section in its system prompt. One conversation is
+`SlackPost`, `SlackMessages`) and a `## Slack` section in its system prompt. Threads are supported: a mention inside a thread reaches the session with the thread's id, the model reads the thread with `SlackMessages` (its `thread` parameter) before answering, and the reply is posted inside that thread; a mention in the channel is answered in the channel. One conversation is
 listened to by one session at a time, across every harness process on the machine: a second one
 fails naming the first. Explicit and never saved: `/new`, `/resume` and `--resume` without the flag
 listen to nothing. Over the API (`harness serve`), pass `channels: [{"type":"slack","ref":"…"}]`

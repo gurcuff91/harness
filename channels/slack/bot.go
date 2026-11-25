@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -75,7 +76,17 @@ type RTMEvent struct {
 	BotID   string      `json:"bot_id"`  // non-empty if sent by a bot
 	SubType string      `json:"subtype"` // "message_changed", "bot_message", etc.
 	Files   []SlackFile `json:"files"`   // file attachments (images, text files, etc.)
+	// ThreadTS is the ts of the thread's ROOT message, set on every message of
+	// a thread — and on the root itself, where it equals TS. ReplyCount is
+	// only informational (Slack does not always send it).
+	ThreadTS   string `json:"thread_ts"`
+	ReplyCount int    `json:"reply_count"`
 }
+
+// InThread reports whether the message is a REPLY inside a thread: its
+// thread_ts names another message. A thread's root (thread_ts == ts, with or
+// without replies) is a channel message.
+func (e *RTMEvent) InThread() bool { return e.ThreadTS != "" && e.ThreadTS != e.TS }
 
 // ── API calls ─────────────────────────────────────────────────────────────
 
@@ -113,9 +124,23 @@ func (b *Bot) RTMConnect(ctx context.Context) (string, error) {
 
 // PostMessage sends text to a Slack channel or DM.
 func (b *Bot) PostMessage(ctx context.Context, channelID, text string) error {
+	return b.PostMessageInThread(ctx, channelID, "", text)
+}
+
+// ErrThreadNotFound is Slack's answer when the thread a post or a read names
+// does not exist (its root was deleted, or it is in another channel).
+var ErrThreadNotFound = errors.New("slack: thread_not_found")
+
+// PostMessageInThread posts text as a reply in the thread whose root has ts
+// threadTS ("" = in the channel itself). A thread that does not exist is
+// ErrThreadNotFound.
+func (b *Bot) PostMessageInThread(ctx context.Context, channelID, threadTS, text string) error {
 	params := map[string]string{
 		"channel": channelID,
 		"text":    text,
+	}
+	if threadTS != "" {
+		params["thread_ts"] = threadTS
 	}
 	data, err := b.apiCall(ctx, "chat.postMessage", params)
 	if err != nil {
@@ -126,9 +151,76 @@ func (b *Bot) PostMessage(ctx context.Context, channelID, text string) error {
 		return fmt.Errorf("slack chat.postMessage: decode: %w", err)
 	}
 	if !r.OK {
+		if r.Error == "thread_not_found" {
+			return fmt.Errorf("slack chat.postMessage: %w", ErrThreadNotFound)
+		}
 		return fmt.Errorf("slack chat.postMessage: %s", r.Error)
 	}
 	return nil
+}
+
+// GetThreadReplies returns the messages of the thread whose root has ts
+// threadTS (conversations.replies), oldest first, the root FIRST. It keeps the
+// most recent `limit` (default 50, max 200) and says how many earlier ones it
+// left out (omitted), so a reader knows when the beginning is missing — the
+// root is always kept, as it is what the thread is about. A thread that does
+// not exist, or lives in another channel, is ErrThreadNotFound.
+func (b *Bot) GetThreadReplies(ctx context.Context, channelID, threadTS string, limit int) (msgs []SlackMessage, omitted int, err error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	var all []SlackMessage
+	cursor := ""
+	for page := 0; page < 20; page++ { // a thread is read whole: it is what the model asked for
+		params := map[string]string{"channel": channelID, "ts": threadTS, "limit": "200"}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		raw, err := b.apiCall(ctx, "conversations.replies", params)
+		if err != nil {
+			return nil, 0, fmt.Errorf("slack conversations.replies: %w", err)
+		}
+		var resp struct {
+			OK       bool           `json:"ok"`
+			Error    string         `json:"error,omitempty"`
+			Messages []SlackMessage `json:"messages"`
+			Meta     struct {
+				NextCursor string `json:"next_cursor"`
+			} `json:"response_metadata"`
+		}
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			return nil, 0, fmt.Errorf("slack conversations.replies: decode: %w", err)
+		}
+		if !resp.OK {
+			if resp.Error == "thread_not_found" {
+				return nil, 0, fmt.Errorf("slack conversations.replies: %w (no thread %s in %s)", ErrThreadNotFound, threadTS, channelID)
+			}
+			return nil, 0, fmt.Errorf("slack conversations.replies: %s", resp.Error)
+		}
+		for _, m := range resp.Messages {
+			if !noiseSubtypes[m.Subtype] {
+				all = append(all, m)
+			}
+		}
+		if cursor = resp.Meta.NextCursor; cursor == "" {
+			break
+		}
+	}
+	// A ts that is a reply, not a root, makes Slack answer with that one message
+	// (or, for an id that is not a message at all, thread_not_found above).
+	if len(all) > limit {
+		omitted = len(all) - limit
+		// The root plus the most recent limit-1.
+		kept := append([]SlackMessage{all[0]}, all[len(all)-(limit-1):]...)
+		if limit == 1 {
+			kept = all[:1]
+		}
+		all = kept
+	}
+	return all, omitted, nil
 }
 
 // DialRTM dials the RTM WebSocket with the required xoxc/xoxd auth headers.
@@ -286,6 +378,10 @@ type SlackMessage struct {
 	Subtype string      `json:"subtype,omitempty"` // "" = normal message; else e.g. "channel_join"
 	BotID   string      `json:"bot_id,omitempty"`
 	Files   []SlackFile `json:"files,omitempty"`
+	// ThreadTS is the ts of the thread's root, on every message of a thread
+	// (the root included); ReplyCount, on a root, says it has replies to read.
+	ThreadTS   string `json:"thread_ts,omitempty"`
+	ReplyCount int    `json:"reply_count,omitempty"`
 }
 
 // GetChannelHistory returns the most recent messages in a channel, oldest
@@ -384,6 +480,12 @@ type completeUploadResponse struct {
 // initialComment is the text that accompanies the file in the channel
 // (stripped of the <slack:uploadFile> tags by the caller).
 func (b *Bot) UploadFile(ctx context.Context, channelID, filePath, initialComment string) error {
+	return b.UploadFileInThread(ctx, channelID, "", filePath, initialComment)
+}
+
+// UploadFileInThread is UploadFile into a thread (threadTS = its root's ts;
+// "" = the channel itself).
+func (b *Bot) UploadFileInThread(ctx context.Context, channelID, threadTS, filePath, initialComment string) error {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("slack upload: read file: %w", err)
@@ -429,6 +531,9 @@ func (b *Bot) UploadFile(ctx context.Context, channelID, filePath, initialCommen
 		"channel_id":      channelID,
 		"initial_comment": initialComment,
 	}
+	if threadTS != "" {
+		completeParams["thread_ts"] = threadTS
+	}
 	raw, err = b.apiCall(ctx, "files.completeUploadExternal", completeParams)
 	if err != nil {
 		return fmt.Errorf("slack upload: completeUploadExternal: %w", err)
@@ -438,6 +543,9 @@ func (b *Bot) UploadFile(ctx context.Context, channelID, filePath, initialCommen
 		return fmt.Errorf("slack upload: decode complete response: %w", err)
 	}
 	if !completeResp.OK {
+		if completeResp.Error == "thread_not_found" {
+			return fmt.Errorf("slack upload: completeUploadExternal: %w", ErrThreadNotFound)
+		}
 		return fmt.Errorf("slack upload: completeUploadExternal: %s", completeResp.Error)
 	}
 	return nil

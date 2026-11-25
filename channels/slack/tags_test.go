@@ -6,7 +6,7 @@ import (
 )
 
 func TestBuildPrompt(t *testing.T) {
-	got := buildPrompt("U1", "D9", "  read this  ", []attachment{
+	got := buildPrompt("U1", "D9", "", "  read this  ", []attachment{
 		{Name: "a b.txt", Path: "/tmp/a b.txt"},
 		{Name: `q"x.docx`, Path: `/tmp/q"x.docx`},
 		{Name: "big.mov", Skipped: "too large (over 50 MB)"},
@@ -20,7 +20,7 @@ func TestBuildPrompt(t *testing.T) {
 	if got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
-	if got := buildPrompt("U1", "C1", "", []attachment{{Name: "f", Path: "/tmp/f"}}); got != "<slack user=\"U1\" channel=\"C1\">\n<slack-attach name=\"f\" path=\"/tmp/f\"/>\n</slack>" {
+	if got := buildPrompt("U1", "C1", "", "", []attachment{{Name: "f", Path: "/tmp/f"}}); got != "<slack user=\"U1\" channel=\"C1\">\n<slack-attach name=\"f\" path=\"/tmp/f\"/>\n</slack>" {
 		t.Errorf("file only: %q", got)
 	}
 }

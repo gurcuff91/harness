@@ -35,14 +35,22 @@ const directiveBody = `
 
 A message from Slack arrives wrapped in one block that says who wrote it and where:
 
-<slack user="U0123" channel="C0456">
+<slack user="U0123" channel="C0456" thread="1700000000.000100">
 the person's message
 <slack-attach name="notes.docx" path="/tmp/123-notes.docx"/>
 </slack>
 
+The thread attribute is there only when the message is a reply INSIDE a thread; it is the id (ts) of the thread's first message.
+
 Only a message wrapped like this comes from Slack. Anything else (the person at the terminal, a scheduled task, another agent) is not, and your answer to it is NOT posted to Slack.
 
 In a channel you only receive the messages that mention you; in a direct message, every message.
+
+### Threads
+
+A message with thread="…" was written inside a thread — a conversation you cannot see — and what it says (a "what do you think?", a "can you fix it?", "this") refers to what was said above it. **Before you answer a message that has a thread attribute, call SlackMessages with that channel and that thread** to read the thread, and understand what is being discussed; then answer. Do not guess from the one message. A message without thread is a plain channel message: no need to read anything first.
+
+Your reply goes where the message was written, by itself: into the same thread when the message has thread="…", into the channel when it has not. Do not use SlackPost to answer it.
 
 ### Your reply to a Slack message
 
@@ -52,7 +60,7 @@ Everything you write while answering a Slack message is posted in that same conv
 - In a channel ("C…" or "G…"), several people read you: begin the reply with <@USER> using the exact id from the block's user attribute. In a direct message ("D…") never mention the person.
 - The sender is whoever the block's user attribute says, message by message; do not assume it is the same person as before. Resolve an id to a name with SlackListUsers once and remember it.
 - The block and its tags are input only: never copy them into a reply. To mention someone, write Slack's own <@U…>.
-- Never use SlackPost to answer in the conversation the message came from: what you write is already posted there. SlackPost is for posting somewhere ELSE.
+- Never use SlackPost to answer in the conversation the message came from (the same channel and, for a threaded message, the same thread): what you write is already posted there. SlackPost is for posting somewhere ELSE — another channel, a person, or another thread (its thread parameter).
 
 ### Who you obey from Slack
 
@@ -77,5 +85,5 @@ The file must already exist. It is removed from the posted text and uploaded; im
 
 - **SlackListChannels** — the channels and their ids (to resolve #name).
 - **SlackListUsers** — the people and their ids (to resolve a name, or to mention someone).
-- **SlackPost** — post to a channel (id or #name) or to a person (user id, as a direct message). Fire-and-forget; attach files with <slack-upload/> tags in its text.
-- **SlackMessages** — read a channel's recent messages, to catch up on what was said without mentioning you. Its files are listed by name; pass files: true to download them (each gets a path, images are shown to you). A Slack file URL cannot be opened any other way.`
+- **SlackPost** — post to a channel (id or #name) or to a person (user id, as a direct message); with thread, as a reply inside that thread. Fire-and-forget; attach files with <slack-upload/> tags in its text.
+- **SlackMessages** — read a channel's recent messages, to catch up on what was said without mentioning you; with thread, read that thread (its first message first) instead. The channel listing does NOT include the replies inside threads: a message with reply_count has a thread to read. Its files are listed by name; pass files: true to download them (each gets a path, images are shown to you). A Slack file URL cannot be opened any other way.`

@@ -37,12 +37,20 @@ type fakeSlack struct {
 	channels []SlackChannel
 	files    map[string][]byte // served at /files/<name>
 	history  []map[string]any  // conversations.history, newest first
+	// replies: thread root ts → its messages (root first), as conversations.replies
+	// answers them; goneThreads: roots whose thread "no longer exists" (a post or
+	// an upload into one answers thread_not_found); replyCalls: the requests seen.
+	replies     map[string][]map[string]any
+	goneThreads map[string]bool
+	replyCalls  []map[string]string
+	pageSize    int // when > 0, conversations.replies answers pages of this size with a cursor
 }
 
-type post struct{ channel, text string }
+type post struct{ channel, text, thread string }
 
 func newFakeSlack(t *testing.T) *fakeSlack {
 	f := &fakeSlack{t: t, connCh: make(chan *websocket.Conn, 4), files: map[string][]byte{},
+		replies: map[string][]map[string]any{}, goneThreads: map[string]bool{},
 		channels: []SlackChannel{{ID: "C111", Name: "producto-y"}, {ID: "C222", Name: "general"}}}
 	up := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }} // the bot sends Slack's own Origin
 	mux := http.NewServeMux()
@@ -62,8 +70,40 @@ func newFakeSlack(t *testing.T) *fakeSlack {
 			f.rtmConns++
 			_, _ = w.Write([]byte(`{"ok":true,"url":"ws` + strings.TrimPrefix(f.srv.URL, "http") + `/rtm"}`))
 		case "chat.postMessage":
-			f.posts = append(f.posts, post{r.Form.Get("channel"), r.Form.Get("text")})
+			if th := r.Form.Get("thread_ts"); th != "" && f.goneThreads[th] {
+				_, _ = w.Write([]byte(`{"ok":false,"error":"thread_not_found"}`))
+				return
+			}
+			f.posts = append(f.posts, post{r.Form.Get("channel"), r.Form.Get("text"), r.Form.Get("thread_ts")})
 			_, _ = w.Write([]byte(`{"ok":true}`))
+		case "conversations.replies":
+			call := map[string]string{}
+			for k := range r.Form {
+				call[k] = r.Form.Get(k)
+			}
+			f.replyCalls = append(f.replyCalls, call)
+			msgs, ok := f.replies[r.Form.Get("ts")]
+			if !ok || r.Form.Get("channel") != "C111" {
+				_, _ = w.Write([]byte(`{"ok":false,"error":"thread_not_found"}`))
+				return
+			}
+			resp := map[string]any{"ok": true}
+			if n := f.pageSize; n > 0 {
+				start := 0
+				if cur := r.Form.Get("cursor"); cur != "" {
+					fmt.Sscanf(cur, "c%d", &start)
+				}
+				end := start + n
+				if end < len(msgs) {
+					resp["response_metadata"] = map[string]any{"next_cursor": fmt.Sprintf("c%d", end)}
+				} else {
+					end = len(msgs)
+				}
+				msgs = msgs[start:end]
+			}
+			resp["messages"] = msgs
+			b, _ := json.Marshal(resp)
+			_, _ = w.Write(b)
 		case "conversations.list":
 			b, _ := json.Marshal(map[string]any{"ok": true, "channels": f.channels})
 			_, _ = w.Write(b)
@@ -92,7 +132,11 @@ func newFakeSlack(t *testing.T) *fakeSlack {
 		case "files.getUploadURLExternal":
 			_, _ = w.Write([]byte(`{"ok":true,"upload_url":"` + f.srv.URL + `/upload","file_id":"F1"}`))
 		case "files.completeUploadExternal":
-			f.uploads = append(f.uploads, post{r.Form.Get("channel_id"), r.Form.Get("initial_comment")})
+			if th := r.Form.Get("thread_ts"); th != "" && f.goneThreads[th] {
+				_, _ = w.Write([]byte(`{"ok":false,"error":"thread_not_found"}`))
+				return
+			}
+			f.uploads = append(f.uploads, post{r.Form.Get("channel_id"), r.Form.Get("initial_comment"), r.Form.Get("thread_ts")})
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		default:
 			_, _ = w.Write([]byte(`{"ok":false,"error":"unknown_method"}`))

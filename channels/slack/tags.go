@@ -10,11 +10,12 @@ import (
 //
 // Inbound — every prompt is wrapped in ONE block naming who wrote and where
 // (channel is always present, DMs included, since a session may listen to
-// several conversations), with the files the person attached inside it (any
+// several conversations; thread is present only for a reply inside a thread),
+// with the files the person attached inside it (any
 // kind; an image ALSO travels as a prompt image, and is marked image="true").
 // A file that was not brought in says so, so the model can tell the person:
 //
-//	<slack user="U0123" channel="C0456">
+//	<slack user="U0123" channel="C0456" thread="1700000000.000100">
 //	the message
 //	<slack-attach name="report.docx" path="/tmp/123-report.docx"/>
 //	<slack-attach name="shot.png" path="/tmp/124-shot.png" image="true"/>
@@ -28,13 +29,20 @@ import (
 //
 // Images travel as prompt images, without a tag.
 
-// buildPrompt wraps one incoming message in its <slack> block.
-func buildPrompt(userID, channelID, text string, atts []attachment) string {
+// buildPrompt wraps one incoming message in its <slack> block. thread is the
+// ts of the thread's root when the message is a reply inside one ("" for a
+// channel message): the block then carries thread="…", which is what
+// SlackMessages takes to read what the thread is about.
+func buildPrompt(userID, channelID, thread, text string, atts []attachment) string {
 	var b strings.Builder
 	b.WriteString(`<slack user="`)
 	b.WriteString(attr(userID))
 	b.WriteString(`" channel="`)
 	b.WriteString(attr(channelID))
+	if thread != "" {
+		b.WriteString(`" thread="`)
+		b.WriteString(attr(thread))
+	}
 	b.WriteString(`">`)
 	b.WriteByte('\n')
 	if t := strings.TrimSpace(text); t != "" {

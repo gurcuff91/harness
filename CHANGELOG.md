@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.122.0] - 2026-11-25
+
+### Added — Slack threads
+Mentioning the agent inside a Slack thread used to reach the session as a bare message: it could not tell what the thread was about, and its answer was posted in the channel instead of the thread. Now:
+- **A message inside a thread carries it.** The block the session receives has `thread="<root ts>"` (only for a reply inside a thread; a thread's first message is a channel message), and a thread reply that was also sent to the channel is delivered too.
+- **The model reads the thread before answering.** `SlackMessages` takes an optional `thread`: the thread's messages in order, the first one first (the most recent ones, with a note of how many earlier ones were left out, when it is long). The channel listing never included thread replies; it now shows `reply_count` on a message that has some. The `## Slack` section tells the model to read the thread first whenever a message has `thread=`.
+- **The answer goes where the question was asked:** into the same thread (text, files, errors, notices), or into the channel for a channel message. If the thread no longer exists the answer goes to the channel, so it is never lost.
+- `SlackPost` takes an optional `thread`; its rule against posting into the conversation being answered now tells threads apart (another thread of the same channel is allowed).
+- A schedule created from a thread fires back into that thread.
+Only mentions are delivered inside a thread, as in a channel; the agent does not keep following a thread after replying.
+
+### Fixed
+- Several publishers typing in one Slack socket at the same time could write to it concurrently (found by the new thread tests).
+
 ## [0.121.0] - 2026-11-25
 
 ### Added — a secret for `harness serve`
