@@ -38,11 +38,11 @@ func (s *internalServer) Close() error {
 	return s.srv.Close()
 }
 
-// startTransportServer builds the server layer for a transport command —
-// agent → server → transport: a loopback server over a, named after transport
-// (e.g. "telegram", reported by GET /api/server), that the transport then
-// runs on (telegram.Run(ctx, srv), …). The CLI owns both: closing the
-// returned server also closes a (the transport itself never closes either).
-func startTransportServer(a *agent.Agent, transport string) (*server.Server, error) {
+// startFrontendServer builds the server layer for a frontend command —
+// agent → server → frontend: a loopback server over a, named after the frontend
+// (e.g. "acp", reported by GET /api/server), that the frontend then runs on
+// (acp.Run(ctx, srv)). The CLI owns both: closing the returned server also
+// closes a (the frontend itself never closes either).
+func startFrontendServer(a *agent.Agent, transport string) (*server.Server, error) {
 	return server.Start(a, "127.0.0.1:0", server.ServerOptions{Logger: logx.NewNilLogger(), Transport: transport})
 }

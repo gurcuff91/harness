@@ -44,7 +44,7 @@ Providers can also be connected from inside the TUI command palette.
 - **Pure-Go TUI** — from-scratch terminal UI, zero external TUI libraries
 - **Auto-detection** — Ollama local auto-connects, models fetched from provider APIs
 - **Zero config** — works with just `harness`; configure via `harness connect`
-- **Embeddable SDK** — the agent, server, and every transport are importable Go packages
+- **Embeddable SDK** — the agent, server, and every frontend are importable Go packages
 - **Single binary** — `go build` produces one executable, no runtime dependencies
 
 ## Architecture
@@ -60,7 +60,7 @@ the essentials, and the binary lives in `cmd/harness/`.
 harness/
 ├── harness.go                # 🔓 SDK facade: NewAgent + AgentWith* (construction),
 │                             #    RunServer/RunAcp + their
-│                             #    XxxWith* (transport runners), Client/NewClient
+│                             #    XxxWith* (frontend runners), Client/NewClient
 ├── cmd/harness/main.go       # Executable entry point (package main) — calls cli.Main
 │
 ├── agent/                    # 🔓 Core ReAct loop — the SDK
@@ -223,10 +223,10 @@ config). `NewAgent()` with no options returns a sensible default agent.
 registered like any other built-in tool — no dedicated option; pass it to
 `AgentWithDisallowedTools("SessionInfo")` to turn it off.
 
-### Running a transport on an embedded agent
+### Running a frontend on an embedded agent
 
 An already-built agent can be handed to a **runner** — a blocking call that
-serves it over a transport until the context is cancelled:
+serves it as a frontend until the context is cancelled:
 
 ```go
 ctx, cancel := context.WithCancel(context.Background())
@@ -239,7 +239,7 @@ harness.RunServer(ctx, a, harness.ServerWithAddr(":8080"))
 ```
 
 Each `RunX` is a thin alias over its package's own `Run`. A runner's options
-configure only the **transport** (listen address and the like) — the agent itself is already fully configured by the
+configure only the **frontend** (listen address and the like) — the agent itself is already fully configured by the
 time it's passed in.
 
 ## Providers
@@ -539,7 +539,7 @@ configured ones, to use as-is or merge with your own). An invalid or
 unreachable server is skipped and reported in `Agent.MCPStatuses()`, never
 fatal. Two separate timeouts per server (ms, in `settings.json` or as
 `harness mcp add --timeout/--connection-timeout`): `timeout` bounds ONE tool
-call (default 300000 = 5 min, both transports) — raise it for a tool meant to run
+call (default 300000 = 5 min, both connection types) — raise it for a tool meant to run
 longer — and `connection_timeout` bounds connecting (initialize + tools/list,
 default 30000 = 30 s).
 

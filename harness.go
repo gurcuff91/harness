@@ -19,11 +19,11 @@
 //	sess.Prompt(ctx, "Hello!")
 //
 // harness is layered: agent (core) → server (the HTTP/SSE API: sessions,
-// events, commands) → transports (pure translation layers). Build ONE agent,
+// events, commands) → frontends (pure translation layers). Build ONE agent,
 // wrap it in ONE server with [StartServer], and hand that same server to any
-// number of transports — [RunAcp] — and your own
+// number of frontends — [RunAcp] — and your own
 // clients. Every session lives in exactly one place, and every frontend can
-// watch and drive the same session at once. Transports never close the
+// watch and drive the same session at once. Frontends never close the
 // server or the agent; you do:
 //
 //	srv, err := harness.StartServer(a, "127.0.0.1:0", server.ServerOptions{})
@@ -43,7 +43,7 @@
 //   - agent/resources  — ResourceLoader internals (the default filesystem one)
 //   - agent/tools      — Tool, the registry, and built-in tools
 //   - agent/memory     — the persistent memory store internals
-//   - server           — the HTTP/SSE backend every transport (including this
+//   - server           — the HTTP/SSE backend every frontend (including this
 //     facade's RunServer) runs on top of
 //   - acp              — the runner RunAcp wraps, and its Option type
 //   - channels/slack, channels/telegram, channels/colleague — the input
@@ -83,7 +83,7 @@ type Logger = logx.Logger
 var NewNilLogger = logx.NewNilLogger
 
 // Client is a typed HTTP/SSE client for a running harness server (`harness
-// serve`, or the in-process server any transport starts). See [client.Client].
+// serve`, or the in-process server any frontend starts). See [client.Client].
 type Client = client.Client
 
 // NewClient connects to a harness server at addr (e.g. "127.0.0.1:8080") and
@@ -133,7 +133,7 @@ func AgentWithSystemPrompt(prompt string) AgentOption {
 
 // AgentWithDirectives appends extra instruction blocks to the system prompt.
 // Each is added verbatim (below the base prompt, skills, memory, etc.), so a
-// caller — typically a transport — can teach the agent capabilities specific
+// caller — typically a frontend — can teach the agent capabilities specific
 // to its environment (e.g. how to send files over Telegram). Repeated calls
 // accumulate.
 func AgentWithDirectives(directives ...string) AgentOption {
@@ -345,9 +345,9 @@ var SetCredentialsStore = agent.SetCredentialsStore
 // caller a sub-package import for the common case. The agent is always
 // already fully configured (thinking level, scheduler, tools, memory, …) by
 // the time it's passed in — a runner's own Option type only ever configures
-// the TRANSPORT itself (listen address, bot credentials, session
+// the FRONTEND itself (listen address, stdin/stdout, session
 // overrides), never the agent (see each package's Options doc comment).
-// All four block until ctx is cancelled (or the transport's own natural end,
+// All four block until ctx is cancelled (or the frontend's own natural end,
 // e.g. ACP's stdin closing) and return nil for that expected shutdown path.
 
 // RunServer starts the HTTP/SSE server on top of an already-built agent and
@@ -356,7 +356,7 @@ var SetCredentialsStore = agent.SetCredentialsStore
 var RunServer = server.Run
 
 // StartServer binds and serves an agent in the background, returning the
-// running server — the one to share with every transport. See [server.Start].
+// running server — the one to share with every frontend. See [server.Start].
 var StartServer = server.Start
 
 // ServerOption configures a [RunServer] call. See [server.Option].
@@ -373,7 +373,7 @@ var ServerWithLogger = server.WithLogger
 // RunAcp runs the Agent Client Protocol bridge (Zed and other ACP clients) on
 // a running (possibly shared) server, over stdin/stdout, and blocks until ctx
 // is cancelled or stdin closes. See [acp.Run]. Deliberately has no
-// AcpWithLogger: this transport never logs anything itself.
+// AcpWithLogger: it never logs anything itself.
 var RunAcp = acp.Run
 
 // AcpOption configures a [RunAcp] call. See [acp.Option].

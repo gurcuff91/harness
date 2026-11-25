@@ -12,7 +12,7 @@ func (c *acpCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	srv, err := startTransportServer(a, "acp")
+	srv, err := startFrontendServer(a, "acp")
 	if err != nil {
 		a.Close()
 		return err
