@@ -3,8 +3,8 @@
 package cli
 
 import (
+	"github.com/gurcuff91/harness/acp"
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/transports/acp"
 )
 
 func (c *acpCmd) Run() error {

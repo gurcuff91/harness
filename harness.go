@@ -45,7 +45,7 @@
 //   - agent/memory     — the persistent memory store internals
 //   - server           — the HTTP/SSE backend every transport (including this
 //     facade's RunServer) runs on top of
-//   - transports/acp   — the runner RunAcp wraps, and its Option type
+//   - acp              — the runner RunAcp wraps, and its Option type
 //   - channels/slack, channels/telegram, channels/colleague — the input
 //     channels (see [AgentWithChannels]; a session listens to one with
 //     agent.WithSessionChannels; registering the colleague channel makes
@@ -58,6 +58,7 @@
 package harness
 
 import (
+	"github.com/gurcuff91/harness/acp"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/agent/resources"
@@ -66,7 +67,6 @@ import (
 	"github.com/gurcuff91/harness/client"
 	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/server"
-	"github.com/gurcuff91/harness/transports/acp"
 	"github.com/gurcuff91/harness/types"
 )
 

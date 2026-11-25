@@ -45,10 +45,10 @@ func waitForServer(t *testing.T, url string, timeout time.Duration) {
 // TestRunConfigDefaultsToLoopbackEphemeralAddr verifies Run's documented
 // default — "127.0.0.1:0" (loopback-only, OS-assigned port) — matches what
 // every transport's own in-process server already uses directly (see
-// transports/telegram, transports/acp, all calling
+// acp and the channels, all calling
 // net.Listen("tcp", "127.0.0.1:0")). Exercises the exact default-application
 // logic Run itself runs (looping opts over a zero-value runConfig), the same
-// pattern transports/acp's TestRunConfigDefaultsToOSStdinStdout uses for its
+// pattern acp's TestRunConfigDefaultsToOSStdinStdout uses for its
 // own Option defaults.
 func TestRunConfigDefaultsToLoopbackEphemeralAddr(t *testing.T) {
 	cfg := runConfig{addr: "127.0.0.1:0"}
@@ -111,9 +111,9 @@ func TestRunServesRequestsAndShutsDownCleanly(t *testing.T) {
 }
 
 // captureLogTee — a small recording Logger used to verify Run's WithLogger
-// actually reaches request handling, without depending on internal/logx
+// actually reaches request handling, without depending on logx.NewHarnessLogger
 // (server must not import it — only internal/cli constructs
-// internal/logx.NewHarnessLogger() and passes it in via WithLogger).
+// logx.NewHarnessLogger() and passes it in via WithLogger).
 type recordingLogger struct {
 	mu    sync.Mutex
 	lines []string

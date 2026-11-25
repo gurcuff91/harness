@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.119.0] - 2026-11-24
+
+### Changed (breaking, SDK) — `transports/acp` is now `acp`; one `logx`
+- The ACP bridge moved from `github.com/gurcuff91/harness/transports/acp` to `github.com/gurcuff91/harness/acp`, and the `transports/` directory is gone (Telegram and Slack became input channels; ACP was its last package). Update the import path; `harness.RunAcp` and `harness.AcpWith*` are unchanged.
+- `logx.NewHarnessLogger()` is public: the line format harness's CLI prints (`LEVEL [component] event key=value`, through the standard `log` package) is now available to SDK users, next to the `Logger` contract and `NewNilLogger`. `internal/logx` no longer exists.
+
 ## [0.118.0] - 2026-11-24
 
 ### Added — export and import sessions

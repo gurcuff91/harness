@@ -5,7 +5,7 @@ package cli
 import (
 	"github.com/gurcuff91/harness/agent"
 	slackch "github.com/gurcuff91/harness/channels/slack"
-	"github.com/gurcuff91/harness/internal/logx"
+	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/server"
 )
 

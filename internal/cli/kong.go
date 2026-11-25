@@ -140,7 +140,7 @@ type telegramTokenFlag struct {
 // sub-process and speaks JSON-RPC to it over stdin/stdout — there is no
 // terminal for flags to be typed into, and every per-session setting (model,
 // thinking) is negotiated over the protocol itself instead (see
-// transports/acp's session config options). The two opt-in extras (colleagues, the scheduler) are
+// acp's session config options). The two opt-in extras (colleagues, the scheduler) are
 // the exception to "negotiated over the protocol": they decide which tools the AGENT has, which is
 // fixed before any session exists, so they come from HARNESS_WITH_COLLEAGUES / HARNESS_WITH_SCHEDULER in
 // the environment the editor starts the process with (see extras.go).

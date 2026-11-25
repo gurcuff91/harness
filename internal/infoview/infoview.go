@@ -1,5 +1,5 @@
 // Package infoview holds the pieces of the /info panel shared by the
-// frontends that show one — the TUI (internal/tui) and ACP (transports/acp):
+// frontends that show one — the TUI (internal/tui) and ACP (acp):
 // the quota layout (window labels, usage bar, reset times) and the grouping of
 // a session's channels. Pure formatting, no colors: each frontend styles the
 // result its own way (the TUI colors the bar, ACP marks a high window with a

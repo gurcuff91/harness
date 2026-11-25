@@ -6,9 +6,9 @@
 //
 // This package is a pure protocol bridge: it never touches agent/,
 // agent/tools/, or client/ internals directly for business logic — it talks
-// to the SAME in-process HTTP/SSE server every other transport uses, via the
-// same client.Client, exactly like transports/telegram. Only the
-// wire format on the outside (JSON-RPC/stdio instead of a chat API) differs.
+// to the SAME in-process HTTP/SSE server every other frontend uses (the TUI,
+// a client of serve), via the same client.Client. Only the wire format on the
+// outside (JSON-RPC over stdio) differs.
 //
 // stdout discipline: once running as an ACP agent, stdout carries ONLY
 // JSON-RPC messages — never a stray log line, never pretty-printed JSON

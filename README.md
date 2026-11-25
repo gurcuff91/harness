@@ -50,7 +50,7 @@ Providers can also be connected from inside the TUI command palette.
 ## Architecture
 
 The **agent is the SDK**. Public packages form the embeddable surface — this
-includes the core agent, the HTTP/SSE `server`, and the `transports/*`, so an
+includes the core agent, the HTTP/SSE `server`, `acp` and the `channels/*`, so an
 SDK consumer can programmatically run any frontend on top of an embedded agent.
 Everything under `internal/` is implementation detail the Go compiler forbids
 third parties from importing. A thin `harness.go` facade at the root re-exports
@@ -79,13 +79,12 @@ harness/
 │   └── client.go / types.go / event.go / error.go / stream.go
 ├── server/                   # 🔓 HTTP/SSE backend — the API all clients talk to
 │   └── server.go / sse.go / proxy.go / run.go
-├── transports/               # 🔓 Interactive session frontends (each runs on server)
-│   └── acp/                  # Agent Client Protocol agent (Zed and other ACP clients)
+├── acp/                      # 🔓 Agent Client Protocol agent (Zed and other ACP clients)
 ├── channels/                 # 🔓 Input channels (agent.Channel): a session listens to a conversation
 │   ├── slack/                # Slack conversations + the Slack login
 │   ├── telegram/             # A Telegram bot (trusted @usernames) + the bot token
 │   └── colleague/            # The other agents of this machine (--with-colleagues)
-├── logx/                     # 🔓 Logger contract (interface) + NewNilLogger
+├── logx/                     # 🔓 Logger contract + NewNilLogger (silent) + NewHarnessLogger (the CLI's line format)
 ├── types/                    # 🔓 Shared types (Event, Message, ModelMeta)
 │
 └── internal/                 # 🔒 Implementation detail (not importable by third parties)
@@ -97,7 +96,6 @@ harness/
     │                         #   driven entirely by server/oauth.go's POST /api/oauth/{provider}
     ├── browseropen/          # Opens a URL in the user's default browser (CLI/TUI only)
     ├── config/               # Typed settings + credentials managers
-    ├── logx/                 # NewHarnessLogger() — the concrete line-format logger
     ├── version/              # Build version (ldflags target)
     ├── tui/                  # Pure-Go terminal UI (stays internal — binary frontend)
     └── cli/                  # CLI app: Kong grammar + Run() methods, agent builders

@@ -198,7 +198,7 @@ func TestBroadcastSilentWithNilLogger(t *testing.T) {
 }
 
 // TestBroadcastLogsWithRealLogger verifies the OTHER side: standalone
-// `harness serve`/Telegram inject a real Logger (internal/logx.HarnessLogger)
+// `harness serve`/Telegram inject a real Logger (logx.NewHarnessLogger)
 // and DO want a dropped control event visible (it's a real, actionable
 // signal there — no raw-mode terminal to corrupt).
 func TestBroadcastLogsWithRealLogger(t *testing.T) {
@@ -218,9 +218,8 @@ func TestBroadcastLogsWithRealLogger(t *testing.T) {
 }
 
 // fakeLogger routes through the standard log package (like
-// internal/logx.HarnessLogger does) so captureLog can observe it, without
-// this package importing internal/logx (server must not depend on it —
-// only internal/cli constructs NewHarnessLogger() and passes it in).
+// logx.NewHarnessLogger does) so captureLog can observe it; the server itself
+// never builds a logger — its caller passes one in (WithLogger).
 type fakeLogger struct{}
 
 func (fakeLogger) Info(component, event string, kv ...any)  { log.Print(component, " ", event) }

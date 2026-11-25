@@ -10,7 +10,7 @@ import (
 	colleaguech "github.com/gurcuff91/harness/channels/colleague"
 	slackch "github.com/gurcuff91/harness/channels/slack"
 	telegramch "github.com/gurcuff91/harness/channels/telegram"
-	"github.com/gurcuff91/harness/internal/logx"
+	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/types"
 )
 

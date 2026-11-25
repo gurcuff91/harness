@@ -18,8 +18,8 @@ type runConfig struct {
 
 // WithAddr sets the listen address (e.g. "127.0.0.1:8080" or ":8080" for all
 // interfaces). Default: "127.0.0.1:0" — loopback only, OS-assigned ephemeral
-// port, exactly like the in-process server a transport starts for itself
-// (see transports/acp).
+// port, exactly like the in-process server a frontend starts for itself
+// (see acp).
 func WithAddr(addr string) Option {
 	return func(c *runConfig) { c.addr = addr }
 }
@@ -27,7 +27,7 @@ func WithAddr(addr string) Option {
 // WithLogger sets the Logger that receives request/lifecycle log lines.
 // Default: logx.NewNilLogger() (silent) — an SDK consumer that never configures
 // one gets no output at all; harness's own CLI always passes
-// internal/logx.NewHarnessLogger() explicitly (see internal/cli/kong_run_serve.go).
+// logx.NewHarnessLogger() explicitly (see internal/cli/kong_run_serve.go).
 func WithLogger(l logx.Logger) Option {
 	return func(c *runConfig) { c.logger = l }
 }

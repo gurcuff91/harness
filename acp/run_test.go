@@ -2,6 +2,7 @@ package acp
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -54,5 +55,16 @@ func TestWithStdoutOverridesDefault(t *testing.T) {
 	WithStdout(w)(&cfg)
 	if cfg.stdout != w {
 		t.Errorf("WithStdout did not override the default")
+	}
+}
+
+// transports/ was removed in v0.119.0 (acp moved to the module root; chat
+// platforms are channels): the directory must not come back.
+func TestTheTransportsDirectoryIsGone(t *testing.T) {
+	if _, err := os.Stat(filepath.Join("..", "transports")); err == nil {
+		t.Error("transports/ exists again: acp lives at the root, chat platforms are channels/")
+	}
+	if _, err := os.Stat(filepath.Join("..", "internal", "logx")); err == nil {
+		t.Error("internal/logx exists again: the logger implementations live in the public logx")
 	}
 }
