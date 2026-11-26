@@ -1,11 +1,13 @@
 name: Documentation
 
 # Builds docs/page (Markdown → static site, standard library only) and publishes
-# it to GitHub Pages. Manual for now: the site goes live when its chapters are
-# written (the build fails on a broken link, so an unfinished chapter cannot be
-# published by accident). To publish on every change to the docs, add:
-#   push: { branches: [main], paths: ["docs/page/**"] }
+# it to GitHub Pages (https://gurcuff91.github.io/harness/). It runs when the
+# documentation changes, and by hand. The build fails on a broken link, so a
+# page that points nowhere cannot be published.
 on:
+  push:
+    branches: [main]
+    paths: ["docs/page/**", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:
