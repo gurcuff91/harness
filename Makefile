@@ -1,7 +1,7 @@
 # Makefile for Harness
 # A minimal AI agent harness built in pure Go.
 
-.PHONY: build install clean test vet lint run help release release-push
+.PHONY: build install clean test vet lint run help release release-push docs-build docs-serve docs-clean
 
 # Binary name and paths
 BINARY_NAME=harness
@@ -26,6 +26,9 @@ help:
 	@echo "  make fmt       - Format code"
 	@echo "  make deps      - Download dependencies"
 	@echo "  make release   - Tag HEAD as \$$(VERSION) and push it (vet+test first)"
+	@echo "  make docs-build - Build the documentation site (docs/page → docs/page/dist)"
+	@echo "  make docs-serve - Build it and serve it on http://localhost:8000"
+	@echo "  make docs-clean - Remove the built site"
 	@echo ""
 	@echo "Usage:"
 	@echo "  make build          # builds ./harness"
@@ -178,3 +181,24 @@ completion-zsh:
 	@echo "Generating zsh completion..."
 	./$(BINARY_NAME) --completion-zsh > harness-completion.zsh
 	@echo "✅ Source with: source harness-completion.zsh"
+
+# ── Documentation site (docs/page) ───────────────────────────────────────────
+# Markdown in docs/page/content → static HTML in docs/page/dist. The generator
+# (docs/page/build) uses only the standard library. DOCS_BASE is the URL prefix
+# the site is served under: empty for a local server, /harness on GitHub Pages
+# (the Pages workflow sets it).
+DOCS_DIR=docs/page
+DOCS_OUT=$(DOCS_DIR)/dist
+DOCS_BASE=
+DOCS_PORT=8000
+
+docs-build:
+	@echo "Building the documentation site..."
+	cd $(DOCS_DIR)/build && $(GO) run . -content ../content -static ../static -out ../dist -version $(VERSION) -base "$(DOCS_BASE)"
+
+docs-serve: docs-build
+	@echo "Serving http://localhost:$(DOCS_PORT) (Ctrl+C to stop)"
+	cd $(DOCS_OUT) && python3 -m http.server $(DOCS_PORT)
+
+docs-clean:
+	rm -rf $(DOCS_OUT)

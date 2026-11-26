@@ -19,3 +19,6 @@ vendor/
 
 # Harness data (local)
 .harness/
+
+# Documentation site (built by `make docs-build`)
+docs/page/dist/

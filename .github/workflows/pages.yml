@@ -1,0 +1,38 @@
+name: Documentation
+
+# Builds docs/page (Markdown → static site, standard library only) and publishes
+# it to GitHub Pages. Manual for now: the site goes live when its chapters are
+# written (the build fails on a broken link, so an unfinished chapter cannot be
+# published by accident). To publish on every change to the docs, add:
+#   push: { branches: [main], paths: ["docs/page/**"] }
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/configure-pages@v5
+      - name: Build the site
+        run: make docs-build DOCS_BASE=/harness
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/page/dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
