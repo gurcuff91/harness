@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
@@ -34,14 +35,14 @@ func resumedTUI(t *testing.T, layout string) *TUI {
 	t.Cleanup(gw.Close)
 	histSeq++
 	prov := fmt.Sprintf("tuihist-%d", histSeq) // the provider registry is process-global
-	if err := agent.NewOpenAIProvider(prov, gw.URL, agent.ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
+	if err := admin.RegisterOpenAI(prov, gw.URL, admin.ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
 		return []types.ModelMeta{{ID: "m", ContextWindow: 100000, MaxTokens: 4096}}, nil
 	})); err != nil {
 		t.Fatal(err)
 	}
 	// Leaving it registered leaked a live provider into every later test of the
 	// binary — one that asserts "no provider is available" then finds it.
-	t.Cleanup(func() { agent.UnregisterCustomProvider(prov) })
+	t.Cleanup(func() { admin.UnregisterProvider(prov) })
 	a := agent.New(agent.AgentOptions{Store: fs, ResourceLoader: resources.NilLoader{}})
 	t.Cleanup(func() { a.Close() })
 	srv, err := server.Start(a, "", server.ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})

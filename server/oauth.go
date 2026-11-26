@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/gurcuff91/harness/internal/oauthflow"
 )
 
 // oauthRequest is the single body shape POST /api/oauth/{provider} accepts
@@ -38,24 +37,17 @@ type oauthRequest struct {
 func (s *Server) handleOAuth(w http.ResponseWriter, r *http.Request) {
 	provider := chi.URLParam(r, "provider")
 
-	flow, err := oauthflow.For(provider)
-	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error(), nil)
-		return
-	}
-
 	var req oauthRequest
 	// An empty body is valid for Start — Decode's EOF error is ignored, not
 	// surfaced, so "no body at all" and "{}" behave identically.
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
 	if req.ExchangeCode == "" {
-		authURL, verifierCode, err := flow.Start()
+		authURL, verifierCode, err := s.admin.Providers.OAuthStart(provider)
 		if err != nil {
-			// Covers codex-oauth's port-1455-busy case (a login already in
-			// progress) — 409 Conflict, not 500: it's a legitimate,
-			// expected contention state, not a server malfunction.
-			writeError(w, http.StatusConflict, err.Error(), nil)
+			// 404 a provider with no OAuth flow; 409 a login already in
+			// progress (codex-oauth's callback port is busy).
+			writeAdminErr(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{
@@ -65,14 +57,9 @@ func (s *Server) handleOAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.VerifierCode == "" {
-		writeError(w, http.StatusBadRequest, "verifier_code is required for exchange", nil)
-		return
-	}
-
-	creds, err := flow.Exchange(req.ExchangeCode, req.VerifierCode)
+	creds, err := s.admin.Providers.OAuthExchange(provider, req.ExchangeCode, req.VerifierCode)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error(), nil)
+		writeAdminErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, creds)

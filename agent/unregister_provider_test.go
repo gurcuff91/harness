@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/gurcuff91/harness/admin"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -49,7 +50,7 @@ func newGateway(t *testing.T) *gateway {
 func hasProvider(name string) bool { return providers.Find(name) != nil }
 
 func modelListed(a *Agent, full string) bool {
-	for _, m := range a.Models() {
+	for _, m := range (&Agent{}).Models() {
 		if m.Model == full {
 			return true
 		}
@@ -65,24 +66,24 @@ func TestUnregisterThenRegisterAgainWithNewHeaders(t *testing.T) {
 	a := New(AgentOptions{Store: store.NewInMemoryStore()})
 	defer a.Close()
 
-	if err := NewOpenAIProvider("tenant-x", g.URL, ProviderWithHeaders(map[string]string{"X-Api-Key": "old"})); err != nil {
+	if err := admin.RegisterOpenAI("tenant-x", g.URL, admin.ProviderWithHeaders(map[string]string{"X-Api-Key": "old"})); err != nil {
 		t.Fatal(err)
 	}
 	if !modelListed(a, "tenant-x/m") {
 		t.Fatal("registered provider's model must be listed")
 	}
 
-	if err := UnregisterCustomProvider("tenant-x"); err != nil {
+	if err := admin.UnregisterProvider("tenant-x"); err != nil {
 		t.Fatalf("unregister: %v", err)
 	}
 	if hasProvider("tenant-x") || modelListed(a, "tenant-x/m") {
 		t.Fatal("an unregistered provider must leave the registry and the model list")
 	}
-	if _, _, err := providers.Resolve("tenant-x/m"); !errors.Is(err, ErrProviderNotFound) {
-		t.Fatalf("Resolve after unregister = %v, want ErrProviderNotFound", err)
+	if _, _, err := providers.Resolve("tenant-x/m"); !errors.Is(err, admin.ErrProviderNotFound) {
+		t.Fatalf("Resolve after unregister = %v, want admin.ErrProviderNotFound", err)
 	}
 
-	if err := NewOpenAIProvider("tenant-x", g.URL, ProviderWithHeaders(map[string]string{"X-Api-Key": "new"})); err != nil {
+	if err := admin.RegisterOpenAI("tenant-x", g.URL, admin.ProviderWithHeaders(map[string]string{"X-Api-Key": "new"})); err != nil {
 		t.Fatalf("register again: %v", err)
 	}
 	sess, err := a.NewSession(t.TempDir(), "tenant-x/m")
@@ -95,23 +96,23 @@ func TestUnregisterThenRegisterAgainWithNewHeaders(t *testing.T) {
 }
 
 // Criteria 3 + 5: built-in providers can't be unregistered; unknown names
-// report ErrProviderNotFound.
+// report admin.ErrProviderNotFound.
 func TestUnregisterRejectsBuiltinAndUnknown(t *testing.T) {
 	withCleanProviderRegistry(t)
 	for _, name := range []string{"anthropic", "openai", "minimax", "claude-oauth"} {
 		if !hasProvider(name) {
 			continue // not constructed in this environment
 		}
-		err := UnregisterCustomProvider(name)
-		if !errors.Is(err, ErrProviderNotRemovable) {
-			t.Errorf("%s: err = %v, want ErrProviderNotRemovable", name, err)
+		err := admin.UnregisterProvider(name)
+		if !errors.Is(err, admin.ErrProviderNotRemovable) {
+			t.Errorf("%s: err = %v, want admin.ErrProviderNotRemovable", name, err)
 		}
 		if !hasProvider(name) {
 			t.Errorf("%s: a built-in provider was removed", name)
 		}
 	}
-	if err := UnregisterCustomProvider("no-such-provider"); !errors.Is(err, ErrProviderNotFound) {
-		t.Errorf("unknown: err = %v, want ErrProviderNotFound", err)
+	if err := admin.UnregisterProvider("no-such-provider"); !errors.Is(err, admin.ErrProviderNotFound) {
+		t.Errorf("unknown: err = %v, want admin.ErrProviderNotFound", err)
 	}
 }
 
@@ -122,9 +123,9 @@ func TestUnregisterRejectsSettingsDeclaredProvider(t *testing.T) {
 	declared := providers.NewCustomOpenAI("from-settings", config.CustomProvider{Type: "openai", URL: "http://127.0.0.1:1"})
 	providers.AddForTest(declared)
 
-	err := UnregisterCustomProvider("from-settings")
-	if !errors.Is(err, ErrProviderNotRemovable) {
-		t.Fatalf("err = %v, want ErrProviderNotRemovable", err)
+	err := admin.UnregisterProvider("from-settings")
+	if !errors.Is(err, admin.ErrProviderNotRemovable) {
+		t.Fatalf("err = %v, want admin.ErrProviderNotRemovable", err)
 	}
 	if !hasProvider("from-settings") {
 		t.Fatal("a settings.json provider was removed")
@@ -140,7 +141,7 @@ func TestRunningSessionAfterUnregister(t *testing.T) {
 	g := newGateway(t)
 	a := New(AgentOptions{Store: store.NewInMemoryStore()})
 	defer a.Close()
-	NewOpenAIProvider("tenant-y", g.URL, ProviderWithHeaders(map[string]string{"X-Api-Key": "k1"}))
+	admin.RegisterOpenAI("tenant-y", g.URL, admin.ProviderWithHeaders(map[string]string{"X-Api-Key": "k1"}))
 	sess, err := a.NewSession(t.TempDir(), "tenant-y/m")
 	if err != nil {
 		t.Fatal(err)
@@ -149,13 +150,13 @@ func TestRunningSessionAfterUnregister(t *testing.T) {
 		t.Fatalf("first turn = %q", out)
 	}
 
-	UnregisterCustomProvider("tenant-y")
+	admin.UnregisterProvider("tenant-y")
 	var events []types.Event
 	var mu sync.Mutex
 	sess.Subscribe(func(e types.Event) { mu.Lock(); events = append(events, e); mu.Unlock() })
 	_, err = sess.PromptAndWait(context.Background(), "two")
-	if !errors.Is(err, ErrProviderNotFound) {
-		t.Fatalf("turn after unregister = %v, want ErrProviderNotFound", err)
+	if !errors.Is(err, admin.ErrProviderNotFound) {
+		t.Fatalf("turn after unregister = %v, want admin.ErrProviderNotFound", err)
 	}
 	mu.Lock()
 	sawErr := countType(events, types.EventError) > 0
@@ -164,7 +165,7 @@ func TestRunningSessionAfterUnregister(t *testing.T) {
 		t.Error("the failed turn must emit an error event")
 	}
 
-	NewOpenAIProvider("tenant-y", g.URL, ProviderWithHeaders(map[string]string{"X-Api-Key": "k2"}))
+	admin.RegisterOpenAI("tenant-y", g.URL, admin.ProviderWithHeaders(map[string]string{"X-Api-Key": "k2"}))
 	if out, err := sess.PromptAndWait(context.Background(), "three"); err != nil || out != "key=k2" {
 		t.Fatalf("turn after re-register = %q, %v; want the same session on the NEW key", out, err)
 	}
@@ -185,7 +186,7 @@ func TestUnregisterRacesWithReaders(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for !stop.Load() {
-				a.Models()
+				(&Agent{}).Models()
 				providers.Resolve("race-p/m")
 				providers.GetProviderStatuses()
 				for _, p := range providers.All() {
@@ -195,10 +196,10 @@ func TestUnregisterRacesWithReaders(t *testing.T) {
 		}()
 	}
 	for i := range 200 {
-		if err := NewOpenAIProvider("race-p", g.URL, ProviderWithHeaders(map[string]string{"X-Api-Key": fmt.Sprint(i)})); err != nil {
+		if err := admin.RegisterOpenAI("race-p", g.URL, admin.ProviderWithHeaders(map[string]string{"X-Api-Key": fmt.Sprint(i)})); err != nil {
 			t.Fatalf("register %d: %v", i, err)
 		}
-		if err := UnregisterCustomProvider("race-p"); err != nil {
+		if err := admin.UnregisterProvider("race-p"); err != nil {
 			t.Fatalf("unregister %d: %v", i, err)
 		}
 	}

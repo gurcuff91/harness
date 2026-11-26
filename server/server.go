@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -19,8 +18,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/internal/config"
 	"github.com/gurcuff91/harness/internal/providers"
@@ -31,12 +30,12 @@ import (
 )
 
 // sseClientBufferSize is the per-client SSE event channel capacity
-// (SessionProxy.broadcast's target, and handleEvents' consumer). A turn with
+// (the buffer of each agent.Watcher handleEvents opens). A turn with
 // thinking:high and a long response can emit thousands of small delta events
 // (one per streamed token/fragment); if the consumer (the render loop on the
 // other end of the connection) falls behind a burst, this is how much
 // slack it gets before a delta is dropped (control events like turn_end/stop
-// get a bounded blocking retry instead — see isControlEvent in proxy.go).
+// get a bounded blocking retry instead — see agent.Session.Watch).
 // 4096 is generous headroom for that burst (each event is at most a few
 // hundred bytes, so worst case this is a few MB — negligible) without being
 // unbounded. Matches tuiClientEventBufferSize on the TUI's consuming side
@@ -47,17 +46,18 @@ const sseClientBufferSize = 4096
 // Server is the HTTP/SSE server for the agent harness.
 type Server struct {
 	agent     *agent.Agent
-	logger    logx.Logger // never nil — defaults to logx.NewNilLogger()
-	frontend  string      // name of the calling frontend
-	keepAgent bool        // Close leaves the agent open (it belongs to the caller)
+	admin     *admin.Admin // the agent's admin layer: stored sessions, providers, settings, MCP, memory, schedules
+	logger    logx.Logger  // never nil — defaults to logx.NewNilLogger()
+	frontend  string       // name of the calling frontend
+	keepAgent bool         // Close leaves the agent open (it belongs to the caller)
 
 	secret        string // when set, every request but the open paths must carry it (see secretMiddleware)
 	proxyMaxBody  int64  // request-body cap of /api/providers/{name}/proxy/*; 0 = DefaultProxyMaxBodyBytes
 	importMaxBody int64  // request-body cap of POST /api/sessions/import; 0 = DefaultImportMaxBodyBytes
 
-	// openMu serializes session create/resume so a session can never get a
-	// second proxy (two concurrent resumes of the same id used to both miss
-	// s.sessions and each build one — the second stealing the event stream).
+	// openMu guards the server's OWN proxy map against two concurrent opens of
+	// the same id each building a proxy (the agent already yields one live
+	// Session per id; this keeps one proxy per Session).
 	openMu sync.Mutex
 
 	profMu   sync.RWMutex
@@ -116,8 +116,13 @@ func NewServer(a *agent.Agent, opts ServerOptions) *Server {
 	if logger == nil {
 		logger = logx.NewNilLogger()
 	}
+	var ad *admin.Admin
+	if a != nil {
+		ad = a.Admin()
+	}
 	return &Server{
 		agent:         a,
+		admin:         ad,
 		logger:        logger,
 		frontend:      frontend,
 		keepAgent:     opts.KeepAgentOpen,
@@ -392,266 +397,6 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// SettingsDTO is the API representation of harness settings. Its JSON tags are
-// the single source of truth for the settings contract and match the on-disk
-// field names (see config.settingsData) — one vocabulary end to end.
-type SettingsDTO struct {
-	ActiveModel   string `json:"active_model"`
-	ThinkingLevel string `json:"thinking_level"`
-}
-
-// handleSettings returns current settings with defaults.
-func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
-	sm := config.GetSettingsManager()
-	thinking := sm.ThinkingLevel()
-	if thinking == "" {
-		thinking = "off"
-	}
-	writeJSON(w, http.StatusOK, SettingsDTO{
-		ActiveModel:   sm.ActiveModel(),
-		ThinkingLevel: thinking,
-	})
-}
-
-// handlePatchSettings partially updates core settings. Only the fields present
-// in the body are changed — this persists the global DEFAULT and does NOT touch
-// any live session (use the session's model/thinking command for that).
-func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		ActiveModel   *string `json:"active_model"`
-		ThinkingLevel *string `json:"thinking_level"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
-		return
-	}
-	sm := config.GetSettingsManager()
-	if body.ActiveModel != nil {
-		if err := sm.SetActiveModel(*body.ActiveModel); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
-	}
-	if body.ThinkingLevel != nil {
-		if err := sm.SetThinkingLevel(*body.ThinkingLevel); err != nil {
-			status := http.StatusInternalServerError
-			if errors.Is(err, config.ErrInvalidThinkingLevel) {
-				status = http.StatusUnprocessableEntity
-			}
-			writeErr(w, status, err)
-			return
-		}
-	}
-	thinking := sm.ThinkingLevel()
-	if thinking == "" {
-		thinking = "off"
-	}
-	writeJSON(w, http.StatusOK, SettingsDTO{ActiveModel: sm.ActiveModel(), ThinkingLevel: thinking})
-}
-
-// ── MCP servers (settings collection) ───────────────────────────────────
-
-// handleListMCPServers returns the whole MCP-server collection.
-func (s *Server) handleListMCPServers(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, config.GetSettingsManager().MCPServers())
-}
-
-// handlePutMCPServer stores (or replaces) one MCP server. Name in URL, MCPServer
-// in the body. Pass-through, same as provider configs.
-func (s *Server) handlePutMCPServer(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	var srv config.MCPServer
-	if err := json.NewDecoder(r.Body).Decode(&srv); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
-		return
-	}
-	if err := config.GetSettingsManager().SetMCPServer(name, srv); err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, config.ErrInvalidMCPServer) {
-			status = http.StatusUnprocessableEntity // 422: well-formed JSON, invalid content
-		}
-		writeErr(w, status, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, srv)
-}
-
-// handleListSchedules serves the read-only list of cron-scheduled prompts, in
-// the same shape as the ScheduleList tool (slug, cron, prompt, runs, last_run).
-// Writes/deletes are not exposed — only the agent mutates schedules via its tools.
-func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
-	st := s.agent.Schedules()
-	if st == nil {
-		writeJSON(w, http.StatusOK, []any{})
-		return
-	}
-	// Optional ?owner=<session_id> filters to the schedules that will actually
-	// fire into that session — the honest count for a single session's view
-	// (a schedule only ever runs in its owner session). Omit owner for all
-	// (the operator view, e.g. `harness schedules`).
-	owner := r.URL.Query().Get("owner")
-	type entry struct {
-		Slug    string `json:"slug"`
-		Cron    string `json:"cron"`
-		Prompt  string `json:"prompt"`
-		Runs    int    `json:"runs"`
-		LastRun int64  `json:"last_run,omitempty"`
-	}
-	out := []entry{}
-	for _, sc := range st.List() {
-		if owner != "" && sc.Owner != owner {
-			continue
-		}
-		out = append(out, entry{sc.Slug, sc.Cron, sc.Prompt, sc.Runs, sc.LastRun})
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-// handleListMemories lists/searches memories. Memories are partitioned by
-// working directory; the cwd query param is an OPTIONAL filter (omit it for a
-// view across all projects, "<global>" for global memories only, a path for
-// that project plus globals). All params are optional:
-//
-//	cwd, query, include_content (default true), skip (default 0), limit (default 10)
-func (s *Server) handleListMemories(w http.ResponseWriter, r *http.Request) {
-	mem := s.agent.Memory()
-	if mem == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"total": 0, "returned": 0, "skip": 0, "limit": 0, "results": []any{}})
-		return
-	}
-	q := r.URL.Query()
-	cwd := q.Get("cwd")
-	query := q.Get("query")
-	includeContent := q.Get("include_content") != "false" // default true
-	skip := atoiDefault(q.Get("skip"), 0)
-	limit := atoiDefault(q.Get("limit"), 10)
-
-	res, err := mem.Search(cwd, query, includeContent, skip, limit)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, res)
-}
-
-// memoryScope resolves the {slug} + scope of a single-memory request. The
-// scope is the REQUIRED cwd query param: a project path, or "<global>"
-// (memory.GlobalCWD) for a global memory — the same sentinel GET
-// /api/memories accepts. Writes 503 when the agent has no memory and 400 when
-// cwd is missing; ok=false means a response was already written.
-func (s *Server) memoryScope(w http.ResponseWriter, r *http.Request) (mem memory.Store, cwd, slug string, global, ok bool) {
-	mem = s.agent.Memory()
-	if mem == nil {
-		writeError(w, http.StatusServiceUnavailable, "memory is not enabled on this agent", nil)
-		return nil, "", "", false, false
-	}
-	// chi matches on the RAW (still-escaped) path when one exists, so a slug
-	// the client had to escape ("a/b", spaces, …) arrives as "a%2Fb" —
-	// unescape it so the stored slug is the real one.
-	slug, err := url.PathUnescape(chi.URLParam(r, "slug"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid slug: "+err.Error(), nil)
-		return nil, "", "", false, false
-	}
-	cwd = r.URL.Query().Get("cwd")
-	if strings.TrimSpace(slug) == "" {
-		writeError(w, http.StatusBadRequest, "slug is required", nil)
-		return nil, "", "", false, false
-	}
-	if cwd == "" {
-		writeError(w, http.StatusBadRequest, `cwd query param is required (a project path, or "`+memory.GlobalCWD+`" for a global memory)`, nil)
-		return nil, "", "", false, false
-	}
-	return mem, cwd, slug, cwd == memory.GlobalCWD, true
-}
-
-// handleGetMemory returns one memory (GET /api/memories/{slug}?cwd=…), 404 if
-// absent.
-func (s *Server) handleGetMemory(w http.ResponseWriter, r *http.Request) {
-	mem, cwd, slug, global, ok := s.memoryScope(w, r)
-	if !ok {
-		return
-	}
-	m, found, err := mem.Get(cwd, slug, global)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	if !found {
-		writeError(w, http.StatusNotFound, "memory not found: "+slug, nil)
-		return
-	}
-	writeJSON(w, http.StatusOK, m)
-}
-
-// handlePutMemory creates or replaces one memory (PUT
-// /api/memories/{slug}?cwd=…, body {"content": "..."}) — an upsert by
-// cwd+slug, same as the agent's MemoWrite. 201 when created, 200 when updated;
-// either way the body is the stored memory.
-func (s *Server) handlePutMemory(w http.ResponseWriter, r *http.Request) {
-	mem, cwd, slug, global, ok := s.memoryScope(w, r)
-	if !ok {
-		return
-	}
-	var body struct {
-		Content string `json:"content"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
-		return
-	}
-	if strings.TrimSpace(body.Content) == "" {
-		writeError(w, http.StatusUnprocessableEntity, "content is required", nil)
-		return
-	}
-	created, err := mem.Write(cwd, slug, body.Content, global)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	m, _, err := mem.Get(cwd, slug, global)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	status := http.StatusOK
-	if created {
-		status = http.StatusCreated
-	}
-	writeJSON(w, status, m)
-}
-
-// handleDeleteMemory removes one memory (DELETE /api/memories/{slug}?cwd=…),
-// 404 if absent.
-func (s *Server) handleDeleteMemory(w http.ResponseWriter, r *http.Request) {
-	mem, cwd, slug, global, ok := s.memoryScope(w, r)
-	if !ok {
-		return
-	}
-	deleted, err := mem.Delete(cwd, slug, global)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	if !deleted {
-		writeError(w, http.StatusNotFound, "memory not found: "+slug, nil)
-		return
-	}
-	writeStatus(w, http.StatusOK, "deleted", "")
-}
-
-// atoiDefault parses s as an int, returning def when empty or invalid.
-func atoiDefault(s string, def int) int {
-	if s == "" {
-		return def
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return def
-	}
-	return n
-}
-
 // handleMCPStatus reports the live connection status of each configured MCP
 // server (connected? tool count? error?). This is how clients surface MCP
 // health without the agent ever writing to stdout. Returns [] when MCP is off.
@@ -661,293 +406,6 @@ func (s *Server) handleMCPStatus(w http.ResponseWriter, r *http.Request) {
 		statuses = []mcp.Status{}
 	}
 	writeJSON(w, http.StatusOK, statuses)
-}
-
-// handleDeleteMCPServer removes one MCP server, 404 if absent.
-func (s *Server) handleDeleteMCPServer(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	sm := config.GetSettingsManager()
-	if _, ok := sm.MCPServer(name); !ok {
-		writeError(w, http.StatusNotFound, "mcp server not found: "+name, nil)
-		return
-	}
-	if err := sm.DeleteMCPServer(name); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeStatus(w, http.StatusOK, "deleted", "")
-}
-
-// handleListCustomProviders handles GET /api/settings/provider. Exact
-// structural mirror of handleListMCPServers.
-func (s *Server) handleListCustomProviders(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, config.GetSettingsManager().CustomProviders())
-}
-
-// handlePutCustomProvider stores (or replaces) one custom provider. Name in
-// URL, CustomProvider in the body. Same pass-through shape as
-// handlePutMCPServer — validation (type/url/reserved-name) happens in
-// SetCustomProvider, not here.
-func (s *Server) handlePutCustomProvider(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	var p config.CustomProvider
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
-		return
-	}
-	if err := config.GetSettingsManager().SetCustomProvider(name, p); err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, config.ErrInvalidCustomProvider) {
-			status = http.StatusUnprocessableEntity // 422: well-formed JSON, invalid content
-		}
-		writeErr(w, status, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, p)
-}
-
-// handleDeleteCustomProvider handles DELETE /api/settings/provider/{name}.
-// Same 404-if-missing shape as handleDeleteMCPServer.
-func (s *Server) handleDeleteCustomProvider(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	sm := config.GetSettingsManager()
-	if _, ok := sm.CustomProvider(name); !ok {
-		writeError(w, http.StatusNotFound, "custom provider not found: "+name, nil)
-		return
-	}
-	if err := sm.DeleteCustomProvider(name); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeStatus(w, http.StatusOK, "deleted", "")
-}
-
-// handleReloadCustomProviders handles POST /api/settings/provider/reload:
-// applies settings.json's "provider" collection live (agent.
-// ReloadCustomProviders). 200 {"status":{"code":"reloaded"}} — with a
-// message listing any entries skipped because a programmatic provider
-// already uses their name (code "reloaded_with_conflicts").
-func (s *Server) handleReloadCustomProviders(w http.ResponseWriter, r *http.Request) {
-	if err := agent.ReloadCustomProviders(); err != nil {
-		if errors.Is(err, agent.ErrProviderNameConflict) {
-			writeStatus(w, http.StatusOK, "reloaded_with_conflicts", err.Error())
-			return
-		}
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeStatus(w, http.StatusOK, "reloaded", "")
-}
-
-// providerInfo is the API representation of a provider.
-type providerInfo struct {
-	Name           string `json:"name"`
-	DisplayName    string `json:"display_name"`
-	Description    string `json:"description"`
-	Active         bool   `json:"active"`
-	Activation     string `json:"activation"`
-	IsSubscription bool   `json:"is_subscription"`
-	// CredentialType is the authoritative kind of credential the provider needs:
-	// "none" (auto-detected, e.g. ollama), "api_key" (secret), or "oauth". The
-	// CLI uses this to decide whether to prompt for a secret at connect time.
-	CredentialType string `json:"credential_type"`
-	ModelCount     int    `json:"model_count"`
-	// Error is why an ACTIVE provider has no models right now (its model fetch
-	// failed: expired token, unreachable, rejected key…) — what a bare
-	// model_count of 0 hides. Omitted when there is nothing to report.
-	Error string `json:"error,omitempty"`
-	// Dialect is the wire dialect of the provider's native API ("anthropic",
-	// "openai", "openai-responses", "ollama") — what its proxy speaks.
-	Dialect string `json:"dialect"`
-	// ProxyPath is the provider's transparent-proxy root on this server
-	// (/api/providers/{name}/proxy), to be appended to the server's base URL.
-	ProxyPath string `json:"proxy_path"`
-}
-
-// handleProviders returns all registered providers.
-func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
-	providers.EnsureRegistry()
-	byName := map[string]agent.ProviderModels{}
-	for _, pm := range s.agent.ListModels("") {
-		byName[pm.Provider] = pm
-	}
-	var list []providerInfo
-	for _, p := range providers.All() {
-		pm := byName[p.Name()]
-		act := string(p.ActivationSource())
-		if act == "none" {
-			act = "inactive"
-		} else if act == "envvar" {
-			act = "env"
-		}
-		info := providerInfo{
-			Name:           p.Name(),
-			DisplayName:    p.DisplayName(),
-			Description:    p.Description(),
-			Active:         p.IsActive(),
-			Activation:     act,
-			IsSubscription: p.CredentialType() == types.CredTypeOAuth,
-			CredentialType: string(p.CredentialType()),
-			ModelCount:     len(pm.Models),
-			Dialect:        p.Dialect(),
-			ProxyPath:      "/api/providers/" + url.PathEscape(p.Name()) + "/proxy",
-		}
-		if pm.Err != nil {
-			info.Error = pm.Err.Error()
-		}
-		list = append(list, info)
-	}
-	if list == nil {
-		list = []providerInfo{}
-	}
-	writeJSON(w, http.StatusOK, list)
-}
-
-// connect/disconnect request types
-type connectRequest struct {
-	APIKey           string `json:"api_key,omitempty"`
-	AccessToken      string `json:"access_token,omitempty"`
-	RefreshToken     string `json:"refresh_token,omitempty"`
-	ExpiresAt        int64  `json:"expires_at,omitempty"`
-	SubscriptionType string `json:"subscription_type,omitempty"`
-	AccountID        string `json:"account_id,omitempty"` // codex-oauth — per-request header account id
-}
-
-func (s *Server) handleConnectProvider(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	providers.EnsureRegistry()
-
-	var target providers.Provider
-	for _, p := range providers.All() {
-		if p.Name() == name {
-			target = p
-			break
-		}
-	}
-	if target == nil {
-		writeError(w, http.StatusNotFound, "provider not found: "+name, nil)
-		return
-	}
-
-	var req connectRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
-		return
-	}
-
-	creds := types.Credentials{
-		Type:             target.CredentialType(),
-		APIKey:           req.APIKey,
-		AccessToken:      req.AccessToken,
-		RefreshToken:     req.RefreshToken,
-		ExpiresAt:        req.ExpiresAt,
-		SubscriptionType: req.SubscriptionType,
-		AccountID:        req.AccountID,
-	}
-
-	if err := target.Connect(creds); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
-	forgetQuota(name) // a reading of the previous account must not be served
-
-	writeStatus(w, http.StatusOK, "connected", fmt.Sprintf("%d models", len(target.Models())))
-}
-
-func (s *Server) handleDisconnectProvider(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	providers.EnsureRegistry()
-
-	var target providers.Provider
-	for _, p := range providers.All() {
-		if p.Name() == name {
-			target = p
-			break
-		}
-	}
-	if target == nil {
-		writeError(w, http.StatusNotFound, "provider not found: "+name, nil)
-		return
-	}
-
-	if err := target.Disconnect(); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
-	forgetQuota(name)
-
-	writeStatus(w, http.StatusOK, "disconnected", "")
-}
-
-// handleModels handles GET /api/models. The listing itself — iterate active
-// providers, lazily fetch models, tag each with its provider and
-// is_subscription — lives in a.Models() (agent/agent.go), the single source
-// of truth; this handler is a thin serialize-as-is wrapper so the wire
-// contract can never drift out of sync with the SDK's own Agent.Models().
-//
-// ?provider=<name> restricts the listing to one provider — and, unlike the
-// unfiltered call (where a failing provider just contributes nothing), says
-// what is wrong with it: 404 unknown provider, 409 not connected, 502 with the
-// provider's own error when its model fetch fails.
-func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	name := r.URL.Query().Get("provider")
-	if name == "" && r.URL.Query().Has("provider") {
-		writeError(w, http.StatusBadRequest, "provider must not be empty", nil)
-		return
-	}
-	pms := s.agent.ListModels(name)
-	if name != "" {
-		if len(pms) == 0 {
-			writeError(w, http.StatusNotFound, fmt.Sprintf("provider %q not found", name), nil)
-			return
-		}
-		if !pms[0].Active {
-			writeError(w, http.StatusConflict, fmt.Sprintf("provider %q is not connected", name), nil)
-			return
-		}
-		if pms[0].Err != nil {
-			writeError(w, http.StatusBadGateway, fmt.Sprintf("provider %q: could not list models: %v", name, pms[0].Err), nil)
-			return
-		}
-	}
-	list := []types.ModelListing{}
-	for _, pm := range pms {
-		list = append(list, pm.Models...)
-	}
-	writeJSON(w, http.StatusOK, list)
-}
-
-// handleModel handles GET /api/models/{provider}/{id}: one model's listing.
-// The id is the provider-local one (as in "id" of /api/models) and may itself
-// contain slashes or colons ("org/model", "gemma3:4b"), hence the wildcard.
-// 404 unknown provider or model, 409 provider not connected, 502 with the
-// provider's own error when its model list can't be fetched.
-func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "provider")
-	id, err := url.PathUnescape(chi.URLParam(r, "*"))
-	if err != nil || id == "" {
-		writeError(w, http.StatusBadRequest, "invalid model id", nil)
-		return
-	}
-	pms := s.agent.ListModels(name)
-	switch {
-	case len(pms) == 0:
-		writeError(w, http.StatusNotFound, fmt.Sprintf("provider %q not found", name), nil)
-		return
-	case !pms[0].Active:
-		writeError(w, http.StatusConflict, fmt.Sprintf("provider %q is not connected", name), nil)
-		return
-	case pms[0].Err != nil:
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("provider %q: could not list models: %v", name, pms[0].Err), nil)
-		return
-	}
-	for _, m := range pms[0].Models {
-		if m.ID == id {
-			writeJSON(w, http.StatusOK, m)
-			return
-		}
-	}
-	writeError(w, http.StatusNotFound, fmt.Sprintf("model %q not found in provider %q", id, name), nil)
 }
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
@@ -1007,46 +465,6 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, liveDetail(sess))
 }
 
-// handleListSessions returns all sessions, optionally filtered by ?cwd=
-func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
-	cwd := r.URL.Query().Get("cwd")
-	var sessions []store.SessionMeta
-	var err error
-	if cwd != "" {
-		sessions, err = s.agent.ListSessions(cwd)
-	} else {
-		sessions, err = s.agent.ListAllSessions()
-	}
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	if sessions == nil {
-		sessions = []store.SessionMeta{}
-	}
-	writeJSON(w, http.StatusOK, sessions)
-}
-
-// handleDeleteSession deletes a session permanently.
-func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-
-	// Close and remove from in-memory if active
-	s.mu.Lock()
-	proxy, ok := s.sessions[id]
-	if ok {
-		delete(s.sessions, id)
-		proxy.close()
-	}
-	s.mu.Unlock()
-
-	if err := s.agent.DeleteSession(id); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
 // handleCloseSession closes an active session (flushes store, disconnects SSE clients).
 func (s *Server) handleCloseSession(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -1079,44 +497,6 @@ func (s *Server) handleStopSession(w http.ResponseWriter, r *http.Request) {
 	}
 	proxy.session.Stop()
 	writeStatus(w, http.StatusOK, "stopped", "")
-}
-
-// handleGetMessages returns a session's message history — all of it by
-// default, or a suffix of it:
-//
-//	?from=<n>         start at absolute index n (n >= total → empty array)
-//	?compactions=<k>  start just after the k-th-to-last compaction checkpoint
-//	                  (k >= 1; fewer checkpoints than k → everything)
-//
-// from and compactions are mutually exclusive (400 if both are present). The
-// body is always a plain JSON array; X-Messages-From carries the absolute index
-// of its first element (what /messages/{index}/images/{n} expects) and
-// X-Messages-Total the length of the full log. Works for active and persisted
-// sessions. The skipped part of the log is never parsed (see
-// store.WindowReader).
-func (s *Server) handleGetMessages(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	q := r.URL.Query()
-	win, errMsg := parseMessageWindow(q.Get("from"), q.Has("from"), q.Get("compactions"), q.Has("compactions"))
-	if errMsg != "" {
-		writeError(w, http.StatusBadRequest, errMsg, nil)
-		return
-	}
-	messages, from, total, err := s.agent.LoadMessagesWindow(id, win)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			writeError(w, http.StatusNotFound, "session not found", nil)
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error(), nil)
-		return
-	}
-	if messages == nil {
-		messages = []types.Message{}
-	}
-	w.Header().Set("X-Messages-From", strconv.Itoa(from))
-	w.Header().Set("X-Messages-Total", strconv.Itoa(total))
-	writeJSON(w, http.StatusOK, messages)
 }
 
 // parseMessageWindow validates GET /messages' query parameters. It returns a
@@ -1170,7 +550,7 @@ func (s *Server) handleMessageImage(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 	if active {
 		msgs = proxy.session.AllMessages()
-	} else if all, err := s.agent.LoadMessages(id); err == nil {
+	} else if all, _, _, err := s.admin.Sessions.Messages(id, store.MessageWindow{}); err == nil {
 		msgs = all
 	} else {
 		writeError(w, http.StatusNotFound, "session not found", nil)
@@ -1217,12 +597,6 @@ func (s *Server) handleMessageImage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)
 	w.Write(data) //nolint:errcheck
-}
-
-// sessionEpoch identifies one "life" of a session's message log for caching:
-// its ResetCount (each /reset empties the log and reuses indices).
-func (s *Server) sessionEpoch(id string) string {
-	return "r" + strconv.Itoa(s.agent.SessionResetCount(id))
 }
 
 // handleForkSession creates a new session that is an exact copy of the parent
@@ -1409,27 +783,23 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fallback: check store (persisted sessions from previous runs). There's no
-	// live *Session to ask, so MaxIterations comes from the agent's configured
-	// default (AgentOptions.MaxIterations, already clamped by New()) — every
-	// session it creates gets the same value.
-	sessions, err := s.agent.ListAllSessions()
+	// Fallback: the stored session (from a previous run). There's no live
+	// *Session to ask, so MaxIterations comes from the agent's configured
+	// default (AgentOptions.MaxIterations, already clamped by New()).
+	meta, err := s.admin.Sessions.Get(id)
 	if err != nil {
+		if errors.Is(err, admin.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "session not found", nil)
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	for _, meta := range sessions {
-		if meta.ID == id {
-			writeJSON(w, http.StatusOK, sessionDetailDTO{
-				SessionMeta:   meta,
-				MaxIterations: s.agent.Options().MaxIterations,
-				MaxTokens:     s.agent.MaxTokensFor(meta.Model),
-			})
-			return
-		}
-	}
-
-	writeError(w, http.StatusNotFound, "session not found", nil)
+	writeJSON(w, http.StatusOK, sessionDetailDTO{
+		SessionMeta:   meta,
+		MaxIterations: s.agent.Options().MaxIterations,
+		MaxTokens:     s.agent.MaxTokensFor(meta.Model),
+	})
 }
 
 type promptRequest struct {
@@ -1561,24 +931,25 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	// message of `harness "task"`, which subscribes and then sends at once) reached no one and its
 	// echo was lost. Events that arrive before the flush wait in ch (its buffer) and are written
 	// right after the headers, in order.
-	ch := make(chan []byte, sseClientBufferSize)
-	proxy.addClient(ch)
-	defer proxy.removeClient(ch)
+	watcher, release := proxy.watch(sseClientBufferSize)
+	defer release()
 
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	// Stream events until client disconnects
+	// Stream events until the client disconnects or the session closes.
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case line, ok := <-ch:
+		case e, ok := <-watcher.Events():
 			if !ok {
 				return
 			}
-			fmt.Fprint(w, string(line))
-			flusher.Flush()
+			if line := formatEvent(e); line != nil {
+				w.Write(line) //nolint:errcheck
+				flusher.Flush()
+			}
 		}
 	}
 }

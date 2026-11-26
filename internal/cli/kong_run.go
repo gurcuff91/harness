@@ -6,50 +6,54 @@
 // call sites.
 package cli
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/gurcuff91/harness/admin"
+)
 
 // ── providers / connect / disconnect ──────────────────────────────────────
 
 func (c *providersCmd) Run() error {
-	a := newConfigAgent()
-	defer a.Close()
+	ad := admin.New()
+	defer ad.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
-	return RunProviders(ctx, a, "text")
+	return RunProviders(ctx, ad, "text")
 }
 
 func (c *connectCmd) Run() error {
-	a := newConfigAgent()
-	defer a.Close()
+	ad := admin.New()
+	defer ad.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
-	return RunConnect(ctx, a, c.Name, c.APIKey, "text")
+	return RunConnect(ctx, ad, c.Name, c.APIKey, "text")
 }
 
 func (c *disconnectCmd) Run() error {
-	a := newConfigAgent()
-	defer a.Close()
+	ad := admin.New()
+	defer ad.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
-	return RunDisconnect(ctx, a, c.Name, "text")
+	return RunDisconnect(ctx, ad, c.Name, "text")
 }
 
 // ── sessions / delete ──────────────────────────────────────────────────────
 
 func (c *sessionsCmd) Run() error {
-	a := newConfigAgent()
-	defer a.Close()
+	ad := admin.New()
+	defer ad.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
-	return RunSessions(ctx, a, c.All, "text")
+	return RunSessions(ctx, ad, c.All, "text")
 }
 
 func (c *deleteCmd) Run() error {
-	a := newConfigAgent()
-	defer a.Close()
+	ad := admin.New()
+	defer ad.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
-	return RunDelete(ctx, a, c.SessionID, "text")
+	return RunDelete(ctx, ad, c.SessionID, "text")
 }
 
 // ── settings ───────────────────────────────────────────────────────────────
@@ -58,23 +62,25 @@ func (c *deleteCmd) Run() error {
 // default child of settingsCmd (see the parent-Run() note in kong.go), so it
 // runs once and only for that path, never after `settings set`.
 func (c *settingsShowCmd) Run() error {
-	a := newConfigAgent()
+	ad := admin.New()
+	defer ad.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
-	return RunSettings(ctx, a, "text")
+	return RunSettings(ctx, ad, "text")
 }
 
 func (c *settingsSetCmd) Run() error {
-	a := newConfigAgent()
+	ad := admin.New()
+	defer ad.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
-	return RunSettingsSet(ctx, a, c.Key, c.Value, "text")
+	return RunSettingsSet(ctx, ad, c.Key, c.Value, "text")
 }
 
 // ── mcp ────────────────────────────────────────────────────────────────────
 
 func (c *mcpListCmd) Run() error {
-	a := newAgent()
+	a := newAgent() // the live connection status of each server is the agent's
 	defer a.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
@@ -82,8 +88,8 @@ func (c *mcpListCmd) Run() error {
 }
 
 func (c *mcpAddCmd) Run() error {
-	a := newAgent()
-	defer a.Close()
+	ad := admin.New()
+	defer ad.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
 
@@ -106,44 +112,44 @@ func (c *mcpAddCmd) Run() error {
 		Timeout:           c.Timeout,
 		ConnectionTimeout: c.ConnectionTimeout,
 	}
-	return RunMCPAdd(ctx, a, c.Name, opts, "text")
+	return RunMCPAdd(ctx, ad, c.Name, opts, "text")
 }
 
 func (c *mcpRmCmd) Run() error {
-	a := newAgent()
-	defer a.Close()
+	ad := admin.New()
+	defer ad.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
-	return RunMCPRemove(ctx, a, c.Name, "text")
+	return RunMCPRemove(ctx, ad, c.Name, "text")
 }
 
 func (c *mcpEnableCmd) Run() error {
-	a := newAgent()
-	defer a.Close()
+	ad := admin.New()
+	defer ad.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
-	return RunMCPSetEnabled(ctx, a, c.Name, true, "text")
+	return RunMCPSetEnabled(ctx, ad, c.Name, true, "text")
 }
 
 func (c *mcpDisableCmd) Run() error {
-	a := newAgent()
-	defer a.Close()
+	ad := admin.New()
+	defer ad.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
-	return RunMCPSetEnabled(ctx, a, c.Name, false, "text")
+	return RunMCPSetEnabled(ctx, ad, c.Name, false, "text")
 }
 
 func (c *providerListCmd) Run() error {
-	a := newAgent()
-	defer a.Close()
+	ad := admin.New()
+	defer ad.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
-	return RunProviderList(ctx, a, "text")
+	return RunProviderList(ctx, ad, "text")
 }
 
 func (c *providerAddCmd) Run() error {
-	a := newAgent()
-	defer a.Close()
+	ad := admin.New()
+	defer ad.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
 
@@ -160,15 +166,15 @@ func (c *providerAddCmd) Run() error {
 		Disabled:       c.Disabled,
 		ReasoningSplit: c.ReasoningSplit,
 	}
-	return RunProviderAdd(ctx, a, c.Name, opts, "text")
+	return RunProviderAdd(ctx, ad, c.Name, opts, "text")
 }
 
 func (c *providerRmCmd) Run() error {
-	a := newAgent()
-	defer a.Close()
+	ad := admin.New()
+	defer ad.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
-	return RunProviderRemove(ctx, a, c.Name, "text")
+	return RunProviderRemove(ctx, ad, c.Name, "text")
 }
 
 // parseKV parses a slice of "key<sep>value" strings into a map — the []string
@@ -192,8 +198,12 @@ func parseKV(pairs []string, sep string) (map[string]string, error) {
 // ── memo ───────────────────────────────────────────────────────────────────
 
 func (c *memoCmd) Run() error {
-	a := newAgent()
-	defer a.Close()
+	mem := defaultMemory()
+	if mem != nil {
+		defer mem.Close()
+	}
+	ad := admin.New(admin.WithMemory(mem))
+	defer ad.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
 
@@ -205,19 +215,19 @@ func (c *memoCmd) Run() error {
 		Limit:   c.Limit,
 		Skip:    c.Skip,
 	}
-	return RunMemo(ctx, a, opts, "text")
+	return RunMemo(ctx, ad, opts, "text")
 }
 
 // ── schedules ──────────────────────────────────────────────────────────────
 
 func (c *schedulesCmd) Run() error {
-	a := newConfigAgent()
-	defer a.Close()
+	ad := admin.New()
+	defer ad.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
 	output := "text"
 	if c.JSON {
 		output = "json"
 	}
-	return RunSchedules(ctx, a, output)
+	return RunSchedules(ctx, ad, output)
 }

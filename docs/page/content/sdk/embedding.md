@@ -84,11 +84,12 @@ A session is one conversation: a working directory, a model, a history and a thi
 | `a.ResumeSession(id, opts...)` | Reopen a stored session. Idempotent: an already-open session returns its live handle. |
 | `a.ForkSession(id, opts...)` | Copy a session (history, stats, compaction state) into a new one. Fails with `agent.ErrBusy` if the parent has a turn in flight. |
 | `a.ImportSession(r, cwd, opts...)` | Create a new session from an export read from `r`. |
-| `a.ExportSession(id, w)` | Write a session as a JSONL export; returns the message count. |
-| `a.ListSessions(cwd)` / `a.ListAllSessions()` | Stored sessions of one directory, or of all. |
-| `a.RenameSession(id, name)` / `a.DeleteSession(id)` | Rename or delete a stored session. |
+| `a.ActiveSessions()` | Ids of the sessions open in this process. |
+| `a.Admin()` | The [admin](admin.md) service bound to this agent's stores. |
 
-`opts` are `agent.SessionOption` values: `agent.SessionWithChannels` and `agent.SessionWithEnabledProfiles`. See [Options](options.md#session-options).
+`opts` are `agent.SessionOption` values: `agent.SessionWithChannels`, `agent.SessionWithEnabledProfiles` and `agent.SessionWithDirectives`. See [Options](options.md#session-options).
+
+The agent operates **live** sessions. Everything that does not need one (listing, renaming, deleting and exporting stored sessions, providers, settings, memory, schedules) is in [admin](admin.md).
 
 When a resumed or forked session's saved model is unavailable (its provider is not connected any more), the agent falls back to the active model, then to the first available one, and reports it with `Session.ModelFallback()`. It returns `agent.ErrNoModelAvailable` only when nothing is usable.
 

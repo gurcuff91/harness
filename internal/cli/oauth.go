@@ -3,27 +3,23 @@ package cli
 import (
 	"fmt"
 
-	"github.com/gurcuff91/harness/client"
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/internal/browseropen"
 	"github.com/gurcuff91/harness/types"
 )
 
-// RunOAuth drives a provider's native OAuth PKCE flow for the CLI entirely
-// through the server's stateless POST /api/oauth/{provider} endpoint: it
-// calls c.StartOAuth to get the auth URL and PKCE verifier, opens the
-// browser (this CLI's own job — the server never does), prints the URL as
-// a fallback, blocks waiting for the user to paste back the authorization
-// code, then calls c.ExchangeOAuth (passing the SAME verifier StartOAuth
-// returned) for credentials. This is the blocking counterpart to the TUI's
-// event-driven value-capture path — both drive the exact same two
-// client.Client methods, so the OAuth logic itself lives in exactly one
-// place (internal/oauthflow, behind the server) and neither client
-// re-implements or imports it.
+// RunOAuth drives a provider's native OAuth PKCE flow for the CLI through
+// admin.Providers: OAuthStart gives the auth URL and PKCE verifier, the browser
+// is opened (this CLI's own job — admin never does), the URL is printed as a
+// fallback, and it blocks waiting for the user to paste back the authorization
+// code, then OAuthExchange (with the SAME verifier) returns credentials. This
+// is the blocking counterpart to the TUI's event-driven path, which drives the
+// same two steps over the server's POST /api/oauth/{provider}.
 //
 // Requires an interactive TTY for the code paste; on a pipe/CI it returns an
 // actionable error rather than blocking on input that will never arrive.
-func RunOAuth(c *client.Client, provName string) (*types.Credentials, error) {
-	authURL, verifierCode, err := c.StartOAuth(provName)
+func RunOAuth(ad *admin.Admin, provName string) (*types.Credentials, error) {
+	authURL, verifierCode, err := ad.Providers.OAuthStart(provName)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +38,7 @@ func RunOAuth(c *client.Client, provName string) (*types.Credentials, error) {
 		return nil, fmt.Errorf("reading code: %w", err)
 	}
 
-	creds, err := c.ExchangeOAuth(provName, code, verifierCode)
+	creds, err := ad.Providers.OAuthExchange(provName, code, verifierCode)
 	if err != nil {
 		return nil, fmt.Errorf("token exchange failed: %w", err)
 	}

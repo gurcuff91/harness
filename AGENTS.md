@@ -50,10 +50,10 @@ cmd/harness/main.go             ← executable entry point (package main) — ju
 │   ├── jsonrpc.go / stdio.go / http.go / client.go / manager.go
 ├── client/                     ← the ONE typed HTTP/SSE SDK over server's API — every frontend uses *client.Client directly (no per-frontend wrappers)
 │   ├── client.go / types.go / event.go / error.go / stream.go
-├── server/                     ← HTTP/SSE backend — the API all clients talk to. Run(ctx, *agent.Agent, ...Option) is the blocking convenience wrapper (listen → serve → wait for ctx → graceful shutdown); Server/NewServer/Serve/Close stay exported for fine-grained control. WithLogger(logx.Logger) sets what receives request/lifecycle log lines — default logx.NewNilLogger() (silent). Memory CRUD: GET /api/memories (list/search) + GET/PUT/DELETE /api/memories/{slug}?cwd=<path|<global>> over Agent.Memory() (503 when the agent has none; slug is URL-unescaped).
+├── server/                     ← HTTP/SSE backend — the API all clients talk to. Run(ctx, *agent.Agent, ...Option) is the blocking convenience wrapper (listen → serve → wait for ctx → graceful shutdown); Server/NewServer/Serve/Close stay exported for fine-grained control. WithLogger(logx.Logger) sets what receives request/lifecycle log lines — default logx.NewNilLogger() (silent). Memory CRUD: GET /api/memories (list/search) + GET/PUT/DELETE /api/memories/{slug}?cwd=<path|<global>> over admin.Memory (Agent.Admin()) (503 when the agent has none; slug is URL-unescaped).
 │   ├── server.go / sse.go / proxy.go / middleware.go / server_docs.go / run.go
 │   │                           ← provider_proxy.go: TRANSPARENT proxy `ANY /api/providers/{name}/proxy/<path>` to a provider's NATIVE API (Anthropic Messages / OpenAI Chat Completions / Codex Responses / Ollama) — body and response (SSE flushed live) pass through verbatim; harness supplies credentials (OAuth refresh) + identity headers and drops the caller's. Driven by `providers.Provider.Upstream()` (internal/providers/upstream.go: base URL, resolved headers, allowlist, optional rewrite) — every provider implements it, built from the same header builders as CompleteStream. Only two kinds of rewrite exist: claude-oauth (identity block, tool-name mapping both ways, billing header) and `injectReasoningSplit` (adds `"reasoning_split":true` to a chat completion — minimax always, a custom provider only when declared with reasoning_split — unless the caller set it; a textual splice, never a re-encode). A provider whose session path sends a request flag a proxy client can't be expected to know MUST get the same flag through its `Upstream().Rewrite`. Allowlists (`allowList`) take `"METHOD /path"`, `/*` (any suffix) and `/:id` (exactly one segment — what an SDK's `models.retrieve` calls); an encoded slash is accepted by `CleanProxyPath` only as a model id (`…/models/<id>`). Keep the proxy compatible with the OFFICIAL SDKs (Anthropic + OpenAI, Python/Node/Go): any route an SDK calls on the surface the proxy serves must be allowed. Client side: `client.ProviderBaseURL` / `ProviderDo` — no typed completions.
-│   │                           ← The model registry: `GET /api/models[?provider=]`, `GET /api/models/{provider}/{id}`, `GET /api/providers` — all built on `Agent.ListModels(provider)` (per-provider models + the FetchModels error; `Agent.Models()` is it flattened). `types.ModelMeta.Sources` is the provenance of every datum (provider > catalog > registry > inferred > default; pricing can also be `unknown`, which is what makes a 0 price readable) — set by `llm.EnrichMeta`/`ApplyRegistryPricing` and by providers that report fields natively (anthropic, ollama-cloud). A provider whose own fetch reports a field MUST mark it `provider`; never leave a defaulted field unmarked. `Provider.Dialect()` feeds `dialect`/`proxy_path`.
+│   │                           ← The model registry: `GET /api/models[?provider=]`, `GET /api/models/{provider}/{id}`, `GET /api/providers` — all built on `admin.Providers.ListModels(provider)` (per-provider models + the FetchModels error; `admin.Providers.Models` is it flattened). `types.ModelMeta.Sources` is the provenance of every datum (provider > catalog > registry > inferred > default; pricing can also be `unknown`, which is what makes a 0 price readable) — set by `llm.EnrichMeta`/`ApplyRegistryPricing` and by providers that report fields natively (anthropic, ollama-cloud). A provider whose own fetch reports a field MUST mark it `provider`; never leave a defaulted field unmarked. `Provider.Dialect()` feeds `dialect`/`proxy_path`.
 ├── channels/
 │   └── slack/                  ← agent.Channel for Slack (input channels, see "Input channels" below) — EVERYTHING Slack in harness since transports/slack was removed (v0.108.0): its own copy of the Slack client, the tag format (`<slack user= channel=>…</slack>`, `<slack-attach name= path=|skipped= [image="true"]/>` — an image is BOTH a prompt image and a saved file —, `<slack-upload path=/>`), the file handling and the four Slack* tools (no SlackAsk). New(workspace, xoxc, xoxd) takes credentials explicitly; it owns the login too (LoadCredentials/SaveCredentials/DeleteCredentials/DeriveXoxC/VerifyAndSave over the same stored keys) and `harness slack login` uses it. Nothing may import the removed transports/slack again — pinned by channels/slack/independence_test.go
 ├── acp/                        ← Agent Client Protocol agent (agentclientprotocol.com) — JSON-RPC/stdio bridge for Zed and other ACP clients; one session per ACP sessionId, pure protocol translation (never touches agent/ or agent/tools/). Run(ctx, srv, ...Option) on a server it's given — WithStdin/WithStdout, defaulting to os.Stdin/os.Stdout. Deliberately no WithLogger: it never logs anything itself. (It lived in `transports/acp` until v0.119.0; `transports/` is gone — a test keeps it gone.)
@@ -221,22 +221,22 @@ travels as static request headers configured up front — never a stored key:
   `Headers` map) to `settings.json`'s `"provider"` collection (singular,
   same style as `"mcp"`), and `internal/providers/registry.go`'s
   `initRegistry()` constructs a `CustomOpenAI` for each enabled entry at
-  start; `providers.ReloadCustom()` (`agent.ReloadCustomProviders`, `POST
+  start; `providers.ReloadCustom()` (`admin.ReloadCustomProviders`, `POST
   /api/settings/provider/reload`) re-applies the collection live — it only
   swaps settings-declared providers (unchanged entries keep their object and
   model cache), never built-in or programmatic ones; on a name clash the
   programmatic provider wins and the skipped entries are reported
   (`ErrNameConflict`). Headers are sent on every request, including model
   discovery.
-- **Programmatic (SDK)**: `agent.NewOpenAIProvider(name, url, ...opts)`
+- **Programmatic (SDK)**: `admin.RegisterOpenAI` (`harness.NewOpenAIProvider`)`(name, url, ...opts)`
   (aliased in `harness.go`) registers one directly in Go code — global to
   the process (same as the declarative path; `providers.All` has no
   per-`Agent` isolation, unlike `mcp.Manager`). Auth goes through
-  `agent.ProviderWithHeaders(map[string]string{...})`; an optional
-  `agent.ProviderWithFetchModels(func() ([]types.ModelMeta, error))` hook
+  `admin.ProviderWithHeaders(map[string]string{...})`; an optional
+  `admin.ProviderWithFetchModels(func() ([]types.ModelMeta, error))` hook
   replaces model discovery entirely — capture whatever auth it needs in its
   own closure. It may be called at any time, even while agents run, and
-  paired with `agent.UnregisterCustomProvider(name)` (aliased in `harness.go`)
+  paired with `admin.UnregisterProvider(name)` (aliased in `harness.go`)
   to drop and re-register a provider live (new key/tenant); running sessions
   re-resolve their provider by name at each turn. The registry is
   copy-on-write behind a lock: always read it through `providers.All()` /
@@ -245,7 +245,7 @@ travels as static request headers configured up front — never a stored key:
   `ErrProviderNotRemovable`).
 
 Both paths also accept an opt-in `ReasoningSplit`/`--reasoning-split`/
-`agent.ProviderWithReasoningSplit()` flag (default `false`, additive —
+`admin.ProviderWithReasoningSplit()` flag (default `false`, additive —
 every existing custom provider is unaffected). The SDK option takes no
 argument — calling it always means "on" (there's no use case for
 explicitly passing `false`; just omit the option). It sends
@@ -264,7 +264,7 @@ See `internal/providers/custom_openai.go`,
 Addendum section for the programmatic path) and
 `internal/providers/custom_anthropic.go`. Two types are supported, either way:
 `type: "openai"` (Chat Completions) and `type: "anthropic"` (Messages, the same
-shape — `harness provider add --type anthropic`, `agent.NewAnthropicProvider`).
+shape — `harness provider add --type anthropic`, `admin.RegisterAnthropic`).
 An anthropic custom provider pointed at another harness instance's
 `/api/providers/claude-oauth/proxy` shares that instance's subscription: it sends
 PLAIN Messages requests and never applies the Claude Code identity / tool
@@ -364,6 +364,17 @@ Design: `docs/plans/2026-11-22-telegram-channel-design.md`. Since v0.116.0 the b
 - **CLI.** The channel is REGISTERED when a token exists: `--telegram-token` (TUI and serve, `telegramTokenFlag`) > `TELEGRAM_BOT_TOKEN` > the saved one (`harness telegram token`). The TUI binds it with `--telegram-allow` (repeatable; Kong's default separator ALSO splits commas — safe, a username has none; `TELEGRAM_ALLOW` comma-separated). Errors before anything opens: users without a token anywhere; `--telegram-token` without users. Clients of serve bind it with `channels:[{type:"telegram", ref:"<users>"}]`. `harness telegram` is only `token [tok] | --status | --delete`.
 - **Schedules go back to their conversation (any channel).** `Session.turnOrigin` (set from the prompt echo, cleared at turn_end); the Schedule tool stores it as `Schedule.Origin` only when the session reaches it by a DURABLE route (`listensTo` → `durableRouteLocked`: the conversation itself, a sub-conversation by prefix, or an origin a channel OWNS through the optional `agent.SenderOrigins` interface — NOT `byPrompt`, which only knows what was delivered in this run and is lost on restart; `routeLocked` = `byPrompt` + the durable routes, for live turns). Colleagues implement `OwnsOrigin` (a QUESTION origin `colleague:<x>`, never a `#reply`), so a schedule created while answering a colleague's question fires back as that colleague's question: its final answer goes to the colleague as a reply, and that reply's turn sends nothing back (no loop). The `## Colleagues` directive says so; `schedule.FireFunc` gets the whole `Schedule`; `fireScheduledPrompt` ALWAYS wraps the prompt in `<scheduled slug="…">` and uses `PromptWithOrigin(s.Origin)` when `listensTo` it, else no origin at all (the wrapper says it is a schedule).
 - **The quota cache lives in `internal/providers`** (`CachedQuota`, `ForgetQuota`, `SetQuotaRulesForTest`) so a channel's `SessionView.Quota` and the HTTP endpoint share it.
+
+### `agent` operates live sessions, `admin` does everything else
+
+Design: `docs/plans/2026-11-26-admin-layer-design.md`. Public package `admin` (services `Sessions`, `Providers`, `Settings`, `MCP`, `Memory`, `Schedules`) holds every operation that does not need a live session; `agent` keeps only what operates one (`NewSession`/`ResumeSession`/`ForkSession`/`ImportSession`, profiles, `RegisterTool`, `MCPTools`/`MCPStatuses`, `MaxTokensFor`, `ActiveSessions`, `Admin()`). Rules that are easy to break:
+
+- **`admin` never imports `agent`** (a test greps for it). It talks to running agents through SHARED STATE (a session re-resolves its provider by name at every turn; there is no Notifier) and, for deleting or renaming a stored session, through `WithActiveSessions(a.ActiveSessions)` → `ErrSessionActive`. A session open in ANOTHER process is NOT protected (as before; do not build cross-process claims for it).
+- **Business logic does not live in a handler.** A server handler is decode → `admin`/`agent` → encode; `adminStatus` (server/admin_handlers.go) maps admin's sentinels with `errors.Is` (`ErrUnprocessable` BEFORE `ErrInvalid`, since a bad thinking level or MCP server matches both). The CLI calls `admin.New()` directly for connect/disconnect/providers/sessions/delete/memo/schedules/settings/mcp/provider — it no longer starts an in-memory server for them (`startInternalServer` is only `-p`'s).
+- **`admin.New(opts...)` options are plain `With*`** (one kind of option) and mirror the agent's: `WithSessionStore`, `WithMemory`, `WithActiveSessions`; defaults are what `agent.New` uses. A store passed in is the caller's: `Admin.Close` closes only what admin opened. `Agent.Admin()` builds one bound to the agent's own store/memory.
+- **Live-or-stored reads stay in the caller** (the server reads the live `*agent.Session` when open, `admin.Sessions` otherwise; export passes the live meta with `ExportAs`).
+- **Fan-out and single-open live in the agent:** `Session.Watch(buffer, onDrop)` → `*Watcher` (deltas dropped without waiting when a watcher's buffer is full; control events wait up to 500 ms then are dropped and `onDrop` is called; `Close` is idempotent and a session's close closes its watchers); `ResumeSession` of the same id is serialized per id, so concurrent opens yield ONE `*Session`. The server's `SessionProxy` is built on `Watch`; do not reimplement the drop rules there.
+- Custom-provider registration (`NewOpenAIProvider`… `ProviderWith*`, `ErrProvider*`) is `admin.RegisterOpenAI`/`RegisterAnthropic`/`UnregisterProvider`/`ReloadCustomProviders`; `harness.go` keeps the old names as aliases.
 
 ### The agent configures, the session obeys
 
@@ -520,7 +531,7 @@ Universal levels mapped per-provider:
 - **Goroutines are the exception, not the rule.** The ReAct loop itself is sequential. Deliberate uses: parallel tool execution (`agent/session.go`), TUI spinner (`internal/tui/components/spinner.go`), SSE readers (`internal/providers/llm/sse.go`, `client/stream.go`), `bash` timeout wait, **reaping a detached child** (`reapInBackground` in `agent/tools/bash.go`, `startAndReap` in `internal/browseropen`), MCP HTTP transport, and each channel's listener and publishers (Slack RTM, Telegram long polling, colleague socket). Don't add new ones without a reason.
 - **An iteration with reasoning but no answer and no tool call is an error, not a success** (`ErrReasoningOnly`, `agent/llm_retry.go`; checked in `promptSync` BEFORE the message is persisted — never retried by harness, never stored). Its message text is a contract orchestrators match on: do not reword it. Keep the check in the ReAct loop, not in `runStream`, which the progress summary also uses.
 - **A provider "refusal" is an error, not an answer** (`llm.ErrRefused`/`llm.RefusalError`, `internal/providers/llm/anthropic.go`): Anthropic's stream can complete cleanly with no content and `stop_reason: "refusal"` (safety classifiers, category `cyber`, judged on the WHOLE conversation). `ParseAnthropicStream` returns it as a typed error — after `message_stop`, with usage still reported — so it is never retried (deterministic for the history; `isTransientNetworkError` must keep saying no), never stored as an empty assistant message, and its text ends with a hint to switch provider (the same history was answered by MiniMax and Codex). Anthropic dialect only; don't generalise to other providers without evidence.
-- **Tests must not leak process-global state** (provider registry, fixed ports, settings stores): anything registered gets a `t.Cleanup` (`agent.UnregisterCustomProvider`, closing a listener on a fixed port such as codex's 1455) so `go test -count=2 ./...` stays green — a leaked provider can even change which model a later test resolves.
+- **Tests must not leak process-global state** (provider registry, fixed ports, settings stores): anything registered gets a `t.Cleanup` (`admin.UnregisterProvider`, closing a listener on a fixed port such as codex's 1455) so `go test -count=2 ./...` stays green — a leaked provider can even change which model a later test resolves.
 - **Every child process you `Start()` must be `Wait()`ed** (inline, or in a goroutine for a detached one). `Process.Release()` and a bare `Start()` leave a zombie until the harness dies — a long-lived server runs out of PIDs.
 - **`bufio.Writer` for output.** All terminal output goes through the buffered writer with explicit `flush()`. Never use `fmt.Println` directly.
 

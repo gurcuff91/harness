@@ -50,7 +50,7 @@ type CustomAnthropic struct {
 	mu          sync.RWMutex
 
 	// fetchModelsFn, if set, REPLACES the default GET <models URL> discovery —
-	// the hook agent.NewAnthropicProvider exposes as ProviderWithFetchModels.
+	// the hook admin.RegisterAnthropic exposes as ProviderWithFetchModels.
 	fetchModelsFn func() ([]types.ModelMeta, error)
 }
 

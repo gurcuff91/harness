@@ -7,23 +7,15 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
-	"github.com/gurcuff91/harness/client"
+	"github.com/gurcuff91/harness/mcp"
+	"github.com/gurcuff91/harness/types"
 )
 
 // RunSettings prints the current core settings (active_model, thinking_level).
-func RunSettings(ctx context.Context, a *agent.Agent, output string) error {
-	server, addr, err := startInternalServer(a)
-	if err != nil {
-		return err
-	}
-	defer server.Close()
-	c := newClient(addr)
-
-	s, err := c.GetSettings()
-	if err != nil {
-		return fmt.Errorf("get settings: %w", err)
-	}
+func RunSettings(ctx context.Context, ad *admin.Admin, output string) error {
+	s := ad.Settings.Get()
 
 	switch output {
 	case "json":
@@ -47,7 +39,7 @@ func RunSettings(ctx context.Context, a *agent.Agent, output string) error {
 // RunSettingsSet updates a core setting. Accepted keys (short form): "model",
 // "thinking". Maps to a PATCH on /api/settings. Validation (e.g. thinking
 // levels) lives in the API/SettingsManager; we surface its error verbatim.
-func RunSettingsSet(ctx context.Context, a *agent.Agent, key, value, output string) error {
+func RunSettingsSet(ctx context.Context, ad *admin.Admin, key, value, output string) error {
 	var field string
 	switch key {
 	case "model":
@@ -61,14 +53,13 @@ func RunSettingsSet(ctx context.Context, a *agent.Agent, key, value, output stri
 		return fmt.Errorf("a value is required: harness settings set %s <value>", key)
 	}
 
-	server, addr, err := startInternalServer(a)
-	if err != nil {
-		return err
+	var err error
+	if field == "active_model" {
+		err = ad.Settings.SetActiveModel(value)
+	} else {
+		err = ad.Settings.SetThinkingLevel(value)
 	}
-	defer server.Close()
-	c := newClient(addr)
-
-	if _, err := c.PatchSettings(map[string]any{field: value}); err != nil {
+	if err != nil {
 		return fmt.Errorf("set %s: %w", key, err)
 	}
 	if output == "json" {
@@ -81,24 +72,12 @@ func RunSettingsSet(ctx context.Context, a *agent.Agent, key, value, output stri
 
 // RunMCPList prints the configured MCP servers.
 func RunMCPList(ctx context.Context, a *agent.Agent, output string) error {
-	server, addr, err := startInternalServer(a)
-	if err != nil {
-		return err
-	}
-	defer server.Close()
-	c := newClient(addr)
-
-	servers, err := c.GetMCPServers()
-	if err != nil {
-		return fmt.Errorf("list mcp: %w", err)
-	}
+	servers := a.Admin().MCP.List()
 
 	// Cross-reference live connection status (connected? tool count? error?).
-	statusByName := map[string]client.MCPStatus{}
-	if sts, err := c.GetMCPStatus(); err == nil {
-		for _, st := range sts {
-			statusByName[st.Name] = st
-		}
+	statusByName := map[string]mcp.Status{}
+	for _, st := range a.MCPStatuses() {
+		statusByName[st.Name] = st
 	}
 
 	switch output {
@@ -173,7 +152,7 @@ type MCPAddOpts struct {
 // RunMCPAdd creates (or replaces) an MCP server. The name is positional; the
 // transport is inferred from which of --command / --url is given (exactly one).
 // Content validation happens server-side (422 surfaced verbatim).
-func RunMCPAdd(ctx context.Context, a *agent.Agent, name string, opts MCPAddOpts, output string) error {
+func RunMCPAdd(ctx context.Context, ad *admin.Admin, name string, opts MCPAddOpts, output string) error {
 	if name == "" {
 		return fmt.Errorf("server name required: harness mcp add <name> (--command … | --url …)")
 	}
@@ -187,7 +166,7 @@ func RunMCPAdd(ctx context.Context, a *agent.Agent, name string, opts MCPAddOpts
 		return fmt.Errorf("--timeout and --connection-timeout are milliseconds and cannot be negative")
 	}
 
-	var srv client.MCPServer
+	var srv types.MCPServer
 	srv.Disabled = opts.Disabled
 	srv.Timeout = opts.Timeout
 	srv.ConnectionTimeout = opts.ConnectionTimeout
@@ -214,15 +193,8 @@ func RunMCPAdd(ctx context.Context, a *agent.Agent, name string, opts MCPAddOpts
 		srv.Headers = headers
 	}
 
-	server, addr, err := startInternalServer(a)
-	if err != nil {
-		return err
-	}
-	defer server.Close()
-	c := newClient(addr)
-
-	saved, err := c.PutMCPServer(name, srv)
-	if err != nil {
+	saved := srv
+	if err := ad.MCP.Put(name, srv); err != nil {
 		return fmt.Errorf("add mcp %q: %w", name, err)
 	}
 	if output == "json" {
@@ -237,7 +209,7 @@ func RunMCPAdd(ctx context.Context, a *agent.Agent, name string, opts MCPAddOpts
 // RunMCPSetEnabled toggles a server's disabled flag by name. It reads the
 // current config (so it preserves command/url/env/headers), flips disabled,
 // and writes it back. A missing server is a clean error.
-func RunMCPSetEnabled(ctx context.Context, a *agent.Agent, name string, enabled bool, output string) error {
+func RunMCPSetEnabled(ctx context.Context, ad *admin.Admin, name string, enabled bool, output string) error {
 	if name == "" {
 		verb := "enable"
 		if !enabled {
@@ -246,21 +218,10 @@ func RunMCPSetEnabled(ctx context.Context, a *agent.Agent, name string, enabled 
 		return fmt.Errorf("server name required: harness mcp %s <name>", verb)
 	}
 
-	server, addr, err := startInternalServer(a)
-	if err != nil {
-		return err
-	}
-	defer server.Close()
-	c := newClient(addr)
-
 	// Load the whole collection and pick out the target so the round-trip
 	// preserves every other field.
-	servers, err := c.GetMCPServers()
+	srv, err := ad.MCP.Get(name)
 	if err != nil {
-		return fmt.Errorf("list mcp: %w", err)
-	}
-	srv, ok := servers[name]
-	if !ok {
 		return fmt.Errorf("mcp server %q not found", name)
 	}
 
@@ -268,7 +229,7 @@ func RunMCPSetEnabled(ctx context.Context, a *agent.Agent, name string, enabled 
 	// rest of the struct round-trips untouched.
 	srv.Disabled = !enabled
 
-	if _, err := c.PutMCPServer(name, srv); err != nil {
+	if err := ad.MCP.Put(name, srv); err != nil {
 		return fmt.Errorf("update mcp %q: %w", name, err)
 	}
 	state := "enabled"
@@ -284,18 +245,11 @@ func RunMCPSetEnabled(ctx context.Context, a *agent.Agent, name string, enabled 
 }
 
 // RunMCPRemove deletes an MCP server (404 surfaced as a clean error).
-func RunMCPRemove(ctx context.Context, a *agent.Agent, name, output string) error {
+func RunMCPRemove(ctx context.Context, ad *admin.Admin, name, output string) error {
 	if name == "" {
 		return fmt.Errorf("server name required: harness mcp rm <name>")
 	}
-	server, addr, err := startInternalServer(a)
-	if err != nil {
-		return err
-	}
-	defer server.Close()
-	c := newClient(addr)
-
-	if _, err := c.DeleteMCPServer(name); err != nil {
+	if err := ad.MCP.Delete(name); err != nil {
 		return fmt.Errorf("remove mcp %q: %w", name, err)
 	}
 	fmt.Printf("MCP server removed: %s\n", name)
@@ -309,18 +263,8 @@ func RunMCPRemove(ctx context.Context, a *agent.Agent, name, output string) erro
 // in SettingsManager.SetCustomProvider, 422s surfaced verbatim).
 
 // RunProviderList prints the configured custom providers.
-func RunProviderList(ctx context.Context, a *agent.Agent, output string) error {
-	server, addr, err := startInternalServer(a)
-	if err != nil {
-		return err
-	}
-	defer server.Close()
-	c := newClient(addr)
-
-	providers, err := c.GetCustomProviders()
-	if err != nil {
-		return fmt.Errorf("list providers: %w", err)
-	}
+func RunProviderList(ctx context.Context, ad *admin.Admin, output string) error {
+	providers := ad.Providers.ListCustom()
 
 	switch output {
 	case "json":
@@ -366,12 +310,12 @@ type ProviderAddOpts struct {
 // RunProviderAdd creates (or replaces) a custom provider. The name is
 // positional. Content validation (type/url/reserved-name) happens
 // server-side (422 surfaced verbatim) — this is a thin pass-through.
-func RunProviderAdd(ctx context.Context, a *agent.Agent, name string, opts ProviderAddOpts, output string) error {
+func RunProviderAdd(ctx context.Context, ad *admin.Admin, name string, opts ProviderAddOpts, output string) error {
 	if name == "" {
 		return fmt.Errorf("provider name required: harness provider add <name> --url <url>")
 	}
 
-	p := client.CustomProvider{
+	p := types.CustomProvider{
 		Type:           opts.Type,
 		URL:            opts.URL,
 		ModelsURL:      opts.ModelsURL,
@@ -381,15 +325,8 @@ func RunProviderAdd(ctx context.Context, a *agent.Agent, name string, opts Provi
 		ReasoningSplit: opts.ReasoningSplit,
 	}
 
-	server, addr, err := startInternalServer(a)
-	if err != nil {
-		return err
-	}
-	defer server.Close()
-	c := newClient(addr)
-
-	saved, err := c.PutCustomProvider(name, p)
-	if err != nil {
+	saved := p
+	if err := ad.Providers.PutCustom(name, p); err != nil {
 		return fmt.Errorf("add provider %q: %w", name, err)
 	}
 	if output == "json" {
@@ -402,18 +339,11 @@ func RunProviderAdd(ctx context.Context, a *agent.Agent, name string, opts Provi
 }
 
 // RunProviderRemove deletes a custom provider (404 surfaced as a clean error).
-func RunProviderRemove(ctx context.Context, a *agent.Agent, name, output string) error {
+func RunProviderRemove(ctx context.Context, ad *admin.Admin, name, output string) error {
 	if name == "" {
 		return fmt.Errorf("provider name required: harness provider rm <name>")
 	}
-	server, addr, err := startInternalServer(a)
-	if err != nil {
-		return err
-	}
-	defer server.Close()
-	c := newClient(addr)
-
-	if _, err := c.DeleteCustomProvider(name); err != nil {
+	if err := ad.Providers.DeleteCustom(name); err != nil {
 		return fmt.Errorf("remove provider %q: %w", name, err)
 	}
 	fmt.Printf("Custom provider removed: %s\n", name)

@@ -42,7 +42,7 @@ func TestCreateSessionHonorsAgentThinkingLevelOverGlobalSetting(t *testing.T) {
 	})
 	defer a.Close()
 
-	models := a.Models()
+	models := modelsOf(a)
 	if len(models) < 1 {
 		t.Skip("need at least 1 active model in this environment")
 	}

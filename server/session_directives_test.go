@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/profiles"
 	"github.com/gurcuff91/harness/agent/resources"
@@ -27,10 +28,10 @@ func TestSessionSystemPromptEndpoint(t *testing.T) {
 		w.Write([]byte(`{"data":[{"id":"m"}]}`))
 	}))
 	defer models.Close()
-	if err := agent.NewOpenAIProvider("srv-sysprompt-fake", models.URL); err != nil {
+	if err := admin.RegisterOpenAI("srv-sysprompt-fake", models.URL); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider("srv-sysprompt-fake") })
+	t.Cleanup(func() { admin.UnregisterProvider("srv-sysprompt-fake") })
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
 	defer a.Close()
 	ts := httptest.NewServer(NewServer(a, ServerOptions{Logger: logx.NewNilLogger()}).handler())
@@ -80,10 +81,10 @@ func TestKeepAgentOpen(t *testing.T) {
 		w.Write([]byte(`{"data":[{"id":"m"}]}`))
 	}))
 	defer models.Close()
-	if err := agent.NewOpenAIProvider("srv-keepopen-fake", models.URL); err != nil {
+	if err := admin.RegisterOpenAI("srv-keepopen-fake", models.URL); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider("srv-keepopen-fake") })
+	t.Cleanup(func() { admin.UnregisterProvider("srv-keepopen-fake") })
 	mem := &closeCounter{SessionStore: store.NewInMemoryStore()}
 	a := agent.New(agent.AgentOptions{Store: mem, ResourceLoader: resources.NilLoader{}})
 	defer a.Close()
@@ -139,12 +140,12 @@ func TestSessionMaxTokensInAPI(t *testing.T) {
 	defer models.Close()
 	// Catalogs: "big" says 512k (capped to 64k), "small" says 8k, "none" unknown.
 	reg := func(name string, max int) {
-		if err := agent.NewOpenAIProvider(name, models.URL, agent.ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
+		if err := admin.RegisterOpenAI(name, models.URL, admin.ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
 			return []types.ModelMeta{{ID: "m", ContextWindow: 1_000_000, MaxTokens: max}}, nil
 		})); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { agent.UnregisterCustomProvider(name) })
+		t.Cleanup(func() { admin.UnregisterProvider(name) })
 	}
 	reg("mt-big", 512000)
 	reg("mt-small", 8000)
@@ -252,10 +253,10 @@ func TestReloadCustomProvidersEndpoint(t *testing.T) {
 	}
 
 	// Conflict with a programmatic provider: reported, not fatal.
-	if err := agent.NewOpenAIProvider("ep-code", models.URL); err != nil {
+	if err := admin.RegisterOpenAI("ep-code", models.URL); err != nil {
 		t.Fatal(err)
 	}
-	defer agent.UnregisterCustomProvider("ep-code")
+	defer admin.UnregisterProvider("ep-code")
 	c.PutCustomProvider("ep-code", types.CustomProvider{Type: "openai", URL: models.URL})
 	st, err = c.ReloadCustomProviders()
 	if err != nil || st.Code != "reloaded_with_conflicts" || !strings.Contains(st.Message, "ep-code") {

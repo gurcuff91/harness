@@ -10,7 +10,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -22,22 +24,28 @@ const DefaultImportMaxBodyBytes = 1 << 30
 // JSONL export (a header, then every message), streamed — open or closed.
 func (s *Server) handleExportSession(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	meta, found, err := s.agent.SessionMetaOf(id)
+	meta, err := s.exportMeta(id)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	if !found {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("session %s not found", id), nil)
+		writeAdminErr(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+agent.ExportFileName(meta)+`"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+admin.ExportFileName(meta)+`"`)
 	w.WriteHeader(http.StatusOK)
-	if _, err := s.agent.ExportSession(id, w); err != nil {
+	if _, err := s.admin.Sessions.ExportAs(meta, w); err != nil {
 		// The status is already sent: a broken stream is all the client sees.
 		s.logger.Error("server", "export", "session", id, "error", err.Error())
 	}
+}
+
+// exportMeta is the meta an export carries: the LIVE one (current model,
+// thinking, stats) for a session open here, else the stored one
+// (admin.ErrNotFound when there is none).
+func (s *Server) exportMeta(id string) (store.SessionMeta, error) {
+	if p, ok := s.liveProxy(id); ok {
+		return p.session.Meta(), nil
+	}
+	return s.admin.Sessions.Get(id)
 }
 
 // handleImportSession serves POST /api/sessions/import[?cwd=]: the body is a
@@ -68,7 +76,7 @@ func (s *Server) writeImportErr(w http.ResponseWriter, err error, limit int64) {
 	switch {
 	case errors.As(err, &tooBig):
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("session export exceeds the %d byte import limit", limit), nil)
-	case errors.Is(err, agent.ErrInvalidExport):
+	case errors.Is(err, admin.ErrInvalidExport):
 		writeErr(w, http.StatusBadRequest, err)
 	case channelErrStatus(err, 0) != 0:
 		writeErr(w, channelErrStatus(err, 0), err)
@@ -105,7 +113,7 @@ func (s *Server) commandExport(sess *agent.Session) (string, error) {
 		return "", err
 	}
 	defer os.Remove(tmp.Name()) // no-op once renamed
-	n, err := s.agent.ExportSession(sess.ID(), tmp)
+	n, err := s.admin.Sessions.ExportAs(sess.Meta(), tmp)
 	if err == nil {
 		err = tmp.Chmod(0o600)
 	}
@@ -115,7 +123,7 @@ func (s *Server) commandExport(sess *agent.Session) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, agent.ExportFileName(sess.Meta()))
+	path := filepath.Join(dir, admin.ExportFileName(sess.Meta()))
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return "", err
 	}
@@ -127,11 +135,11 @@ func (s *Server) commandExport(sess *agent.Session) (string, error) {
 // a NEW session in the calling session's project; the message is its id.
 func (s *Server) commandImport(sess *agent.Session, path string) (string, error) {
 	if !strings.HasSuffix(path, ".export.jsonl") {
-		return "", fmt.Errorf("%w: %q is not a .export.jsonl file", agent.ErrInvalidExport, path)
+		return "", fmt.Errorf("%w: %q is not a .export.jsonl file", admin.ErrInvalidExport, path)
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", agent.ErrInvalidExport, err)
+		return "", fmt.Errorf("%w: %v", admin.ErrInvalidExport, err)
 	}
 	defer f.Close()
 	imp, err := s.agent.ImportSession(f, sess.CWD())

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
@@ -30,12 +31,12 @@ func visionServer(t *testing.T) (*Server, string) {
 	ts := httptest.NewServer(http.HandlerFunc(llm.handler))
 	t.Cleanup(ts.Close)
 	prov := "vision-" + strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-"))
-	if err := agent.NewOpenAIProvider(prov, ts.URL, agent.ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
+	if err := admin.RegisterOpenAI(prov, ts.URL, admin.ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
 		return []types.ModelMeta{{ID: "m", Vision: true, ContextWindow: 100000, MaxTokens: 4096}}, nil
 	})); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider(prov) })
+	t.Cleanup(func() { admin.UnregisterProvider(prov) })
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
 	t.Cleanup(func() { a.Close() })
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})

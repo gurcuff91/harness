@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
@@ -62,14 +63,14 @@ func TestAnthropicRefusalEndToEnd(t *testing.T) {
 	}))
 	defer other.Close()
 
-	if err := agent.NewAnthropicProvider("refuse-anth", anth.URL); err != nil {
+	if err := admin.RegisterAnthropic("refuse-anth", anth.URL); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider("refuse-anth") })
-	if err := agent.NewOpenAIProvider("refuse-other", other.URL); err != nil {
+	t.Cleanup(func() { admin.UnregisterProvider("refuse-anth") })
+	if err := admin.RegisterOpenAI("refuse-other", other.URL); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider("refuse-other") })
+	t.Cleanup(func() { admin.UnregisterProvider("refuse-other") })
 
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
 	defer a.Close()

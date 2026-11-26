@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
 )
 
@@ -214,10 +215,10 @@ func fakeProviderModel(t *testing.T) string {
 	t.Cleanup(models.Close)
 	herdrFakeSeq++
 	name := fmt.Sprintf("cli-extras-fake-%d", herdrFakeSeq)
-	if err := agent.NewOpenAIProvider(name, models.URL); err != nil {
+	if err := admin.RegisterOpenAI(name, models.URL); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider(name) })
+	t.Cleanup(func() { admin.UnregisterProvider(name) })
 	return name + "/m"
 }
 

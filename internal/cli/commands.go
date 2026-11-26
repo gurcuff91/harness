@@ -3,23 +3,18 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
 
-	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/admin"
+	"github.com/gurcuff91/harness/types"
 )
 
 // RunProviders lists all registered providers.
-func RunProviders(ctx context.Context, a *agent.Agent, output string) error {
-	server, addr, err := startInternalServer(a)
-	if err != nil {
-		return err
-	}
-	defer server.Close()
-	c := newClient(addr)
-
-	providers, err := c.GetProviders()
+func RunProviders(ctx context.Context, ad *admin.Admin, output string) error {
+	providers, err := ad.Providers.List(ctx)
 	if err != nil {
 		return fmt.Errorf("list providers: %w", err)
 	}
@@ -50,29 +45,17 @@ func RunProviders(ctx context.Context, a *agent.Agent, output string) error {
 }
 
 // RunConnect connects a provider.
-func RunConnect(ctx context.Context, a *agent.Agent, name, apiKey, output string) error {
+func RunConnect(ctx context.Context, ad *admin.Admin, name, apiKey, output string) error {
 	if name == "" {
 		return fmt.Errorf("provider name required")
 	}
 
-	server, addr, err := startInternalServer(a)
-	if err != nil {
-		return err
-	}
-	defer server.Close()
-	c := newClient(addr)
-
 	// Validate provider exists and read its authoritative credential type.
-	provExists := false
 	credType := ""
-	if providers, err := c.GetProviders(); err == nil {
-		for _, p := range providers {
-			if p.Name == name {
-				provExists = true
-				credType = p.CredentialType
-				break
-			}
-		}
+	ct, err := ad.Providers.CredentialType(name)
+	provExists := err == nil
+	if provExists {
+		credType = string(ct)
 	}
 	if !provExists {
 		return fmt.Errorf("unknown provider: %s\nRun 'harness providers' to see available providers.", name)
@@ -81,19 +64,23 @@ func RunConnect(ctx context.Context, a *agent.Agent, name, apiKey, output string
 	// Branch on the credential type the provider actually needs.
 	switch credType {
 	case "oauth":
-		// Native OAuth PKCE flow, driven entirely through the server's
-		// stateless POST /api/oauth/{provider} endpoint: open the browser,
-		// let the user log in, and exchange the pasted code for tokens — no
-		// Claude Code install or keychain read required, and no direct
-		// dependency on internal/oauthflow from this CLI package anymore.
+		// Native OAuth PKCE flow (admin.Providers.OAuthStart/OAuthExchange):
+		// open the browser, let the user log in, and exchange the pasted code
+		// for tokens — no Claude Code install or keychain read required.
 		// RunOAuth stays provider-agnostic — a new OAuth provider needs no
 		// change here.
-		creds, err := RunOAuth(c, name)
+		creds, err := RunOAuth(ad, name)
 		if err != nil {
 			return fmt.Errorf("OAuth: %w", err)
 		}
-		if _, err = c.ConnectProviderWithCreds(name, creds); err != nil {
-			return fmt.Errorf("connect: %w", err)
+		if _, err = ad.Providers.Connect(ctx, name, admin.ConnectCredentials{
+			AccessToken:      creds.AccessToken,
+			RefreshToken:     creds.RefreshToken,
+			ExpiresAt:        creds.ExpiresAt,
+			SubscriptionType: creds.SubscriptionType,
+			AccountID:        creds.AccountID,
+		}); err != nil {
+			return fmt.Errorf("connect: %w", apiErr(err))
 		}
 	case "api_key":
 		if apiKey == "" {
@@ -106,12 +93,12 @@ func RunConnect(ctx context.Context, a *agent.Agent, name, apiKey, output string
 		if apiKey == "" {
 			return fmt.Errorf("api key required")
 		}
-		if _, err = c.ConnectProvider(name, apiKey); err != nil {
-			return fmt.Errorf("connect: %w", err)
+		if _, err = ad.Providers.Connect(ctx, name, admin.ConnectCredentials{APIKey: apiKey}); err != nil {
+			return fmt.Errorf("connect: %w", apiErr(err))
 		}
 	default: // "none" — auto-detected (e.g. ollama via ping); no credential needed.
-		if _, err = c.ConnectProvider(name, ""); err != nil {
-			return fmt.Errorf("connect: %w", err)
+		if _, err = ad.Providers.Connect(ctx, name, admin.ConnectCredentials{}); err != nil {
+			return fmt.Errorf("connect: %w", apiErr(err))
 		}
 	}
 
@@ -120,34 +107,17 @@ func RunConnect(ctx context.Context, a *agent.Agent, name, apiKey, output string
 }
 
 // RunDisconnect disconnects a provider.
-func RunDisconnect(ctx context.Context, a *agent.Agent, name, output string) error {
+func RunDisconnect(ctx context.Context, ad *admin.Admin, name, output string) error {
 	if name == "" {
 		return fmt.Errorf("provider name required")
 	}
 
-	server, addr, err := startInternalServer(a)
-	if err != nil {
-		return err
-	}
-	defer server.Close()
-	c := newClient(addr)
-
 	// Validate provider exists
-	provExists := false
-	if providers, err := c.GetProviders(); err == nil {
-		for _, p := range providers {
-			if p.Name == name {
-				provExists = true
-				break
-			}
-		}
-	}
-	if !provExists {
+	if _, err := ad.Providers.CredentialType(name); err != nil {
 		return fmt.Errorf("unknown provider: %s\nRun 'harness providers' to see available providers.", name)
 	}
 
-	_, err = c.DisconnectProvider(name)
-	if err != nil {
+	if err := ad.Providers.Disconnect(name); err != nil {
 		return fmt.Errorf("disconnect: %w", err)
 	}
 
@@ -156,19 +126,12 @@ func RunDisconnect(ctx context.Context, a *agent.Agent, name, output string) err
 }
 
 // RunSessions lists sessions, optionally all.
-func RunSessions(ctx context.Context, a *agent.Agent, all bool, output string) error {
-	server, addr, err := startInternalServer(a)
-	if err != nil {
-		return err
-	}
-	defer server.Close()
-	c := newClient(addr)
-
+func RunSessions(ctx context.Context, ad *admin.Admin, all bool, output string) error {
 	cwd := ""
 	if !all {
 		cwd, _ = os.Getwd()
 	}
-	sessions, err := c.ListSessions(cwd)
+	sessions, err := ad.Sessions.List(cwd)
 	if err != nil {
 		return fmt.Errorf("list sessions: %w", err)
 	}
@@ -226,21 +189,14 @@ func spaces(n int) string {
 }
 
 // RunDelete deletes a session.
-func RunDelete(ctx context.Context, a *agent.Agent, id, output string) error {
+func RunDelete(ctx context.Context, ad *admin.Admin, id, output string) error {
 	if id == "" {
 		return fmt.Errorf("session ID required")
 	}
 
-	server, addr, err := startInternalServer(a)
-	if err != nil {
-		return err
-	}
-	defer server.Close()
-	c := newClient(addr)
-
 	// Validate session exists by checking all CWDs
 	found := false
-	if sessions, err := c.ListSessions(""); err == nil {
+	if sessions, err := ad.Sessions.List(""); err == nil {
 		for _, s := range sessions {
 			if s.ID == id {
 				found = true
@@ -252,10 +208,26 @@ func RunDelete(ctx context.Context, a *agent.Agent, id, output string) error {
 		return fmt.Errorf("session not found: %s\nRun 'harness sessions --all' to see all sessions.", id)
 	}
 
-	if err := c.DeleteSession(id); err != nil {
+	if err := ad.Sessions.Delete(id); err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
 
 	fmt.Println("Session deleted:", id)
 	return nil
+}
+
+// apiErr renders an admin error the way the API did before the CLI stopped
+// going through the server: a provider's structured error keeps its own
+// message plus its details.
+func apiErr(err error) error {
+	var pe *types.ProviderAPIError
+	if errors.As(err, &pe) {
+		if len(pe.Details) > 0 {
+			if d, jerr := json.Marshal(pe.Details); jerr == nil {
+				return errors.New(pe.Message + ": " + string(d))
+			}
+		}
+		return errors.New(pe.Message)
+	}
+	return err
 }

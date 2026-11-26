@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/configstore"
 	"github.com/gurcuff91/harness/internal/config"
 	"github.com/gurcuff91/harness/internal/providers"
@@ -31,10 +31,10 @@ func TestSlashInfoShowsTheSessionProvidersQuota(t *testing.T) {
 	t.Cleanup(gw.Close)
 	const name = "acpquota"
 	models := func() ([]types.ModelMeta, error) { return []types.ModelMeta{{ID: "m", ContextWindow: 1000}}, nil }
-	if err := agent.NewOpenAIProvider(name, gw.URL, agent.ProviderWithFetchModels(models)); err != nil {
+	if err := admin.RegisterOpenAI(name, gw.URL, admin.ProviderWithFetchModels(models)); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider(name) })
+	t.Cleanup(func() { admin.UnregisterProvider(name) })
 	q := &types.Quota{Provider: name, Plan: "pro", FetchedAt: time.Now().UTC(), Windows: []types.QuotaWindow{
 		{Name: "weekly", Label: "Weekly (all models)", UsedPercent: 42},
 	}}

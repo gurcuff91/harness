@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"github.com/gurcuff91/harness/admin"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -38,9 +39,9 @@ func TestNewOpenAIProvider_RegistersAndResolvableThroughAgent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := NewOpenAIProvider("agent-sdk-proxy", srv.URL,
-		ProviderWithDisplay("Agent SDK Proxy"),
-		ProviderWithHeaders(map[string]string{"X-Test": "1"}),
+	if err := admin.RegisterOpenAI("agent-sdk-proxy", srv.URL,
+		admin.ProviderWithDisplay("Agent SDK Proxy"),
+		admin.ProviderWithHeaders(map[string]string{"X-Test": "1"}),
 	); err != nil {
 		t.Fatalf("NewOpenAIProvider: %v", err)
 	}
@@ -66,7 +67,7 @@ func TestNewOpenAIProvider_RegistersAndResolvableThroughAgent(t *testing.T) {
 	}
 
 	var foundModel bool
-	for _, m := range a.Models() {
+	for _, m := range (&Agent{}).Models() {
 		if m.Provider == "agent-sdk-proxy" {
 			foundModel = true
 			if m.Model != "agent-sdk-proxy/agent-visible-model" {
@@ -75,14 +76,14 @@ func TestNewOpenAIProvider_RegistersAndResolvableThroughAgent(t *testing.T) {
 		}
 	}
 	if !foundModel {
-		t.Error("registered provider's model did not appear in a.Models()")
+		t.Error("registered provider's model did not appear in admin.Providers.Models()")
 	}
 }
 
 func TestNewOpenAIProvider_RejectsReservedName(t *testing.T) {
 	withCleanProviderRegistry(t)
 
-	if err := NewOpenAIProvider("openai", "https://x"); err == nil {
+	if err := admin.RegisterOpenAI("openai", "https://x"); err == nil {
 		t.Error("expected an error registering a reserved built-in provider name")
 	}
 }
@@ -90,8 +91,8 @@ func TestNewOpenAIProvider_RejectsReservedName(t *testing.T) {
 func TestProviderWithFetchModels_OverridesDiscovery(t *testing.T) {
 	withCleanProviderRegistry(t)
 
-	if err := NewOpenAIProvider("static-proxy", "https://unused.invalid",
-		ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
+	if err := admin.RegisterOpenAI("static-proxy", "https://unused.invalid",
+		admin.ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
 			return []types.ModelMeta{{ID: "static-1"}, {ID: "static-2"}}, nil
 		}),
 	); err != nil {
@@ -102,25 +103,25 @@ func TestProviderWithFetchModels_OverridesDiscovery(t *testing.T) {
 	defer a.Close()
 
 	count := 0
-	for _, m := range a.Models() {
+	for _, m := range (&Agent{}).Models() {
 		if m.Provider == "static-proxy" {
 			count++
 		}
 	}
 	if count != 2 {
-		t.Errorf("got %d models from static-proxy, want 2 (from the ProviderWithFetchModels hook)", count)
+		t.Errorf("got %d models from static-proxy, want 2 (from the admin.ProviderWithFetchModels hook)", count)
 	}
 }
 
 // TestNewOpenAIProvider_AlwaysActiveNoConnectStep confirms an SDK-registered
 // provider is immediately active without any connect step — authentication
-// lives entirely in ProviderWithHeaders, there's no apiKey parameter and no
+// lives entirely in admin.ProviderWithHeaders, there's no apiKey parameter and no
 // "not connected" state to resolve.
 func TestNewOpenAIProvider_AlwaysActiveNoConnectStep(t *testing.T) {
 	withCleanProviderRegistry(t)
 
-	if err := NewOpenAIProvider("always-active-proxy", "https://x",
-		ProviderWithHeaders(map[string]string{"X-Api-Key": "secret"}),
+	if err := admin.RegisterOpenAI("always-active-proxy", "https://x",
+		admin.ProviderWithHeaders(map[string]string{"X-Api-Key": "secret"}),
 	); err != nil {
 		t.Fatalf("NewOpenAIProvider: %v", err)
 	}
@@ -145,7 +146,7 @@ func TestNewOpenAIProvider_AlwaysActiveNoConnectStep(t *testing.T) {
 // deployment) needs "reasoning_split": true on every request to get its
 // thinking routed into reasoning_content instead of leaking inline inside
 // content as literal "<think>...</think>". Without
-// ProviderWithReasoningSplit, this flag never reaches the wire at all
+// admin.ProviderWithReasoningSplit, this flag never reaches the wire at all
 // (proven by TestNewOpenAIProvider_RegistersAndResolvableThroughAgent's
 // sibling coverage of the default path via internal/providers' own
 // TestCustomOpenAI_ReasoningSplitDefaultsToFalseNotSentOnWire) — this test
@@ -161,8 +162,8 @@ func TestNewOpenAIProvider_ReasoningSplitReachesTheWire(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := NewOpenAIProvider("minimax-gateway", srv.URL,
-		ProviderWithReasoningSplit(),
+	if err := admin.RegisterOpenAI("minimax-gateway", srv.URL,
+		admin.ProviderWithReasoningSplit(),
 	); err != nil {
 		t.Fatalf("NewOpenAIProvider: %v", err)
 	}

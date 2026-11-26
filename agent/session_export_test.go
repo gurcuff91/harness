@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/gurcuff91/harness/admin"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,22 +65,6 @@ func rawLog(t *testing.T, st store.SessionStore, id string) []string {
 	return out
 }
 
-func TestExportFileName(t *testing.T) {
-	for in, want := range map[string]string{
-		"Refactor del Parser!":         "refactor-del-parser-5111a1b3.export.jsonl",
-		"":                             "session-5111a1b3.export.jsonl",
-		"🚀 ¿qué?":                      "qu-5111a1b3.export.jsonl",
-		"🚀 ¿?":                         "session-5111a1b3.export.jsonl",
-		"a/b\\c  d":                    "a-b-c-d-5111a1b3.export.jsonl",
-		strings.Repeat("x", 80):        strings.Repeat("x", 50) + "-5111a1b3.export.jsonl",
-		strings.Repeat("y", 49) + " z": strings.Repeat("y", 49) + "-5111a1b3.export.jsonl", // a cut never ends in "-"
-	} {
-		if got := ExportFileName(store.SessionMeta{ID: "5111a1b3-bb6d-45d1", Name: in}); got != want {
-			t.Errorf("ExportFileName(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 // Export → import: a NEW session (new id, now, the cwd given) with the same
 // conversation byte for byte and the same name/model/thinking/stats.
 func TestExportImportRoundTrip(t *testing.T) {
@@ -100,8 +85,8 @@ func TestExportImportRoundTrip(t *testing.T) {
 	if n != 4 || len(lines) != 5 {
 		t.Fatalf("exported %d messages in %d lines, want 4 and 5:\n%s", n, len(lines), data)
 	}
-	var head ExportHeader
-	if err := json.Unmarshal([]byte(lines[0]), &head); err != nil || head.Format != ExportFormat || head.Version != ExportVersion || head.Meta.ID != sess.ID() || head.Meta.Name != "Round Trip" || head.Harness == "" {
+	var head admin.ExportHeader
+	if err := json.Unmarshal([]byte(lines[0]), &head); err != nil || head.Format != admin.ExportFormat || head.Version != admin.ExportVersion || head.Meta.ID != sess.ID() || head.Meta.Name != "Round Trip" || head.Harness == "" {
 		t.Fatalf("header = %+v, %v", head, err)
 	}
 
@@ -175,7 +160,7 @@ func TestImportRefusesInvalidExportsAndLeavesNothing(t *testing.T) {
 	lines := strings.Split(strings.TrimRight(string(good), "\n"), "\n")
 	header := lines[0]
 	futureHead := strings.Replace(header, `"version":1`, `"version":9`, 1)
-	var h ExportHeader
+	var h admin.ExportHeader
 	_ = json.Unmarshal([]byte(header), &h)
 	h.Meta.CompactOffset = 99
 	pastHead, _ := json.Marshal(h)
@@ -192,8 +177,8 @@ func TestImportRefusesInvalidExportsAndLeavesNothing(t *testing.T) {
 	} {
 		before, _ := a.store.ListMetas("")
 		_, err := a.ImportSession(strings.NewReader(c.in), t.TempDir())
-		if !errors.Is(err, ErrInvalidExport) || !strings.Contains(err.Error(), c.want) {
-			t.Errorf("%s: err = %v, want ErrInvalidExport mentioning %q", name, err, c.want)
+		if !errors.Is(err, admin.ErrInvalidExport) || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want admin.ErrInvalidExport mentioning %q", name, err, c.want)
 		}
 		after, _ := a.store.ListMetas("")
 		if len(after) != len(before) {

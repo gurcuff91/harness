@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/internal/providers"
 	"github.com/gurcuff91/harness/internal/tui/ansi"
 	"github.com/gurcuff91/harness/types"
@@ -377,10 +377,10 @@ func withAProvider(t *testing.T) {
 	models := func() ([]types.ModelMeta, error) {
 		return []types.ModelMeta{{ID: "m", ContextWindow: 100000, MaxTokens: 4096}}, nil
 	}
-	if err := agent.NewOpenAIProvider(name, gw.URL, agent.ProviderWithFetchModels(models)); err != nil {
+	if err := admin.RegisterOpenAI(name, gw.URL, admin.ProviderWithFetchModels(models)); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider(name) })
+	t.Cleanup(func() { admin.UnregisterProvider(name) })
 	t.Cleanup(providers.SetForTest([]providers.Provider{providers.Find(name)}))
 }
 

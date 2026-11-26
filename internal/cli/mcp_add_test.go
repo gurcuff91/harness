@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/configstore"
 	"github.com/gurcuff91/harness/internal/config"
 )
@@ -15,7 +16,7 @@ func TestMCPAddStoresTheTimeouts(t *testing.T) {
 	restore := config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore())
 	defer restore()
 	t.Setenv("HOME", t.TempDir())
-	a := newConfigAgent()
+	a := admin.New()
 	defer a.Close()
 
 	if err := RunMCPAdd(context.Background(), a, "wiki", MCPAddOpts{URL: "http://127.0.0.1:8787/mcp", Timeout: 600000, ConnectionTimeout: 7000}, "text"); err != nil {

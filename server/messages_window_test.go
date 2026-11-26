@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
@@ -42,12 +43,12 @@ func windowServerWithHandle(t *testing.T, layout string) (srv *Server, c *client
 	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	t.Cleanup(gw.Close)
 	prov := "win-" + strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-"))
-	if err := agent.NewOpenAIProvider(prov, gw.URL, agent.ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
+	if err := admin.RegisterOpenAI(prov, gw.URL, admin.ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
 		return []types.ModelMeta{{ID: "m", ContextWindow: 100000, MaxTokens: 4096}}, nil
 	})); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider(prov) })
+	t.Cleanup(func() { admin.UnregisterProvider(prov) })
 	a := agent.New(agent.AgentOptions{Store: fs, ResourceLoader: resources.NilLoader{}})
 	t.Cleanup(func() { a.Close() })
 	srv, err = Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})

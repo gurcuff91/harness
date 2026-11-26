@@ -187,7 +187,7 @@ func (m *SettingsManager) DeleteMCPServer(name string) error {
 // Exact same agnostic pattern as MCP servers above: keyed by provider name,
 // stored verbatim. internal/providers/registry.go's initRegistry reads this
 // collection at process start to construct a CustomOpenAI per enabled entry;
-// providers.ReloadCustom (agent.ReloadCustomProviders, POST
+// providers.ReloadCustom (admin.ReloadCustomProviders, POST
 // /api/settings/provider/reload) re-reads it live.
 
 // CustomProvider returns the stored config for a custom provider by name.

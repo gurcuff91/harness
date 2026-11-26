@@ -4,12 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
-	"strconv"
 	"time"
 
-	"github.com/gurcuff91/harness/agent"
+	"github.com/gurcuff91/harness/admin"
 )
 
 // MemoOpts carries the parsed flags for `harness memo`.
@@ -29,41 +27,29 @@ const globalCWD = "<global>"
 // RunMemo lists or searches memories for the current working directory (or all
 // projects with --all). Read-only: memories are written/deleted only by the
 // agent via its tools.
-func RunMemo(ctx context.Context, a *agent.Agent, opts MemoOpts, output string) error {
-	server, addr, err := startInternalServer(a)
-	if err != nil {
-		return err
-	}
-	defer server.Close()
-	c := newClient(addr)
-
-	// Build the query string. cwd selection:
+func RunMemo(ctx context.Context, ad *admin.Admin, opts MemoOpts, output string) error {
+	// cwd selection:
 	//   --all    → no cwd filter (every project + globals)
 	//   --global → cwd = sentinel (global-only)
 	//   default  → current directory (project + globals, folded in by the store)
-	q := url.Values{}
+	cwd := ""
 	switch {
 	case opts.All:
-		// no cwd param
 	case opts.Global:
-		q.Set("cwd", globalCWD)
+		cwd = globalCWD
 	default:
-		if cwd, err := os.Getwd(); err == nil {
-			q.Set("cwd", cwd)
-		}
+		cwd, _ = os.Getwd()
 	}
-	if opts.Query != "" {
-		q.Set("query", opts.Query)
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 10
 	}
-	q.Set("include_content", strconv.FormatBool(opts.Content))
-	if opts.Limit > 0 {
-		q.Set("limit", strconv.Itoa(opts.Limit))
-	}
-	if opts.Skip > 0 {
-		q.Set("skip", strconv.Itoa(opts.Skip))
+	skip := opts.Skip
+	if skip < 0 {
+		skip = 0
 	}
 
-	res, err := c.GetMemories(q.Encode())
+	res, err := ad.Memory.Search(cwd, opts.Query, opts.Content, skip, limit)
 	if err != nil {
 		return fmt.Errorf("memo: %w", err)
 	}

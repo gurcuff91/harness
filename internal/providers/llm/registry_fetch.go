@@ -20,7 +20,7 @@ import (
 // ── Remote model registry (OpenRouter catalog) ────────────────────────────
 //
 // The catalog must ALWAYS be available fast, and a slow or broken registry
-// server must never block anything (it's reached from Agent.Models() →
+// server must never block anything (it's reached from admin.Providers.Models →
 // GET /api/models, i.e. startup). Observed live: the plain catalog URL was
 // served from a broken CDN cache entry — 200, then the body stalled forever
 // — while any query string bypassed it. So:

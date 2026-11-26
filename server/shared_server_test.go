@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
@@ -63,10 +64,10 @@ func sharedServer(t *testing.T, llm *fakeLLM) (*Server, *agent.Agent, string) {
 	ts := httptest.NewServer(http.HandlerFunc(llm.handler))
 	t.Cleanup(ts.Close)
 	prov := "shared-" + strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-"))
-	if err := agent.NewOpenAIProvider(prov, ts.URL); err != nil {
+	if err := admin.RegisterOpenAI(prov, ts.URL); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider(prov) })
+	t.Cleanup(func() { admin.UnregisterProvider(prov) })
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
 	t.Cleanup(func() { a.Close() })
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
@@ -260,7 +261,7 @@ func TestProfilesBindPersistAndApply(t *testing.T) {
 	if strings.Contains(ps.SystemPrompt(), "## Chat directive") || len(profileToolNames(ps)) != 0 {
 		t.Fatal("unbound session got the profile")
 	}
-	if got := a.SessionProfiles(bound.ID); !slices.Equal(got, []string{"chat"}) {
+	if got := a.Admin().Sessions.Profiles(bound.ID); !slices.Equal(got, []string{"chat"}) {
 		t.Fatalf("persisted binding = %v", got)
 	}
 
@@ -282,7 +283,7 @@ func TestProfilesBindPersistAndApply(t *testing.T) {
 	if strings.Contains(off.SystemPrompt(), "## Chat directive") || len(profileToolNames(off)) != 0 {
 		t.Fatal("an unregistered profile must be skipped")
 	}
-	if got := a.SessionProfiles(bound.ID); !slices.Equal(got, []string{"chat"}) {
+	if got := a.Admin().Sessions.Profiles(bound.ID); !slices.Equal(got, []string{"chat"}) {
 		t.Fatalf("binding must survive unregistration, got %v", got)
 	}
 
@@ -374,19 +375,19 @@ func TestProfilesPatchSemanticsOverTheAPI(t *testing.T) {
 	}
 	c.CloseSession(s.ID)
 
-	if _, err := c.ResumeSession(s.ID); err != nil || !slices.Equal(a.SessionProfiles(s.ID), []string{"one"}) {
-		t.Fatalf("absent must keep: %v %v", err, a.SessionProfiles(s.ID))
+	if _, err := c.ResumeSession(s.ID); err != nil || !slices.Equal(a.Admin().Sessions.Profiles(s.ID), []string{"one"}) {
+		t.Fatalf("absent must keep: %v %v", err, a.Admin().Sessions.Profiles(s.ID))
 	}
-	if _, err := c.ResumeSession(s.ID, client.SessionWithEnabledProfiles("two")); err != nil || !slices.Equal(a.SessionProfiles(s.ID), []string{"two"}) {
-		t.Fatalf("names must replace: %v %v", err, a.SessionProfiles(s.ID))
+	if _, err := c.ResumeSession(s.ID, client.SessionWithEnabledProfiles("two")); err != nil || !slices.Equal(a.Admin().Sessions.Profiles(s.ID), []string{"two"}) {
+		t.Fatalf("names must replace: %v %v", err, a.Admin().Sessions.Profiles(s.ID))
 	}
 	f, err := c.ForkSession(s.ID)
-	if err != nil || !slices.Equal(a.SessionProfiles(f.ID), []string{"two"}) {
-		t.Fatalf("fork inherits: %v %v", err, a.SessionProfiles(f.ID))
+	if err != nil || !slices.Equal(a.Admin().Sessions.Profiles(f.ID), []string{"two"}) {
+		t.Fatalf("fork inherits: %v %v", err, a.Admin().Sessions.Profiles(f.ID))
 	}
 	f2, err := c.ForkSession(s.ID, client.SessionWithEnabledProfiles("one"))
-	if err != nil || !slices.Equal(a.SessionProfiles(f2.ID), []string{"one"}) {
-		t.Fatalf("fork replaces: %v %v", err, a.SessionProfiles(f2.ID))
+	if err != nil || !slices.Equal(a.Admin().Sessions.Profiles(f2.ID), []string{"one"}) {
+		t.Fatalf("fork replaces: %v %v", err, a.Admin().Sessions.Profiles(f2.ID))
 	}
 	_, err = c.ForkSession(s.ID, client.SessionWithEnabledProfiles("nope"))
 	var ce *client.Error
@@ -408,7 +409,7 @@ func TestProfilesPatchSemanticsOverTheAPI(t *testing.T) {
 		t.Fatalf("missing_profiles = %v (%v)", r, err)
 	}
 	r, err = c.ResumeSession(s.ID, client.SessionWithEnabledProfiles())
-	if err != nil || len(r.MissingProfiles) != 0 || len(a.SessionProfiles(s.ID)) != 0 {
-		t.Fatalf("[] must remove all: %v %v", err, a.SessionProfiles(s.ID))
+	if err != nil || len(r.MissingProfiles) != 0 || len(a.Admin().Sessions.Profiles(s.ID)) != 0 {
+		t.Fatalf("[] must remove all: %v %v", err, a.Admin().Sessions.Profiles(s.ID))
 	}
 }

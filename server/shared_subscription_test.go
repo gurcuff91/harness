@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
@@ -122,23 +123,23 @@ func TestSharedSubscriptionAcrossInstances(t *testing.T) {
 
 	// Instance B: a registry holding ONLY the custom provider (no claude-oauth).
 	proxyRoot := "http://" + addrA + "/api/providers/claude-oauth/proxy"
-	if err := agent.NewAnthropicProvider("shared-claude", proxyRoot); err != nil {
+	if err := admin.RegisterAnthropic("shared-claude", proxyRoot); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider("shared-claude") })
+	t.Cleanup(func() { admin.UnregisterProvider("shared-claude") })
 	bAgent := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
 	t.Cleanup(func() { bAgent.Close() })
 
 	// 1. B lists A's models, WITH their capabilities (the proxy passed them verbatim).
 	var listed *types.ModelListing
-	for _, m := range bAgent.Models() {
+	for _, m := range modelsOf(bAgent) {
 		if m.Model == "shared-claude/claude-test-1" {
 			m := m
 			listed = &m
 		}
 	}
 	if listed == nil {
-		t.Fatalf("B does not list A's models: %v", bAgent.Models())
+		t.Fatalf("B does not list A's models: %v", modelsOf(bAgent))
 	}
 	if listed.Dialect != "anthropic" || listed.ContextWindow != 777000 || listed.MaxTokens != 55000 || !listed.Vision || !listed.ThinkingAdaptive || !listed.EffortLevels["high"] ||
 		listed.Sources[types.FieldContextWindow] != types.SourceProvider {
@@ -187,10 +188,10 @@ func TestSharedSubscriptionAcrossInstances(t *testing.T) {
 func TestSharedSubscriptionToolNamesRoundTrip(t *testing.T) {
 	backend := newClaudeBackend(t)
 	addrA := instanceA(t, backend)
-	if err := agent.NewAnthropicProvider("shared-claude-tools", "http://"+addrA+"/api/providers/claude-oauth/proxy"); err != nil {
+	if err := admin.RegisterAnthropic("shared-claude-tools", "http://"+addrA+"/api/providers/claude-oauth/proxy"); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider("shared-claude-tools") })
+	t.Cleanup(func() { admin.UnregisterProvider("shared-claude-tools") })
 
 	p := providers.Find("shared-claude-tools")
 	resp, err := p.CompleteStream(context.Background(), &types.Request{
@@ -213,10 +214,10 @@ func TestSharedSubscriptionToolNamesRoundTrip(t *testing.T) {
 func TestSharedSubscriptionChainOfThree(t *testing.T) {
 	backend := newClaudeBackend(t)
 	addrA := instanceA(t, backend)
-	if err := agent.NewAnthropicProvider("hop-b", "http://"+addrA+"/api/providers/claude-oauth/proxy"); err != nil {
+	if err := admin.RegisterAnthropic("hop-b", "http://"+addrA+"/api/providers/claude-oauth/proxy"); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider("hop-b") })
+	t.Cleanup(func() { admin.UnregisterProvider("hop-b") })
 	bAgent := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
 	t.Cleanup(func() { bAgent.Close() })
 	srvB, err := Start(bAgent, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
@@ -254,10 +255,10 @@ func TestCustomAnthropicSettingsReload(t *testing.T) {
 	if err := sm.SetCustomProvider("decl-claude", config.CustomProvider{Type: "anthropic", URL: root, Display: "Declared"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := agent.ReloadCustomProviders(); err != nil {
+	if err := admin.ReloadCustomProviders(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { sm.DeleteCustomProvider("decl-claude"); agent.ReloadCustomProviders() })
+	t.Cleanup(func() { sm.DeleteCustomProvider("decl-claude"); admin.ReloadCustomProviders() })
 	p := providers.Find("decl-claude")
 	if p == nil || p.Dialect() != "anthropic" || p.DisplayName() != "Declared" {
 		t.Fatalf("declared provider = %v", p)
@@ -266,13 +267,13 @@ func TestCustomAnthropicSettingsReload(t *testing.T) {
 		t.Fatalf("fetch via settings-declared provider: %v", err)
 	}
 	// unchanged reload keeps the same object (and its model cache)
-	agent.ReloadCustomProviders()
+	admin.ReloadCustomProviders()
 	if providers.Find("decl-claude") != p {
 		t.Error("an unchanged entry must keep its provider object across reloads")
 	}
 	// the same name switched to openai becomes a different provider type
 	sm.SetCustomProvider("decl-claude", config.CustomProvider{Type: "openai", URL: root})
-	agent.ReloadCustomProviders()
+	admin.ReloadCustomProviders()
 	if q := providers.Find("decl-claude"); q == nil || q == p || q.Dialect() != "openai" {
 		t.Errorf("after a type switch: %v", q)
 	}

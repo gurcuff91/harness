@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
@@ -54,11 +55,11 @@ func newFallbackFixtureWith(t *testing.T, opts agent.AgentOptions) *fallbackFixt
 		return []types.ModelMeta{{ID: "m", ContextWindow: 100000, MaxTokens: 4096}}, nil
 	}
 	for _, n := range []string{f.first, f.second} {
-		if err := agent.NewOpenAIProvider(n, gw.URL, agent.ProviderWithFetchModels(models)); err != nil {
+		if err := admin.RegisterOpenAI(n, gw.URL, admin.ProviderWithFetchModels(models)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider(f.first); agent.UnregisterCustomProvider(f.second) })
+	t.Cleanup(func() { admin.UnregisterProvider(f.first); admin.UnregisterProvider(f.second) })
 	t.Cleanup(providers.SetForTest([]providers.Provider{providers.Find(f.first), providers.Find(f.second)}))
 	f.disconnect = func(name string) {
 		var keep []providers.Provider

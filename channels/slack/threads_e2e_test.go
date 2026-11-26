@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/schedule"
 	"github.com/gurcuff91/harness/agent/store"
@@ -137,10 +138,10 @@ func TestEndToEndAMentionInAThread(t *testing.T) {
 		{"user": "U3", "text": "since when?", "ts": "100.2", "thread_ts": "100.1"},
 	}
 	model := newThreadModel(t)
-	if err := agent.NewOpenAIProvider("threadmodel", model.srv.URL); err != nil {
+	if err := admin.RegisterOpenAI("threadmodel", model.srv.URL); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider("threadmodel") })
+	t.Cleanup(func() { admin.UnregisterProvider("threadmodel") })
 
 	ch := New(f.srv.URL, "xoxc-1", "xoxd-1")
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), Channels: []agent.Channel{ch}, EnableScheduler: true})
@@ -187,7 +188,7 @@ func TestEndToEndAMentionInAThread(t *testing.T) {
 	f.send(conn, map[string]any{"type": "message", "channel": "C111", "user": "U1", "ts": "100.9", "thread_ts": "100.1", "text": "<@UME> REMIND ME every day"})
 	var stored schedule.Schedule
 	eventually(t, "the schedule", func() bool {
-		for _, sc := range a.Schedules().List() {
+		for _, sc := range schedStore(t).List() {
 			if sc.Slug == "standup-reminder" && sc.Owner == sess.ID() {
 				stored = sc
 				return true
@@ -195,7 +196,7 @@ func TestEndToEndAMentionInAThread(t *testing.T) {
 		}
 		return false
 	})
-	t.Cleanup(func() { _, _ = a.Schedules().Delete("standup-reminder", sess.ID()) })
+	t.Cleanup(func() { _, _ = schedStore(t).Delete("standup-reminder", sess.ID()) })
 	if stored.Origin != "slack:C111:100.1" {
 		t.Fatalf("schedule origin = %q, want slack:C111:100.1 (the thread)", stored.Origin)
 	}
@@ -209,4 +210,15 @@ func TestEndToEndAMentionInAThread(t *testing.T) {
 		t.Errorf("the schedule's answer = %+v, want it back IN thread 100.1", last)
 	}
 	_ = time.Second
+}
+
+// schedStore opens the schedule store (a view over the process-global settings,
+// the same one the agent uses).
+func schedStore(t *testing.T) *schedule.Store {
+	t.Helper()
+	st, err := schedule.Open()
+	if err != nil || st == nil {
+		t.Fatalf("schedule store: %v", err)
+	}
+	return st
 }

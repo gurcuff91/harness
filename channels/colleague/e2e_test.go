@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/schedule"
 	"github.com/gurcuff91/harness/agent/store"
@@ -141,10 +142,10 @@ func TestTwoColleaguesTalk(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
 	model := newScriptedModel(t)
-	if err := agent.NewOpenAIProvider("scripted", model.srv.URL); err != nil {
+	if err := admin.RegisterOpenAI("scripted", model.srv.URL); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider("scripted") })
+	t.Cleanup(func() { admin.UnregisterProvider("scripted") })
 
 	ch := New(WithRunDir(shortDir(t)))
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), Channels: []agent.Channel{ch}})
@@ -232,10 +233,10 @@ func TestAReplyToAColleagueThatLeftIsLost(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
 	model := newScriptedModel(t)
-	if err := agent.NewOpenAIProvider("scripted2", model.srv.URL); err != nil {
+	if err := admin.RegisterOpenAI("scripted2", model.srv.URL); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider("scripted2") })
+	t.Cleanup(func() { admin.UnregisterProvider("scripted2") })
 	ch := New(WithRunDir(shortDir(t)))
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), Channels: []agent.Channel{ch}})
 	defer a.Close()
@@ -278,10 +279,10 @@ func TestTheReplyIsTheFinalText(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
 	model := newScriptedModel(t)
-	if err := agent.NewOpenAIProvider("scripted3", model.srv.URL); err != nil {
+	if err := admin.RegisterOpenAI("scripted3", model.srv.URL); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider("scripted3") })
+	t.Cleanup(func() { admin.UnregisterProvider("scripted3") })
 	ch := New(WithRunDir(shortDir(t)))
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), Channels: []agent.Channel{ch}})
 	defer a.Close()
@@ -352,10 +353,10 @@ func TestColleagueListShowsTheSessionName(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
 	model := newScriptedModel(t)
-	if err := agent.NewOpenAIProvider("scripted", model.srv.URL); err != nil {
+	if err := admin.RegisterOpenAI("scripted", model.srv.URL); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider("scripted") })
+	t.Cleanup(func() { admin.UnregisterProvider("scripted") })
 	ch := New(WithRunDir(shortDir(t)))
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), Channels: []agent.Channel{ch}})
 	defer a.Close()
@@ -433,10 +434,10 @@ func TestColleagueListPingsOtherProcessesForTheName(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
 	model := newScriptedModel(t)
-	if err := agent.NewOpenAIProvider("scripted", model.srv.URL); err != nil {
+	if err := admin.RegisterOpenAI("scripted", model.srv.URL); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider("scripted") })
+	t.Cleanup(func() { admin.UnregisterProvider("scripted") })
 	run := shortDir(t)
 	chA, chB := New(WithRunDir(run)), New(WithRunDir(run))
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), Channels: []agent.Channel{chA}})
@@ -539,10 +540,10 @@ func TestAScheduleAColleagueAskedForAnswersThatColleague(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
 	model := newScriptedModel(t)
-	if err := agent.NewOpenAIProvider("scripted", model.srv.URL); err != nil {
+	if err := admin.RegisterOpenAI("scripted", model.srv.URL); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider("scripted") })
+	t.Cleanup(func() { admin.UnregisterProvider("scripted") })
 	ch := New(WithRunDir(shortDir(t)))
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), Channels: []agent.Channel{ch}, EnableScheduler: true})
 	defer a.Close()
@@ -559,7 +560,7 @@ func TestAScheduleAColleagueAskedForAnswersThatColleague(t *testing.T) {
 	raiden, rl := open()
 	sID, rID := colleagueID(t, scorpion), colleagueID(t, raiden)
 	slug := "tg-" + strings.ReplaceAll(t.Name(), "/", "")[:8]
-	t.Cleanup(func() { _, _ = a.Schedules().Delete(slug, scorpion.ID()) })
+	t.Cleanup(func() { _, _ = schedStore(t).Delete(slug, scorpion.ID()) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -569,7 +570,7 @@ func TestAScheduleAColleagueAskedForAnswersThatColleague(t *testing.T) {
 	}
 	var stored schedule.Schedule
 	eventually(t, "the schedule exists with the colleague's origin", func() bool {
-		for _, sc := range a.Schedules().List() {
+		for _, sc := range schedStore(t).List() {
 			if sc.Slug == slug && sc.Owner == scorpion.ID() {
 				stored = sc
 				return true
@@ -611,4 +612,15 @@ func TestAScheduleAColleagueAskedForAnswersThatColleague(t *testing.T) {
 	if len(sl.prompts()) != n {
 		t.Errorf("scorpion got more prompts after the reply: a loop")
 	}
+}
+
+// schedStore opens the schedule store (a view over the process-global settings,
+// the same one the agent uses).
+func schedStore(t *testing.T) *schedule.Store {
+	t.Helper()
+	st, err := schedule.Open()
+	if err != nil || st == nil {
+		t.Fatalf("schedule store: %v", err)
+	}
+	return st
 }

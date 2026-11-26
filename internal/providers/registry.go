@@ -245,7 +245,7 @@ func refreshCachedModels() {
 
 // RegisterOpenAI builds a CustomOpenAI provider and appends it to the
 // global registry — the internal implementation
-// agent.NewOpenAIProvider (a public, SDK-safe wrapper never exposing this
+// admin.RegisterOpenAI (a public, SDK-safe wrapper never exposing this
 // package's Provider interface or any other internal/… type) calls this.
 // Returns an error if name collides with a reserved built-in provider
 // name; never touches settings.json or credentials.json. There is no
@@ -286,7 +286,7 @@ func RegisterOpenAI(name, url, display string, headers map[string]string, reason
 }
 
 // RegisterAnthropic is RegisterOpenAI for an Anthropic Messages-compatible
-// endpoint (agent.NewAnthropicProvider is its public wrapper): it builds a
+// endpoint (admin.RegisterAnthropic is its public wrapper): it builds a
 // CustomAnthropic and appends it to the registry. url is the API root WITHOUT
 // "/v1" (…/v1/messages and …/v1/models are appended), so pointing at another
 // harness's proxy is just its "/api/providers/<name>/proxy" root. Same rules as

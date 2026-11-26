@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.129.0] - 2026-11-26
+
+### Added — the `admin` package
+`agent` operates live sessions; the new public package **`admin`** does everything that does not need one: stored sessions (list, get, messages, rename, delete, export), providers (list, models, connect, disconnect, OAuth, quotas, custom providers), settings, MCP configuration, memory and schedules. Each is a service of `admin.New(opts...)` (`WithSessionStore`, `WithMemory`, `WithActiveSessions`; the defaults are what `agent.New` uses), with typed errors (`ErrNotFound`, `ErrInvalid`, `ErrUnprocessable`, `ErrSessionActive`, `ErrConflict`, `ErrNotConnected`, `ErrUpstream`, `ErrNotConfigured`). It does not import `agent`.
+- **The server and the CLI are thin layers over it.** Handlers decode, call `admin` or `agent`, and encode; the logic that lived inside them (connecting a provider, listing models, the quota rules…) is in `admin`. The CLI no longer starts an in-memory server for `connect`, `disconnect`, `providers`, `sessions`, `delete`, `memo`, `schedules`, `settings`, `mcp` and `provider`. HTTP behavior is unchanged.
+- **`Agent.ActiveSessions()`**, **`Agent.Admin()`**, and **`Session.Watch(buffer, onDrop)`** (fan-out of a session's events to several observers: deltas dropped when a watcher is full, control events never silently lost). `ResumeSession` of one id is now serialized, so concurrent opens return a single live session.
+
+### Changed (BREAKING)
+- Removed from `*agent.Agent`: `ListSessions`, `ListAllSessions`, `DeleteSession`, `RenameSession`, `SessionMetaOf`, `LoadMessages`, `LoadMessagesWindow`, `SessionResetCount`, `SessionProfiles`, `ExportSession`, `ListModels`, `Models`, `Memory`, `Schedules` — use `Agent.Admin()` (or `admin.New()`). The export format types moved to `admin` (`admin.ExportHeader`, …).
+- The custom-provider functions moved to `admin` (`RegisterOpenAI`, `RegisterAnthropic`, `UnregisterProvider`, `ReloadCustomProviders`, `ProviderWith*`, `ErrProvider*`); **`harness.NewOpenAIProvider` and the rest keep their names** in the facade.
+- `harness providers --json` no longer prints `proxy_path` (it described a server that is no longer involved).
+
 ## [0.128.0] - 2026-11-26
 
 ### Added — per-session directives are back

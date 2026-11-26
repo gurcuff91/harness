@@ -59,6 +59,7 @@ package harness
 
 import (
 	"github.com/gurcuff91/harness/acp"
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/agent/profiles"
@@ -262,66 +263,85 @@ func AgentWithTerminal(name string) AgentOption {
 	return func(o *agent.AgentOptions) { o.Terminal = name }
 }
 
+// ── Admin ────────────────────────────────────────────────────────────────
+
+// NewAdmin builds the admin layer (stored sessions, providers, settings, MCP
+// config, memory, schedules). See [admin.New].
+var NewAdmin = admin.New
+
+// AdminOption configures NewAdmin.
+type AdminOption = admin.Option
+
+// AdminWithSessionStore sets where stored sessions live. See [admin.WithSessionStore].
+var AdminWithSessionStore = admin.WithSessionStore
+
+// AdminWithMemory sets the memory store. See [admin.WithMemory].
+var AdminWithMemory = admin.WithMemory
+
+// AdminWithActiveSessions tells admin which sessions are open in this process.
+// See [admin.WithActiveSessions].
+var AdminWithActiveSessions = admin.WithActiveSessions
+
 // ── Custom providers ─────────────────────────────────────────────────────
 //
 // Registers a custom OpenAI Chat Completions-compatible provider globally
 // for this process — usable by any Agent built afterward via "name/model".
 // May be called at any time, and paired with UnregisterCustomProvider.
-// See agent.NewOpenAIProvider's doc comment for the full contract
+// See admin.RegisterOpenAI's doc comment for the full contract
 // (why apiKey is memory-only, how this differs from the declarative
 // `harness provider add` / settings.json path, registration-ordering
 // requirements).
 
 // NewOpenAIProvider registers a custom OpenAI-compatible provider. See
-// [agent.NewOpenAIProvider].
-var NewOpenAIProvider = agent.NewOpenAIProvider
+// [admin.RegisterOpenAI].
+var NewOpenAIProvider = admin.RegisterOpenAI
 
 // NewAnthropicProvider registers a custom Anthropic Messages-compatible
 // provider — Anthropic itself, a gateway, or another harness instance's
-// provider proxy. See [agent.NewAnthropicProvider].
-var NewAnthropicProvider = agent.NewAnthropicProvider
+// provider proxy. See [admin.RegisterAnthropic].
+var NewAnthropicProvider = admin.RegisterAnthropic
 
 // UnregisterCustomProvider removes a provider registered with
 // NewOpenAIProvider or NewAnthropicProvider, so the name can be registered again in the same process.
-// See [agent.UnregisterCustomProvider].
-var UnregisterCustomProvider = agent.UnregisterCustomProvider
+// See [admin.UnregisterProvider].
+var UnregisterCustomProvider = admin.UnregisterProvider
 
 // ReloadCustomProviders applies settings.json's "provider" collection live.
-// See [agent.ReloadCustomProviders].
-var ReloadCustomProviders = agent.ReloadCustomProviders
+// See [admin.ReloadCustomProviders].
+var ReloadCustomProviders = admin.ReloadCustomProviders
 
 // ErrProviderNameConflict: a settings.json entry was skipped because a
-// programmatic provider uses its name. See [agent.ErrProviderNameConflict].
-var ErrProviderNameConflict = agent.ErrProviderNameConflict
+// programmatic provider uses its name. See [admin.ErrProviderNameConflict].
+var ErrProviderNameConflict = admin.ErrProviderNameConflict
 
 // ErrProviderNotFound: no provider is registered under that name. See
-// [agent.ErrProviderNotFound].
-var ErrProviderNotFound = agent.ErrProviderNotFound
+// [admin.ErrProviderNotFound].
+var ErrProviderNotFound = admin.ErrProviderNotFound
 
 // ErrProviderNotRemovable: built-in or settings.json-declared provider. See
-// [agent.ErrProviderNotRemovable].
-var ErrProviderNotRemovable = agent.ErrProviderNotRemovable
+// [admin.ErrProviderNotRemovable].
+var ErrProviderNotRemovable = admin.ErrProviderNotRemovable
 
 // CustomProviderOption configures a NewOpenAIProvider call. See
-// [agent.CustomProviderOption].
-type CustomProviderOption = agent.CustomProviderOption
+// [admin.CustomProviderOption].
+type CustomProviderOption = admin.CustomProviderOption
 
 // ProviderWithDisplay sets the human-friendly display name. See
-// [agent.ProviderWithDisplay].
-var ProviderWithDisplay = agent.ProviderWithDisplay
+// [admin.ProviderWithDisplay].
+var ProviderWithDisplay = admin.ProviderWithDisplay
 
 // ProviderWithHeaders sets extra HTTP headers sent on every request. See
-// [agent.ProviderWithHeaders].
-var ProviderWithHeaders = agent.ProviderWithHeaders
+// [admin.ProviderWithHeaders].
+var ProviderWithHeaders = admin.ProviderWithHeaders
 
 // ProviderWithFetchModels overrides model discovery entirely. See
-// [agent.ProviderWithFetchModels].
-var ProviderWithFetchModels = agent.ProviderWithFetchModels
+// [admin.ProviderWithFetchModels].
+var ProviderWithFetchModels = admin.ProviderWithFetchModels
 
 // ProviderWithReasoningSplit sends "reasoning_split": true on every
 // request — needed for a custom provider fronting a MiniMax-compatible
-// backend. See [agent.ProviderWithReasoningSplit].
-var ProviderWithReasoningSplit = agent.ProviderWithReasoningSplit
+// backend. See [admin.ProviderWithReasoningSplit].
+var ProviderWithReasoningSplit = admin.ProviderWithReasoningSplit
 
 // ── Configuration stores ─────────────────────────────────────────────────
 //

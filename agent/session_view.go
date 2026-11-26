@@ -86,7 +86,7 @@ func (s *Session) Snapshot() SessionSnapshot {
 				snap.MCPConnected++
 			}
 		}
-		if store := a.Schedules(); store != nil {
+		if store := a.schedules(); store != nil {
 			for _, sc := range store.List() {
 				if sc.Owner == s.ID() {
 					snap.ScheduleCount++

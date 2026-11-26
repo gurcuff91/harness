@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/configstore"
 	"github.com/gurcuff91/harness/internal/config"
@@ -41,10 +42,10 @@ func promptOf(t *testing.T, a *agent.Agent) string {
 	t.Cleanup(models.Close)
 	herdrFakeSeq++
 	name := fmt.Sprintf("cli-herdr-fake-%d", herdrFakeSeq)
-	if err := agent.NewOpenAIProvider(name, models.URL); err != nil {
+	if err := admin.RegisterOpenAI(name, models.URL); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider(name) })
+	t.Cleanup(func() { admin.UnregisterProvider(name) })
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -131,10 +132,10 @@ func TestTheSectionSurvivesResumeAndFork(t *testing.T) {
 	defer models.Close()
 	herdrFakeSeq++
 	name := fmt.Sprintf("cli-herdr-fake-%d", herdrFakeSeq)
-	if err := agent.NewOpenAIProvider(name, models.URL); err != nil {
+	if err := admin.RegisterOpenAI(name, models.URL); err != nil {
 		t.Fatal(err)
 	}
-	defer agent.UnregisterCustomProvider(name)
+	defer admin.UnregisterProvider(name)
 	cwd, _ := os.Getwd()
 	sess, err := a.NewSession(cwd, name+"/m")
 	if err != nil {
@@ -311,10 +312,10 @@ func askThroughTheTUIAgent(t *testing.T, m *scriptedModel, withHerdr bool) (answ
 	}
 	herdrFakeSeq++
 	name := fmt.Sprintf("cli-herdr-fake-%d", herdrFakeSeq)
-	if err := agent.NewOpenAIProvider(name, m.URL); err != nil {
+	if err := admin.RegisterOpenAI(name, m.URL); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider(name) })
+	t.Cleanup(func() { admin.UnregisterProvider(name) })
 	a := (&tuiCmd{}).newTUIAgent(extras{})
 	defer a.Close()
 	// A scratch directory, not the repo: the repo's AGENTS.md (project context, ~90 KB) would fill the
@@ -387,10 +388,10 @@ func TestAPersonsPromptIsDeliveredUnchanged(t *testing.T) {
 	t.Setenv("HC_TERMINAL_ID", "t9")
 	herdrFakeSeq++
 	name := fmt.Sprintf("cli-herdr-fake-%d", herdrFakeSeq)
-	if err := agent.NewOpenAIProvider(name, m.URL); err != nil {
+	if err := admin.RegisterOpenAI(name, m.URL); err != nil {
 		t.Fatal(err)
 	}
-	defer agent.UnregisterCustomProvider(name)
+	defer admin.UnregisterProvider(name)
 	a := (&tuiCmd{}).newTUIAgent(extras{})
 	defer a.Close()
 	sess, err := a.NewSession(t.TempDir(), name+"/m") // a scratch directory: see askThroughTheTUIAgent

@@ -111,6 +111,8 @@ type Session struct {
 	toolsLen     atomic.Int64 // total JSON byte length of all tool schemas
 
 	handler Handler
+	// watchers fans events out to Watch observers (see watch.go).
+	watchers watchSet
 
 	// Skills
 	skills    []resources.SkillInfo
@@ -1557,7 +1559,7 @@ func (s *Session) SystemPrompt() string { return s.systemPromptVal.Load().(strin
 
 // refreshProviderLocked re-resolves the session's provider by NAME at a turn
 // boundary. Providers registered from code can be unregistered and
-// registered again while sessions run (agent.UnregisterCustomProvider): a
+// registered again while sessions run (admin.UnregisterProvider): a
 // session adopts the provider now registered under its name (new
 // URL/headers — e.g. a rotated API key), and fails the turn with a clear
 // ErrProviderNotFound if none is. Built-in and settings.json providers never
@@ -1890,6 +1892,7 @@ func (s *Session) Close() error {
 	if s.agent != nil {
 		s.agent.unregisterSession(s.id)
 	}
+	s.watchers.closeAll()
 	return s.store.Close()
 }
 
@@ -2282,6 +2285,7 @@ func (s *Session) emit(e types.Event) {
 	if s.handler != nil {
 		s.handler(e)
 	}
+	s.watchers.deliver(e)
 }
 
 // stripOldTurnImages strips inline images from all turns except the current one.

@@ -34,7 +34,7 @@ import (
 // (CredTypeNone, Connect/Disconnect always rejected) already models "this
 // provider's activation isn't credential-based" for a different reason
 // (a local ping instead of headers). Both the declarative (settings.json)
-// and programmatic (agent.NewOpenAIProvider) registration paths land here
+// and programmatic (admin.RegisterOpenAI) registration paths land here
 // identically — there is no per-path branching in this file at all.
 type CustomOpenAI struct {
 	// customMeta: programmatic / fromSettings / settingsCfg — what the registry
@@ -61,7 +61,7 @@ type CustomOpenAI struct {
 
 	// fetchModelsFn, if set, REPLACES the default HTTP-GET-<url>/models
 	// discovery in FetchModels — the hook RegisterOpenAI (the SDK's
-	// programmatic registration path, via agent.NewOpenAIProvider) exposes
+	// programmatic registration path, via admin.RegisterOpenAI) exposes
 	// as ProviderWithFetchModels. nil for every settings.json-configured
 	// custom provider (types.CustomProvider carries no such field — it has
 	// no JSON representation, so it can only ever come from Go code). Any
@@ -129,7 +129,7 @@ func (o *CustomOpenAI) ResolveCredentials() (types.Credentials, error) {
 
 // Connect is not supported — a custom provider's authentication is fixed
 // at registration time (via Headers, either settings.json's "headers" or
-// agent.ProviderWithHeaders), not something `harness connect` can
+// admin.ProviderWithHeaders), not something `harness connect` can
 // meaningfully change. Mirrors Ollama.Connect's exact rejection pattern.
 func (o *CustomOpenAI) Connect(_ types.Credentials) error {
 	return fmt.Errorf("%s authenticates entirely via its configured headers — connect/disconnect not applicable", o.name)

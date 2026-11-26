@@ -1,151 +1,62 @@
 package server
 
 import (
-	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/logx"
 	"github.com/gurcuff91/harness/types"
 )
 
-// controlBroadcastTimeout bounds how long broadcast will block trying to
-// deliver a control event (see isControlEvent) to a slow/stuck client before
-// giving up and dropping it as a last resort. Long enough to ride out a
-// consumer that's momentarily behind (a big render, a burst of buffered
-// deltas draining), short enough that a genuinely dead client can't stall
-// the agent loop for real — s.emit (and therefore the whole ReAct iteration)
-// calls broadcast synchronously.
-const controlBroadcastTimeout = 500 * time.Millisecond
-
 // proxiesCreated counts proxies ever built — a session must get exactly one
-// per server (a second one steals its event stream); tests assert on it.
+// per server; tests assert on it.
 var proxiesCreated atomic.Int64
 
-// SessionProxy wraps an agent session and broadcasts events to SSE clients.
-// It subscribes to the session once and fans out to all connected clients.
+// SessionProxy is the server's handle on one live session: the session itself
+// plus the SSE clients watching it. The fan-out (one buffer per client, deltas
+// dropped when it is full, control events waiting a bounded time) is
+// agent.Session.Watch's — the server only formats what a watcher yields.
 type SessionProxy struct {
 	session *agent.Session
-	logger  logx.Logger // never nil — used by the dropped-control-event warning, see broadcast
+	logger  logx.Logger // never nil — used by the dropped-control-event warning
 
-	mu      sync.RWMutex
-	clients map[chan<- []byte]struct{} // SSE client channels (formatted JSON lines)
+	clients atomic.Int64
 }
 
-// newSessionProxy wraps sess for SSE fan-out. logger must mirror the owning
-// Server's — the TUI's in-process server runs with logx.NewNilLogger()
-// specifically because it shares stdout/stderr with the raw-mode terminal
-// UI, so ANY unconditional log line here would corrupt the render. See
-// broadcast's dropped-control-event warning, the one log call on this path.
+// newSessionProxy wraps sess. logger must mirror the owning Server's — the
+// TUI's in-process server runs with logx.NewNilLogger() specifically because
+// it shares stdout/stderr with the raw-mode terminal UI, so ANY unconditional
+// log line here would corrupt the render. The warning in onDrop is the one log
+// call on this path.
 func newSessionProxy(sess *agent.Session, logger logx.Logger) *SessionProxy {
 	proxiesCreated.Add(1)
-	p := &SessionProxy{
-		session: sess,
-		logger:  logger,
-		clients: make(map[chan<- []byte]struct{}),
+	return &SessionProxy{session: sess, logger: logger}
+}
+
+// watch registers an SSE client: a Watcher with the given buffer, already
+// receiving when it returns. The caller must call the returned release func
+// when the client is gone.
+func (p *SessionProxy) watch(buffer int) (w *agent.Watcher, release func()) {
+	w = p.session.Watch(buffer, p.onDrop)
+	p.clients.Add(1)
+	return w, func() {
+		w.Close()
+		p.clients.Add(-1)
 	}
-	sess.Subscribe(p.broadcast)
-	return p
-}
-
-// addClient registers a new SSE client.
-func (p *SessionProxy) addClient(ch chan<- []byte) {
-	p.mu.Lock()
-	p.clients[ch] = struct{}{}
-	p.mu.Unlock()
-}
-
-// removeClient unregisters an SSE client.
-func (p *SessionProxy) removeClient(ch chan<- []byte) {
-	p.mu.Lock()
-	delete(p.clients, ch)
-	p.mu.Unlock()
 }
 
 // clientCount returns the number of connected SSE clients.
-func (p *SessionProxy) clientCount() int {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return len(p.clients)
-}
+func (p *SessionProxy) clientCount() int { return int(p.clients.Load()) }
 
-// close disconnects all SSE clients and closes the underlying session.
-func (p *SessionProxy) close() {
-	p.mu.Lock()
-	for ch := range p.clients {
-		close(ch)
-	}
-	p.clients = nil
-	p.mu.Unlock()
-	p.session.Close()
-}
+// close closes the underlying session; that also ends every watcher (and so
+// every SSE stream).
+func (p *SessionProxy) close() { p.session.Close() }
 
-// broadcast formats an agent event as JSON and sends it to all connected
-// clients.
-//
-// High-volume streaming deltas (thinking/text/tool_args — many per turn, one
-// per LLM token) are sent non-blocking: a slow client just misses a fragment,
-// which is harmless and the right trade-off — s.emit calls broadcast
-// synchronously from the agent's ReAct loop, so blocking here would stall the
-// whole turn waiting on a slow renderer.
-//
-// Control events (turn/loop lifecycle, stop, error, compaction — see
-// isControlEvent) are different: losing one leaves the client with no way to
-// know the agent is done or was cancelled, which is exactly the "spinner
-// stuck forever, Esc does nothing" freeze this guards against. For those,
-// broadcast blocks briefly (controlBroadcastTimeout) to ride out a client
-// that's momentarily behind on a backlog, only dropping as an absolute last
-// resort (logged, so it's visible in the field instead of silent).
-func (p *SessionProxy) broadcast(e types.Event) {
-	line := formatEvent(e)
-	if line == nil {
-		return
-	}
-	control := isControlEvent(e.Type)
-
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	for ch := range p.clients {
-		select {
-		case ch <- line:
-			continue
-		default:
-		}
-		if !control {
-			continue // streaming delta: fine to drop, already tried non-blocking above
-		}
-		// Control event and the channel was full — worth a bounded wait instead
-		// of dropping immediately.
-		select {
-		case ch <- line:
-		case <-time.After(controlBroadcastTimeout):
-			// This runs on the agent's own event-emitting goroutine, which
-			// for the TUI's in-process server is the SAME process driving
-			// the raw-mode terminal — an unconditional log line here would
-			// corrupt its rendering. p.logger is logx.NewNilLogger() in exactly
-			// that case (see newSessionProxy's doc comment), so this call is
-			// always safe to make unconditionally: `harness serve`/telegram
-			// inject a real Logger and do want this visible, the TUI's inner
-			// server gets the silent one.
-			p.logger.Warn("sse", "control_event_dropped",
-				"event_type", int(e.Type), "timeout_ms", controlBroadcastTimeout.Milliseconds())
-		}
-	}
-}
-
-// isControlEvent reports whether e is a lifecycle/control event that must
-// never be silently dropped — as opposed to a high-volume streaming delta
-// (thinking/text/tool_args deltas), where losing one is harmless. Control
-// events are everything the client needs to track turn/loop state, tool
-// pairing, and terminal outcomes (stop/error/compaction); deltas are
-// everything else. Listed as an explicit denylist of the droppable types so a
-// FUTURE event type defaults to "protected" — the safer failure mode.
-func isControlEvent(t types.EventType) bool {
-	switch t {
-	case types.EventStreamTextDelta, types.EventStreamThinkingDelta, types.EventToolArgsDelta:
-		return false
-	default:
-		return true
-	}
+// onDrop reports a control event a watcher could not take in time. It runs on
+// the agent's own event-emitting goroutine — for the TUI's in-process server
+// the SAME process that drives the raw-mode terminal — which is why p.logger is
+// logx.NewNilLogger() there and this call is always safe to make.
+func (p *SessionProxy) onDrop(e types.Event) {
+	p.logger.Warn("sse", "control_event_dropped",
+		"event_type", int(e.Type), "timeout_ms", int64(500))
 }

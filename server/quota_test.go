@@ -58,9 +58,9 @@ func quotaServerURL(t *testing.T, ps ...providers.Provider) (*client.Client, str
 	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
 	t.Cleanup(providers.SetForTest(ps))
 	for _, p := range ps {
-		forgetQuota(p.Name())
+		providers.ForgetQuota(p.Name())
 		name := p.Name()
-		t.Cleanup(func() { forgetQuota(name) })
+		t.Cleanup(func() { providers.ForgetQuota(name) })
 	}
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
 	t.Cleanup(func() { a.Close() })
@@ -172,6 +172,25 @@ func TestQuotaEndpointRetryAfterHeaderWithoutReading(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 	if _, err := c.ProviderQuota("q", true); statusOf(err) != http.StatusBadGateway || q.calls.Load() != 1 {
 		t.Fatalf("calls = %d", q.calls.Load())
+	}
+}
+
+// The Retry-After header is the wait in WHOLE seconds, rounded UP (never
+// advertising a retry before the block ends), on a failure with no reading.
+func TestQuotaEndpointRetryAfterRoundsUp(t *testing.T) {
+	shortQuotaRules(t, time.Minute, time.Millisecond, 90*time.Second)
+	q := &quotaProvider{toggleProvider: newToggle("q")}
+	q.answer(func() (*types.Quota, error) {
+		return nil, &providers.QuotaHTTPError{Provider: "q", Status: 429, RetryAfter: 1500 * time.Millisecond}
+	})
+	_, base := quotaServerURL(t, q)
+	resp, err := http.Get(base + "/api/providers/q/quota")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := resp.Header.Get("Retry-After"); got != "2" {
+		t.Fatalf("Retry-After = %q, want %q (1.5 s rounded up)", got, "2")
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent/memory"
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/schedule"
@@ -63,6 +64,14 @@ type Agent struct {
 	// output it wants by subscribing to that session's events. Guarded by sessMu.
 	sessMu         sync.Mutex
 	activeSessions map[string]*Session
+	// adm is the cached Admin (see Admin()).
+	admOnce sync.Once
+	adm     *admin.Admin
+	// openMu/opening serialize the slow path of ResumeSession per session id.
+	openMu  sync.Mutex
+	opening map[string]*openLock
+	// onRegisterForTest, when set, runs on every registerSession (tests).
+	onRegisterForTest func()
 
 	// Graceful shutdown (idempotent Close).
 	closeOnce sync.Once
@@ -420,6 +429,9 @@ func (a *Agent) registerSession(s *Session) {
 	a.sessMu.Lock()
 	a.activeSessions[s.id] = s
 	a.sessMu.Unlock()
+	if a.onRegisterForTest != nil {
+		a.onRegisterForTest()
+	}
 	if a.schedEngine != nil {
 		a.schedEngine.AddSession(s.id)
 	}
@@ -452,9 +464,23 @@ func (a *Agent) scheduleAdapter() tools.ScheduleStore {
 	return schedule.NewToolAdapter(a.schedStore)
 }
 
-// Schedules returns the agent's schedule store (nil if unavailable). Read by the
-// HTTP server to serve the read-only /api/schedules listing.
-func (a *Agent) Schedules() *schedule.Store { return a.schedStore }
+// schedules returns the agent's schedule store (nil if unavailable).
+func (a *Agent) schedules() *schedule.Store { return a.schedStore }
+
+// Admin returns the admin layer bound to this agent: its session store, its
+// memory store and its ActiveSessions (so deleting or renaming a session open
+// here is refused). Built once and cached. The stores belong to the agent:
+// closing the Admin does not close them.
+func (a *Agent) Admin() *admin.Admin {
+	a.admOnce.Do(func() {
+		a.adm = admin.New(
+			admin.WithSessionStore(a.store),
+			admin.WithMemory(a.memStore),
+			admin.WithActiveSessions(a.ActiveSessions),
+		)
+	})
+	return a.adm
+}
 
 // Options returns the original configuration — used by the Subagent tool to clone.
 func (a *Agent) Options() AgentOptions {
@@ -548,93 +574,6 @@ func (a *Agent) MCPTools() []tools.Tool {
 		return nil
 	}
 	return a.mcpManager.Tools()
-}
-
-// Memory exposes the agent's persistent memory store (nil if the agent was
-// built without one). This is the rich, cwd-aware store — used by the HTTP server to
-// serve read-only memory queries, and available to SDK consumers. The agent's
-// own tools use a scoped adapter over the same store.
-func (a *Agent) Memory() memory.Store { return a.memStore }
-
-// ProviderModels is one provider's slice of the model registry: its models, or
-// the reason it has none right now.
-type ProviderModels struct {
-	// Provider is the provider's slug.
-	Provider string
-	// Active reports whether the provider has valid credentials / is reachable.
-	Active bool
-	// Models are the provider's models (nil when inactive or when Err is set).
-	Models []types.ModelListing
-	// Err is why an ACTIVE provider has no model list — the failure of its
-	// FetchModels (expired token, unreachable, rejected key…). Nil when the
-	// provider is inactive (not an error: it simply isn't connected) or when
-	// the fetch worked, including a fetch that legitimately returned nothing.
-	Err error
-}
-
-// ListModels is the model registry, per provider: for every registered provider
-// (or only the one named by provider, "" = all) its models AND, for an active
-// one that couldn't produce them, the error — the part Models() has to drop.
-// Providers run concurrently, so the call costs the slowest one, and results
-// keep providers.All order. An unknown provider name yields an empty result.
-func (a *Agent) ListModels(provider string) []ProviderModels {
-	all := providers.All() // snapshot: safe while providers are (un)registered
-	if provider != "" {
-		var one []providers.Provider
-		for _, p := range all {
-			if p.Name() == provider {
-				one = append(one, p)
-			}
-		}
-		all = one
-	}
-
-	// Each provider may need network I/O — IsActive() can probe (Ollama pings
-	// its local server), and an uncached model list is fetched from the
-	// provider's API — so providers run CONCURRENTLY, slotted by index.
-	out := make([]ProviderModels, len(all))
-	var wg sync.WaitGroup
-	for i, p := range all {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			pm := ProviderModels{Provider: p.Name()}
-			defer func() { out[i] = pm }()
-			if pm.Active = p.IsActive(); !pm.Active {
-				return
-			}
-			models := p.Models()
-			if len(models) == 0 {
-				var err error
-				if models, err = p.FetchModels(); err != nil {
-					pm.Err = err
-					return
-				}
-			}
-			dialect := p.Dialect()
-			for _, m := range models {
-				pm.Models = append(pm.Models, types.ModelListing{
-					Provider:  p.Name(),
-					Model:     p.Name() + "/" + m.ID,
-					Dialect:   dialect,
-					ModelMeta: m,
-				})
-			}
-		}()
-	}
-	wg.Wait()
-	return out
-}
-
-// Models lists every model of every active provider, flat — the shape of GET
-// /api/models. It is ListModels without the per-provider errors (a provider
-// that fails simply contributes nothing); use ListModels to see why.
-func (a *Agent) Models() []types.ModelListing {
-	var out []types.ModelListing
-	for _, pm := range a.ListModels("") {
-		out = append(out, pm.Models...)
-	}
-	return out
 }
 
 // MCPStatuses reports the connection state of each configured MCP server. Nil
@@ -907,6 +846,54 @@ func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session
 	}
 	a.sessMu.Unlock()
 
+	// Slow path, serialized per id: concurrent resumes of the same closed
+	// session yield ONE live Session (the later ones wait, then take the fast
+	// path). Resumes of other ids are not blocked. sessMu is never held here.
+	unlockOpen := a.lockOpen(sessionID)
+	a.sessMu.Lock()
+	_, raced := a.activeSessions[sessionID]
+	a.sessMu.Unlock()
+	if raced {
+		unlockOpen()
+		return a.ResumeSession(sessionID, opts...)
+	}
+	defer unlockOpen()
+	return a.resumeStored(sessionID, cfg)
+}
+
+// lockOpen serializes the opening of one session id; the returned func
+// releases it. The per-id entry is dropped when nobody holds or waits on it.
+func (a *Agent) lockOpen(id string) func() {
+	a.openMu.Lock()
+	if a.opening == nil {
+		a.opening = make(map[string]*openLock)
+	}
+	l := a.opening[id]
+	if l == nil {
+		l = &openLock{}
+		a.opening[id] = l
+	}
+	l.refs++
+	a.openMu.Unlock()
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		a.openMu.Lock()
+		if l.refs--; l.refs == 0 {
+			delete(a.opening, id)
+		}
+		a.openMu.Unlock()
+	}
+}
+
+type openLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// resumeStored opens a stored session that is not live (caller holds the
+// per-id open lock).
+func (a *Agent) resumeStored(sessionID string, cfg sessionConfig) (*Session, error) {
 	storeInst, err := store.OpenSession(a.store, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
@@ -1066,53 +1053,6 @@ func (a *Agent) setSessionProfiles(sessionID string, profiles []string) error {
 	return st.UpdateMeta(meta)
 }
 
-// LoadMessages returns a session's full message history whether or not it's
-// active (the live session's log if it is, the store's otherwise).
-func (a *Agent) LoadMessages(sessionID string) ([]types.Message, error) {
-	a.sessMu.Lock()
-	sess, ok := a.activeSessions[sessionID]
-	a.sessMu.Unlock()
-	if ok {
-		return sess.AllMessages(), nil
-	}
-	if _, found, err := a.store.LoadMeta(sessionID); err != nil || !found {
-		return nil, fmt.Errorf("session %s not found", sessionID)
-	}
-	return a.store.LoadMessages(sessionID, 0)
-}
-
-// LoadMessagesWindow is LoadMessages restricted to a window of the log (see
-// store.MessageWindow), for an active or a persisted session alike. It returns
-// the messages, the absolute index of the first one and the full log's length.
-func (a *Agent) LoadMessagesWindow(sessionID string, w store.MessageWindow) ([]types.Message, int, int, error) {
-	a.sessMu.Lock()
-	sess, ok := a.activeSessions[sessionID]
-	a.sessMu.Unlock()
-	if ok {
-		return sess.MessagesWindow(w)
-	}
-	if _, found, err := a.store.LoadMeta(sessionID); err != nil || !found {
-		return nil, 0, 0, fmt.Errorf("session %s not found", sessionID)
-	}
-	return store.LoadMessagesWindow(a.store, sessionID, w)
-}
-
-// SessionResetCount returns how many times a session's history was reset
-// (store.SessionMeta.ResetCount) — 0 for a never-reset or unknown session.
-func (a *Agent) SessionResetCount(sessionID string) int {
-	a.sessMu.Lock()
-	sess, ok := a.activeSessions[sessionID]
-	a.sessMu.Unlock()
-	if ok {
-		return sess.store.Meta().ResetCount
-	}
-	meta, found, err := a.store.LoadMeta(sessionID)
-	if err != nil || !found {
-		return 0
-	}
-	return meta.ResetCount
-}
-
 // MaxTokensFor returns the output-token ceiling a session on fullModel
 // ("provider/model") would run with — the same rule sessions use
 // (sessionMaxTokens): AgentOptions.MaxTokens when set, else the model's
@@ -1126,22 +1066,6 @@ func (a *Agent) MaxTokensFor(fullModel string) int {
 		}
 	}
 	return sessionMaxTokens(a.maxTokens, meta)
-}
-
-// SessionProfiles returns the profile names bound to a session (nil if none
-// or the session doesn't exist).
-func (a *Agent) SessionProfiles(sessionID string) []string {
-	a.sessMu.Lock()
-	sess, ok := a.activeSessions[sessionID]
-	a.sessMu.Unlock()
-	if ok {
-		return append([]string(nil), sess.store.Meta().Profiles...)
-	}
-	meta, found, err := a.store.LoadMeta(sessionID)
-	if err != nil || !found {
-		return nil
-	}
-	return meta.Profiles
 }
 
 // ── Session management ───────────────────────────────────────────────────
@@ -1274,22 +1198,6 @@ func (a *Agent) openStoredCopy(copyStore *store.Session, cfg sessionConfig, what
 	}
 	a.registerSession(sess)
 	return sess, nil
-}
-
-func (a *Agent) ListSessions(cwd string) ([]store.SessionMeta, error) {
-	return a.store.ListMetas(cwd)
-}
-
-func (a *Agent) ListAllSessions() ([]store.SessionMeta, error) {
-	return a.store.ListMetas("")
-}
-
-func (a *Agent) DeleteSession(sessionID string) error {
-	return a.store.DeleteSession(sessionID)
-}
-
-func (a *Agent) RenameSession(sessionID, name string) error {
-	return store.Rename(a.store, sessionID, name)
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────
@@ -1568,7 +1476,7 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 				}
 			}
 			scheduleCount := 0
-			if sc := a.Schedules(); sc != nil {
+			if sc := a.schedules(); sc != nil {
 				for _, s := range sc.List() {
 					if s.Owner == sessionID {
 						scheduleCount++

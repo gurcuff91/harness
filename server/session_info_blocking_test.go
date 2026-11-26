@@ -36,7 +36,7 @@ func TestSessionInfoDoesNotBlockDuringInFlightTurn(t *testing.T) {
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore()})
 	defer a.Close()
 
-	models := a.Models()
+	models := modelsOf(a)
 	if len(models) < 1 {
 		t.Skip("need at least 1 active model in this environment")
 	}

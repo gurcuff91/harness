@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
@@ -75,13 +76,13 @@ func proxyEnv(t *testing.T, up *fakeUpstream, opts ServerOptions) (*Server, stri
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	name := fmt.Sprintf("pxy-%d", proxySeq.Add(1))
-	if err := agent.NewOpenAIProvider(name, up.URL,
-		agent.ProviderWithHeaders(map[string]string{"X-Api-Key": "SECRET-UPSTREAM-KEY"}),
-		agent.ProviderWithFetchModels(func() ([]types.ModelMeta, error) { return []types.ModelMeta{{ID: "m"}}, nil }),
+	if err := admin.RegisterOpenAI(name, up.URL,
+		admin.ProviderWithHeaders(map[string]string{"X-Api-Key": "SECRET-UPSTREAM-KEY"}),
+		admin.ProviderWithFetchModels(func() ([]types.ModelMeta, error) { return []types.ModelMeta{{ID: "m"}}, nil }),
 	); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider(name) })
+	t.Cleanup(func() { admin.UnregisterProvider(name) })
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
 	t.Cleanup(func() { a.Close() })
 	opts.Logger = logx.NewNilLogger()
@@ -358,14 +359,14 @@ func TestProxyRuntimeRegisteredProvider(t *testing.T) {
 	if resp, _ := do(t, "POST", proxyURL(srv, late, "/chat/completions"), `{}`, nil); resp.StatusCode != 404 {
 		t.Fatalf("before registering: %d", resp.StatusCode)
 	}
-	if err := agent.NewOpenAIProvider(late, up.URL, agent.ProviderWithFetchModels(func() ([]types.ModelMeta, error) { return nil, nil })); err != nil {
+	if err := admin.RegisterOpenAI(late, up.URL, admin.ProviderWithFetchModels(func() ([]types.ModelMeta, error) { return nil, nil })); err != nil {
 		t.Fatal(err)
 	}
 	resp, b := do(t, "POST", proxyURL(srv, late, "/chat/completions"), `{}`, nil)
 	if resp.StatusCode != 200 || string(b) != `{"ok":1}` {
 		t.Fatalf("after registering: %d %s", resp.StatusCode, b)
 	}
-	agent.UnregisterCustomProvider(late)
+	admin.UnregisterProvider(late)
 	if resp, _ := do(t, "POST", proxyURL(srv, late, "/chat/completions"), `{}`, nil); resp.StatusCode != 404 {
 		t.Errorf("after unregistering: %d", resp.StatusCode)
 	}
@@ -681,11 +682,11 @@ func TestProxyInjectsReasoningSplitForDeclaredProvider(t *testing.T) {
 	up := miniMaxLike(t)
 	t.Setenv("HOME", t.TempDir())
 	name := fmt.Sprintf("mm-like-%d", proxySeq.Add(1))
-	if err := agent.NewOpenAIProvider(name, up.URL, agent.ProviderWithReasoningSplit(),
-		agent.ProviderWithFetchModels(func() ([]types.ModelMeta, error) { return []types.ModelMeta{{ID: "m"}}, nil })); err != nil {
+	if err := admin.RegisterOpenAI(name, up.URL, admin.ProviderWithReasoningSplit(),
+		admin.ProviderWithFetchModels(func() ([]types.ModelMeta, error) { return []types.ModelMeta{{ID: "m"}}, nil })); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider(name) })
+	t.Cleanup(func() { admin.UnregisterProvider(name) })
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
 	t.Cleanup(func() { a.Close() })
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})

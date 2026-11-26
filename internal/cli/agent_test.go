@@ -56,7 +56,7 @@ func TestNewOneShotAgentDoesNotPersistToDisk(t *testing.T) {
 // in-memory.
 func resolveAnyModelOrSkip(t *testing.T, a *agent.Agent) string {
 	t.Helper()
-	models := a.Models()
+	models := modelsOf(a)
 	if len(models) == 0 {
 		t.Skip("no active provider configured in this environment — skipping (covered indirectly by newOneShotAgent's Store wiring, which this test's setup already exercises up to NewSession)")
 	}

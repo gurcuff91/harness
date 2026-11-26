@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/gurcuff91/harness/admin"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,7 +25,7 @@ func directivesTestAgent(t *testing.T, st store.SessionStore, opts AgentOptions)
 		w.Write([]byte(`{"data":[{"id":"m"}]}`))
 	}))
 	t.Cleanup(srv.Close)
-	if err := NewOpenAIProvider("directives-fake", srv.URL); err != nil {
+	if err := admin.RegisterOpenAI("directives-fake", srv.URL); err != nil {
 		t.Fatal(err)
 	}
 	opts.Store = st

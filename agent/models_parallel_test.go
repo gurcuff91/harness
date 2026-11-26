@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"github.com/gurcuff91/harness/admin"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -20,7 +21,7 @@ func TestModelsFetchesProvidersConcurrently(t *testing.T) {
 	names := []string{"par-a", "par-b", "par-c"}
 	for _, n := range names {
 		id := n + "-model"
-		if err := NewOpenAIProvider(n, ts.URL, ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
+		if err := admin.RegisterOpenAI(n, ts.URL, admin.ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
 			time.Sleep(300 * time.Millisecond)
 			return []types.ModelMeta{{ID: id}}, nil
 		})); err != nil {
@@ -31,7 +32,7 @@ func TestModelsFetchesProvidersConcurrently(t *testing.T) {
 	defer a.Close()
 
 	start := time.Now()
-	list := a.Models()
+	list := (&Agent{}).Models()
 	el := time.Since(start)
 
 	var ours []string

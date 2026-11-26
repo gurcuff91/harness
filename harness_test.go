@@ -153,7 +153,7 @@ func TestRunServerAliasIsWiredEndToEnd(t *testing.T) {
 // back").
 func TestSessionToolsEndpointEndToEnd(t *testing.T) {
 	a := NewAgent(AgentWithStore(store.NewInMemoryStore()))
-	models := a.Models()
+	models := modelsOf(a)
 	if len(models) < 1 {
 		t.Skip("need at least 1 active model in this environment")
 	}
@@ -226,7 +226,7 @@ func TestSessionToolsEndpointEndToEnd(t *testing.T) {
 // applying.
 func TestMaxIterCommandEndToEnd(t *testing.T) {
 	a := NewAgent(AgentWithStore(store.NewInMemoryStore()))
-	models := a.Models()
+	models := modelsOf(a)
 	if len(models) < 1 {
 		t.Skip("need at least 1 active model in this environment")
 	}
@@ -582,7 +582,7 @@ func TestNewAnthropicProviderFacadeAliasIsWired(t *testing.T) {
 	a := NewAgent(AgentWithStore(store.NewInMemoryStore()))
 	defer a.Close()
 	var found bool
-	for _, m := range a.Models() {
+	for _, m := range modelsOf(a) {
 		if m.Model == "facade-claude/claude-facade" {
 			found = true
 			if m.Dialect != "anthropic" || m.DisplayName != "Facade" {
@@ -599,7 +599,7 @@ func TestNewAnthropicProviderFacadeAliasIsWired(t *testing.T) {
 	if err := UnregisterCustomProvider("facade-claude"); err != nil {
 		t.Errorf("UnregisterCustomProvider: %v", err)
 	}
-	for _, m := range a.Models() {
+	for _, m := range modelsOf(a) {
 		if strings.HasPrefix(m.Model, "facade-claude/") {
 			t.Errorf("still listed after unregistering: %s", m.Model)
 		}

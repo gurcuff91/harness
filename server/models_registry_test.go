@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
@@ -28,8 +29,8 @@ func registryServer(t *testing.T) (c *client.Client, good, broken string) {
 	t.Setenv("HOME", t.TempDir())
 	n := regSeq.Add(1)
 	good, broken = fmt.Sprintf("reg-good-%d", n), fmt.Sprintf("reg-broken-%d", n)
-	if err := agent.NewOpenAIProvider(good, "http://127.0.0.1:1",
-		agent.ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
+	if err := admin.RegisterOpenAI(good, "http://127.0.0.1:1",
+		admin.ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
 			return []types.ModelMeta{
 				{ID: "alpha", DisplayName: "Alpha", ContextWindow: 1000, MaxTokens: 100, Vision: true, InputPrice: 1.5,
 					Sources: map[string]string{types.FieldPricing: types.SourceProvider}},
@@ -38,13 +39,13 @@ func registryServer(t *testing.T) (c *client.Client, good, broken string) {
 		})); err != nil {
 		t.Fatal(err)
 	}
-	if err := agent.NewOpenAIProvider(broken, "http://127.0.0.1:1",
-		agent.ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
+	if err := admin.RegisterOpenAI(broken, "http://127.0.0.1:1",
+		admin.ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
 			return nil, errors.New("token expired: re-authenticate")
 		})); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider(good); agent.UnregisterCustomProvider(broken) })
+	t.Cleanup(func() { admin.UnregisterProvider(good); admin.UnregisterProvider(broken) })
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
 	t.Cleanup(func() { a.Close() })
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/gurcuff91/harness/admin"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,7 +39,7 @@ func TestReloadAddsAndRemoves(t *testing.T) {
 
 	setProvider(t, sm, "set-a", g.URL, "k", false)
 	setProvider(t, sm, "set-b", g.URL, "k", false)
-	if err := ReloadCustomProviders(); err != nil {
+	if err := admin.ReloadCustomProviders(); err != nil {
 		t.Fatal(err)
 	}
 	if !hasProvider("set-a") || !hasProvider("set-b") {
@@ -47,7 +48,7 @@ func TestReloadAddsAndRemoves(t *testing.T) {
 
 	sm.DeleteCustomProvider("set-a")
 	setProvider(t, sm, "set-b", g.URL, "k", true) // disabled
-	if err := ReloadCustomProviders(); err != nil {
+	if err := admin.ReloadCustomProviders(); err != nil {
 		t.Fatal(err)
 	}
 	if hasProvider("set-a") || hasProvider("set-b") {
@@ -61,7 +62,7 @@ func TestReloadEditIsPickedUpByRunningSession(t *testing.T) {
 	sm := withSettings(t)
 	g := newGateway(t)
 	setProvider(t, sm, "set-edit", g.URL, "old", false)
-	if err := ReloadCustomProviders(); err != nil {
+	if err := admin.ReloadCustomProviders(); err != nil {
 		t.Fatal(err)
 	}
 	a := New(AgentOptions{Store: store.NewInMemoryStore()})
@@ -75,7 +76,7 @@ func TestReloadEditIsPickedUpByRunningSession(t *testing.T) {
 	}
 
 	setProvider(t, sm, "set-edit", g.URL, "new", false)
-	if err := ReloadCustomProviders(); err != nil {
+	if err := admin.ReloadCustomProviders(); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := sess.PromptAndWait(context.Background(), "two"); err != nil || out != "key=new" {
@@ -86,9 +87,9 @@ func TestReloadEditIsPickedUpByRunningSession(t *testing.T) {
 	}
 
 	sm.DeleteCustomProvider("set-edit")
-	ReloadCustomProviders()
-	if _, err := sess.PromptAndWait(context.Background(), "three"); !errors.Is(err, ErrProviderNotFound) {
-		t.Fatalf("turn after delete = %v, want ErrProviderNotFound", err)
+	admin.ReloadCustomProviders()
+	if _, err := sess.PromptAndWait(context.Background(), "three"); !errors.Is(err, admin.ErrProviderNotFound) {
+		t.Fatalf("turn after delete = %v, want admin.ErrProviderNotFound", err)
 	}
 	if modelListed(a, "set-edit/m") {
 		t.Error("a deleted provider's models must leave the model list")
@@ -100,7 +101,7 @@ func TestReloadEditIsPickedUpByRunningSession(t *testing.T) {
 func TestReloadLeavesBuiltinAndProgrammatic(t *testing.T) {
 	sm := withSettings(t)
 	g := newGateway(t)
-	if err := NewOpenAIProvider("code-p", g.URL); err != nil {
+	if err := admin.RegisterOpenAI("code-p", g.URL); err != nil {
 		t.Fatal(err)
 	}
 	before := map[string]providers.Provider{}
@@ -111,7 +112,7 @@ func TestReloadLeavesBuiltinAndProgrammatic(t *testing.T) {
 		before[p.Name()] = p
 	}
 	setProvider(t, sm, "set-x", g.URL, "k", false)
-	if err := ReloadCustomProviders(); err != nil {
+	if err := admin.ReloadCustomProviders(); err != nil {
 		t.Fatal(err)
 	}
 	for name, p := range before {
@@ -126,16 +127,16 @@ func TestReloadLeavesBuiltinAndProgrammatic(t *testing.T) {
 func TestReloadNameConflictProgrammaticWins(t *testing.T) {
 	sm := withSettings(t)
 	g := newGateway(t)
-	if err := NewOpenAIProvider("dup", g.URL, ProviderWithHeaders(map[string]string{"X-Api-Key": "code"})); err != nil {
+	if err := admin.RegisterOpenAI("dup", g.URL, admin.ProviderWithHeaders(map[string]string{"X-Api-Key": "code"})); err != nil {
 		t.Fatal(err)
 	}
 	code := providers.Find("dup")
 	setProvider(t, sm, "dup", g.URL, "settings", false)
 	setProvider(t, sm, "set-ok", g.URL, "k", false)
 
-	err := ReloadCustomProviders()
-	if !errors.Is(err, ErrProviderNameConflict) || !strings.Contains(err.Error(), "dup") {
-		t.Fatalf("err = %v, want ErrProviderNameConflict naming dup", err)
+	err := admin.ReloadCustomProviders()
+	if !errors.Is(err, admin.ErrProviderNameConflict) || !strings.Contains(err.Error(), "dup") {
+		t.Fatalf("err = %v, want admin.ErrProviderNameConflict naming dup", err)
 	}
 	if providers.Find("dup") != code {
 		t.Error("the programmatic provider must win the name")
@@ -160,10 +161,10 @@ func TestReloadIsIdempotent(t *testing.T) {
 	sm := withSettings(t)
 	g := newGateway(t)
 	setProvider(t, sm, "set-same", g.URL, "k", false)
-	ReloadCustomProviders()
+	admin.ReloadCustomProviders()
 	first := providers.Find("set-same")
 	first.FetchModels() // warm its cache
-	if err := ReloadCustomProviders(); err != nil {
+	if err := admin.ReloadCustomProviders(); err != nil {
 		t.Fatal(err)
 	}
 	if providers.Find("set-same") != first {
@@ -179,11 +180,11 @@ func TestReloadKeepsOldSnapshots(t *testing.T) {
 	sm := withSettings(t)
 	g := newGateway(t)
 	setProvider(t, sm, "set-snap", g.URL, "k", false)
-	ReloadCustomProviders()
+	admin.ReloadCustomProviders()
 	snap := providers.All()
 	n := len(snap)
 	sm.DeleteCustomProvider("set-snap")
-	ReloadCustomProviders()
+	admin.ReloadCustomProviders()
 	if len(snap) != n {
 		t.Fatal("an old snapshot changed length")
 	}
@@ -210,7 +211,7 @@ func TestReloadRacesWithReaders(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for !stop.Load() {
-				a.Models()
+				(&Agent{}).Models()
 				providers.Find("set-race")
 				providers.Resolve("set-race/m")
 				for _, p := range providers.All() {
@@ -221,7 +222,7 @@ func TestReloadRacesWithReaders(t *testing.T) {
 	}
 	for i := range 200 {
 		setProvider(t, sm, "set-race", g.URL, fmt.Sprint(i), i%3 == 0)
-		if err := ReloadCustomProviders(); err != nil {
+		if err := admin.ReloadCustomProviders(); err != nil {
 			t.Fatalf("reload %d: %v", i, err)
 		}
 	}

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gurcuff91/harness/admin"
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/configstore"
@@ -255,10 +256,10 @@ func newFixture(t *testing.T, allow string) *fixture {
 	if len(name) > 40 {
 		name = name[:40]
 	}
-	if err := agent.NewOpenAIProvider(name, echoModel(t)); err != nil {
+	if err := admin.RegisterOpenAI(name, echoModel(t)); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { agent.UnregisterCustomProvider(name) })
+	t.Cleanup(func() { admin.UnregisterProvider(name) })
 	ch := New(botToken)
 	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), Channels: []agent.Channel{ch}})
 	t.Cleanup(func() { a.Close() })
