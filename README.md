@@ -65,4 +65,4 @@ make docs-serve # build and serve the documentation locally
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
