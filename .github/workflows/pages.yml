@@ -31,6 +31,13 @@ jobs:
         with:
           go-version-file: go.mod
       - uses: actions/configure-pages@v5
+      - name: The generated reference pages must be up to date
+        run: |
+          make docs-generate
+          git diff --exit-code -- docs/page/content rpc/schema.json || {
+            echo "::error::A generated page is stale. Run 'make docs' and commit the result."
+            exit 1
+          }
       - name: Build the site
         run: make docs-build DOCS_BASE=/harness
       - uses: actions/upload-pages-artifact@v3

@@ -1,7 +1,7 @@
 # Makefile for Harness
 # A minimal AI agent harness built in pure Go.
 
-.PHONY: build install clean test vet lint run help release release-push docs-build docs-serve docs-clean docs-rpc docs-api
+.PHONY: build install clean test vet lint run help release release-push docs docs-generate docs-build docs-serve docs-clean docs-rpc docs-api
 
 # Binary name and paths
 BINARY_NAME=harness
@@ -26,8 +26,9 @@ help:
 	@echo "  make fmt       - Format code"
 	@echo "  make deps      - Download dependencies"
 	@echo "  make release   - Tag HEAD as \$$(VERSION) and push it (vet+test first)"
-	@echo "  make docs-build - Build the documentation site (docs/page → docs/page/dist)"
-	@echo "  make docs-serve - Build it and serve it on http://localhost:8000"
+	@echo "  make docs       - EVERYTHING: regenerate the reference pages, then build the site"
+	@echo "  make docs-build - Build only the site (docs/page → docs/page/dist)"
+	@echo "  make docs-serve - Run "make docs", then serve it on http://localhost:8000"
 	@echo "  make docs-clean - Remove the built site"
 	@echo "  make docs-rpc   - Regenerate the RPC protocol reference page from its schema"
 	@echo "  make docs-api   - Regenerate reference/http-api.md from the server's OpenAPI document"
@@ -158,12 +159,6 @@ get:
 	$(GO) mod download
 	@echo "✅ Dependencies ready"
 
-# Build documentation
-docs:
-	@echo "Building docs..."
-	@go doc -all > docs/api.md 2>/dev/null || true
-	@echo "✅ Docs generated"
-
 # Full build cycle (deps, vet, test, build, install)
 all: deps vet test build install
 
@@ -198,7 +193,16 @@ docs-build:
 	@echo "Building the documentation site..."
 	cd $(DOCS_DIR)/build && $(GO) run . -content ../content -static ../static -out ../dist -version $(VERSION) -base "$(DOCS_BASE)"
 
-docs-serve: docs-build
+# The whole documentation in one step: the two generated reference pages (the HTTP
+# API from the server's OpenAPI, the RPC protocol from its schema) and then the
+# site itself. This is what to run before committing a change to the code that
+# the docs describe.
+docs: docs-generate docs-build
+
+# Regenerate every page that is generated from code.
+docs-generate: docs-api docs-rpc
+
+docs-serve: docs
 	@echo "Serving http://localhost:$(DOCS_PORT) (Ctrl+C to stop)"
 	cd $(DOCS_OUT) && python3 -m http.server $(DOCS_PORT)
 
