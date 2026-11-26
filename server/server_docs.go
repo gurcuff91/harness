@@ -542,7 +542,7 @@ const openAPISpecTemplate = `{
       "get": {
         "tags": ["sessions"],
         "summary": "Stream events (SSE)",
-        "description": "Opens a Server-Sent Events stream for the session. Emits turn_start, text_delta, tool_call, tool_result, turn_end, error, and more.",
+        "description": "Opens a Server-Sent Events stream for the session. Emits turn_start, loop_start, thinking, text, tool_start, tool_args, tool_call, tool_result, tokens, turn_end, error, and more.",
         "operationId": "streamEvents",
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
         "responses": {

@@ -1,7 +1,7 @@
 # Makefile for Harness
 # A minimal AI agent harness built in pure Go.
 
-.PHONY: build install clean test vet lint run help release release-push docs-build docs-serve docs-clean
+.PHONY: build install clean test vet lint run help release release-push docs-build docs-serve docs-clean docs-api
 
 # Binary name and paths
 BINARY_NAME=harness
@@ -29,6 +29,7 @@ help:
 	@echo "  make docs-build - Build the documentation site (docs/page → docs/page/dist)"
 	@echo "  make docs-serve - Build it and serve it on http://localhost:8000"
 	@echo "  make docs-clean - Remove the built site"
+	@echo "  make docs-api   - Regenerate reference/http-api.md from the server's OpenAPI document"
 	@echo ""
 	@echo "Usage:"
 	@echo "  make build          # builds ./harness"
@@ -202,3 +203,6 @@ docs-serve: docs-build
 
 docs-clean:
 	rm -rf $(DOCS_OUT)
+
+docs-api:
+	$(GO) run ./docs/page/genapi

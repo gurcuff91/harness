@@ -127,7 +127,7 @@ func pageHTML(s *site, p *page, body string, heads []heading, prev, next *page, 
 			if h.Level == 3 {
 				cls = "l3"
 			}
-			fmt.Fprintf(&toc, `<a class="%s" href="#%s">%s</a>`+"\n", cls, h.ID, html.EscapeString(h.Text))
+			fmt.Fprintf(&toc, `<a class="%s" href="#%s">%s</a>`+"\n", cls, h.ID, html.EscapeString(strings.ReplaceAll(h.Text, "`", "")))
 		}
 	}
 	var pager strings.Builder
