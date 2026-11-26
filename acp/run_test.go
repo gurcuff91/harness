@@ -58,7 +58,7 @@ func TestWithStdoutOverridesDefault(t *testing.T) {
 	}
 }
 
-// transports/ was removed in v0.119.0 (acp moved to the module root; chat
+// frontends/ was removed in v0.119.0 (acp moved to the module root; chat
 // platforms are channels): the directory must not come back.
 func TestTheTransportsDirectoryIsGone(t *testing.T) {
 	if _, err := os.Stat(filepath.Join("..", "transports")); err == nil {

@@ -53,7 +53,7 @@ func (f *fakeLLM) handler(w http.ResponseWriter, r *http.Request) {
 }
 
 // sharedServer is ONE running server over an agent with a fake model — the
-// layered setup the transports now run on.
+// layered setup the frontends now run on.
 func sharedServer(t *testing.T, llm *fakeLLM) (*Server, *agent.Agent, string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
@@ -120,7 +120,7 @@ func TestStartAddrIsValidImmediately(t *testing.T) {
 	}
 }
 
-// Two clients (a "transport" and a plain UI client) streaming the SAME session
+// Two clients (a "frontend" and a plain UI client) streaming the SAME session
 // on one server both receive every event — no subscriber stealing — and the
 // origin each prompt was sent with is echoed to both.
 func TestTwoClientsOneSessionBothGetEveryEvent(t *testing.T) {
@@ -157,7 +157,7 @@ func TestTwoClientsOneSessionBothGetEveryEvent(t *testing.T) {
 		t.Errorf("origin = %q / %q, want slack for both", o1, o2)
 	}
 
-	// A prompt typed from the UI (caller-defined origin) reaches the transport too.
+	// A prompt typed from the UI (caller-defined origin) reaches the frontend too.
 	if _, err := ui.SendPrompt(sess.ID, "from ui", client.PromptWithOrigin("kaiban")); err != nil {
 		t.Fatal(err)
 	}

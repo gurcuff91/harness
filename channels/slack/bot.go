@@ -370,7 +370,7 @@ var noiseSubtypes = map[string]bool{
 
 // SlackMessage is one message entry from conversations.history, exposed to
 // the agent as-is (including Files with their URLs) so it can decide whether
-// to fetch an attachment — this transport never resolves that decision itself.
+// to fetch an attachment — this frontend never resolves that decision itself.
 type SlackMessage struct {
 	User    string      `json:"user,omitempty"`
 	Text    string      `json:"text"`

@@ -41,7 +41,7 @@ type ModelGroup struct {
 	Models []types.ModelInfo
 }
 
-// GetModelGroups returns ordered groups of models for transport display.
+// GetModelGroups returns ordered groups of models for frontend display.
 func GetModelGroups(currentModel string) []ModelGroup {
 	EnsureRegistry()
 

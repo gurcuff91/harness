@@ -32,7 +32,7 @@ func WithStdout(w io.Writer) Option {
 	return func(c *runConfig) { c.stdout = w }
 }
 
-// Run starts the ACP transport on srv — a running server (server.Start) the
+// Run starts the ACP frontend on srv — a running server (server.Start) the
 // caller owns and may share with other frontends; it talks to srv over
 // HTTP/SSE (client.New(srv.Addr())) and never closes srv or its agent — then
 // runs a JSON-RPC dispatch loop reading newline-delimited messages from stdin (or
@@ -154,7 +154,7 @@ func dispatchLoop(ctx context.Context, c *conn, h *handler) error {
 			// MUST come after respond() — see notifyAvailableCommands's doc
 			// comment: sending this before the response line hits the wire is
 			// silently dropped by Zed (a confirmed upstream bug), which is
-			// exactly how this transport's slash commands went missing before.
+			// exactly how this frontend's slash commands went missing before.
 			if rerr == nil {
 				h.notifyAvailableCommands(c, result.SessionID)
 			}

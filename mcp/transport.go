@@ -2,7 +2,7 @@ package mcp
 
 import "context"
 
-// Transport is the pluggable channel over which a Client exchanges JSON-RPC
+// Frontend is the pluggable channel over which a Client exchanges JSON-RPC
 // messages with an MCP server. Phase 1 ships StdioTransport (local subprocess);
 // a future StreamableHTTPTransport can implement this same interface without any
 // changes to Client or Manager.

@@ -24,7 +24,7 @@ type acpSession struct {
 }
 
 // handler owns the live state for one ACP connection: the shared Harness
-// client (talking to the in-process server every other transport also
+// client (talking to the in-process server every other frontend also
 // uses), and the set of concurrently open ACP sessions this connection has
 // created or loaded — Zed can run several "trains of thought" against one
 // agent process at once.
@@ -37,7 +37,7 @@ type handler struct {
 }
 
 // handleInitialize answers the ACP handshake — always advertising
-// protocolVersion 1 and the fixed capability set this transport implements
+// protocolVersion 1 and the fixed capability set this frontend implements
 // (see the design doc: trusted execution, no fs/terminal delegation, no
 // auth). agentInfo lets Zed display which agent/version is running.
 func (h *handler) handleInitialize(_ initializeParams) (initializeResult, *rpcError) {
@@ -60,7 +60,7 @@ func (h *handler) handleInitialize(_ initializeParams) (initializeResult, *rpcEr
 	}, nil
 }
 
-// handleAuthenticate is never meaningfully invoked — this transport
+// handleAuthenticate is never meaningfully invoked — this frontend
 // advertises no authMethods (Harness manages provider credentials out of
 // band, outside of any ACP session), but responds cleanly if a client calls
 // it anyway rather than erroring.
@@ -177,7 +177,7 @@ func (h *handler) registerSession(c *conn, harnessID string) (newSessionResult, 
 // "notification for unknown session" — this is a confirmed, reported Zed bug
 // (zed-industries/zed#60199: "available_commands_update never shown because
 // notification arrives before session/new response"). It used to bite this
-// transport for exactly that reason: registerSession sent the notification
+// frontend for exactly that reason: registerSession sent the notification
 // from INSIDE the handler, before the handler had even returned its result
 // to be written — so on the wire, the notification line preceded the
 // response line, and Zed threw it away every time, unconditionally.
@@ -196,7 +196,7 @@ func (h *handler) notifyAvailableCommands(c *conn, sessionID string) {
 
 // handleSetConfigOption applies a value change from one of the config
 // options advertised in buildConfigOptions ("model" or "thinking" — the only
-// two IDs this transport ever hands out, so any other configId is a client
+// two IDs this frontend ever hands out, so any other configId is a client
 // error) and returns the complete, current config option state, per spec.
 func (h *handler) handleSetConfigOption(p setConfigOptionParams) (setConfigOptionResult, *rpcError) {
 	h.mu.Lock()
@@ -208,7 +208,7 @@ func (h *handler) handleSetConfigOption(p setConfigOptionParams) (setConfigOptio
 
 	var value string
 	if err := json.Unmarshal(p.Value, &value); err != nil {
-		return setConfigOptionResult{}, &rpcError{Code: errCodeInvalidParams, Message: "value must be a string for this transport's config options: " + err.Error()}
+		return setConfigOptionResult{}, &rpcError{Code: errCodeInvalidParams, Message: "value must be a string for this frontend's config options: " + err.Error()}
 	}
 
 	// The session command name and its param key are NOT always the same
@@ -378,7 +378,7 @@ func (h *handler) formatSessionQuery(sessionID, cmd string) (string, error) {
 //     session/thread's name, and there's no protocol channel for the agent
 //     to push a live name change to it.
 //   - reset would desync the client's own rendered history (built from every
-//     session/update this transport already sent) from Harness's — wiping the
+//     session/update this frontend already sent) from Harness's — wiping the
 //     Harness-side log doesn't erase what Zed already put on screen.
 //
 // Unrecognized text starting with "/" (including a genuinely bad slash
@@ -440,7 +440,7 @@ func (h *handler) handleResumeSession(c *conn, p resumeSessionParams) (resumeSes
 // handleCloseSession cancels any in-flight work (same effect as
 // session/cancel) and frees the session's resources — but, unlike
 // session/delete, leaves it intact for a future session/load or
-// session/resume. Also drops this transport's own bookkeeping entry so a
+// session/resume. Also drops this frontend's own bookkeeping entry so a
 // stale acpSession doesn't linger for a session ACP no longer considers
 // live.
 func (h *handler) handleCloseSession(p closeSessionParams) (closeSessionResult, *rpcError) {
@@ -567,8 +567,8 @@ func resolveDefaultModel(c *client.Client) (string, error) {
 }
 
 // acpSessionName returns the default name for sessions created via the ACP
-// transport, e.g. "Acp 2026-08-01 18:30", so `harness sessions`/the TUI can tell at a glance which
-// transport/protocol a session came from.
+// frontend, e.g. "Acp 2026-08-01 18:30", so `harness sessions`/the TUI can tell at a glance which
+// frontend/protocol a session came from.
 func acpSessionName() string {
 	return "Acp " + time.Now().Format("2006-01-02 15:04")
 }

@@ -174,7 +174,7 @@ func TestEngineEveryFires(t *testing.T) {
 	}
 }
 
-// The engine passes each schedule's owner to the fire callback, so a transport
+// The engine passes each schedule's owner to the fire callback, so a frontend
 // can route the fired prompt to the right session.
 func TestEngineFiresWithOwner(t *testing.T) {
 	s := newTestStore(t)

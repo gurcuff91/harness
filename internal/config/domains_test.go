@@ -142,7 +142,7 @@ func TestSlackConfig(t *testing.T) {
 
 }
 
-// ── Transport secrets ────────────────────────────────────────────────────
+// ── Frontend secrets ────────────────────────────────────────────────────
 
 func TestTransportSecretsLiveInCredentials(t *testing.T) {
 	c := memCreds()
@@ -169,7 +169,7 @@ func TestTransportSecretsLiveInCredentials(t *testing.T) {
 	}
 }
 
-// Deleting transport secrets/identity: removes exactly the targeted entry and
+// Deleting frontend secrets/identity: removes exactly the targeted entry and
 // is idempotent.
 func TestDeleteTransportSecretsAndSlackConfig(t *testing.T) {
 	m, c := memSettings(), memCreds()

@@ -20,7 +20,7 @@ import (
 )
 
 // End to end through a REAL provider client (CustomOpenAI on the provider
-// transport), the session, the server and SSE: the first completion request
+// frontend), the session, the server and SSE: the first completion request
 // gets headers and then total silence (a dead connection mid-response, before
 // any content); the idle timeout aborts it, the turn retries on a new request,
 // the second attempt answers, and the client sees a "retry" event and a normal

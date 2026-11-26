@@ -198,7 +198,7 @@ func badge(text string) string {
 	return ansi.Dimmed("[" + text + "]")
 }
 
-// ── Formatting helpers (ported from transport/tui) ──────────────────────────
+// ── Formatting helpers (ported from frontend/tui) ──────────────────────────
 
 // toolStyle returns the color and icon for a tool header. Built-in tools each
 // get a distinctive icon; the generic gear (⚙) is reserved for MCP/extension

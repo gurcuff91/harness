@@ -485,7 +485,7 @@ func TestRunAcpAliasIsWiredEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	srv, err := server.Start(a, "", server.ServerOptions{Transport: "acp"})
+	srv, err := server.Start(a, "", server.ServerOptions{Frontend: "acp"})
 	if err != nil {
 		t.Fatal(err)
 	}

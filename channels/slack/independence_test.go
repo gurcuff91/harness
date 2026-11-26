@@ -9,8 +9,8 @@ import (
 	"testing"
 )
 
-// channels/slack must stand on its own: nothing in it imports transports/slack,
-// so the transport can be removed without touching this package.
+// channels/slack must stand on its own: nothing in it imports frontends/slack,
+// so the frontend can be removed without touching this package.
 func TestDoesNotImportTheTransport(t *testing.T) {
 	files, _ := filepath.Glob("*.go")
 	for _, f := range files {
@@ -30,7 +30,7 @@ func TestDoesNotImportTheTransport(t *testing.T) {
 	}
 }
 
-// transports/slack was removed in v0.108.0: nothing may bring it back by
+// frontends/slack was removed in v0.108.0: nothing may bring it back by
 // importing it (this package covers every Slack need: login and channels).
 func TestNothingImportsTheRemovedSlackTransport(t *testing.T) {
 	allowed := map[string]bool{}

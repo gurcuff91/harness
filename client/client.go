@@ -1,5 +1,5 @@
 // Package client is the single, typed HTTP/SSE client for harness's internal
-// API (server). Every transport (TUI, Telegram, the CLI's one-shot
+// API (server). Every frontend (TUI, Telegram, the CLI's one-shot
 // `-p` prompt, and any future one) is a thin frontend over the same backend —
 // this is the one client they all share, instead of each reimplementing the
 // same request/decode/stream boilerplate.
@@ -7,7 +7,7 @@
 // It is a real SDK over the API: every method returns a decoded Go value (see
 // types.go / event.go), never a raw []byte or map[string]any. Callers get a
 // []Session, a *Status, a typed Event stream — decoding is done here, once,
-// against wire types that match the server's, so no transport re-invents it and
+// against wire types that match the server's, so no frontend re-invents it and
 // no two of them drift.
 package client
 
@@ -29,7 +29,7 @@ import (
 
 // Client is a typed HTTP/SSE client for the harness internal API
 // (server). One instance per connection to a running server
-// (typically the in-process server a transport starts on a loopback port via
+// (typically the in-process server a frontend starts on a loopback port via
 // startInternalServer).
 type Client struct {
 	baseURL string
@@ -71,7 +71,7 @@ func WithSecret(secret string) Option {
 }
 
 // secretTransport adds the secret header to every request of the wrapped
-// transport — one place, so no call (present or future) can forget it.
+// frontend — one place, so no call (present or future) can forget it.
 type secretTransport struct {
 	base   http.RoundTripper
 	secret string
@@ -119,7 +119,7 @@ func (c *Client) do(method, path string, body any) ([]byte, error) {
 	return c.doCtx(c.ctx, method, path, body)
 }
 
-// doCtx is the real transport primitive: sends one request bound to ctx and
+// doCtx is the real frontend primitive: sends one request bound to ctx and
 // returns the raw response body. A 4xx/5xx status returns the body alongside
 // an *Error (see error.go) when the response is harness's standard
 // {"error": {"message", "details"}} shape, or a plain error otherwise.
@@ -168,7 +168,7 @@ func (c *Client) doHeaders(ctx context.Context, method, path string, body any) (
 	return data, resp.Header, nil
 }
 
-// decode runs do() and unmarshals the successful body into *T. A transport
+// decode runs do() and unmarshals the successful body into *T. A frontend
 // error is returned as-is; a decode error is wrapped.
 func decode[T any](c *Client, method, path string, body any) (T, error) {
 	return decodeCtx[T](c, c.ctx, method, path, body)
@@ -686,7 +686,7 @@ func (c *Client) StopSession(id string) (*Status, error) {
 type PromptOption func(map[string]any)
 
 // PromptWithOrigin tags the prompt with where it came from — any short string:
-// a transport's name ("telegram", "slack", "acp"), your own ("kaiban"), or
+// a frontend's name ("telegram", "slack", "acp"), your own ("kaiban"), or
 // "user" (the default). Echoed back on the session's
 // received_prompt / follow_up_start events (Event.Origin) so every frontend
 // watching the session can render it ("via Slack"). Live only, not stored.
@@ -812,7 +812,7 @@ func (c *Client) GetSystemPrompt(sessionID string) (string, error) {
 // GetSessionInfo returns the consolidated session-info snapshot for an active
 // session: server version, full session metadata, runtime state (busy, queue
 // depth), and environment counts (MCP connected, schedule count). Single
-// round-trip replacing the three-to-four calls each transport previously made
+// round-trip replacing the three-to-four calls each frontend previously made
 // to assemble the same picture.
 func (c *Client) GetSessionInfo(sessionID string) (*SessionInfo, error) {
 	return ptr(decode[SessionInfo](c, "GET", "/api/sessions/"+sessionID+"/info", nil))
@@ -930,7 +930,7 @@ func (c *Client) ProviderDo(ctx context.Context, provider, method, path string, 
 // schema) currently registered for an active session — the exact set sent
 // to the provider on the next turn, including any MCP tools and
 // SDK-supplied tools alongside the built-ins. Pure introspection, not tied
-// to any transport.
+// to any frontend.
 func (c *Client) GetSessionTools(sessionID string) ([]types.ToolDef, error) {
 	return decode[[]types.ToolDef](c, "GET", "/api/sessions/"+sessionID+"/tools", nil)
 }

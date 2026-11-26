@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.127.0] - 2026-11-26
+
+### Changed — the "transport" concept is gone (BREAKING for two names)
+Frontends (the TUI, `acp`, your own) and input channels replaced what used to be called transports. `server.ServerOptions.Transport` is now `Frontend`, and the `transport` field of `GET /api/server` is now `frontend`. Comments across the code no longer use the old word (the HTTP/MCP/provider transports, which are real, keep it).
+
 ## [0.126.0] - 2026-11-26
 
 ### Changed — the agent configures, the session obeys (BREAKING)

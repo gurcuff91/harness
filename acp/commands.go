@@ -9,7 +9,7 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
-// buildConfigOptions returns the session config options this transport
+// buildConfigOptions returns the session config options this frontend
 // advertises: the active model (category "model" — ACP's semantic category
 // for a model selector; "model_config" is reserved for model-related
 // PARAMETERS like context size, not the selector itself) and the thinking
@@ -75,7 +75,7 @@ func buildConfigOptions(c *client.Client, sessionID string) ([]sessionConfigOpti
 }
 
 // commandsExcludedFromACP are session commands Harness exposes over the HTTP
-// API (client.ListCommands) that this transport deliberately does NOT
+// API (client.ListCommands) that this frontend deliberately does NOT
 // advertise in available_commands_update — for two different reasons:
 //
 //   - "model"/"thinking" are already exposed as native ACP configOptions
@@ -179,7 +179,7 @@ func commandInputHint(d client.CommandDef) *availableCommandInput {
 // (internal/infoview.InfoPlain): a fenced code block, so Zed renders it in a
 // monospace font — without the fence the padded columns are ragged in Zed's
 // proportional Markdown font (a real, reported rendering bug). It shows what
-// the TUI's /info shows minus the terminal (an editor starts this transport;
+// the TUI's /info shows minus the terminal (an editor starts this frontend;
 // it never runs in one). quota/qerr come from GET /api/providers/{name}/quota
 // (a 404 = no section).
 func formatInfoPlain(info *client.SessionInfo, quota *types.Quota, qerr error, now time.Time) string {

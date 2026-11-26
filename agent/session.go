@@ -222,7 +222,7 @@ type followUp struct {
 	images []types.ImageData
 	origin string // where the prompt came from ("user", "slack:C1", …); default "user"
 	// displayText, when non-empty, is what EventReceivedPrompt/EventFollowUpStart
-	// echo to transports INSTEAD of text — see PromptWithDisplayText's doc
+	// echo to frontends INSTEAD of text — see PromptWithDisplayText's doc
 	// comment. The model always sees the full `text`; this only affects what
 	// gets echoed back to a human.
 	displayText string
@@ -233,7 +233,7 @@ type followUp struct {
 
 // ── Prompt options ────────────────────────────────────────────────────────────
 
-// Origin constants tag where a prompt came from, so transports can render it
+// Origin constants tag where a prompt came from, so frontends can render it
 // distinctly (e.g. a scheduled prompt with a clock icon).
 const (
 	OriginUser = "user"
@@ -265,12 +265,12 @@ func PromptWithImages(images ...types.ImageData) PromptOption {
 }
 
 // PromptWithDisplayText overrides what EventReceivedPrompt/EventFollowUpStart
-// echo to transports, WITHOUT changing what the model actually receives (the
+// echo to frontends, WITHOUT changing what the model actually receives (the
 // full `text` argument to Prompt/PromptAndWait is unaffected — this only
 // controls the human-facing echo). Built for server.go's generic
 // "skill:<name>" command handler: the actual prompt sent to the model is the
 // skill's full content (location note + entire SKILL.md body, which can be
-// large) plus the user's own text, but a human watching the transport only
+// large) plus the user's own text, but a human watching the frontend only
 // needs to see "Skill: <name> <their own text>", never the whole skill body
 // scrolling past. Left unset (the default), the echo is `text` itself —
 // today's behavior for every other caller.
@@ -284,7 +284,7 @@ func PromptWithOriginUser() PromptOption {
 }
 
 // PromptWithOrigin tags the prompt with any short origin string — a
-// transport's name ("telegram", "slack", "acp"), an SDK consumer's own
+// frontend's name ("telegram", "slack", "acp"), an SDK consumer's own
 // ("kaiban"), or the built-in OriginUser. It is echoed on
 // EventReceivedPrompt/EventFollowUpStart (Event.Origin) so frontends can
 // render where a prompt came from; live only, never stored in history. An
@@ -494,7 +494,7 @@ func (r *reportedErr) Unwrap() error { return r.err }
 func reported(err error) error { return &reportedErr{err} }
 
 // errorEvent builds an EventError from an error, lifting a provider ProviderAPIError's
-// structured details into the event so transports can render them richly.
+// structured details into the event so frontends can render them richly.
 func errorEvent(err error) types.Event {
 	e := types.Event{Type: types.EventError, Message: err.Error()}
 	var apiErr *types.ProviderAPIError
@@ -869,7 +869,7 @@ func (s *Session) promptSync(ctx context.Context, fu followUp, first bool) (retT
 	s.emit(types.Event{Type: types.EventTurnStart})
 
 	// Guarantee turn_end is always emitted — even on unexpected early returns
-	// (store errors, panics recovered by the runtime). Without this, transports
+	// (store errors, panics recovered by the runtime). Without this, frontends
 	// (TUI spinner, Telegram typing indicator, Slack typing) never stop.
 	turnEnded := false
 	emitTurnEnd := func() {
@@ -1312,7 +1312,7 @@ func (s *Session) compactWithTarget(ctx context.Context, provider providers.Prov
 
 // generateCompactionSummary makes a focused LLM call to summarize the full conversation
 // for use as a compaction checkpoint. Uses no tools and a dedicated system prompt.
-// The result is stored internally — NOT streamed to the transport.
+// The result is stored internally — NOT streamed to the frontend.
 // Retries up to 3 times with exponential backoff to handle transient token
 // refresh failures or network errors during compact.
 func (s *Session) generateCompactionSummary(ctx context.Context, provider providers.Provider, modelID string) (string, error) {
@@ -1478,7 +1478,7 @@ func turnStarts(msgs []types.Message) []int {
 }
 
 // isToolResultOnly reports whether a user-role message consists solely of
-// tool_result parts (i.e. it's the transport of tool outputs back to the
+// tool_result parts (i.e. it's the frontend of tool outputs back to the
 // model, not a fresh human prompt). Such a message continues the assistant's
 // turn; it does not start a new one.
 func isToolResultOnly(m types.Message) bool {
@@ -2145,10 +2145,10 @@ func (s *Session) updateStats(se types.StreamEvent) {
 
 // requestProgressUpdate makes a final LLM call when max iterations is reached.
 // Asks the model to summarize progress and check with the user on next steps.
-// The response IS streamed to the transport via EventStreamTextDelta.
+// The response IS streamed to the frontend via EventStreamTextDelta.
 func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 	// Inject summary request into history. Mark it as system-generated so
-	// transports that replay history (e.g. the TUI on resume) can render it
+	// frontends that replay history (e.g. the TUI on resume) can render it
 	// as a notice instead of as a user message the human never typed.
 	msg := types.NewUserTextMessage(maxIterationsPrompt)
 	msg.Meta = &types.MessageMeta{IsSystemGenerated: true}
@@ -2197,9 +2197,9 @@ func (s *Session) requestProgressUpdate(ctx context.Context) (string, error) {
 	// exactly how a summary went missing in the field while the
 	// "reached the N-iteration limit" warning had already been shown.
 	//
-	// A retry is safe here even though this call STREAMS to the transport
+	// A retry is safe here even though this call STREAMS to the frontend
 	// (unlike generateCompactionSummary, which accumulates silently): a
-	// failed attempt emits at most a partial text run, and the transports
+	// failed attempt emits at most a partial text run, and the frontends
 	// append streamed deltas into the live block, so a retry continues in the
 	// same block rather than corrupting state. Losing the summary entirely is
 	// strictly worse than a rare duplicated fragment.

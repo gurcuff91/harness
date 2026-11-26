@@ -11,7 +11,7 @@ import (
 // ProviderAPIError is a structured error from an LLM provider's HTTP API (as
 // opposed to harness's own API). Message is human-readable; Details, when
 // present, holds the parsed error payload the provider returned (e.g. its JSON
-// body) so a transport can render it richly instead of scraping a string.
+// body) so a frontend can render it richly instead of scraping a string.
 type ProviderAPIError struct {
 	Message string         `json:"message"`
 	Details map[string]any `json:"details,omitempty"`
@@ -45,7 +45,7 @@ func NewProviderAPIError(provider string, status int, body []byte) *ProviderAPIE
 		e.Details = obj
 	} else if len(body) > 0 {
 		// The body is text a gateway or proxy wrote, not harness's: it ends up in a message every
-		// transport prints (a terminal, a chat), so control characters — ESC above all, which would
+		// frontend prints (a terminal, a chat), so control characters — ESC above all, which would
 		// make a terminal INTERPRET what follows — are removed at the source.
 		e.Message += ": " + stripControl(string(body))
 	}

@@ -6,7 +6,7 @@ import (
 )
 
 // MCPServer is the configuration of one MCP (Model Context Protocol) server.
-// The transport is INFERRED, not declared: a server with a Command is local
+// The frontend is INFERRED, not declared: a server with a Command is local
 // (spawns a process); a server with a URL is remote (dials HTTP). Declaring
 // both is invalid. Servers are enabled by default — set Disabled to turn one
 // off without deleting it.
@@ -60,7 +60,7 @@ func (s MCPServer) Validate() error {
 }
 
 // Argv returns the full local command line (executable + args) for the stdio
-// transport. Empty when Command is unset.
+// frontend. Empty when Command is unset.
 func (s MCPServer) Argv() []string {
 	if s.Command == "" {
 		return nil

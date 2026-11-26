@@ -58,7 +58,7 @@ const openAPISpecTemplate = `{
       "get": {
         "tags": ["server"],
         "summary": "Server info",
-        "description": "Returns harness version, transport, URL, and process metadata.",
+        "description": "Returns harness version, frontend, URL, and process metadata.",
         "operationId": "getServerInfo",
         "security": [],
         "responses": {
@@ -708,7 +708,7 @@ const openAPISpecTemplate = `{
         "properties": {
           "name":       { "type": "string", "example": "harness" },
           "version":    { "type": "string", "example": "v0.73.74" },
-          "transport":  { "type": "string", "example": "tui", "description": "Calling transport (tui, telegram, slack, server, cli)" },
+          "frontend":  { "type": "string", "example": "tui", "description": "Calling frontend (tui, acp, server, cli)" },
           "url":        { "type": "string", "example": "http://127.0.0.1:52341" },
           "cwd":        { "type": "string", "example": "/Users/gustavo/Workspace/harness" },
           "pid":        { "type": "integer", "example": 92807 },

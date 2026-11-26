@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// spinnerLabels are the themed status messages (mirrors transport/tui).
+// spinnerLabels are the themed status messages (mirrors frontend/tui).
 var spinnerLabels = []string{
 	"Boostaffing", "Maskarizing", "Outworlding", "Khanifying", "Emeraldizing",
 	"Razoranging", "Brutalizing", "Windwalking", "Edenianizing", "Kitananizing",

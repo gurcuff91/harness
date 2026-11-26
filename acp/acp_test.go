@@ -38,7 +38,7 @@ func newTestAgent(t *testing.T) *agent.Agent {
 // newTestServer is a running server over a fresh test agent — what Run takes.
 func newTestServer(t *testing.T) *server.Server {
 	t.Helper()
-	srv, err := server.Start(newTestAgent(t), "", server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "acp", KeepAgentOpen: true})
+	srv, err := server.Start(newTestAgent(t), "", server.ServerOptions{Logger: logx.NewNilLogger(), Frontend: "acp", KeepAgentOpen: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func startHarness(t *testing.T, a *agent.Agent) *harness {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	srv, err := server.Start(a, "", server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "acp"})
+	srv, err := server.Start(a, "", server.ServerOptions{Logger: logx.NewNilLogger(), Frontend: "acp"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func (h *harness) readResponseFor(id int) map[string]any {
 // BEFORE the response arrives — for tests that need to assert on any
 // out-of-band session/update notifications a handler might send ahead of its
 // own response (there currently are none — see readNotificationsAfter for
-// the ones sent AFTER, which is the spec-safe order this transport uses).
+// the ones sent AFTER, which is the spec-safe order this frontend uses).
 func (h *harness) readResponseForCollecting(id int) (resp map[string]any, notifications []map[string]any) {
 	h.t.Helper()
 	for i := 0; i < 50; i++ { // generous bound: enough for any realistic notification burst
@@ -677,7 +677,7 @@ func TestSessionCancelUnknownSessionDoesNotPanicOrRespond(t *testing.T) {
 // TestInitializeAdvertisesAllFourSessionCapabilities is the regression test
 // for sessionCapabilities coming back as an empty {} even though Harness
 // genuinely backs resume/close/delete/list via client.Client for every
-// transport — the fields just weren't wired to ACP's advertisement.
+// frontend — the fields just weren't wired to ACP's advertisement.
 func TestInitializeAdvertisesAllFourSessionCapabilities(t *testing.T) {
 	h := startHarness(t, newTestAgent(t))
 	h.send(1, "initialize", initializeParams{ProtocolVersion: 1})

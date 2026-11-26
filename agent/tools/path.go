@@ -9,7 +9,7 @@ import "path/filepath"
 // the hosting OS process's real working directory instead of the session's
 // logical one (see agent/tools/bash.go's cmd.Dir for the Bash-side twin of
 // this fix). Harmless no-op when cwd == the process's own cwd, which is every
-// harness transport's actual usage pattern (CLI/TUI/Telegram/Slack/ACP/server
+// harness frontend's actual usage pattern (CLI/TUI/Telegram/Slack/ACP/server
 // all call os.Getwd() once per process) — the gap only mattered to an SDK
 // consumer running multiple sessions with different real cwds in one process.
 func resolvePath(cwd, path string) string {

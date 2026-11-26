@@ -13,7 +13,7 @@ const maxEditorRows = 5
 
 // Editor is a multi-line text input with a fake block cursor, placeholder text,
 // word-wise navigation, and paste handling. Port of the harness's v1 input
-// (transport/tui), built on the Component model.
+// (frontend/tui), built on the Component model.
 //
 // Newline insertion uses Ctrl+J (LF) or Alt+Enter (both reliable without the
 // Kitty protocol — see the TODO in term/terminal.go). Enter (\r) submits.

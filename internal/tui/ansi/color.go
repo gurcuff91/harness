@@ -5,7 +5,7 @@ import (
 	"strconv"
 )
 
-// ── Kaiban palette (single source of truth, mirrors transport/tui) ──────────
+// ── Kaiban palette (single source of truth, mirrors frontend/tui) ──────────
 const (
 	HexPrimary = "#26A69A" // teal 400   — Kaiban Teal (dark-adapted)
 	HexAccent  = "#C8D96A" // chartreuse — Kaiban Energy

@@ -13,7 +13,7 @@ import (
 
 // eventBufferSize is the capacity of the channel streamEvents hands decoded
 // SSE events through, between the socket-reading goroutine and whatever
-// consumes them (each transport's own render/dispatch loop). A turn with
+// consumes them (each frontend's own render/dispatch loop). A turn with
 // thinking:high and a long response can emit thousands of small delta events
 // (one per streamed token/fragment); if the consumer falls behind a burst for
 // a moment, this is how much slack it gets before backpressure reaches the

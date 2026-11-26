@@ -2,7 +2,7 @@ package acp
 
 import "encoding/json"
 
-// protocolVersion is the ACP major version this transport implements —
+// protocolVersion is the ACP major version this frontend implements —
 // v1, the stable spec (NOT v2, which is still Draft as of this writing).
 const protocolVersion = 1
 
@@ -53,7 +53,7 @@ type promptCapabilities struct {
 // agent supports. Each field is an empty object (not just `true`) per spec —
 // future sub-options would live inside; omitted entirely means unsupported.
 // Harness's client.Client already exposes Resume/Close/Delete/List for every
-// transport (not ACP-specific), so all four are genuinely backed here, not
+// frontend (not ACP-specific), so all four are genuinely backed here, not
 // just advertised.
 type sessionCapabilities struct {
 	Resume *struct{} `json:"resume,omitempty"`
@@ -102,9 +102,9 @@ type newSessionResult struct {
 
 // setConfigOptionParams' Value is deliberately untyped (json.RawMessage):
 // ACP's "value" field is `string | boolean` depending on the option's type —
-// this transport only ever advertises "select" options (string values), so
+// this frontend only ever advertises "select" options (string values), so
 // it unmarshals Value as a plain string in methods.go and rejects anything
-// else, rather than modeling the boolean variant this transport never sends.
+// else, rather than modeling the boolean variant this frontend never sends.
 type setConfigOptionParams struct {
 	SessionID string          `json:"sessionId"`
 	ConfigID  string          `json:"configId"`
@@ -131,7 +131,7 @@ type promptResult struct {
 
 // StopReason values (ACP v1 schema). stopReasonMaxTurnRequests and
 // stopReasonMaxTokens are part of the spec's vocabulary but deliberately
-// unused by this transport: Harness never actually stops a turn at its
+// unused by this frontend: Harness never actually stops a turn at its
 // ReAct iteration cap the way "max_turn_requests" implies — it reserves one
 // more model call to summarize progress and hand control back to the user
 // (see the max_iterations_reached case in events.go), so the turn always
@@ -174,7 +174,7 @@ type closeSessionParams struct {
 }
 
 // closeSessionResult is intentionally empty — ACP's CloseSessionResponse
-// carries no fields besides the reserved _meta this transport never sets.
+// carries no fields besides the reserved _meta this frontend never sets.
 type closeSessionResult struct{}
 
 // ── session/delete ───────────────────────────────────────────────────────
@@ -198,7 +198,7 @@ type listSessionsResult struct {
 }
 
 // sessionInfo is ACP's SessionInfo — only sessionId and cwd are required;
-// this transport also fills title (Harness's session name, e.g. "Acp
+// this frontend also fills title (Harness's session name, e.g. "Acp
 // 2026-08-01 18:30") and updatedAt (RFC3339, matching ACP's ISO 8601
 // expectation) from client.Session's embedded store.SessionMeta.
 type sessionInfo struct {
@@ -212,7 +212,7 @@ type sessionInfo struct {
 
 // contentBlock is a tagged union over "type": text | image | audio |
 // resource | resource_link. Only the fields relevant to the type are
-// populated; the rest stay zero. This transport reads text/image/resource
+// populated; the rest stay zero. This frontend reads text/image/resource
 // (embeddedContext) from prompts and only ever WRITES type "text" itself.
 type contentBlock struct {
 	Type string `json:"type"`
@@ -229,7 +229,7 @@ type contentBlock struct {
 	Resource *embeddedResource `json:"resource,omitempty"`
 
 	// resource_link — reference only, no content attached; not read by this
-	// transport (see design doc: out of scope for the first cut).
+	// frontend (see design doc: out of scope for the first cut).
 	URI  string `json:"uri,omitempty"`
 	Name string `json:"name,omitempty"`
 }
@@ -350,7 +350,7 @@ const (
 )
 
 // toolCallContent is a tagged union over "type": content | diff | terminal.
-// This transport only ever produces "content" (plain text) and "diff" (for
+// This frontend only ever produces "content" (plain text) and "diff" (for
 // the Edit tool, built observationally in diff.go) — "terminal" is unused
 // since terminal delegation is out of scope.
 type toolCallContent struct {

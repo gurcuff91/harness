@@ -3,7 +3,7 @@
 // one entry per owner session + slug), so they live wherever settings live:
 // ~/.harness/settings.json by default, or any configstore.SettingsStore an
 // SDK embedder registered. The agent manages them via the Schedule* tools; a
-// transport (e.g. the TUI with --with-scheduler) runs the engine that fires their
+// frontend (e.g. the TUI with --with-scheduler) runs the engine that fires their
 // prompts on time.
 package schedule
 
@@ -110,7 +110,7 @@ func (s *Store) UpdateSchedule(
 
 // Set upserts a schedule under (owner, slug) after validating the cron
 // expression. owner is the session id the fired prompt is routed to (empty for
-// single-session transports); origin is the channel conversation it was created
+// single-session frontends); origin is the channel conversation it was created
 // from ("" for none). Runs and LastRun are preserved across edits.
 func (s *Store) Set(slug, spec, prompt, owner, origin string) error {
 	if slug == "" {

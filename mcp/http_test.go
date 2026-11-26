@@ -217,7 +217,7 @@ func TestHTTPSSEContextCancelUnblocks(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error from the cancelled call, got nil")
 	}
-	// Must return close to the ctx deadline (300ms), NOT hang for the transport's
+	// Must return close to the ctx deadline (300ms), NOT hang for the frontend's
 	// 30s HTTP timeout or forever. Generous upper bound to absorb CI jitter.
 	if elapsed > 2*time.Second {
 		t.Errorf("CallTool did not respect ctx cancellation: took %v (want ~300ms)", elapsed)

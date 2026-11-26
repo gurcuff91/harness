@@ -154,7 +154,7 @@ func TestPrimaryEmptyListFallsBack(t *testing.T) {
 	}
 }
 
-// ── Fallback on transport-level failure ──────────────────────────────────
+// ── Fallback on frontend-level failure ──────────────────────────────────
 
 func TestPrimaryTimeoutFallsBack(t *testing.T) {
 	// primary's responder sleeps past the http.Client's short timeout.

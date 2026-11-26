@@ -35,7 +35,7 @@ type ScheduleStore interface {
 
 // Schedule upserts a cron-scheduled prompt (create or edit by slug). owner is the
 // id of the session this tool belongs to; the engine routes a fired prompt back
-// to that session (empty for single-session transports). It's captured here, not
+// to that session (empty for single-session frontends). It's captured here, not
 // exposed to the model. origin, when not nil, returns the input-channel
 // conversation the current turn came from ("" for none): a schedule created
 // from a Slack or Telegram conversation fires back into it.

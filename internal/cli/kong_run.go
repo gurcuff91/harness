@@ -1,5 +1,5 @@
 // Run() methods for the "leaf" commands — the ones with no nested
-// subcommands and no interactive agent/transport of their own. Each Run() is
+// subcommands and no interactive agent/frontend of their own. Each Run() is
 // a thin adapter: parse Kong's already-validated fields into the Run*()
 // business-logic functions (commands.go, settings.go, memory.go,
 // schedule.go) — this file only wires Kong's parsed struct fields to their

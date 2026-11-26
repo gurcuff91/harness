@@ -14,7 +14,7 @@ import (
 // regression test for reverting the auto-resume-from-disk behavior: a
 // schedule whose owner session is NOT active in this instance must be
 // dropped silently — never resurrected from disk by the engine on its own
-// initiative. Only a transport that keeps a session active (e.g.
+// initiative. Only a frontend that keeps a session active (e.g.
 // Telegram/Slack's prewarmPumps) is responsible for that; the agent's
 // scheduler engine only ever fires into sessions already live in THIS
 // process's activeSessions map.

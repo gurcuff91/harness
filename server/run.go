@@ -69,7 +69,7 @@ func Run(ctx context.Context, a *agent.Agent, opts ...Option) error {
 		return err
 	}
 
-	srv := NewServer(a, ServerOptions{Logger: cfg.logger, Transport: "server", Secret: cfg.secret})
+	srv := NewServer(a, ServerOptions{Logger: cfg.logger, Frontend: "server", Secret: cfg.secret})
 
 	// srv.Serve blocks until the listener closes, so Close() must be
 	// triggered from elsewhere on ctx cancellation. Close() itself calls

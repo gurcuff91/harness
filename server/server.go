@@ -44,11 +44,11 @@ import (
 // have comparable slack, not one starving the other.
 const sseClientBufferSize = 4096
 
-// Server is the HTTP transport for the agent harness.
+// Server is the HTTP/SSE server for the agent harness.
 type Server struct {
 	agent     *agent.Agent
 	logger    logx.Logger // never nil — defaults to logx.NewNilLogger()
-	transport string      // name of the calling transport
+	frontend  string      // name of the calling frontend
 	keepAgent bool        // Close leaves the agent open (it belongs to the caller)
 
 	secret        string // when set, every request but the open paths must carry it (see secretMiddleware)
@@ -77,10 +77,10 @@ type ServerOptions struct {
 	// Logger receives request/lifecycle log lines. Defaults to
 	// logx.NewNilLogger() (silent) when left nil — the same default Run's
 	// WithLogger option falls back to. Pass logx.NewNilLogger() explicitly (as
-	// every transport's own in-process server does) when something ELSE is
+	// every frontend's own in-process server does) when something ELSE is
 	// already logging and this server must stay silent.
-	Logger    logx.Logger
-	Transport string // name of the calling transport (e.g. "tui", "telegram", "slack"); empty defaults to "server"
+	Logger   logx.Logger
+	Frontend string // name of the calling frontend (e.g. "tui", "acp", "cli"); empty defaults to "server"
 
 	// KeepAgentOpen makes Close leave the agent running: it closes this
 	// server's sessions and HTTP listener, but not the agent's MCP, memory,
@@ -108,9 +108,9 @@ type ServerOptions struct {
 
 // NewServer creates an HTTP server wrapping the agent.
 func NewServer(a *agent.Agent, opts ServerOptions) *Server {
-	transport := opts.Transport
-	if transport == "" {
-		transport = "server"
+	frontend := opts.Frontend
+	if frontend == "" {
+		frontend = "server"
 	}
 	logger := opts.Logger
 	if logger == nil {
@@ -119,7 +119,7 @@ func NewServer(a *agent.Agent, opts ServerOptions) *Server {
 	return &Server{
 		agent:         a,
 		logger:        logger,
-		transport:     transport,
+		frontend:      frontend,
 		keepAgent:     opts.KeepAgentOpen,
 		secret:        opts.Secret,
 		proxyMaxBody:  opts.ProxyMaxBodyBytes,
@@ -207,7 +207,7 @@ func (s *Server) handler() http.Handler {
 	return r
 }
 
-// Serve runs the HTTP transport on an already-open listener. This is the single
+// Serve runs the HTTP server on an already-open listener. This is the single
 // serving entry point. Callers open the listener themselves (net.Listen), which
 // guarantees the port is accepting connections the moment Listen returns — no
 // close-then-reopen race, no readiness polling. For a fixed address, do
@@ -244,7 +244,7 @@ func (s *Server) Addr() string {
 // Start binds addr ("127.0.0.1:0" for loopback + an OS-assigned port; "" means
 // the same) and serves the agent in the background, returning once the
 // server is bound and accepting — so srv.Addr() is valid immediately, ready
-// to hand to transports (acp.Run(ctx, srv), …), which all share it.
+// to hand to frontends (acp.Run(ctx, srv), …), which all share it.
 // The caller owns the server: Close it when done (by default that also
 // closes the agent — see ServerOptions.KeepAgentOpen).
 func Start(a *agent.Agent, addr string, opts ServerOptions) (*Server, error) {
@@ -346,7 +346,7 @@ type resumeSessionRequest struct {
 type serverInfo struct {
 	Name      string `json:"name"`
 	Version   string `json:"version"`
-	Transport string `json:"transport"`
+	Frontend  string `json:"frontend"`
 	URL       string `json:"url"`
 	CWD       string `json:"cwd"`
 	PID       int    `json:"pid"`
@@ -377,7 +377,7 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, serverInfo{
 		Name:      staticServerName,
 		Version:   staticServerVersion,
-		Transport: s.transport,
+		Frontend:  s.frontend,
 		URL:       "http://" + addr,
 		CWD:       staticServerCWD,
 		PID:       staticServerPID,
@@ -971,7 +971,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply optional initial name (transport-supplied, e.g. "Slack 2026-07-27").
+	// Apply optional initial name (frontend-supplied, e.g. "Slack 2026-07-27").
 	if req.Name != "" {
 		_ = sess.Rename(req.Name)
 	}
@@ -1419,7 +1419,7 @@ type promptRequest struct {
 	Text   string            `json:"text"`
 	Images []types.ImageData `json:"images,omitempty"`
 	// Origin tags where the prompt came from — any short string: "user"
-	// (default), a channel conversation ("slack:C1"), a transport's name
+	// (default), a channel conversation ("slack:C1"), a frontend's name
 	// ("acp"), or a caller's own. Echoed on received_prompt/follow_up_start.
 	Origin string `json:"origin,omitempty"`
 }
@@ -1568,7 +1568,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 // sessionInfoDTO is the response shape for GET /api/sessions/{id}/info.
 // It consolidates everything the TUI footer, Telegram /info, and any future
-// transport needs into one round-trip: server version, full session meta,
+// frontend needs into one round-trip: server version, full session meta,
 // live runtime state (busy, queue depth), and environment counts (MCPs,
 // schedules). Read-only — no side effects.
 type sessionInfoDTO struct {
@@ -1663,7 +1663,7 @@ func (s *Server) handleSessionSystemPrompt(w http.ResponseWriter, r *http.Reques
 // registered for the session — the exact set sent to the provider on the
 // next turn, including any MCP tools and SDK-supplied AgentOptions.Tools
 // alongside the built-ins. Pure introspection: this is NOT tied to any
-// transport and doesn't affect what the model can call — it only tells a
+// frontend and doesn't affect what the model can call — it only tells a
 // caller what's available. Only valid for active sessions.
 func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -1958,7 +1958,7 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 			}
 			// PromptWithDisplayText keeps the skill's full body (can be
 			// large — SKILL.md content, not just a short instruction) OUT
-			// of what a transport echoes back to the user: it shows
+			// of what a frontend echoes back to the user: it shows
 			// "Skill:<name> <their own text>" (mirroring the literal
 			// "skill:<name>" command syntax, no space before the name)
 			// instead of the entire injected prompt scrolling past. The

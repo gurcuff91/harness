@@ -620,7 +620,7 @@ func parseCodexStream(ctx context.Context, body io.Reader, cb types.StreamCallba
 	var lastReasoningID, lastReasoningEncContent string
 	// Accumulate tool calls for resp.ToolCalls — the ReAct loop executes
 	// tools from the RETURNED response, not from the event stream (events
-	// are the transports' rendering feed; see parseOpenAIStream doing the
+	// are the frontends' rendering feed; see parseOpenAIStream doing the
 	// same). Missing this made a function_call turn persist an empty
 	// assistant message and execute nothing — "the model said nothing".
 	var pendingTools []types.ToolCall
@@ -633,7 +633,7 @@ func parseCodexStream(ctx context.Context, body io.Reader, cb types.StreamCallba
 	// arguments via response.function_call_arguments.delta, and finalizes it
 	// via output_item.done. All three map onto harness's own three-phase
 	// tool event flow (StreamToolStart → StreamToolDelta → StreamToolEnd):
-	// without ToolStart/ToolDelta the transports never render the tool
+	// without ToolStart/ToolDelta the frontends never render the tool
 	// header/streaming args while the call executes (observed live: the TUI
 	// showed nothing during the entire Bash/web_search execution).
 	toolStates := map[string]*codexToolStreamState{} // keyed by output_item id

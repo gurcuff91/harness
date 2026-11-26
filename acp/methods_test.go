@@ -125,7 +125,7 @@ func TestFlattenPromptEmbeddedResource(t *testing.T) {
 
 func TestFlattenPromptResourceWithoutText(t *testing.T) {
 	// A resource block with no embedded text (e.g. a blob) contributes nothing —
-	// this transport doesn't resolve blob/binary resources.
+	// this frontend doesn't resolve blob/binary resources.
 	blocks := []contentBlock{
 		textBlock("look at this:"),
 		{Type: "resource", Resource: &embeddedResource{URI: "file:///a.png", Blob: "base64=="}},

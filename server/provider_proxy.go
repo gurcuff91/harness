@@ -140,7 +140,7 @@ func (s *Server) handleProviderProxy(w http.ResponseWriter, r *http.Request) {
 		if r.Context().Err() != nil {
 			return // the caller left
 		}
-		// err mentions the target URL and transport failure, never a header.
+		// err mentions the target URL and frontend failure, never a header.
 		s.logger.Warn("server", "proxy_upstream_error", "provider", name, "path", path, "err", err.Error())
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("provider %q unreachable", name), nil)
 		return

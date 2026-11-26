@@ -9,7 +9,7 @@ import (
 	"github.com/gurcuff91/harness/server"
 )
 
-// startInternalServer starts the HTTP transport on a random port. Because we
+// startInternalServer starts the HTTP server on a random port. Because we
 // open the listener ourselves and hand it straight to Serve, the port is already
 // accepting connections the instant net.Listen returns — no close-then-reopen
 // race, so no readiness polling is needed. Always logx.NewNilLogger() — this
@@ -24,7 +24,7 @@ func startInternalServer(a *agent.Agent) (*internalServer, string, error) {
 	}
 	addr := listener.Addr().String()
 
-	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "cli"})
+	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NewNilLogger(), Frontend: "cli"})
 	go srv.Serve(listener) //nolint:errcheck
 
 	return &internalServer{srv: srv}, addr, nil
@@ -43,6 +43,6 @@ func (s *internalServer) Close() error {
 // (e.g. "acp", reported by GET /api/server), that the frontend then runs on
 // (acp.Run(ctx, srv)). The CLI owns both: closing the returned server also
 // closes a (the frontend itself never closes either).
-func startFrontendServer(a *agent.Agent, transport string) (*server.Server, error) {
-	return server.Start(a, "127.0.0.1:0", server.ServerOptions{Logger: logx.NewNilLogger(), Transport: transport})
+func startFrontendServer(a *agent.Agent, frontend string) (*server.Server, error) {
+	return server.Start(a, "127.0.0.1:0", server.ServerOptions{Logger: logx.NewNilLogger(), Frontend: frontend})
 }

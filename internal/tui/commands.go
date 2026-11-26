@@ -202,7 +202,7 @@ func (t *TUI) completeOAuthConnect(provider, verifierCode, code string) {
 // already in flight.
 // scheduleIcon marks a prompt fired by the scheduler (a clock); outsideIcon a
 // prompt that came from outside (a colleague, Herdr, a channel, …); userIcon a
-// user prompt. The transport picks the icon from the prompt's origin, carried by the
+// user prompt. The frontend picks the icon from the prompt's origin, carried by the
 // received_prompt / follow_up_start events.
 const (
 	scheduleIcon = "◷"

@@ -14,7 +14,7 @@ type Client struct {
 	nextID    atomic.Int64
 }
 
-// NewClient wraps a Transport. Call Initialize before ListTools/CallTool.
+// NewClient wraps a Frontend. Call Initialize before ListTools/CallTool.
 func NewClient(t Transport) *Client {
 	return &Client{transport: t}
 }
@@ -99,7 +99,7 @@ func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage
 	return result, nil
 }
 
-// Close terminates the underlying transport (and subprocess for stdio).
+// Close terminates the underlying frontend (and subprocess for stdio).
 func (c *Client) Close() error {
 	return c.transport.Close()
 }

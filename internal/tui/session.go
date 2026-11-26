@@ -14,7 +14,7 @@ import (
 )
 
 // autoConnect resolves the model, creates or resumes a session, and opens SSE.
-// Port of transport/tui's autoConnect, adapted to the v3 render model.
+// Port of frontend/tui's autoConnect, adapted to the v3 render model.
 //
 // The banner is harness's identity and is ALWAYS shown exactly once, even
 // when startup can't fully succeed (server unreachable, no active

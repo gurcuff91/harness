@@ -130,7 +130,7 @@ func (m *Manager) Start(ctx context.Context, servers map[string]types.MCPServer)
 	return m.toolList
 }
 
-// connectServer builds the right transport for the server's type (local=stdio,
+// connectServer builds the right frontend for the server's type (local=stdio,
 // remote=HTTP), initializes it, and lists its tools — bounded by the server's
 // connect timeout (or the default). The connect timeout bounds ONLY this phase, through
 // connectCtx; what bounds a later tool call is the call timeout (see wrapTool), which is also the

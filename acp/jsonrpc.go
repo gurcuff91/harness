@@ -1,5 +1,5 @@
 // Package acp implements the Agent Client Protocol (agentclientprotocol.com)
-// "agent" role transport: harness runs as a sub-process of an ACP client
+// "agent" role frontend: harness runs as a sub-process of an ACP client
 // (e.g. the Zed editor), speaking JSON-RPC 2.0 over stdio. Framing is
 // newline-delimited — one complete JSON object per line, both directions;
 // there is no Content-Length header (unlike LSP).
@@ -55,7 +55,7 @@ type rpcError struct {
 
 // Standard JSON-RPC error codes used by this package (agentclientprotocol.com
 // reserves the standard JSON-RPC range plus a few ACP-specific ones; only the
-// ones this transport actually emits are named here).
+// ones this frontend actually emits are named here).
 const (
 	errCodeParseError     = -32700
 	errCodeInvalidRequest = -32600

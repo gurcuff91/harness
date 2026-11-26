@@ -1,4 +1,4 @@
-// Run() for `harness acp` — bridges the ACP transport onto stdin/stdout
+// Run() for `harness acp` — bridges the ACP frontend onto stdin/stdout
 // (acp.Run's defaults, so no options are needed here).
 package cli
 

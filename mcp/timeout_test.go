@@ -75,7 +75,7 @@ func start(t *testing.T, cfg types.MCPServer) tools.Tool {
 	return got[0]
 }
 
-// transports runs a test body once per transport, each with a tool call that takes `delay`.
+// frontends runs a test body once per frontend, each with a tool call that takes `delay`.
 func transports(t *testing.T, delay time.Duration, body func(t *testing.T, cfg types.MCPServer)) {
 	t.Run("http", func(t *testing.T) { body(t, types.MCPServer{URL: slowHTTPServer(t, delay, false)}) })
 	t.Run("stdio", func(t *testing.T) { body(t, slowStdioServer(delay)) })
@@ -83,7 +83,7 @@ func transports(t *testing.T, delay time.Duration, body func(t *testing.T, cfg t
 
 // The bug this guards: the connect timeout (a few seconds, right for connecting) was also the HTTP
 // client's timeout for every later call, so any remote tool slower than that was cut off. A call
-// slower than "connection_timeout" but within "timeout" must succeed, on both transports.
+// slower than "connection_timeout" but within "timeout" must succeed, on both frontends.
 func TestACallMayTakeLongerThanTheConnectTimeout(t *testing.T) {
 	transports(t, 900*time.Millisecond, func(t *testing.T, cfg types.MCPServer) {
 		cfg.ConnectionTimeout = 300 // connect budget: far shorter than the call

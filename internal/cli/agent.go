@@ -8,7 +8,7 @@ import (
 )
 
 // interactiveMaxIterations is the ReAct iteration cap for interactive
-// transports (TUI, standalone `harness serve`, Telegram) — higher than
+// frontends (TUI, standalone `harness serve`, Telegram) — higher than
 // agent.defaultMaxIterations (50) because these are where real, complex,
 // multi-step work happens (explore code, edit multiple files, run
 // verification, iterate on failures), unlike the one-shot commands newAgent()
@@ -94,8 +94,8 @@ func oneShotOptions() agent.AgentOptions {
 // off unless the command asked for them with --with-colleagues / --with-scheduler or the matching
 // environment variable, because each costs every session something even when unused.
 //
-// directives are extra AGENT-WIDE system-prompt blocks (every session sees them). Transport-specific ones
-// (telegram.Directive, slack.Directive) don't go here: those transports add them per session.
+// directives are extra AGENT-WIDE system-prompt blocks (every session sees them). Frontend-specific ones
+// (telegram.Directive, slack.Directive) don't go here: those frontends add them per session.
 //
 // SessionInfo itself is always registered regardless of this constructor (see agent.go's
 // buildSessionTools) — it has no dedicated EnableX flag, unlike the options below.

@@ -164,7 +164,7 @@ type ContextBreakdown struct {
 
 // SessionInfo is GET /api/sessions/{id}/info — a consolidated, read-only
 // snapshot of everything the TUI footer, Telegram /info, and any future
-// transport needs in a single round-trip. Only valid for active sessions.
+// frontend needs in a single round-trip. Only valid for active sessions.
 type SessionInfo struct {
 	// Version is the harness binary version (e.g. "v0.73.40").
 	Version string `json:"version"`

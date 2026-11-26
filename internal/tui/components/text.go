@@ -2,7 +2,7 @@
 //
 // Each widget implements render.Component (and optionally render.InputHandler /
 // render.Invalidator). Widgets are pure-Go ports of the pi-tui components,
-// styled to match the harness's existing tview-based TUI (transport/tui).
+// styled to match the harness's existing tview-based TUI (frontend/tui).
 package components
 
 import (

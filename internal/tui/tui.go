@@ -1,12 +1,12 @@
 // Package tui is a from-scratch, pure-Go terminal frontend for the harness.
 //
-// It is a thin client over the same HTTP/SSE backend the other transports use
+// It is a thin client over the same HTTP/SSE backend the other frontends use
 // (server): it starts an in-process server, creates/resumes a session,
 // streams events over SSE, and renders everything with the custom differential
-// renderer in transport/tui/render. No external TUI library — only
+// renderer in frontend/tui/render. No external TUI library — only
 // golang.org/x/term (raw mode) and rivo/uniseg (grapheme width).
 //
-// Styling and behavior mirror the original tview-based TUI (transport/tui):
+// Styling and behavior mirror the original tview-based TUI (frontend/tui):
 // the Kaiban palette, streaming markdown, tool-call rendering, command palette,
 // spinner, and stats footer.
 package tui

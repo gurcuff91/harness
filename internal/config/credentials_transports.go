@@ -5,9 +5,9 @@ import (
 	"fmt"
 )
 
-// ── Transport secrets ────────────────────────────────────────────────────
+// ── Frontend secrets ────────────────────────────────────────────────────
 //
-// Secrets the chat transports need, kept out of the settings store so they
+// Secrets the chat frontends need, kept out of the settings store so they
 // can live in a different (secret-grade) backend than ordinary state.
 //
 // Store layout:

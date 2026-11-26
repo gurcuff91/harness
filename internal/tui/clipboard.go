@@ -8,7 +8,7 @@ import (
 	goclip "golang.design/x/clipboard"
 )
 
-// Clipboard image paste. Ported from the v1 TUI (transport/tui/image.go): the
+// Clipboard image paste. Ported from the v1 TUI (frontend/tui/image.go): the
 // clipboard's PNG is written to a temp file and its path is inserted into the
 // editor as text. The Read tool resolves image paths, so the agent receives the
 // image by reading that path — hence path-as-text rather than an inline attach.

@@ -59,7 +59,7 @@ type Agent struct {
 
 	// activeSessions tracks every live session (created via NewSession or
 	// ResumeSession, removed on Close) by id. The scheduler routes a fired prompt
-	// to the session named by the schedule's owner; a transport reaches whatever
+	// to the session named by the schedule's owner; a frontend reaches whatever
 	// output it wants by subscribing to that session's events. Guarded by sessMu.
 	sessMu         sync.Mutex
 	activeSessions map[string]*Session
@@ -76,7 +76,7 @@ type AgentOptions struct {
 
 	// ── Behavior ─────────────────────────────────────────────────────────
 	SystemPrompt  string   // base system prompt for all sessions; precedence: this > SYSTEM.md > built-in default
-	Directives    []string // extra instruction blocks appended to the system prompt (e.g. transport-specific capabilities)
+	Directives    []string // extra instruction blocks appended to the system prompt (e.g. a frontend's capabilities)
 	MaxIterations int      // max ReAct iterations per turn — default: 50 (defaultMaxIterations)
 	MaxTokens     int      // max output tokens — default: model's MaxTokens from ModelMeta
 
@@ -114,7 +114,7 @@ type AgentOptions struct {
 	sharedMemory memory.Store
 	// EnableScheduler turns on cron-scheduled prompts: the Schedule* management
 	// tools AND the engine that fires due prompts. The agent owns both. A
-	// transport marks one session as the scheduler target (SetScheduledSession);
+	// frontend marks one session as the scheduler target (SetScheduledSession);
 	// only one agent should enable this so prompts don't fire twice.
 	EnableScheduler bool
 
@@ -140,7 +140,7 @@ type AgentOptions struct {
 
 // defaultMaxIterations is the fallback used when AgentOptions.MaxIterations
 // isn't set. It's the SDK/one-shot-command default — generous enough for a
-// real multi-step task without being unbounded; interactive transports (TUI,
+// real multi-step task without being unbounded; interactive frontends (TUI,
 // serve, Telegram) that expect longer, more complex work override it higher
 // (see internal/cli/agent.go), and subagents cap it lower via
 // subagentMaxIterations (see the Subagent tool wiring below).
@@ -453,7 +453,7 @@ func (a *Agent) scheduleAdapter() tools.ScheduleStore {
 }
 
 // Schedules returns the agent's schedule store (nil if unavailable). Read by the
-// HTTP transport to serve the read-only /api/schedules listing.
+// HTTP server to serve the read-only /api/schedules listing.
 func (a *Agent) Schedules() *schedule.Store { return a.schedStore }
 
 // Options returns the original configuration — used by the Subagent tool to clone.
@@ -551,7 +551,7 @@ func (a *Agent) MCPTools() []tools.Tool {
 }
 
 // Memory exposes the agent's persistent memory store (nil if the agent was
-// built without one). This is the rich, cwd-aware store — used by the HTTP transport to
+// built without one). This is the rich, cwd-aware store — used by the HTTP server to
 // serve read-only memory queries, and available to SDK consumers. The agent's
 // own tools use a scoped adapter over the same store.
 func (a *Agent) Memory() memory.Store { return a.memStore }
@@ -847,7 +847,7 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 // ResumeSession reopens an existing session, fully restoring its state. If the
 // session is already active (live in the agent's registry), it returns the
 // existing handle without reloading from disk — making this idempotent and safe
-// to call from multiple paths (transport reconnect, scheduler auto-resume, …).
+// to call from multiple paths (frontend reconnect, scheduler auto-resume, …).
 //
 // opts configure the reopened session (see SessionWithDirectives). They are
 // IGNORED on that already-active fast path: the live session keeps the
@@ -1790,7 +1790,7 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources, sessionD
 		b.WriteString(res.AgentsMD)
 	}
 
-	// Caller-supplied directives (e.g. a transport's capabilities). Appended last
+	// Caller-supplied directives (e.g. a frontend's capabilities). Appended last
 	// so they can reference everything above.
 	// Session-scoped directives (SessionWithDirectives) after them. A block
 	// identical to one already appended is skipped, so a caller that still

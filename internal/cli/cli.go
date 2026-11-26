@@ -1,4 +1,4 @@
-// Package cli provides a single-turn prompt transport for harness.
+// Package cli provides a single-turn prompt frontend for harness.
 // Usage: harness "what is 2+2?" [--model ...] [--thinking ...] [--output text|json|json-stream]
 package cli
 
@@ -15,14 +15,14 @@ import (
 	"github.com/gurcuff91/harness/client"
 )
 
-// Opts configures the CLI transport.
+// Opts configures the CLI frontend.
 type Opts struct {
 	Model    string // "provider/model" — empty means use settings default
 	Thinking string // thinking level — empty means use settings default
 	Output   string // "text" | "json" | "json-stream" (default: "text")
 }
 
-// Client is the HTTP API interface used by the CLI transport. an internal HTTP server, creates a session, sends a prompt,
+// Client is the HTTP API interface used by the CLI frontend. an internal HTTP server, creates a session, sends a prompt,
 // and streams the response to stdout according to the output mode.
 func Run(ctx context.Context, a *agent.Agent, prompt string, opts Opts) error {
 	if prompt == "" {

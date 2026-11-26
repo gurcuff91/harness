@@ -124,7 +124,7 @@ func TestStripImagesDoesNotMutateTheOriginal(t *testing.T) {
 
 // TestStripImagesPreservesSystemGeneratedMeta verifies Message.Meta survives —
 // requestProgressUpdate injects its prompt with IsSystemGenerated:true so
-// transports render it as a notice, not as a user message the human typed.
+// frontends render it as a notice, not as a user message the human typed.
 // Since stripImages now runs over a history that includes that message, losing
 // Meta here would make the TUI replay it as a fake user prompt on resume.
 func TestStripImagesPreservesSystemGeneratedMeta(t *testing.T) {

@@ -49,7 +49,7 @@ var CLI struct {
 
 	TUI tuiCmd `cmd:"" default:"withargs" hidden:"" help:"Interactive TUI (default)"`
 
-	Serve serveCmd `cmd:"" help:"Start the HTTP/SSE server (headless transport)"`
+	Serve serveCmd `cmd:"" help:"Start the HTTP/SSE server (headless)"`
 
 	GenSecret genSecretCmd `name:"gen-secret" cmd:"" help:"Print a new secret for harness serve --secret (or HARNESS_SECRET)"`
 
@@ -178,7 +178,7 @@ type telegramTokenCmd struct {
 // slackCmd is the Slack account group: today only `login`, the account the
 // input channels (--slack-channel, API channels) listen with. The Slack bot
 // (`harness slack` with no subcommand) and `slack admin` were removed in
-// v0.108.0 along with transports/slack.
+// v0.108.0 along with frontends/slack.
 type slackCmd struct {
 	Login slackLoginCmd `cmd:"" help:"Authenticate interactively (saves the login to harness's config stores)"`
 }

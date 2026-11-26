@@ -170,7 +170,7 @@ func Subagent(executor SubagentExecutor) Tool {
 // same turn is cancelled at the exact moment the turn ends, which is
 // earlier than the sub-agent's own work is usually done. The result was
 // every background sub-agent call failing with "context canceled" the
-// instant its launching turn finished, regardless of transport (TUI,
+// instant its launching turn finished, regardless of frontend (TUI,
 // Telegram, Slack, ACP, the HTTP /ask or /prompt endpoints — the
 // cancellation happens deep in agent/session.go, before any of that even
 // gets involved). context.Background() has no relationship to any turn's

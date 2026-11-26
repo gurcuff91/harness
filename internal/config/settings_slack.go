@@ -5,7 +5,7 @@ package config
 // The xoxc/xoxd session pair is a secret and lives in the credentials store
 // (see CredentialsManager.SlackSession). Here: the workspace identity saved by
 // `harness slack login` (channels/slack). The admin list and channel→session
-// bindings of the removed Slack transport (namespaces slack_admins and
+// bindings of the removed Slack frontend (namespaces slack_admins and
 // slack_sessions) are no longer read or written.
 //
 // Store layout:

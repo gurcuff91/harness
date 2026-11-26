@@ -90,7 +90,7 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 				// evt.Loop is the agent's own 0-based iteration index (the SAME
 				// value loop_end for this iteration will carry — they're a
 				// matched pair) — read directly instead of a client-side counter
-				// this transport used to maintain by hand (currTurn++ on every
+				// this frontend used to maintain by hand (currTurn++ on every
 				// loop_start), which could drift from the agent's real count.
 				// +1 for the footer's "(turn/max_iterations)" 1-based display.
 				t.withView(func() { t.currTurn = evt.Loop + 1 })

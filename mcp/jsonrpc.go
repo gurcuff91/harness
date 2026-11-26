@@ -1,9 +1,9 @@
 // Package mcp implements a minimal client for the Model Context Protocol (MCP).
 //
-// Phase 1 scope: the stdio transport and the tools primitive only. The protocol
+// Phase 1 scope: the stdio frontend and the tools primitive only. The protocol
 // is JSON-RPC 2.0 (newline-delimited over stdin/stdout), implemented with the
 // standard library alone — no external SDK — to keep the harness dependency
-// footprint minimal. The Transport interface leaves the door open for a future
+// footprint minimal. The Frontend interface leaves the door open for a future
 // Streamable-HTTP transport without touching the client or manager.
 package mcp
 

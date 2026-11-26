@@ -9,7 +9,7 @@ import (
 	"github.com/gurcuff91/harness/server"
 )
 
-// startInternalServer starts the HTTP transport on a random loopback port.
+// startInternalServer starts the HTTP server on a random loopback port.
 // tui talks to this in-process server exactly like an external client —
 // keeping the frontend/backend separation clean. Always logx.NewNilLogger():
 // this server shares stdout/stderr with the raw-mode terminal renderer, so
@@ -23,7 +23,7 @@ func startInternalServer(a *agent.Agent) (*internalServer, string, error) {
 	}
 	addr := listener.Addr().String()
 
-	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NewNilLogger(), Transport: "tui"})
+	srv := server.NewServer(a, server.ServerOptions{Logger: logx.NewNilLogger(), Frontend: "tui"})
 	go srv.Serve(listener) //nolint:errcheck
 
 	return &internalServer{srv: srv}, addr, nil

@@ -16,7 +16,7 @@ import (
 // HTTPTransport speaks the MCP Streamable HTTP transport: every JSON-RPC message
 // is a POST to a single endpoint. The server replies either with a single JSON
 // object (Content-Type: application/json) or an SSE stream (text/event-stream);
-// this transport supports both. Authentication is entirely header-driven (e.g.
+// this frontend supports both. Authentication is entirely header-driven (e.g.
 // Authorization: Bearer <token>) — no OAuth flow. A server-assigned
 // Mcp-Session-Id, if any, is captured and echoed on subsequent requests.
 type HTTPTransport struct {
@@ -35,7 +35,7 @@ type HTTPConfig struct {
 	Timeout time.Duration     // per-request timeout; 0 = default 30s
 }
 
-// NewHTTPTransport builds a remote transport. It performs no I/O until Send.
+// NewHTTPTransport builds a remote frontend. It performs no I/O until Send.
 func NewHTTPTransport(cfg HTTPConfig) (*HTTPTransport, error) {
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("mcp http: empty url")

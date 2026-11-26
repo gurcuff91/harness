@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// transports/telegram was removed in v0.116.0 (the bot is this channel now):
+// frontends/telegram was removed in v0.116.0 (the bot is this channel now):
 // nothing may bring it back by importing it, tests included, and the
 // directory itself must stay gone.
 func TestNothingImportsTheRemovedTelegramTransport(t *testing.T) {

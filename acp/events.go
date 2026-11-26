@@ -8,7 +8,7 @@ import (
 
 // toolKindByName maps a Harness tool name to its ACP ToolKind category,
 // purely by name — a small fixed table, not a per-tool annotation, since
-// this transport must not touch agent/tools/. Unlisted tools (Skill,
+// this frontend must not touch agent/tools/. Unlisted tools (Skill,
 // Subagent, MemoWrite/Search/Delete, Schedule*, Colleague*) fall back to
 // toolKindOther.
 var toolKindByName = map[string]string{

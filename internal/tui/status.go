@@ -18,7 +18,7 @@ const statusApp = "harness"
 // nothing appears on screen.
 //
 // It exists only inside the interactive TUI. ACP uses stdout as its JSON-RPC channel, and serve,
-// the chat transports and -p never run the TUI, so none of them may ever emit this — which is why
+// the chat frontends and -p never run the TUI, so none of them may ever emit this — which is why
 // the reporter is built in exactly one place (attachTerminal) and a test pins that.
 //
 // Every report is exactly ONE write to the terminal the renderer draws on. The renderer writes

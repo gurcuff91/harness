@@ -22,7 +22,7 @@ const spinnerInterval = 80 * time.Millisecond
 
 // Spinner is an animated loader with a themed label. When running it advances
 // a braille frame every 80ms and asks the renderer to repaint. Port of PI's
-// Loader, styled to match transport/tui (primary spinner + dim message).
+// Loader, styled to match frontend/tui (primary spinner + dim message).
 type Spinner struct {
 	mu       sync.Mutex
 	renderer Renderer

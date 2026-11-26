@@ -71,7 +71,7 @@ func TestSessionSystemPromptEndpoint(t *testing.T) {
 	}
 }
 
-// KeepAgentOpen: closing a transport's in-process server closes its own
+// KeepAgentOpen: closing a frontend's in-process server closes its own
 // sessions but leaves the caller's agent usable; without it, Close closes
 // the agent (server.Run's ownership semantics, unchanged).
 func TestKeepAgentOpen(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 // MarkdownStream is a streaming markdown renderer. It consumes text deltas and
 // emits ANSI-styled output incrementally, tracking parse state across calls.
 //
-// Port of the harness's tview-based renderer (transport/tui/mdrender.go),
+// Port of the harness's tview-based renderer (frontend/tui/mdrender.go),
 // translated to raw ANSI. Two key simplifications over the original:
 //   - ANSI needs no bracket escaping (tview required "[" -> "[[").
 //   - Style emission is derived from parser state in one place (style()),

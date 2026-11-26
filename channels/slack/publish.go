@@ -16,7 +16,7 @@ var typingInterval = 4 * time.Second
 
 // publisher posts the turns of one conversation, in order. Events are queued
 // by HandleEvent (which must never block the session) and consumed by one
-// goroutine — the same behavior as the transport's pump: the turn's text is
+// goroutine — the same behavior as the frontend's pump: the turn's text is
 // accumulated with a typing indicator and posted at every natural cut
 // (text_end, before a tool runs, turn_end, max iterations), processed first
 // (uploads, mrkdwn, splitting); errors and compaction notices are posted too.
