@@ -145,6 +145,10 @@ type Session struct {
 	// registered at its last open/reconfigure (see MissingProfiles). Lock-free:
 	// read by API handlers while a turn may be running.
 	missingProfiles atomic.Value // []string
+	// ownDirectives: the text given with SessionWithDirectives, kept so a live
+	// reconfiguration (a profile registered or removed) does not drop it. Never
+	// persisted; set once when the session opens.
+	ownDirectives []string
 
 	// modelStr is the session's active "provider/model" string, stored in an
 	// atomic.Value so it can be read lock-free from Model(). The value

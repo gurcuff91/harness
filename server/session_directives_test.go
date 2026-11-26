@@ -262,3 +262,51 @@ func TestReloadCustomProvidersEndpoint(t *testing.T) {
 		t.Fatalf("conflict reload = %+v, %v", st, err)
 	}
 }
+
+// POST /api/sessions, /resume and /fork accept "directives" for THAT session
+// only; they are not stored, and an empty body still works.
+func TestSessionDirectivesOverHTTP(t *testing.T) {
+	srv, a, model := sharedServer(t, nil)
+	c := client.New(srv.Addr())
+	const d = "## Only for this session"
+	prompt := func(id string) string {
+		s, err := a.ResumeSession(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s.SystemPrompt()
+	}
+
+	with, err := c.CreateSession(model, "/a", "", client.SessionWithDirectives(d))
+	if err != nil {
+		t.Fatal(err)
+	}
+	without, _ := c.CreateSession(model, "/b", "")
+	if !strings.Contains(prompt(with.ID), d) || strings.Contains(prompt(without.ID), d) {
+		t.Fatal("create: the directive must reach only the session that asked for it")
+	}
+
+	c.CloseSession(with.ID)
+	if _, err := c.ResumeSession(with.ID, client.SessionWithDirectives(d+" (resumed)")); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt(with.ID), d+" (resumed)") {
+		t.Error("resume: the directive must reach the reopened session")
+	}
+	c.CloseSession(with.ID)
+	if _, err := c.ResumeSession(with.ID); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(prompt(with.ID), d) {
+		t.Error("a resume without the option must not carry it (not stored)")
+	}
+
+	f, err := c.ForkSession(without.ID, client.SessionWithDirectives("## Fork text"))
+	if err != nil || !strings.Contains(prompt(f.ID), "## Fork text") {
+		t.Fatalf("fork: %v", err)
+	}
+	f2, _ := c.ForkSession(f.ID)
+	if strings.Contains(prompt(f2.ID), "## Fork text") {
+		t.Error("a fork must not inherit its parent's directives")
+	}
+}

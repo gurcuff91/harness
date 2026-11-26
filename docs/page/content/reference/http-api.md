@@ -754,6 +754,7 @@ Content type: `application/json`.
 |---|---|---|---|
 | `channels` | array of object | no | External conversations this session listens to while it is open: their messages for it (Slack: mentions in a channel, every message in a DM) become prompts with origin "<type>:<id>", and the turns they start are posted back there. The channel's tools and system-prompt section are added. Never persisted. One conversation, one live session (across processes): taken → 409; unknown type (no such channel registered, e.g. no Slack login) or unresolvable ref → 400. |
 | `cwd` | string | no |  |
+| `directives` | array of string | no | Instruction text for THIS session's system prompt only, after the agent's and the enabled profiles'. Not stored: pass it again on every open that should carry it. |
 | `model` | string | yes |  |
 | `name` | string | no |  |
 | `profiles` | array of string | no | Bind the session to the agent's registered profiles by name (e.g. "slack") — their directives and tools apply to it. The names are persisted: every later open of the session, by any client, re-applies whichever are registered then. Unknown name → 400. |
@@ -1038,6 +1039,7 @@ Content type: `application/json`.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `channels` | array of object | no | Conversations the fork listens to (it never inherits its parent's). |
+| `directives` | array of string | no | Instruction text for THIS session's system prompt only, after the agent's and the enabled profiles'. Not stored: pass it again on every open that should carry it. |
 | `profiles` | array of string | no | Profile names that REPLACE the ones the fork inherits from its parent: absent or null = the parent's, [] = none. Unknown name → 400. |
 
 Responses:
@@ -1188,6 +1190,7 @@ Content type: `application/json`.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `channels` | array of object | no | External conversations the reopened session listens to while it is open (never persisted; a resume without them listens to none). Taken by another live session → 409; unknown type or unresolvable ref → 400; asking an already-open session for a conversation it does not listen to → 400. |
+| `directives` | array of string | no | Instruction text for THIS session's system prompt only, after the agent's and the enabled profiles'. Not stored: pass it again on every open that should carry it. Ignored when the session is already open. |
 | `profiles` | array of string | no | Profile names that REPLACE the session's persisted binding: absent or null = unchanged, [] = remove them all, names = exactly those. If the session is already active, a changed binding applies at its next turn boundary, never mid-turn. Unknown name → 400. |
 
 Responses:

@@ -322,6 +322,10 @@ type createSessionRequest struct {
 	// (persisted in its meta — see profiles.Profile). Unknown names → 400.
 	// Absent = none; [] = none too.
 	Profiles *[]string `json:"profiles,omitempty"`
+	// Directives is instruction text for THIS session's system prompt only
+	// (agent.SessionWithDirectives): after the agent's and the profiles', never
+	// stored. Pass it again on every open that should carry it.
+	Directives []string `json:"directives,omitempty"`
 	// Channels are the external conversations the session listens to while it
 	// is open (agent.SessionWithChannels) — never persisted. A conversation
 	// another live session already listens to → 409; an unregistered type or
@@ -336,6 +340,9 @@ type resumeSessionRequest struct {
 	// → 400. If the session is already active, a changed binding is applied
 	// at its next turn boundary.
 	Profiles *[]string `json:"profiles,omitempty"`
+	// Directives for the reopened session's system prompt only (not stored).
+	// Ignored when the session is already open: it keeps its prompt.
+	Directives []string `json:"directives,omitempty"`
 	// Channels to listen to while the reopened session is open (see
 	// createSessionRequest.Channels). Asking an already-open session for
 	// channels it does not listen to → 400.
@@ -958,6 +965,9 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	if req.Profiles != nil {
 		opts = append(opts, agent.SessionWithEnabledProfiles(*req.Profiles...))
 	}
+	if len(req.Directives) > 0 {
+		opts = append(opts, agent.SessionWithDirectives(req.Directives...))
+	}
 	if len(req.Channels) > 0 {
 		opts = append(opts, agent.SessionWithChannels(req.Channels...))
 	}
@@ -1234,8 +1244,9 @@ func (s *Server) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	// "profiles" REPLACES the profile names the fork inherits (absent or null
 	// = keep the parent's, [] = none).
 	var req struct {
-		Channels []types.InputChannel `json:"channels,omitempty"`
-		Profiles *[]string            `json:"profiles,omitempty"`
+		Channels   []types.InputChannel `json:"channels,omitempty"`
+		Profiles   *[]string            `json:"profiles,omitempty"`
+		Directives []string             `json:"directives,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
@@ -1244,6 +1255,9 @@ func (s *Server) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	var opts []agent.SessionOption
 	if req.Profiles != nil {
 		opts = append(opts, agent.SessionWithEnabledProfiles(*req.Profiles...))
+	}
+	if len(req.Directives) > 0 {
+		opts = append(opts, agent.SessionWithDirectives(req.Directives...))
 	}
 	if len(req.Channels) > 0 {
 		opts = append(opts, agent.SessionWithChannels(req.Channels...))
@@ -1282,7 +1296,7 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, err := s.openSession(id, req.Profiles, req.Channels...)
+	sess, err := s.openSession(id, req.Profiles, req.Directives, req.Channels...)
 	if err != nil {
 		status := http.StatusInternalServerError
 		switch {
@@ -1311,13 +1325,16 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 // persisted binding (an empty one removes them all); the agent applies it —
 // on a fresh open and on a session that is already active (at its next turn
 // boundary, never mid-turn).
-func (s *Server) openSession(id string, profileNames *[]string, channels ...types.InputChannel) (*agent.Session, error) {
+func (s *Server) openSession(id string, profileNames *[]string, directives []string, channels ...types.InputChannel) (*agent.Session, error) {
 	s.openMu.Lock()
 	defer s.openMu.Unlock()
 
 	var opts []agent.SessionOption
 	if profileNames != nil {
 		opts = append(opts, agent.SessionWithEnabledProfiles(*profileNames...))
+	}
+	if len(directives) > 0 {
+		opts = append(opts, agent.SessionWithDirectives(directives...))
 	}
 	if len(channels) > 0 {
 		opts = append(opts, agent.SessionWithChannels(channels...))

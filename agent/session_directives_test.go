@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -179,5 +180,95 @@ func TestSystemPromptPrecedence(t *testing.T) {
 				t.Errorf("prompt = %.80q", s.systemPrompt)
 			}
 		})
+	}
+}
+
+// SessionWithDirectives: text particular to ONE session. Order in the prompt:
+// the agent's, the enabled profiles', the session's own.
+func TestSessionDirectivesAreScopedAndOrdered(t *testing.T) {
+	a, model := directivesTestAgent(t, store.NewInMemoryStore(), AgentOptions{Directives: []string{"## Agent wide"}})
+	_ = a.RegisterProfile("p", profiles.Profile{Directives: []string{"## Profile text"}})
+
+	s, err := a.NewSession("/a", model, SessionWithEnabledProfiles("p"), SessionWithDirectives("## Own A", "  ", "## Own A"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _ := a.NewSession("/b", model, SessionWithDirectives("## Own B"))
+	plain, _ := a.NewSession("/c", model)
+
+	p := s.systemPrompt
+	i, j, k := strings.Index(p, "## Agent wide"), strings.Index(p, "## Profile text"), strings.Index(p, "## Own A")
+	if i < 0 || j < 0 || k < 0 || !(i < j && j < k) {
+		t.Errorf("order agent(%d) < profile(%d) < own(%d) violated", i, j, k)
+	}
+	if strings.Count(p, "## Own A") != 1 {
+		t.Error("an identical block must appear once; a blank one must be dropped")
+	}
+	if strings.Contains(other.systemPrompt, "## Own A") || !strings.Contains(other.systemPrompt, "## Own B") {
+		t.Error("two sessions with different directives must not touch each other")
+	}
+	if strings.Contains(plain.systemPrompt, "## Own") {
+		t.Error("a session without directives is unchanged")
+	}
+}
+
+// Not persisted: whoever reopens passes them again; a fork does not inherit.
+func TestSessionDirectivesAreNotPersistedNorInherited(t *testing.T) {
+	st := store.NewInMemoryStore()
+	a1, model := directivesTestAgent(t, st, AgentOptions{})
+	s, _ := a1.NewSession("/a", model, SessionWithDirectives("## Mine"))
+	id := s.ID()
+
+	f, err := a1.ForkSession(id)
+	if err != nil || strings.Contains(f.systemPrompt, "## Mine") {
+		t.Fatalf("a fork must not inherit the parent's directives (%v)", err)
+	}
+	f2, err := a1.ForkSession(id, SessionWithDirectives("## Fork own"))
+	if err != nil || !strings.Contains(f2.systemPrompt, "## Fork own") || strings.Contains(f2.systemPrompt, "## Mine") {
+		t.Fatalf("a fork takes the ones it is given (%v)", err)
+	}
+	s.Close()
+
+	r, _ := a1.ResumeSession(id)
+	if strings.Contains(r.systemPrompt, "## Mine") {
+		t.Fatal("a plain reopen must not carry them: they are not stored")
+	}
+	r.Close()
+	r, err = a1.ResumeSession(id, SessionWithDirectives("## Again"))
+	if err != nil || !strings.Contains(r.systemPrompt, "## Again") {
+		t.Fatalf("a reopen with the option carries them (%v)", err)
+	}
+	// An already-open session keeps the prompt it has.
+	same, _ := a1.ResumeSession(id, SessionWithDirectives("## Ignored"))
+	if same != r || strings.Contains(same.systemPrompt, "## Ignored") {
+		t.Error("resuming an open session must not change its prompt")
+	}
+}
+
+// A live reconfiguration (a profile registered or removed) keeps the session's own text.
+func TestSessionDirectivesSurviveALiveReconfigure(t *testing.T) {
+	a, model := directivesTestAgent(t, store.NewInMemoryStore(), AgentOptions{})
+	_ = a.RegisterProfile("p", profiles.Profile{Directives: []string{"## P1"}})
+	s, _ := a.NewSession("/a", model, SessionWithEnabledProfiles("p"), SessionWithDirectives("## Own"))
+	_ = a.RegisterProfile("p", profiles.Profile{Directives: []string{"## P2"}})
+	if !strings.Contains(s.SystemPrompt(), "## P2") || !strings.Contains(s.SystemPrompt(), "## Own") {
+		t.Fatalf("reconfigure lost the session's own directive:\n%s", s.SystemPrompt())
+	}
+}
+
+// An import does not bring directives (they are not in the export) and takes the ones it is given.
+func TestImportTakesTheDirectivesItIsGiven(t *testing.T) {
+	a, model := profAgent(t)
+	s, _ := a.NewSession(t.TempDir(), model, SessionWithDirectives("## Original"))
+	var buf bytes.Buffer
+	if _, err := a.ExportSession(s.ID(), &buf); err != nil {
+		t.Fatal(err)
+	}
+	im, err := a.ImportSession(bytes.NewReader(buf.Bytes()), "", SessionWithDirectives("## For the copy"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(im.systemPrompt, "## Original") || !strings.Contains(im.systemPrompt, "## For the copy") {
+		t.Fatalf("import prompt wrong:\n%s", im.systemPrompt)
 	}
 }

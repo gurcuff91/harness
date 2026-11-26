@@ -187,7 +187,7 @@ func TestConcurrentResumeOneProxyAndSingleClose(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 64 {
 		wg.Add(1)
-		go func() { defer wg.Done(); <-start; srv.openSession(sess.ID, nil) }()
+		go func() { defer wg.Done(); <-start; srv.openSession(sess.ID, nil, nil) }()
 	}
 	close(start)
 	wg.Wait()

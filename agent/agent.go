@@ -712,11 +712,14 @@ type SessionOption func(*sessionConfig)
 
 type sessionConfig struct {
 	// directives and tools are NOT options: they are what the session's enabled
-	// profiles contribute (filled by profilesFor). The agent configures
-	// everything else; a session only chooses channels and profiles.
+	// profiles and its own directives contribute (filled by profilesFor). The
+	// agent configures the tools; a session chooses channels, profiles and its
+	// own instruction text.
 	directives []string
 	tools      []tools.Tool
-	profiles   []string
+	// own: the text given with SessionWithDirectives (never persisted).
+	own      []string
+	profiles []string
 	// setProfile: SessionWithEnabledProfiles was passed, even with no names. It is the
 	// difference between "leave the session's profiles as they are" and "none".
 	setProfile bool
@@ -754,6 +757,22 @@ func SessionWithEnabledProfiles(names ...string) SessionOption {
 	}
 }
 
+// SessionWithDirectives adds instruction text to THIS session's system prompt
+// only — for text that is particular to one session (its working tree, its
+// task), where a profile (shared text and tools, registered once by name) is
+// the wrong tool. It works on NewSession, ResumeSession, ForkSession and
+// ImportSession. Order in the prompt: the agent's directives, the enabled
+// profiles', these, then the channels'. Blank blocks are dropped and a block
+// identical to an earlier one appears once.
+//
+// Never persisted: they live in the open session, so whoever reopens it passes
+// them again (a fork does not inherit its parent's, an import does not bring
+// the export's). A resume that returns an already-open session leaves its
+// prompt as it is. Profiles that change while the session is open keep them.
+func SessionWithDirectives(directives ...string) SessionOption {
+	return func(c *sessionConfig) { c.own = append(c.own, directives...) }
+}
+
 func applySessionOptions(opts []SessionOption) sessionConfig {
 	var c sessionConfig
 	for _, o := range opts {
@@ -772,6 +791,7 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 	cfg := applySessionOptions(opts)
 	// The profiles it is bound to (none unless asked), checked BEFORE anything
 	// is created: an unknown one fails the open.
+	cfgOwn := cfg.own
 	profileNames, cfg, missingProfiles, err := a.profilesFor(nil, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("new session: %w", err)
@@ -834,6 +854,7 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 		res.Skills, loader.ReadSkill,
 		a.memStore != nil)
 	sess.agent = a
+	sess.ownDirectives = append([]string(nil), cfgOwn...)
 	sess.missingProfiles.Store(missingProfiles)
 	if err := sess.attachChannels(chans); err != nil {
 		_ = storeInst.Close()
@@ -899,6 +920,7 @@ func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session
 	// The profiles it ends up bound to: the stored ones, or the ones asked for
 	// (which REPLACE them and are saved). A stored one that is no longer
 	// registered is skipped and reported, never an error.
+	cfgOwn := cfg.own
 	profileNames, cfg, missingProfiles, err := a.profilesFor(meta.Profiles, cfg)
 	if err != nil {
 		_ = storeInst.Close()
@@ -968,6 +990,7 @@ func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session
 		skills, readSkill,
 		a.memStore != nil)
 	sess.agent = a
+	sess.ownDirectives = append([]string(nil), cfgOwn...)
 	sess.modelFallback = fallback
 	sess.missingProfiles.Store(missingProfiles)
 	if err := sess.attachChannels(chans); err != nil {
@@ -993,7 +1016,7 @@ func (a *Agent) reconfigureSession(sessionID string) error {
 	if !ok {
 		return fmt.Errorf("session %s is not active", sessionID)
 	}
-	_, cfg, missing, err := a.profilesFor(sess.store.Meta().Profiles, sessionConfig{})
+	_, cfg, missing, err := a.profilesFor(sess.store.Meta().Profiles, sessionConfig{own: sess.ownDirectives})
 	if err != nil {
 		return err
 	}
@@ -1185,6 +1208,7 @@ func (a *Agent) openStoredCopy(copyStore *store.Session, cfg sessionConfig, what
 	// Profiles: the copy keeps the names it came with (a fork: the parent's; an
 	// import: the export's); SessionWithEnabledProfiles replaces them. A stored name
 	// that is not registered is skipped and reported, an explicit one fails.
+	cfgOwn := cfg.own
 	profNames, cfg, missingProfiles, err := a.profilesFor(meta.Profiles, cfg)
 	if err != nil {
 		_ = copyStore.Close()
@@ -1240,6 +1264,7 @@ func (a *Agent) openStoredCopy(copyStore *store.Session, cfg sessionConfig, what
 		skills, readSkill,
 		a.memStore != nil)
 	sess.agent = a
+	sess.ownDirectives = append([]string(nil), cfgOwn...)
 	sess.modelFallback = fallback
 	sess.missingProfiles.Store(missingProfiles)
 	if err := sess.attachChannels(chans); err != nil {

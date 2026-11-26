@@ -19,7 +19,7 @@ Options are functional options whose names carry the thing they configure:
 
 Packages with a single kind of option use the plain `With*` form (`server.WithAddr`, `client.WithSecret`, `slack.WithLogger`).
 
-The rule behind the split: **the agent configures, the session obeys.** Directives, tools, disallowed tools, MCP servers, memory and the system prompt belong to the agent and apply to every session. A session option exists only for what is particular to one session: which conversations it listens to and which profiles are enabled for it. There is no per-session directive, tool or disallowed-tools option. A subset of sessions that needs extra text or tools is what a [profile](profiles.md) is.
+The rule behind the split: **the agent configures, the session obeys.** Directives, tools, disallowed tools, MCP servers, memory and the system prompt belong to the agent and apply to every session. A session option exists only for what is particular to one session: which conversations it listens to, which profiles are enabled for it, and instruction text of its own. There is no per-session tool or disallowed-tools option. A subset of sessions that needs shared text and tools is what a [profile](profiles.md) is.
 
 ## Agent options
 
@@ -79,7 +79,7 @@ The base prompt is chosen in this order:
 
 A prompt you set is never overridden by a project's `SYSTEM.md`.
 
-The final prompt is assembled in this order: base prompt, skills, memory, tool sections, working directory, `AGENTS.md`, the agent's directives, the directives of the session's enabled profiles, then the directives of its channels.
+The final prompt is assembled in this order: base prompt, skills, memory, tool sections, working directory, `AGENTS.md`, the agent's directives, the directives of the session's enabled profiles, the session's own directives, then the directives of its channels.
 
 ## Directives, tools and disallowed tools
 
@@ -97,8 +97,25 @@ Passed to `NewSession`, `ResumeSession`, `ForkSession` and `ImportSession`.
 |---|---|
 | `agent.SessionWithChannels(types.InputChannel{Type, Ref}...)` | Conversations the session listens to while it is open. Never persisted. See [Channels in Go](channels.md). |
 | `agent.SessionWithEnabledProfiles(names...)` | Profiles enabled for the session. Replaces the session's profile list. See [Profiles](profiles.md). |
+| `agent.SessionWithDirectives(text...)` | Instruction text for this session's prompt only. Never persisted. See below. |
 
 On `ResumeSession` of a session that is already open, options are ignored except profiles, which rebind it.
+
+### Session directives
+
+`SessionWithDirectives` is for text that is particular to one session and changes from session to session, such as the working tree or the task that session is about. For text shared by several sessions, register a [profile](profiles.md) instead.
+
+```go
+sess, err := a.NewSession(cwd, model,
+	agent.SessionWithDirectives("Your worktree is cards/42/. Edit only there."),
+)
+```
+
+- **Order in the prompt:** the agent's directives, then those of the enabled profiles, then the session's own, then the channels'. Blank blocks are dropped and an identical block appears once.
+- **Never persisted.** They live in the open session. Whoever reopens it passes them again; a plain `ResumeSession` returns a session without them, and a fork does not inherit its parent's. An import does not bring them either: pass the option to `ImportSession` if the copy needs text.
+- **An open session keeps its prompt:** `ResumeSession` of a session that is already open ignores the option.
+- **They survive reconfiguration.** When a profile is registered or removed while the session is open, the session's own text stays.
+- **Over HTTP:** `directives` in the body of `POST /api/sessions`, `/resume` and `/fork`; in Go, `client.SessionWithDirectives(...)`.
 
 ## Prompt options
 

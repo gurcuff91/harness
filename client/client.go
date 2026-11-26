@@ -480,8 +480,9 @@ func (c *Client) GetSchedules(owner string) ([]Schedule, error) {
 type SessionOption func(*sessionOptions)
 
 type sessionOptions struct {
-	profiles *[]string // nil = not passed (unchanged); empty = remove all
-	channels []types.InputChannel
+	profiles   *[]string // nil = not passed (unchanged); empty = remove all
+	directives []string
+	channels   []types.InputChannel
 }
 
 // SessionWithChannels makes the session listen to these external conversations
@@ -507,6 +508,15 @@ func SessionWithEnabledProfiles(names ...string) SessionOption {
 	}
 }
 
+// SessionWithDirectives adds instruction text to THIS session's system prompt
+// only (the agent's SessionWithDirectives): text particular to one session,
+// after the agent's and the enabled profiles'. Not stored: pass it again on every
+// Create/Resume/Fork that should carry it. On ResumeSession it is ignored when
+// the session is already open.
+func SessionWithDirectives(directives ...string) SessionOption {
+	return func(o *sessionOptions) { o.directives = append(o.directives, directives...) }
+}
+
 func applyClientSessionOptions(opts []SessionOption) sessionOptions {
 	var o sessionOptions
 	for _, opt := range opts {
@@ -527,6 +537,9 @@ func (c *Client) CreateSession(model, cwd, name string, opts ...SessionOption) (
 	}
 	if o.profiles != nil {
 		body["profiles"] = *o.profiles
+	}
+	if len(o.directives) > 0 {
+		body["directives"] = o.directives
 	}
 	if len(o.channels) > 0 {
 		body["channels"] = o.channels
@@ -564,13 +577,16 @@ func (c *Client) CloseSession(id string) (*Status, error) {
 func (c *Client) ForkSession(id string, opts ...SessionOption) (*Session, error) {
 	o := applyClientSessionOptions(opts)
 	var body any
-	if len(o.channels) > 0 || o.profiles != nil {
+	if len(o.channels) > 0 || o.profiles != nil || len(o.directives) > 0 {
 		m := map[string]any{}
 		if len(o.channels) > 0 {
 			m["channels"] = o.channels
 		}
 		if o.profiles != nil {
 			m["profiles"] = *o.profiles
+		}
+		if len(o.directives) > 0 {
+			m["directives"] = o.directives
 		}
 		body = m
 	}
@@ -664,10 +680,13 @@ func (c *Client) ImportSession(r io.Reader, cwd string, opts ...SessionOption) (
 func (c *Client) ResumeSession(id string, opts ...SessionOption) (*Session, error) {
 	o := applyClientSessionOptions(opts)
 	var body any
-	if o.profiles != nil || len(o.channels) > 0 {
+	if o.profiles != nil || len(o.directives) > 0 || len(o.channels) > 0 {
 		m := map[string]any{}
 		if o.profiles != nil {
 			m["profiles"] = *o.profiles
+		}
+		if len(o.directives) > 0 {
+			m["directives"] = o.directives
 		}
 		if len(o.channels) > 0 {
 			m["channels"] = o.channels

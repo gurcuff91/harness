@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.128.0] - 2026-11-26
+
+### Added — per-session directives are back
+`agent.SessionWithDirectives(text...)` and `client.SessionWithDirectives(text...)`, and a `directives` field on `POST /api/sessions`, `/resume` and `/fork`, were removed in 0.126.0; an external embedder used them. They return, for what a profile is the wrong tool: instruction text that changes from session to session (a working tree, a task).
+- Works on `NewSession`, `ResumeSession`, `ForkSession` and `ImportSession`. Order in the prompt: the agent's directives, the enabled profiles', the session's own, the channels'.
+- **Never persisted:** not in the session, not in an export. A plain reopen has none, a fork and an import do not inherit them, and an already-open session ignores the option on resume. They survive a live reconfiguration (a profile registered or removed while the session is open).
+- Profiles are unchanged. Per-session tools and disallowed tools stay agent-level.
+
 ## [0.127.0] - 2026-11-26
 
 ### Changed — the "transport" concept is gone (BREAKING for two names)

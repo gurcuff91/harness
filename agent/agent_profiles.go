@@ -79,7 +79,8 @@ func (a *Agent) profilesFor(stored []string, cfg sessionConfig) (names []string,
 		names = append([]string(nil), cfg.profiles...)
 	}
 	directives, ts, missing := a.resolveProfiles(names)
-	cfg.directives = append([]string(nil), directives...)
+	// Order: the enabled profiles', then the session's own.
+	cfg.directives = append(append([]string(nil), directives...), cfg.own...)
 	cfg.tools = append([]tools.Tool(nil), ts...)
 	return names, cfg, missing, nil
 }
