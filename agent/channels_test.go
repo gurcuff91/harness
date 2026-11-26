@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/gurcuff91/harness/agent/profiles"
 	"os"
 	"reflect"
 	"strings"
@@ -433,8 +434,8 @@ func TestTapFollowsEachTurnsOrigin(t *testing.T) {
 	}
 }
 
-// Reconfiguring a live session (a server profile bound to it changed) keeps
-// the channel's tools and directive.
+// Reconfiguring a live session (a profile bound to it changed) keeps the
+// channel's tools and directive.
 func TestReconfigureKeepsTheChannel(t *testing.T) {
 	ch := newFakeChannel("fake")
 	a, model, _ := channelAgent(t, ch)
@@ -443,7 +444,10 @@ func TestReconfigureKeepsTheChannel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if err := a.ReconfigureSession(s.ID(), SessionWithDirectives("## OTHER")); err != nil {
+	if err := a.RegisterProfile("p", profiles.Profile{Directives: []string{"## OTHER"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.ResumeSession(s.ID(), SessionWithEnabledProfiles("p")); err != nil { // rebinds the live session
 		t.Fatal(err)
 	}
 	if _, err := s.PromptAndWait(context.Background(), "x"); err != nil { // applies at the turn boundary

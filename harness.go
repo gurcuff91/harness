@@ -233,7 +233,7 @@ func AgentWithChannels(chs ...agent.Channel) AgentOption {
 
 // AgentWithProfiles registers named bundles of per-session directives and
 // tools (see agent/profiles). A session is bound to profiles by name with
-// agent.SessionWithProfiles; more can be registered or removed at any time
+// agent.SessionWithEnabledProfiles; more can be registered or removed at any time
 // with Agent.RegisterProfile / UnregisterProfile.
 func AgentWithProfiles(ps map[string]profiles.Profile) AgentOption {
 	return func(o *agent.AgentOptions) {

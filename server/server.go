@@ -318,9 +318,6 @@ type createSessionRequest struct {
 	Model string `json:"model"`
 	CWD   string `json:"cwd"`
 	Name  string `json:"name,omitempty"` // optional initial name; default: "New Session <date>"
-	// Directives are optional instruction blocks for THIS session's system
-	// prompt only (agent.SessionWithDirectives) — not persisted.
-	Directives []string `json:"directives,omitempty"`
 	// Profiles binds the new session to registered profiles by name
 	// (persisted in its meta — see profiles.Profile). Unknown names → 400.
 	// Absent = none; [] = none too.
@@ -334,10 +331,6 @@ type createSessionRequest struct {
 
 // resumeSessionRequest is the OPTIONAL body of POST /api/sessions/{id}/resume.
 type resumeSessionRequest struct {
-	// Directives for the reopened session's system prompt
-	// (agent.SessionWithDirectives), not persisted. Ignored when the session
-	// is already active.
-	Directives []string `json:"directives,omitempty"`
 	// Profiles REPLACES the session's persisted binding: absent or null =
 	// unchanged, [] = remove them all, names = exactly those. Unknown names
 	// → 400. If the session is already active, a changed binding is applied
@@ -961,9 +954,9 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := []agent.SessionOption{agent.SessionWithDirectives(req.Directives...)}
+	var opts []agent.SessionOption
 	if req.Profiles != nil {
-		opts = append(opts, agent.SessionWithProfiles(*req.Profiles...))
+		opts = append(opts, agent.SessionWithEnabledProfiles(*req.Profiles...))
 	}
 	if len(req.Channels) > 0 {
 		opts = append(opts, agent.SessionWithChannels(req.Channels...))
@@ -1250,7 +1243,7 @@ func (s *Server) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	}
 	var opts []agent.SessionOption
 	if req.Profiles != nil {
-		opts = append(opts, agent.SessionWithProfiles(*req.Profiles...))
+		opts = append(opts, agent.SessionWithEnabledProfiles(*req.Profiles...))
 	}
 	if len(req.Channels) > 0 {
 		opts = append(opts, agent.SessionWithChannels(req.Channels...))
@@ -1282,15 +1275,14 @@ func (s *Server) handleForkSession(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	// The body is optional (historically this endpoint took none): an empty
-	// body means no session directives.
+	// The body is optional (historically this endpoint took none).
 	var req resumeSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), nil)
 		return
 	}
 
-	sess, err := s.openSession(id, req.Profiles, req.Directives, req.Channels...)
+	sess, err := s.openSession(id, req.Profiles, req.Channels...)
 	if err != nil {
 		status := http.StatusInternalServerError
 		switch {
@@ -1319,13 +1311,13 @@ func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 // persisted binding (an empty one removes them all); the agent applies it —
 // on a fresh open and on a session that is already active (at its next turn
 // boundary, never mid-turn).
-func (s *Server) openSession(id string, profileNames *[]string, extraDirectives []string, channels ...types.InputChannel) (*agent.Session, error) {
+func (s *Server) openSession(id string, profileNames *[]string, channels ...types.InputChannel) (*agent.Session, error) {
 	s.openMu.Lock()
 	defer s.openMu.Unlock()
 
-	opts := []agent.SessionOption{agent.SessionWithDirectives(extraDirectives...)}
+	var opts []agent.SessionOption
 	if profileNames != nil {
-		opts = append(opts, agent.SessionWithProfiles(*profileNames...))
+		opts = append(opts, agent.SessionWithEnabledProfiles(*profileNames...))
 	}
 	if len(channels) > 0 {
 		opts = append(opts, agent.SessionWithChannels(channels...))

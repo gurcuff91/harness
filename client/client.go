@@ -480,9 +480,8 @@ func (c *Client) GetSchedules(owner string) ([]Schedule, error) {
 type SessionOption func(*sessionOptions)
 
 type sessionOptions struct {
-	directives []string
-	profiles   *[]string // nil = not passed (unchanged); empty = remove all
-	channels   []types.InputChannel
+	profiles *[]string // nil = not passed (unchanged); empty = remove all
+	channels []types.InputChannel
 }
 
 // SessionWithChannels makes the session listen to these external conversations
@@ -494,26 +493,18 @@ func SessionWithChannels(chs ...types.InputChannel) SessionOption {
 	return func(o *sessionOptions) { o.channels = append(o.channels, chs...) }
 }
 
-// SessionWithProfiles binds the session to the agent's registered profiles by name
+// SessionWithEnabledProfiles binds the session to the agent's registered profiles by name
 // (profiles.Profile — e.g. "slack"): their directives and tools apply to it,
 // and the binding is persisted, so every later open of the session — by any
 // client, with or without options — gets them again. The names REPLACE the
 // session's binding (on Resume and Fork too): not passing the option leaves it
 // unchanged, and passing it with no names removes every profile. An unknown
 // name is a 400 error.
-func SessionWithProfiles(names ...string) SessionOption {
+func SessionWithEnabledProfiles(names ...string) SessionOption {
 	return func(o *sessionOptions) {
 		n := append([]string{}, names...)
 		o.profiles = &n
 	}
-}
-
-// SessionWithDirectives adds instruction blocks to THIS session's system prompt only
-// (the server's agent.SessionWithDirectives) — the agent's other sessions
-// don't see them. Not persisted: pass them on every Create/ResumeSession. On
-// ResumeSession they're ignored if the session is already active.
-func SessionWithDirectives(directives ...string) SessionOption {
-	return func(o *sessionOptions) { o.directives = append(o.directives, directives...) }
 }
 
 func applyClientSessionOptions(opts []SessionOption) sessionOptions {
@@ -533,9 +524,6 @@ func (c *Client) CreateSession(model, cwd, name string, opts ...SessionOption) (
 	body := map[string]any{"model": model, "cwd": cwd}
 	if name != "" {
 		body["name"] = name
-	}
-	if len(o.directives) > 0 {
-		body["directives"] = o.directives
 	}
 	if o.profiles != nil {
 		body["profiles"] = *o.profiles
@@ -676,11 +664,8 @@ func (c *Client) ImportSession(r io.Reader, cwd string, opts ...SessionOption) (
 func (c *Client) ResumeSession(id string, opts ...SessionOption) (*Session, error) {
 	o := applyClientSessionOptions(opts)
 	var body any
-	if len(o.directives) > 0 || o.profiles != nil || len(o.channels) > 0 {
+	if o.profiles != nil || len(o.channels) > 0 {
 		m := map[string]any{}
-		if len(o.directives) > 0 {
-			m["directives"] = o.directives
-		}
 		if o.profiles != nil {
 			m["profiles"] = *o.profiles
 		}

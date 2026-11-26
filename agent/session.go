@@ -54,7 +54,7 @@ type Session struct {
 	tools        *tools.Registry
 	systemPrompt string
 
-	// Pending reconfiguration (Agent.ReconfigureSession): a new prompt/tool
+	// Pending reconfiguration (Agent.reconfigureSession): a new prompt/tool
 	// set, swapped in by promptSync at the start of the NEXT turn — never
 	// mid-turn, since promptSync holds s.mu for the whole turn. Guarded by
 	// reconfMu (not s.mu) so it can be queued from anywhere, including while
@@ -599,7 +599,7 @@ func (s *Session) Skills() []resources.SkillInfo { return s.skills }
 // provider on the next turn, including any MCP tools (namespaced
 // mcp__<server>__<tool>) and SDK-supplied AgentOptions.Tools alongside the
 // built-ins. Read-only and lock-free: the registry only changes at a turn
-// boundary (a profile reconfiguration, see Agent.ReconfigureSession), and is
+// boundary (a profile reconfiguration, see Agent.reconfigureSession), and is
 // read here through its atomic mirror; Definitions() returns a fresh copy.
 func (s *Session) Tools() []types.ToolDef {
 	return s.toolsVal.Load().(*tools.Registry).Definitions()
@@ -1589,7 +1589,7 @@ func imageRefs(images []types.ImageData) []types.ImageRef {
 }
 
 // sessionReconfig is a rebuilt system prompt + tool registry waiting for the
-// next turn boundary (see Agent.ReconfigureSession).
+// next turn boundary (see Agent.reconfigureSession).
 type sessionReconfig struct {
 	systemPrompt string
 	pl           promptLens

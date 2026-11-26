@@ -45,7 +45,7 @@ func profAgent(t *testing.T) (*Agent, string) {
 
 func TestProfilesReachOnlyBoundSessions(t *testing.T) {
 	a, model := profAgent(t)
-	b, err := a.NewSession("/p", model, SessionWithProfiles("chat"))
+	b, err := a.NewSession("/p", model, SessionWithEnabledProfiles("chat"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,21 +63,21 @@ func TestProfilesReachOnlyBoundSessions(t *testing.T) {
 
 func TestNewSessionWithUnknownProfileFailsAndLeavesNothing(t *testing.T) {
 	a, model := profAgent(t)
-	_, err := a.NewSession("/p", model, SessionWithProfiles("chat", "nope"))
+	_, err := a.NewSession("/p", model, SessionWithEnabledProfiles("chat", "nope"))
 	if !errors.Is(err, ErrUnknownProfile) {
 		t.Fatalf("err = %v", err)
 	}
 	if metas, _ := a.ListAllSessions(); len(metas) != 0 {
 		t.Fatalf("left %d sessions behind", len(metas))
 	}
-	if _, err := a.NewSession("/p", model, SessionWithProfiles("chat", " ")); err == nil {
+	if _, err := a.NewSession("/p", model, SessionWithEnabledProfiles("chat", " ")); err == nil {
 		t.Fatal("blank name must be an error")
 	}
 }
 
 func TestResumePatchSemantics(t *testing.T) {
 	a, model := profAgent(t)
-	s, _ := a.NewSession("/p", model, SessionWithProfiles("chat"))
+	s, _ := a.NewSession("/p", model, SessionWithEnabledProfiles("chat"))
 	id := s.ID()
 	s.Close()
 
@@ -86,21 +86,21 @@ func TestResumePatchSemantics(t *testing.T) {
 		t.Fatalf("unchanged: %v %v", err, a.SessionProfiles(id))
 	}
 	r.Close()
-	r, err = a.ResumeSession(id, SessionWithProfiles("other")) // replace
+	r, err = a.ResumeSession(id, SessionWithEnabledProfiles("other")) // replace
 	if err != nil || !slices.Equal(a.SessionProfiles(id), []string{"other"}) || !slices.Equal(profNames(r), []string{"Prof_other"}) {
 		t.Fatalf("replace: %v %v %v", err, a.SessionProfiles(id), profNames(r))
 	}
 	// Live session: passing rebinds (applies at once, idle).
-	if _, err := a.ResumeSession(id, SessionWithProfiles("chat", "other")); err != nil {
+	if _, err := a.ResumeSession(id, SessionWithEnabledProfiles("chat", "other")); err != nil {
 		t.Fatal(err)
 	}
 	if got := profNames(r); !slices.Equal(got, []string{"Prof_chat", "Prof_other"}) {
 		t.Fatalf("live rebind: %v", got)
 	}
-	if _, err := a.ResumeSession(id, SessionWithProfiles("nope")); !errors.Is(err, ErrUnknownProfile) {
+	if _, err := a.ResumeSession(id, SessionWithEnabledProfiles("nope")); !errors.Is(err, ErrUnknownProfile) {
 		t.Fatalf("unknown on live = %v", err)
 	}
-	if _, err := a.ResumeSession(id, SessionWithProfiles()); err != nil { // none → remove all
+	if _, err := a.ResumeSession(id, SessionWithEnabledProfiles()); err != nil { // none → remove all
 		t.Fatal(err)
 	}
 	if len(a.SessionProfiles(id)) != 0 || len(profNames(r)) != 0 {
@@ -110,7 +110,7 @@ func TestResumePatchSemantics(t *testing.T) {
 
 func TestMissingStoredProfileIsSkippedKeptAndReported(t *testing.T) {
 	a, model := profAgent(t)
-	s, _ := a.NewSession("/p", model, SessionWithProfiles("chat", "other"))
+	s, _ := a.NewSession("/p", model, SessionWithEnabledProfiles("chat", "other"))
 	id := s.ID()
 
 	a.UnregisterProfile("chat") // live session reconfigured
@@ -137,12 +137,12 @@ func TestMissingStoredProfileIsSkippedKeptAndReported(t *testing.T) {
 
 func TestForkInheritsAndReplacesProfiles(t *testing.T) {
 	a, model := profAgent(t)
-	s, _ := a.NewSession("/p", model, SessionWithProfiles("chat"))
+	s, _ := a.NewSession("/p", model, SessionWithEnabledProfiles("chat"))
 	f, err := a.ForkSession(s.ID())
 	if err != nil || !slices.Equal(a.SessionProfiles(f.ID()), []string{"chat"}) || !slices.Equal(profNames(f), []string{"Prof_chat"}) {
 		t.Fatalf("inherit: %v %v", err, a.SessionProfiles(f.ID()))
 	}
-	f2, err := a.ForkSession(s.ID(), SessionWithProfiles("other"))
+	f2, err := a.ForkSession(s.ID(), SessionWithEnabledProfiles("other"))
 	if err != nil || !slices.Equal(a.SessionProfiles(f2.ID()), []string{"other"}) || !slices.Equal(profNames(f2), []string{"Prof_other"}) {
 		t.Fatalf("replace: %v %v", err, a.SessionProfiles(f2.ID()))
 	}
@@ -150,7 +150,7 @@ func TestForkInheritsAndReplacesProfiles(t *testing.T) {
 		t.Fatal("parent changed")
 	}
 	n := len(mustList(t, a))
-	if _, err := a.ForkSession(s.ID(), SessionWithProfiles("nope")); !errors.Is(err, ErrUnknownProfile) {
+	if _, err := a.ForkSession(s.ID(), SessionWithEnabledProfiles("nope")); !errors.Is(err, ErrUnknownProfile) {
 		t.Fatalf("unknown = %v", err)
 	}
 	if len(mustList(t, a)) != n {
@@ -174,7 +174,7 @@ func mustList(t *testing.T, a *Agent) []store.SessionMeta {
 
 func TestImportBringsProfileNames(t *testing.T) {
 	a, model := profAgent(t)
-	s, _ := a.NewSession(t.TempDir(), model, SessionWithProfiles("chat", "other"))
+	s, _ := a.NewSession(t.TempDir(), model, SessionWithEnabledProfiles("chat", "other"))
 	var buf bytes.Buffer
 	if _, err := a.ExportSession(s.ID(), &buf); err != nil {
 		t.Fatal(err)
@@ -196,7 +196,7 @@ func TestProfilesFromAgentOptions(t *testing.T) {
 	a, model := directivesTestAgent(t, store.NewInMemoryStore(), AgentOptions{
 		Profiles: map[string]profiles.Profile{"x": {Directives: []string{"## x"}}},
 	})
-	s, err := a.NewSession("/p", model, SessionWithProfiles("x"))
+	s, err := a.NewSession("/p", model, SessionWithEnabledProfiles("x"))
 	if err != nil || !strings.Contains(s.SystemPrompt(), "## x") {
 		t.Fatalf("%v", err)
 	}

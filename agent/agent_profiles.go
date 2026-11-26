@@ -79,10 +79,8 @@ func (a *Agent) profilesFor(stored []string, cfg sessionConfig) (names []string,
 		names = append([]string(nil), cfg.profiles...)
 	}
 	directives, ts, missing := a.resolveProfiles(names)
-	// The profiles' directives and tools come BEFORE the caller's own, so a
-	// session-specific directive or tool still wins.
-	cfg.directives = append(append([]string(nil), directives...), cfg.directives...)
-	cfg.tools = append(append([]tools.Tool(nil), ts...), cfg.tools...)
+	cfg.directives = append([]string(nil), directives...)
+	cfg.tools = append([]tools.Tool(nil), ts...)
 	return names, cfg, missing, nil
 }
 
@@ -98,7 +96,7 @@ func (a *Agent) reconfigureBound(name string) {
 	}
 	a.sessMu.Unlock()
 	for _, id := range ids {
-		_ = a.ReconfigureSession(id)
+		_ = a.reconfigureSession(id)
 	}
 }
 

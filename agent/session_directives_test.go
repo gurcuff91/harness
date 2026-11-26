@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gurcuff91/harness/agent/profiles"
 	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/agent/tools"
@@ -26,7 +27,9 @@ func directivesTestAgent(t *testing.T, st store.SessionStore, opts AgentOptions)
 		t.Fatal(err)
 	}
 	opts.Store = st
-	opts.ResourceLoader = resources.NilLoader{}
+	if opts.ResourceLoader == nil {
+		opts.ResourceLoader = resources.NilLoader{}
+	}
 	a := New(opts)
 	t.Cleanup(func() { a.Close() })
 	return a, "directives-fake/m"
@@ -34,11 +37,14 @@ func directivesTestAgent(t *testing.T, st store.SessionStore, opts AgentOptions)
 
 const tgDirective = "## Telegram\n\nYou are talking over Telegram."
 
-// Criterion 3: a session's directives reach only THAT session's prompt.
-func TestSessionDirectivesAreScopedToTheSession(t *testing.T) {
-	a, model := directivesTestAgent(t, store.NewInMemoryStore(), AgentOptions{})
-
-	tg, err := a.NewSession("/tg", model, SessionWithDirectives(tgDirective))
+// The agent's directives reach every session; a profile's reach only the
+// sessions that enabled it. There is no per-session directive any more.
+func TestDirectivesAreTheAgentsAndProfilesScopeTheRest(t *testing.T) {
+	a, model := directivesTestAgent(t, store.NewInMemoryStore(), AgentOptions{Directives: []string{"## Agent wide"}})
+	if err := a.RegisterProfile("tg", profiles.Profile{Directives: []string{tgDirective}}); err != nil {
+		t.Fatal(err)
+	}
+	tg, err := a.NewSession("/tg", model, SessionWithEnabledProfiles("tg"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,19 +52,22 @@ func TestSessionDirectivesAreScopedToTheSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(tg.systemPrompt, tgDirective) {
-		t.Error("the Telegram session's prompt must include its directive")
+	for _, s := range []*Session{tg, other} {
+		if !strings.Contains(s.systemPrompt, "## Agent wide") {
+			t.Error("the agent's directive must reach every session")
+		}
 	}
-	if strings.Contains(other.systemPrompt, tgDirective) {
-		t.Error("a session created without it must not see the directive")
+	if !strings.Contains(tg.systemPrompt, tgDirective) || strings.Contains(other.systemPrompt, tgDirective) {
+		t.Error("the profile's directive must reach only the session that enabled it")
 	}
 }
 
-// Agent-wide directives come first, session ones after; an identical block at
+// Order: agent directives first, then the profiles'; an identical block at
 // both levels appears once.
-func TestSessionDirectivesOrderAndDedup(t *testing.T) {
+func TestDirectivesOrderAndDedup(t *testing.T) {
 	a, model := directivesTestAgent(t, store.NewInMemoryStore(), AgentOptions{Directives: []string{"## Agent wide", tgDirective}})
-	s, err := a.NewSession("/p", model, SessionWithDirectives(tgDirective, "## Session only"))
+	_ = a.RegisterProfile("p", profiles.Profile{Directives: []string{tgDirective, "## Profile only"}})
+	s, err := a.NewSession("/p", model, SessionWithEnabledProfiles("p"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,76 +75,60 @@ func TestSessionDirectivesOrderAndDedup(t *testing.T) {
 	if strings.Count(p, tgDirective) != 1 {
 		t.Errorf("duplicate directive appears %d times, want 1", strings.Count(p, tgDirective))
 	}
-	if i, j := strings.Index(p, "## Agent wide"), strings.Index(p, "## Session only"); i < 0 || j < 0 || i > j {
-		t.Errorf("want agent-wide (%d) before session-only (%d)", i, j)
+	if i, j := strings.Index(p, "## Agent wide"), strings.Index(p, "## Profile only"); i < 0 || j < 0 || i > j {
+		t.Errorf("want agent-wide (%d) before the profile's (%d)", i, j)
 	}
 }
 
-// Criterion 4: directives aren't persisted — a session resumed after a
-// "restart" (a new Agent over the same store) gets them from whoever resumes
-// it, and only then.
-func TestSessionDirectivesOnResumeAfterRestart(t *testing.T) {
+// The profile's directive is applied again by whoever reopens the session (the
+// binding is persisted by name), even from a new agent over the same store.
+func TestProfileDirectiveSurvivesAReopenAfterRestart(t *testing.T) {
 	st := store.NewInMemoryStore()
 	a1, model := directivesTestAgent(t, st, AgentOptions{})
-	s, err := a1.NewSession("/tg", model, SessionWithDirectives(tgDirective))
+	_ = a1.RegisterProfile("tg", profiles.Profile{Directives: []string{tgDirective}})
+	s, err := a1.NewSession("/tg", model, SessionWithEnabledProfiles("tg"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	id := s.ID()
 	s.Close()
 
-	a2 := New(AgentOptions{Store: st, ResourceLoader: resources.NilLoader{}})
+	a2 := New(AgentOptions{Store: st, ResourceLoader: resources.NilLoader{}, Profiles: map[string]profiles.Profile{"tg": {Directives: []string{tgDirective}}}})
 	defer a2.Close()
-	resumed, err := a2.ResumeSession(id, SessionWithDirectives(tgDirective))
+	resumed, err := a2.ResumeSession(id)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(resumed.systemPrompt, tgDirective) {
-		t.Error("a session resumed with the directive must include it")
-	}
-	resumed.Close()
-
-	plain, err := a2.ResumeSession(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(plain.systemPrompt, tgDirective) {
-		t.Error("directives must not be persisted — a plain resume (e.g. the TUI) must not get them")
+		t.Error("a plain resume must re-apply the persisted profile")
 	}
 }
 
-// Option (a): resuming an ALREADY-ACTIVE session ignores directives — the
-// live session keeps the prompt it was opened with.
-func TestResumeActiveSessionIgnoresDirectives(t *testing.T) {
+// Resuming an ALREADY-ACTIVE session without profile options leaves its prompt alone.
+func TestResumeActiveSessionKeepsItsPrompt(t *testing.T) {
 	a, model := directivesTestAgent(t, store.NewInMemoryStore(), AgentOptions{})
 	s, err := a.NewSession("/p", model)
 	if err != nil {
 		t.Fatal(err)
 	}
-	same, err := a.ResumeSession(s.ID(), SessionWithDirectives(tgDirective))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if same != s {
-		t.Fatal("resuming an active session must return the live handle")
-	}
-	if strings.Contains(same.systemPrompt, tgDirective) {
-		t.Error("an active session's prompt must not change on resume")
+	before := s.systemPrompt
+	same, err := a.ResumeSession(s.ID())
+	if err != nil || same != s || same.systemPrompt != before {
+		t.Fatalf("a resume of an active session must return it untouched (%v)", err)
 	}
 }
 
-// SessionWithTools: scoped to the session, filtered by DisallowedTools,
-// replaces an agent-wide tool of the same name in that session only, and is
-// not persisted.
-func TestSessionToolsScopedFilteredAndNotPersisted(t *testing.T) {
-	st := store.NewInMemoryStore()
+// The agent's tools and DisallowedTools apply to every session; a profile's
+// tools only to the sessions that enabled it, still filtered by DisallowedTools.
+func TestToolsAreTheAgentsAndProfilesScopeTheRest(t *testing.T) {
 	mk := func(name, desc string) tools.Tool {
 		return tools.Tool{Def: types.ToolDef{Name: name, Description: desc, InputSchema: json.RawMessage(`{"type":"object"}`)}}
 	}
-	a, model := directivesTestAgent(t, st, AgentOptions{
+	a, model := directivesTestAgent(t, store.NewInMemoryStore(), AgentOptions{
 		DisallowedTools: []string{"Blocked"},
 		Tools:           []tools.Tool{mk("Shared", "agent-wide")},
 	})
+	_ = a.RegisterProfile("p", profiles.Profile{Tools: func() []tools.Tool { return []tools.Tool{mk("Mine", "x"), mk("Blocked", "x")} }})
 	defs := func(s *Session) map[string]string {
 		out := map[string]string{}
 		for _, d := range s.Tools() {
@@ -143,24 +136,48 @@ func TestSessionToolsScopedFilteredAndNotPersisted(t *testing.T) {
 		}
 		return out
 	}
-
-	s, err := a.NewSession("/p", model, SessionWithTools(mk("Mine", "x"), mk("Blocked", "x"), mk("Shared", "session")))
+	s, err := a.NewSession("/p", model, SessionWithEnabledProfiles("p"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := defs(s)
-	if got["Mine"] == "" || got["Blocked"] != "" || got["Shared"] != "session" {
-		t.Errorf("session tools = %v; want Mine, no Blocked, Shared overridden", got)
+	if got["Mine"] == "" || got["Blocked"] != "" || got["Shared"] != "agent-wide" {
+		t.Errorf("session tools = %v; want Mine and the agent-wide Shared, no Blocked", got)
 	}
 	other, _ := a.NewSession("/q", model)
 	if og := defs(other); og["Mine"] != "" || og["Shared"] != "agent-wide" {
 		t.Errorf("another session = %v; want no Mine and the agent-wide Shared", og)
 	}
+}
 
-	id := s.ID()
-	s.Close()
-	plain, _ := a.ResumeSession(id)
-	if defs(plain)["Mine"] != "" {
-		t.Error("session tools must not be persisted across resume")
+// The base prompt: what the caller set > SYSTEM.md > the built-in default.
+type systemMDLoader struct{ resources.NilLoader }
+
+func (systemMDLoader) Load() (*resources.Resources, error) {
+	return &resources.Resources{SystemMD: "FROM SYSTEM.MD"}, nil
+}
+func (l systemMDLoader) Copy() resources.ResourceLoader { return l }
+
+func TestSystemPromptPrecedence(t *testing.T) {
+	cases := []struct {
+		name, explicit, want, notWant string
+		loader                        resources.ResourceLoader
+	}{
+		{"explicit beats SYSTEM.md", "MINE", "MINE", "FROM SYSTEM.MD", systemMDLoader{}},
+		{"SYSTEM.md beats the default", "", "FROM SYSTEM.MD", "expert coding agent", systemMDLoader{}},
+		{"the default when there is nothing else", "", "You are an expert coding agent", "FROM SYSTEM.MD", resources.NilLoader{}},
+		{"explicit beats the default", "MINE", "MINE", "expert coding agent", resources.NilLoader{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a, model := directivesTestAgent(t, store.NewInMemoryStore(), AgentOptions{SystemPrompt: c.explicit, ResourceLoader: c.loader})
+			s, err := a.NewSession("/p", model)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(s.systemPrompt, c.want) || strings.Contains(s.systemPrompt, c.notWant) {
+				t.Errorf("prompt = %.80q", s.systemPrompt)
+			}
+		})
 	}
 }

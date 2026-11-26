@@ -75,14 +75,14 @@ type AgentOptions struct {
 	ThinkingLevel string // "disable"|"low"|"medium"|"high"|"xhigh"|"max"
 
 	// ── Behavior ─────────────────────────────────────────────────────────
-	SystemPrompt  string   // base system prompt for all sessions
+	SystemPrompt  string   // base system prompt for all sessions; precedence: this > SYSTEM.md > built-in default
 	Directives    []string // extra instruction blocks appended to the system prompt (e.g. transport-specific capabilities)
 	MaxIterations int      // max ReAct iterations per turn — default: 50 (defaultMaxIterations)
 	MaxTokens     int      // max output tokens — default: model's MaxTokens from ModelMeta
 
 	// ── Profiles ─────────────────────────────────────────────────────────
 	// Profiles are named bundles of directives and tools that SOME sessions
-	// can be bound to (SessionWithProfiles) — see package profiles. More can be
+	// can be bound to (SessionWithEnabledProfiles) — see package profiles. More can be
 	// added, replaced or removed live with Agent.RegisterProfile.
 	Profiles map[string]profiles.Profile
 
@@ -206,9 +206,6 @@ func New(opts AgentOptions) *Agent {
 		// branch above, and minMaxIterations is 1, so every remaining
 		// positive value already satisfies the floor.
 		opts.MaxIterations = maxMaxIterations
-	}
-	if opts.SystemPrompt == "" {
-		opts.SystemPrompt = defaultSystemPrompt
 	}
 	if opts.ThinkingLevel == "" {
 		// Fall back to the user's configured level, then to "off". Doing this in
@@ -714,10 +711,13 @@ func (a *Agent) newLoader(cwd string) resources.ResourceLoader {
 type SessionOption func(*sessionConfig)
 
 type sessionConfig struct {
+	// directives and tools are NOT options: they are what the session's enabled
+	// profiles contribute (filled by profilesFor). The agent configures
+	// everything else; a session only chooses channels and profiles.
 	directives []string
 	tools      []tools.Tool
 	profiles   []string
-	// setProfile: SessionWithProfiles was passed, even with no names. It is the
+	// setProfile: SessionWithEnabledProfiles was passed, even with no names. It is the
 	// difference between "leave the session's profiles as they are" and "none".
 	setProfile bool
 	channels   []types.InputChannel
@@ -726,7 +726,7 @@ type sessionConfig struct {
 	err error
 }
 
-// SessionWithProfiles binds the session to the named profiles (package
+// SessionWithEnabledProfiles binds the session to the named profiles (package
 // profiles; defined with AgentOptions.Profiles or Agent.RegisterProfile): their
 // directives and tools apply to it, and the names are stored in the session, so
 // every later open — by any frontend — applies them again. It works on
@@ -735,14 +735,14 @@ type sessionConfig struct {
 //   - not passed: the session keeps the profiles it has (a new one has none; a
 //     fork keeps its parent's);
 //   - one or more names: exactly those;
-//   - passed with no names, SessionWithProfiles(): none.
+//   - passed with no names, SessionWithEnabledProfiles(): none.
 //
 // A name that is not registered fails NewSession (and ResumeSession/ForkSession
 // when passed here): nothing is opened. A STORED name that is no longer
 // registered is skipped when a session opens — it stays usable, the name is
 // kept for when it is registered again, and Session.MissingProfiles reports
 // it. A blank name is an error.
-func SessionWithProfiles(names ...string) SessionOption {
+func SessionWithEnabledProfiles(names ...string) SessionOption {
 	return func(c *sessionConfig) {
 		c.setProfile = true
 		c.profiles = append([]string(nil), names...)
@@ -752,34 +752,6 @@ func SessionWithProfiles(names ...string) SessionOption {
 			}
 		}
 	}
-}
-
-// SessionWithDirectives appends instruction blocks to THIS session's system
-// prompt, after the Agent-wide AgentOptions.Directives. Unlike those, they
-// apply only to the session being created/resumed — e.g. a transport adding
-// its own capabilities (a server.Profile's directive) to the sessions
-// it drives, while the same Agent's other sessions don't see them.
-//
-// Not persisted: they live on the in-memory session object, so whoever drives
-// a session passes them again on every NewSession/ResumeSession. Ignored when
-// ResumeSession returns an already-active session (its prompt was built by
-// whoever opened it; see ResumeSession).
-func SessionWithDirectives(directives ...string) SessionOption {
-	return func(c *sessionConfig) { c.directives = append(c.directives, directives...) }
-}
-
-// SessionWithTools adds tools to THIS session's registry only, after the
-// Agent-wide ones (AgentOptions.Tools) — e.g. a transport's own tools
-// (Slack's SlackPost, …) for the sessions it drives, which the same Agent's
-// other sessions must never get. Still filtered by AgentOptions.DisallowedTools;
-// a session tool with the same name as an Agent-wide one replaces it in this
-// session.
-//
-// Not persisted, exactly like SessionWithDirectives: pass them again on every
-// NewSession/ResumeSession; ignored when ResumeSession returns an
-// already-active session; ForkSession doesn't inherit them.
-func SessionWithTools(ts ...tools.Tool) SessionOption {
-	return func(c *sessionConfig) { c.tools = append(c.tools, ts...) }
 }
 
 func applySessionOptions(opts []SessionOption) sessionConfig {
@@ -897,10 +869,10 @@ func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session
 			if err := a.checkProfileNames(cfg.profiles); err != nil {
 				return nil, fmt.Errorf("resume session: %w", err)
 			}
-			if err := a.SetSessionProfiles(sessionID, cfg.profiles); err != nil {
+			if err := a.setSessionProfiles(sessionID, cfg.profiles); err != nil {
 				return nil, fmt.Errorf("resume session: %w", err)
 			}
-			if err := a.ReconfigureSession(sessionID); err != nil {
+			if err := a.reconfigureSession(sessionID); err != nil {
 				return nil, fmt.Errorf("resume session: %w", err)
 			}
 		}
@@ -1006,31 +978,24 @@ func (a *Agent) ResumeSession(sessionID string, opts ...SessionOption) (*Session
 	return sess, nil
 }
 
-// ReconfigureSession rebuilds a LIVE session's system prompt and tool
-// registry — from the profiles it is bound to (registered now) plus the
-// session options given (SessionWithDirectives/SessionWithTools, and
-// SessionWithProfiles, which also rebinds it) — and applies them at the
-// session's next turn boundary, never mid-turn; if the session is idle they
-// apply immediately. This is how a session that was already active picks up a
-// changed configuration (a profile registered, replaced, removed or bound
-// after it was opened). Returns an error if the session isn't active in this
-// agent.
-func (a *Agent) ReconfigureSession(sessionID string, opts ...SessionOption) error {
+// reconfigureSession rebuilds a LIVE session's system prompt and tool
+// registry from the agent's configuration, the profiles it is bound to
+// (registered now) and its channels, and applies them at the session's next
+// turn boundary, never mid-turn; an idle session applies them immediately. This
+// is how a session that is already active picks up a profile registered,
+// replaced or removed after it was opened, or a rebind (ResumeSession with
+// SessionWithEnabledProfiles). Private on purpose: nobody outside the agent
+// should force a reconfiguration. Returns an error if the session isn't active.
+func (a *Agent) reconfigureSession(sessionID string) error {
 	a.sessMu.Lock()
 	sess, ok := a.activeSessions[sessionID]
 	a.sessMu.Unlock()
 	if !ok {
 		return fmt.Errorf("session %s is not active", sessionID)
 	}
-	cfg := applySessionOptions(opts)
-	names, cfg, missing, err := a.profilesFor(sess.store.Meta().Profiles, cfg)
+	_, cfg, missing, err := a.profilesFor(sess.store.Meta().Profiles, sessionConfig{})
 	if err != nil {
 		return err
-	}
-	if cfg.setProfile {
-		if err := a.SetSessionProfiles(sessionID, names); err != nil {
-			return err
-		}
 	}
 	sess.missingProfiles.Store(missing)
 	cwd := sess.CWD()
@@ -1041,7 +1006,7 @@ func (a *Agent) ReconfigureSession(sessionID string, opts ...SessionOption) erro
 	}
 	sessRef := sess
 	// The session's channels keep their tools and directive: they belong to
-	// how the session was opened, not to the options being re-applied.
+	// how the session was opened.
 	if sc := sess.channels; sc != nil {
 		cfg.tools = append(append([]tools.Tool(nil), cfg.tools...), sc.tools...)
 		cfg.directives = append(append([]string(nil), cfg.directives...), sc.directives...)
@@ -1052,12 +1017,12 @@ func (a *Agent) ReconfigureSession(sessionID string, opts ...SessionOption) erro
 	return nil
 }
 
-// SetSessionProfiles persists the names of the profiles bound to a session
+// setSessionProfiles persists the names of the profiles bound to a session
 // (store.SessionMeta.Profiles), replacing them — nil or empty removes them all.
 // It only changes the STORED names, on an active or an inactive session alike:
-// an active one applies them at its next ReconfigureSession (ResumeSession and
-// SessionWithProfiles do both).
-func (a *Agent) SetSessionProfiles(sessionID string, profiles []string) error {
+// an active one applies them at its next reconfigureSession (ResumeSession and
+// SessionWithEnabledProfiles do both).
+func (a *Agent) setSessionProfiles(sessionID string, profiles []string) error {
 	a.sessMu.Lock()
 	sess, ok := a.activeSessions[sessionID]
 	a.sessMu.Unlock()
@@ -1218,7 +1183,7 @@ func (a *Agent) openStoredCopy(copyStore *store.Session, cfg sessionConfig, what
 	}
 
 	// Profiles: the copy keeps the names it came with (a fork: the parent's; an
-	// import: the export's); SessionWithProfiles replaces them. A stored name
+	// import: the export's); SessionWithEnabledProfiles replaces them. A stored name
 	// that is not registered is skipped and reported, an explicit one fails.
 	profNames, cfg, missingProfiles, err := a.profilesFor(meta.Profiles, cfg)
 	if err != nil {
@@ -1758,10 +1723,14 @@ type promptLens struct {
 func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources, sessionDirectives ...string) (string, promptLens) {
 	var b strings.Builder
 
-	if res.SystemMD != "" {
-		b.WriteString(res.SystemMD)
-	} else {
+	// Precedence: the prompt the caller set > SYSTEM.md > the built-in default.
+	switch {
+	case a.systemPrompt != "":
 		b.WriteString(a.systemPrompt)
+	case res.SystemMD != "":
+		b.WriteString(res.SystemMD)
+	default:
+		b.WriteString(defaultSystemPrompt)
 	}
 
 	if len(res.Skills) > 0 {

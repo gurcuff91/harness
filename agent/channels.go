@@ -152,7 +152,7 @@ type sessionChannels struct {
 	byPrompt map[string]*boundChannel
 
 	// directives and tools the channels add to the session — kept so a
-	// reconfiguration (ReconfigureSession) re-applies them instead of dropping
+	// reconfiguration (reconfigureSession) re-applies them instead of dropping
 	// them.
 	directives []string
 	tools      []tools.Tool

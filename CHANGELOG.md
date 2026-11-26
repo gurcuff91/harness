@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.126.0] - 2026-11-26
+
+### Changed — the agent configures, the session obeys (BREAKING)
+A session is its agent's child: directives, tools and disallowed tools are the AGENT's (`AgentOptions` / `harness.AgentWith*`) and apply to every session. A session option exists only for what is particular to one session.
+- **Removed:** `agent.SessionWithDirectives`, `agent.SessionWithTools`, `client.SessionWithDirectives`, and the `directives` field of `POST /api/sessions` and `/resume` (nobody used them; a subset of sessions that needs extra text or tools is what a profile is).
+- **Renamed:** `SessionWithProfiles` → `SessionWithEnabledProfiles` (agent and client), so it cannot be confused with `AgentWithProfiles`, which REGISTERS profiles. A session now has two options: `SessionWithChannels` and `SessionWithEnabledProfiles`.
+- **Private:** `Agent.ReconfigureSession` and `Agent.SetSessionProfiles` (nobody outside the agent should force a reconfiguration).
+- **System prompt precedence:** the prompt the caller set (`AgentOptions.SystemPrompt`) > `SYSTEM.md` > the built-in default. Before, `SYSTEM.md` always won, so a project's file overrode a prompt the SDK user had set (and a sub-agent's own).
+
 ## [0.125.0] - 2026-11-26
 
 ### Changed — session options are `SessionWith*` (BREAKING)
