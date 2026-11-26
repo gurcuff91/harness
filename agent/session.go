@@ -2032,7 +2032,10 @@ func (s *Session) runPendingTools(ctx context.Context, resp *types.Response, pen
 		go func() {
 			defer wg.Done()
 			start := time.Now()
-			output, images, execErr := s.tools.Run(ctx, call.toolName, call.toolArgs)
+			// The tool's ctx carries the session (agent.SessionID), as a
+			// channel's Listen ctx does for SessionName.
+			toolCtx := context.WithValue(ctx, sessionCtxKey{}, s)
+			output, images, execErr := s.tools.Run(toolCtx, call.toolName, call.toolArgs)
 			dur := time.Since(start)
 			// If ctx was cancelled (Stop), skip emitting — EventStop handles it
 			if ctx.Err() != nil {

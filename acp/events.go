@@ -201,7 +201,7 @@ func pumpEvents(c *conn, sessionID string, events <-chan client.Event, stopOnCom
 // error: a broken stdout pipe means the client is gone, and there is nothing
 // useful left to do for this turn.
 func notify(c *conn, sessionID string, u sessionUpdate) {
-	_ = c.sendNotification("session/update", sessionUpdateNotification{
+	_ = c.SendNotification("session/update", sessionUpdateNotification{
 		SessionID: sessionID,
 		Update:    u,
 	})

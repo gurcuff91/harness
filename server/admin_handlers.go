@@ -15,26 +15,27 @@ import (
 	"github.com/gurcuff91/harness/types"
 )
 
-// adminStatus maps an admin error to its HTTP status. Order matters:
-// ErrUnprocessable (422) is checked BEFORE ErrInvalid (400) because a few
-// errors carry both (a bad thinking level, an invalid MCP server).
+// adminKindStatus is the HTTP status of each admin error kind (admin.Kind: the
+// taxonomy lives there, once). A kind absent here — the provider lookups and
+// name conflicts, invalid exports — keeps the generic 500 it always had where
+// a handler does not map it itself.
+var adminKindStatus = map[string]int{
+	"not_found":              http.StatusNotFound,
+	"unprocessable":          http.StatusUnprocessableEntity,
+	"invalid":                http.StatusBadRequest,
+	"session_active":         http.StatusConflict,
+	"conflict":               http.StatusConflict,
+	"not_connected":          http.StatusConflict,
+	"provider_not_removable": http.StatusConflict,
+	"upstream":               http.StatusBadGateway,
+	"not_configured":         http.StatusServiceUnavailable,
+}
+
+// adminStatus maps an admin error to its HTTP status through admin.Kind (so
+// "unprocessable" wins over "invalid" for the errors that carry both).
 func adminStatus(err error) int {
-	switch {
-	case errors.Is(err, admin.ErrNotFound):
-		return http.StatusNotFound
-	case errors.Is(err, admin.ErrUnprocessable):
-		return http.StatusUnprocessableEntity
-	case errors.Is(err, admin.ErrInvalid):
-		return http.StatusBadRequest
-	case errors.Is(err, admin.ErrSessionActive),
-		errors.Is(err, admin.ErrConflict),
-		errors.Is(err, admin.ErrNotConnected),
-		errors.Is(err, admin.ErrProviderNotRemovable):
-		return http.StatusConflict
-	case errors.Is(err, admin.ErrUpstream):
-		return http.StatusBadGateway
-	case errors.Is(err, admin.ErrNotConfigured):
-		return http.StatusServiceUnavailable
+	if st, ok := adminKindStatus[admin.Kind(err)]; ok {
+		return st
 	}
 	return http.StatusInternalServerError
 }

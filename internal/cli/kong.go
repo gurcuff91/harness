@@ -57,6 +57,7 @@ var CLI struct {
 
 	Slack slackCmd `cmd:"" help:"Slack account for input channels (harness slack login)"`
 
+	RPC rpcCmd `cmd:"" help:"Run the Harness JSON-RPC protocol over stdio (for SDKs in other languages: the client sends an initialize request with the agent configuration, then drives sessions and administration; it takes no flags)"`
 	ACP acpCmd `cmd:"" help:"Run as an Agent Client Protocol agent over stdio (for Zed and other ACP clients; it takes no flags: set HARNESS_WITH_COLLEAGUES=1 / HARNESS_WITH_SCHEDULER=1 to turn the extras on)"`
 
 	// ── Management ───────────────────────────────────────────────────────
@@ -157,6 +158,12 @@ type telegramTokenFlag struct {
 // fixed before any session exists, so they come from HARNESS_WITH_COLLEAGUES / HARNESS_WITH_SCHEDULER in
 // the environment the editor starts the process with (see extras.go).
 type acpCmd struct{}
+
+// rpcCmd has no flags either: an SDK launches this exact command as a
+// sub-process and speaks JSON-RPC to it over stdin/stdout. The agent is NOT
+// built from flags or the environment: the client describes it in `initialize`
+// (thinking level, tools, profiles, MCP servers, store, memory…).
+type rpcCmd struct{}
 
 // ── telegram ─────────────────────────────────────────────────────────────
 

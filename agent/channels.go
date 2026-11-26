@@ -120,6 +120,18 @@ func SessionName(ctx context.Context) (name string, ok bool) {
 	return s.Name(), true
 }
 
+// SessionID returns the id of the session a ctx belongs to: the ctx a tool's
+// Execute gets during a turn, or a channel's Listen ctx. ok is false for any
+// other ctx. A tool that serves several sessions uses it to know which one is
+// calling.
+func SessionID(ctx context.Context) (id string, ok bool) {
+	s, isSession := ctx.Value(sessionCtxKey{}).(*Session)
+	if !isSession || s == nil {
+		return "", false
+	}
+	return s.ID(), true
+}
+
 // ChannelOrigin is the prompt origin of a message from conversation id of a
 // channel of type typ.
 func ChannelOrigin(typ, id string) string { return typ + ":" + id }

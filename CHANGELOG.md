@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.131.0] - 2026-11-26
+
+### Added — `harness rpc`, a JSON-RPC protocol for SDKs in other languages
+`harness rpc` speaks JSON-RPC 2.0 over stdin/stdout, directly on the agent and `admin` (no HTTP server, no port). The client describes the agent in `initialize` (thinking level, tools, profiles, MCP servers, `store`/`memory`/`resources` by kind, channels…) and then drives it: **67 methods** in `agent/*`, `session/*` and `admin/<service>/*` (every method of `admin` and every live-session operation of the SDK), the `event` notification with the same events as the HTTP stream, and **custom tools implemented in the client** through the `tool/call` request (with `tool/cancel`).
+- A closed stdin shuts the binary down, so no process is left behind if the client dies. Requests sent right behind `initialize` wait for it.
+- snake_case throughout, like the HTTP API; ACP stays camelCase because its specification mandates it.
+- `protocol_version` (1) is negotiated in `initialize`; the full protocol is in the new [RPC reference](https://gurcuff91.github.io/harness/reference/rpc-protocol.html), generated from `rpc/schema.json` (`make docs-rpc`), and a parity test keeps every public method of `agent`, `Session` and `admin` either in the protocol or explicitly excluded.
+- Go: `harness.RunRpc` (+ `RpcWithStdin/Stdout/Logger`), `agent.SessionID(ctx)`, `agent.SessionDetail`/`Session.Detail()`, `admin.Kind(err)`, `types.WireEvent(e)`.
+
+### Fixed
+- A session's events could arrive reordered on a JSON-RPC connection (a goroutine per notification); notifications are now handled in order. The HTTP stream was never affected.
+
 ## [0.130.0] - 2026-11-26
 
 ### Removed (BREAKING) — `max_tokens` is internal

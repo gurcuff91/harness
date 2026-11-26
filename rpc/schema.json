@@ -1,0 +1,3462 @@
+{
+  "$defs": {
+    "AdminMCPListResult": {
+      "properties": {
+        "servers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/MCPServer"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "servers"
+      ],
+      "type": "object"
+    },
+    "AdminMCPNameParams": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "AdminMCPPutParams": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "server": {
+          "$ref": "#/$defs/MCPServer"
+        }
+      },
+      "required": [
+        "name",
+        "server"
+      ],
+      "type": "object"
+    },
+    "AdminMCPSetEnabledParams": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "enabled",
+        "name"
+      ],
+      "type": "object"
+    },
+    "AdminMemoryConfiguredResult": {
+      "properties": {
+        "configured": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "configured"
+      ],
+      "type": "object"
+    },
+    "AdminMemoryKeyParams": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cwd",
+        "slug"
+      ],
+      "type": "object"
+    },
+    "AdminMemoryListParams": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "include_content": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "skip": {
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "AdminMemoryPutParams": {
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content",
+        "cwd",
+        "slug"
+      ],
+      "type": "object"
+    },
+    "AdminMemoryPutResult": {
+      "properties": {
+        "created": {
+          "type": "boolean"
+        },
+        "memory": {
+          "$ref": "#/$defs/Memory"
+        }
+      },
+      "required": [
+        "created",
+        "memory"
+      ],
+      "type": "object"
+    },
+    "AdminMemorySearchParams": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "include_content": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "query": {
+          "type": "string"
+        },
+        "skip": {
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "AdminProviderNameParams": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "AdminProvidersConnectParams": {
+      "properties": {
+        "access_token": {
+          "type": "string"
+        },
+        "account_id": {
+          "type": "string"
+        },
+        "api_key": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "refresh_token": {
+          "type": "string"
+        },
+        "subscription_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "AdminProvidersConnectResult": {
+      "properties": {
+        "models": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "models"
+      ],
+      "type": "object"
+    },
+    "AdminProvidersCredentialTypeResult": {
+      "properties": {
+        "credential_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "credential_type"
+      ],
+      "type": "object"
+    },
+    "AdminProvidersListCustomResult": {
+      "properties": {
+        "providers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/CustomProvider"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "providers"
+      ],
+      "type": "object"
+    },
+    "AdminProvidersListResult": {
+      "properties": {
+        "providers": {
+          "items": {
+            "$ref": "#/$defs/ProviderInfo"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "providers"
+      ],
+      "type": "object"
+    },
+    "AdminProvidersModelParams": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "provider"
+      ],
+      "type": "object"
+    },
+    "AdminProvidersModelsParams": {
+      "properties": {
+        "provider": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AdminProvidersModelsResult": {
+      "properties": {
+        "models": {
+          "items": {
+            "$ref": "#/$defs/ModelListing"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "models"
+      ],
+      "type": "object"
+    },
+    "AdminProvidersOAuthExchangeParams": {
+      "properties": {
+        "exchange_code": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "verifier_code": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "exchange_code",
+        "provider",
+        "verifier_code"
+      ],
+      "type": "object"
+    },
+    "AdminProvidersOAuthStartParams": {
+      "properties": {
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "type": "object"
+    },
+    "AdminProvidersOAuthStartResult": {
+      "properties": {
+        "auth_url": {
+          "type": "string"
+        },
+        "verifier_code": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "auth_url",
+        "verifier_code"
+      ],
+      "type": "object"
+    },
+    "AdminProvidersPutCustomParams": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/CustomProvider"
+        }
+      },
+      "required": [
+        "name",
+        "provider"
+      ],
+      "type": "object"
+    },
+    "AdminProvidersQuotaParams": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "refresh": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "AdminProvidersQuotaResult": {
+      "properties": {
+        "quota": {
+          "$ref": "#/$defs/Quota"
+        },
+        "retry_after_seconds": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "quota",
+        "retry_after_seconds"
+      ],
+      "type": "object"
+    },
+    "AdminProvidersRegisterAnthropicParams": {
+      "properties": {
+        "display": {
+          "type": "string"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "url"
+      ],
+      "type": "object"
+    },
+    "AdminProvidersRegisterOpenAIParams": {
+      "properties": {
+        "display": {
+          "type": "string"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        },
+        "reasoning_split": {
+          "type": "boolean"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "url"
+      ],
+      "type": "object"
+    },
+    "AdminProvidersReloadCustomResult": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "AdminSchedule": {
+      "properties": {
+        "cron": {
+          "type": "string"
+        },
+        "last_run": {
+          "type": "integer"
+        },
+        "origin": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "runs": {
+          "type": "integer"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cron",
+        "owner",
+        "prompt",
+        "runs",
+        "slug"
+      ],
+      "type": "object"
+    },
+    "AdminSchedulesListParams": {
+      "properties": {
+        "owner": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AdminSchedulesListResult": {
+      "properties": {
+        "schedules": {
+          "items": {
+            "$ref": "#/$defs/AdminSchedule"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schedules"
+      ],
+      "type": "object"
+    },
+    "AdminSessionsExportFileNameResult": {
+      "properties": {
+        "file_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_name"
+      ],
+      "type": "object"
+    },
+    "AdminSessionsExportParams": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "AdminSessionsExportResult": {
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messages"
+      ],
+      "type": "object"
+    },
+    "AdminSessionsListParams": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AdminSessionsListResult": {
+      "properties": {
+        "sessions": {
+          "items": {
+            "$ref": "#/$defs/SessionMeta"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "sessions"
+      ],
+      "type": "object"
+    },
+    "AdminSessionsMessagesParams": {
+      "properties": {
+        "compactions": {
+          "type": "integer"
+        },
+        "from": {
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "AdminSessionsMessagesResult": {
+      "properties": {
+        "from": {
+          "type": "integer"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/Message"
+          },
+          "type": "array"
+        },
+        "total": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "from",
+        "messages",
+        "total"
+      ],
+      "type": "object"
+    },
+    "AdminSessionsRenameParams": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "AdminSettingsSetActiveModelParams": {
+      "properties": {
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "type": "object"
+    },
+    "AdminSettingsSetThinkingLevelParams": {
+      "properties": {
+        "level": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "type": "object"
+    },
+    "Capabilities": {
+      "properties": {
+        "channels": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "channels"
+      ],
+      "type": "object"
+    },
+    "ChannelInfo": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "type"
+      ],
+      "type": "object"
+    },
+    "ClientInfo": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Config": {
+      "properties": {
+        "channels": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "directives": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "disallowed_tools": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enable_scheduler": {
+          "type": "boolean"
+        },
+        "enable_web_search": {
+          "type": "boolean"
+        },
+        "max_iterations": {
+          "type": "integer"
+        },
+        "max_tokens": {
+          "type": "integer"
+        },
+        "mcp_servers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/MCPServer"
+          },
+          "type": "object"
+        },
+        "memory": {
+          "$ref": "#/$defs/KindConfig"
+        },
+        "profiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ProfileConfig"
+          },
+          "type": "object"
+        },
+        "resources": {
+          "$ref": "#/$defs/ResourcesConfig"
+        },
+        "store": {
+          "$ref": "#/$defs/KindConfig"
+        },
+        "system_prompt": {
+          "type": "string"
+        },
+        "terminal": {
+          "type": "string"
+        },
+        "thinking_level": {
+          "type": "string"
+        },
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/ToolDecl"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ContentPart": {
+      "properties": {
+        "image": {
+          "$ref": "#/$defs/ImageData"
+        },
+        "text": {
+          "type": "string"
+        },
+        "thinking": {
+          "$ref": "#/$defs/ThinkingPart"
+        },
+        "tool_call": {
+          "$ref": "#/$defs/ToolCall"
+        },
+        "tool_result": {
+          "$ref": "#/$defs/ToolResult"
+        }
+      },
+      "type": "object"
+    },
+    "ContextBreakdown": {
+      "properties": {
+        "context_window": {
+          "type": "integer"
+        },
+        "conversation": {
+          "type": "integer"
+        },
+        "estimated_total": {
+          "type": "integer"
+        },
+        "free_space": {
+          "type": "integer"
+        },
+        "last_real_total": {
+          "type": "integer"
+        },
+        "system": {
+          "type": "integer"
+        },
+        "tools": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "context_window",
+        "conversation",
+        "estimated_total",
+        "free_space",
+        "last_real_total",
+        "system",
+        "tools"
+      ],
+      "type": "object"
+    },
+    "Credentials": {
+      "properties": {
+        "access_token": {
+          "type": "string"
+        },
+        "account_id": {
+          "type": "string"
+        },
+        "api_key": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "integer"
+        },
+        "refresh_token": {
+          "type": "string"
+        },
+        "subscription_type": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "CustomProvider": {
+      "properties": {
+        "disabled": {
+          "type": "boolean"
+        },
+        "display": {
+          "type": "string"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "models_url": {
+          "type": "string"
+        },
+        "reasoning_split": {
+          "type": "boolean"
+        },
+        "type": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "url"
+      ],
+      "type": "object"
+    },
+    "Empty": {
+      "properties": {},
+      "type": "object"
+    },
+    "IDsResult": {
+      "properties": {
+        "ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "ids"
+      ],
+      "type": "object"
+    },
+    "ImageData": {
+      "properties": {
+        "base64": {
+          "type": "string"
+        },
+        "mime_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "base64",
+        "mime_type"
+      ],
+      "type": "object"
+    },
+    "InitializeParams": {
+      "properties": {
+        "client_info": {
+          "$ref": "#/$defs/ClientInfo"
+        },
+        "config": {
+          "$ref": "#/$defs/Config"
+        },
+        "protocol_version": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "client_info",
+        "config",
+        "protocol_version"
+      ],
+      "type": "object"
+    },
+    "InitializeResult": {
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities"
+        },
+        "harness_version": {
+          "type": "string"
+        },
+        "protocol_version": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "capabilities",
+        "harness_version",
+        "protocol_version"
+      ],
+      "type": "object"
+    },
+    "InputChannel": {
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "type"
+      ],
+      "type": "object"
+    },
+    "KindConfig": {
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "MCPServer": {
+      "properties": {
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "command": {
+          "type": "string"
+        },
+        "connection_timeout": {
+          "type": "integer"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "disabled": {
+          "type": "boolean"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "timeout": {
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "MCPStatusResult": {
+      "properties": {
+        "statuses": {
+          "items": {
+            "$ref": "#/$defs/Status"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "statuses"
+      ],
+      "type": "object"
+    },
+    "Memory": {
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "integer"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "score": {
+          "type": "number"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "created_at",
+        "slug",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "Message": {
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "meta": {
+          "$ref": "#/$defs/MessageMeta"
+        },
+        "parts": {
+          "items": {
+            "$ref": "#/$defs/ContentPart"
+          },
+          "type": "array"
+        },
+        "role": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "parts",
+        "role"
+      ],
+      "type": "object"
+    },
+    "MessageMeta": {
+      "properties": {
+        "is_compaction": {
+          "type": "boolean"
+        },
+        "is_system_generated": {
+          "type": "boolean"
+        },
+        "origin": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ModelFallback": {
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "reason",
+        "to"
+      ],
+      "type": "object"
+    },
+    "ModelListing": {
+      "properties": {
+        "cache_read": {
+          "type": "number"
+        },
+        "cache_write": {
+          "type": "number"
+        },
+        "context_window": {
+          "type": "integer"
+        },
+        "dialect": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "effort_levels": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "input_price": {
+          "type": "number"
+        },
+        "is_subscription": {
+          "type": "boolean"
+        },
+        "max_tokens": {
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "output_price": {
+          "type": "number"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "sources": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "thinking": {
+          "type": "boolean"
+        },
+        "thinking_adaptive": {
+          "type": "boolean"
+        },
+        "thinking_legacy": {
+          "type": "boolean"
+        },
+        "vision": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cache_read",
+        "cache_write",
+        "context_window",
+        "display_name",
+        "id",
+        "input_price",
+        "is_subscription",
+        "max_tokens",
+        "model",
+        "output_price",
+        "provider",
+        "thinking",
+        "vision"
+      ],
+      "type": "object"
+    },
+    "NamesResult": {
+      "properties": {
+        "names": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "names"
+      ],
+      "type": "object"
+    },
+    "ProfileConfig": {
+      "properties": {
+        "directives": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/ToolDecl"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ProfileNameParams": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "ProviderInfo": {
+      "properties": {
+        "activation": {
+          "type": "string"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "credential_type": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "dialect": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "is_subscription": {
+          "type": "boolean"
+        },
+        "model_count": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "activation",
+        "active",
+        "credential_type",
+        "description",
+        "dialect",
+        "display_name",
+        "is_subscription",
+        "model_count",
+        "name"
+      ],
+      "type": "object"
+    },
+    "Quota": {
+      "properties": {
+        "balance": {
+          "$ref": "#/$defs/QuotaBalance"
+        },
+        "fetched_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "plan": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "stale": {
+          "type": "boolean"
+        },
+        "windows": {
+          "items": {
+            "$ref": "#/$defs/QuotaWindow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "fetched_at",
+        "provider",
+        "windows"
+      ],
+      "type": "object"
+    },
+    "QuotaBalance": {
+      "properties": {
+        "allowance_usd": {
+          "type": "number"
+        },
+        "remaining_usd": {
+          "type": "number"
+        },
+        "resets_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "allowance_usd",
+        "remaining_usd"
+      ],
+      "type": "object"
+    },
+    "QuotaWindow": {
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "resets_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "used_percent": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "label",
+        "name",
+        "used_percent"
+      ],
+      "type": "object"
+    },
+    "RegisterProfileParams": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "profile": {
+          "$ref": "#/$defs/ProfileConfig"
+        }
+      },
+      "required": [
+        "name",
+        "profile"
+      ],
+      "type": "object"
+    },
+    "RegisterToolParams": {
+      "properties": {
+        "tool": {
+          "$ref": "#/$defs/ToolDecl"
+        }
+      },
+      "required": [
+        "tool"
+      ],
+      "type": "object"
+    },
+    "ResourcesConfig": {
+      "properties": {
+        "kind": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "SearchResult": {
+      "properties": {
+        "limit": {
+          "type": "integer"
+        },
+        "results": {
+          "items": {
+            "$ref": "#/$defs/Memory"
+          },
+          "type": "array"
+        },
+        "returned": {
+          "type": "integer"
+        },
+        "skip": {
+          "type": "integer"
+        },
+        "total": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "limit",
+        "results",
+        "returned",
+        "skip",
+        "total"
+      ],
+      "type": "object"
+    },
+    "SessionAskResult": {
+      "properties": {
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    },
+    "SessionDetail": {
+      "properties": {
+        "channels": {
+          "items": {
+            "$ref": "#/$defs/ChannelInfo"
+          },
+          "type": "array"
+        },
+        "compact_count": {
+          "type": "integer"
+        },
+        "compact_offset": {
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "last_active_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "max_iterations": {
+          "type": "integer"
+        },
+        "missing_profiles": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "model": {
+          "type": "string"
+        },
+        "model_fallback": {
+          "$ref": "#/$defs/ModelFallback"
+        },
+        "name": {
+          "type": "string"
+        },
+        "profiles": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reset_count": {
+          "type": "integer"
+        },
+        "stats": {
+          "$ref": "#/$defs/SessionStats"
+        },
+        "thinking": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "created_at",
+        "cwd",
+        "id",
+        "last_active_at",
+        "max_iterations",
+        "model",
+        "stats",
+        "thinking"
+      ],
+      "type": "object"
+    },
+    "SessionExecCommandParams": {
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": {},
+          "type": "object"
+        }
+      },
+      "required": [
+        "command",
+        "id"
+      ],
+      "type": "object"
+    },
+    "SessionExecCommandResult": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "SessionForkParams": {
+      "properties": {
+        "channels": {
+          "items": {
+            "$ref": "#/$defs/InputChannel"
+          },
+          "type": "array"
+        },
+        "directives": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled_profiles": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "SessionIDParams": {
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "SessionImportParams": {
+      "properties": {
+        "channels": {
+          "items": {
+            "$ref": "#/$defs/InputChannel"
+          },
+          "type": "array"
+        },
+        "content": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SessionInfoResult": {
+      "properties": {
+        "arch": {
+          "type": "string"
+        },
+        "busy": {
+          "type": "boolean"
+        },
+        "mcp_connected": {
+          "type": "integer"
+        },
+        "os": {
+          "type": "string"
+        },
+        "queue_depth": {
+          "type": "integer"
+        },
+        "schedule_count": {
+          "type": "integer"
+        },
+        "session": {
+          "$ref": "#/$defs/SessionDetail"
+        },
+        "terminal": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "arch",
+        "busy",
+        "mcp_connected",
+        "os",
+        "queue_depth",
+        "schedule_count",
+        "session",
+        "version"
+      ],
+      "type": "object"
+    },
+    "SessionMessagesParams": {
+      "properties": {
+        "compactions": {
+          "type": "integer"
+        },
+        "from": {
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "SessionMessagesResult": {
+      "properties": {
+        "from": {
+          "type": "integer"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/Message"
+          },
+          "type": "array"
+        },
+        "total": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "from",
+        "messages",
+        "total"
+      ],
+      "type": "object"
+    },
+    "SessionMeta": {
+      "properties": {
+        "compact_count": {
+          "type": "integer"
+        },
+        "compact_offset": {
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "last_active_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "max_iterations": {
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "profiles": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reset_count": {
+          "type": "integer"
+        },
+        "stats": {
+          "$ref": "#/$defs/SessionStats"
+        },
+        "thinking": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "created_at",
+        "cwd",
+        "id",
+        "last_active_at",
+        "model",
+        "stats",
+        "thinking"
+      ],
+      "type": "object"
+    },
+    "SessionNewParams": {
+      "properties": {
+        "channels": {
+          "items": {
+            "$ref": "#/$defs/InputChannel"
+          },
+          "type": "array"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "directives": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled_profiles": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "model": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cwd",
+        "model"
+      ],
+      "type": "object"
+    },
+    "SessionPromptParams": {
+      "properties": {
+        "display_text": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "images": {
+          "items": {
+            "$ref": "#/$defs/ImageData"
+          },
+          "type": "array"
+        },
+        "origin": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "type": "object"
+    },
+    "SessionPromptResult": {
+      "properties": {
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "SessionRenameParams": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "SessionResumeParams": {
+      "properties": {
+        "channels": {
+          "items": {
+            "$ref": "#/$defs/InputChannel"
+          },
+          "type": "array"
+        },
+        "directives": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled_profiles": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "SessionSetMaxIterationsParams": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "n": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "n"
+      ],
+      "type": "object"
+    },
+    "SessionStats": {
+      "properties": {
+        "cache_read": {
+          "type": "integer"
+        },
+        "cache_write": {
+          "type": "integer"
+        },
+        "context_usage": {
+          "type": "number"
+        },
+        "context_window": {
+          "type": "integer"
+        },
+        "cost_usd": {
+          "type": "number"
+        },
+        "input_tokens": {
+          "type": "integer"
+        },
+        "output_tokens": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cache_read",
+        "cache_write",
+        "context_usage",
+        "context_window",
+        "cost_usd",
+        "input_tokens",
+        "output_tokens"
+      ],
+      "type": "object"
+    },
+    "SessionSwitchModelParams": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "model"
+      ],
+      "type": "object"
+    },
+    "SessionSwitchThinkingParams": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "level": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "level"
+      ],
+      "type": "object"
+    },
+    "SessionSyspromptResult": {
+      "properties": {
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    },
+    "SessionToolsResult": {
+      "properties": {
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/ToolDef"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tools"
+      ],
+      "type": "object"
+    },
+    "SettingsValues": {
+      "properties": {
+        "active_model": {
+          "type": "string"
+        },
+        "thinking_level": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "active_model",
+        "thinking_level"
+      ],
+      "type": "object"
+    },
+    "Status": {
+      "properties": {
+        "connected": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "tool_count": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "connected",
+        "name",
+        "tool_count"
+      ],
+      "type": "object"
+    },
+    "ThinkingPart": {
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "openai_item_id": {
+          "type": "string"
+        },
+        "signature": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "type": "object"
+    },
+    "ToolCall": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "input": {},
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "input",
+        "name"
+      ],
+      "type": "object"
+    },
+    "ToolCallParams": {
+      "properties": {
+        "input": {},
+        "name": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "tool_call_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "input",
+        "name",
+        "session_id",
+        "tool_call_id"
+      ],
+      "type": "object"
+    },
+    "ToolCallResult": {
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "images": {
+          "items": {
+            "$ref": "#/$defs/ImageData"
+          },
+          "type": "array"
+        },
+        "is_error": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "type": "object"
+    },
+    "ToolCancelParams": {
+      "properties": {
+        "tool_call_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool_call_id"
+      ],
+      "type": "object"
+    },
+    "ToolDecl": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "input_schema": {},
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "description",
+        "name"
+      ],
+      "type": "object"
+    },
+    "ToolDef": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "input_schema": {},
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "description",
+        "input_schema",
+        "name"
+      ],
+      "type": "object"
+    },
+    "ToolResult": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "images": {
+          "items": {
+            "$ref": "#/$defs/ImageData"
+          },
+          "type": "array"
+        },
+        "is_error": {
+          "type": "boolean"
+        },
+        "output": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "output"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "errors": [
+    {
+      "code": -32000,
+      "doc": "The thing named does not exist (a session, a memory, a file).",
+      "kind": "not_found"
+    },
+    {
+      "code": -32000,
+      "doc": "No provider with that name.",
+      "kind": "provider_not_found"
+    },
+    {
+      "code": -32001,
+      "doc": "Well-formed input the operation cannot accept.",
+      "kind": "invalid"
+    },
+    {
+      "code": -32001,
+      "doc": "Well-formed input whose content is invalid (a bad thinking level, an invalid MCP server).",
+      "kind": "unprocessable"
+    },
+    {
+      "code": -32001,
+      "doc": "The session export is not valid; the message names the line.",
+      "kind": "invalid_export"
+    },
+    {
+      "code": -32002,
+      "doc": "The session is open in this process; close it first.",
+      "kind": "session_active"
+    },
+    {
+      "code": -32002,
+      "doc": "The request clashes with the current state (a channel already taken, a busy session).",
+      "kind": "conflict"
+    },
+    {
+      "code": -32002,
+      "doc": "The provider is built in or declared in settings and cannot be unregistered.",
+      "kind": "provider_not_removable"
+    },
+    {
+      "code": -32002,
+      "doc": "A custom provider name is already used by a provider registered from code.",
+      "kind": "provider_name_conflict"
+    },
+    {
+      "code": -32003,
+      "doc": "The provider has no credentials, or no model is available to run on.",
+      "kind": "not_connected"
+    },
+    {
+      "code": -32004,
+      "doc": "A provider or its OAuth endpoint failed.",
+      "kind": "upstream"
+    },
+    {
+      "code": -32005,
+      "doc": "The feature has no backing store here (e.g. no memory).",
+      "kind": "not_configured"
+    },
+    {
+      "code": -32006,
+      "doc": "initialize carried an unsupported protocol_version; data.supported lists the ones accepted. The process exits.",
+      "kind": "protocol_version"
+    },
+    {
+      "code": -32603,
+      "doc": "An unexpected failure.",
+      "kind": "internal"
+    }
+  ],
+  "events": [
+    {
+      "doc": "A turn started.",
+      "payload": {
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "turn_start"
+          }
+        },
+        "required": [
+          "session_id",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "turn_start"
+    },
+    {
+      "doc": "The turn finished; the session is ready for the next prompt.",
+      "payload": {
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "turn_end"
+          }
+        },
+        "required": [
+          "session_id",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "turn_end"
+    },
+    {
+      "doc": "One ReAct iteration started.",
+      "payload": {
+        "properties": {
+          "loop": {
+            "type": "integer"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "loop_start"
+          }
+        },
+        "required": [
+          "loop",
+          "session_id",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "loop_start"
+    },
+    {
+      "doc": "One ReAct iteration finished.",
+      "payload": {
+        "properties": {
+          "loop": {
+            "type": "integer"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "loop_end"
+          }
+        },
+        "required": [
+          "loop",
+          "session_id",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "loop_end"
+    },
+    {
+      "doc": "A fragment of the model's reasoning.",
+      "payload": {
+        "properties": {
+          "delta": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "thinking"
+          }
+        },
+        "required": [
+          "delta",
+          "session_id",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "thinking"
+    },
+    {
+      "doc": "The reasoning block finished.",
+      "payload": {
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "thinking_end"
+          }
+        },
+        "required": [
+          "session_id",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "thinking_end"
+    },
+    {
+      "doc": "A fragment of the response text.",
+      "payload": {
+        "properties": {
+          "delta": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "text"
+          }
+        },
+        "required": [
+          "delta",
+          "session_id",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "text"
+    },
+    {
+      "doc": "The response text finished.",
+      "payload": {
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "text_end"
+          }
+        },
+        "required": [
+          "session_id",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "text_end"
+    },
+    {
+      "doc": "A tool call was announced (name and id known, arguments not yet).",
+      "payload": {
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "tool_id": {
+            "type": "string"
+          },
+          "tool_name": {
+            "type": "string"
+          },
+          "type": {
+            "const": "tool_start"
+          }
+        },
+        "required": [
+          "session_id",
+          "tool_id",
+          "tool_name",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "tool_start"
+    },
+    {
+      "doc": "A fragment of a tool call's arguments.",
+      "payload": {
+        "properties": {
+          "delta": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "tool_id": {
+            "type": "string"
+          },
+          "tool_name": {
+            "type": "string"
+          },
+          "type": {
+            "const": "tool_args"
+          }
+        },
+        "required": [
+          "delta",
+          "session_id",
+          "tool_id",
+          "tool_name",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "tool_args"
+    },
+    {
+      "doc": "A tool call's arguments are complete; it is about to run.",
+      "payload": {
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "tool_args": {
+            "type": "string"
+          },
+          "tool_id": {
+            "type": "string"
+          },
+          "tool_name": {
+            "type": "string"
+          },
+          "type": {
+            "const": "tool_call"
+          }
+        },
+        "required": [
+          "session_id",
+          "tool_args",
+          "tool_id",
+          "tool_name",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "tool_call"
+    },
+    {
+      "doc": "A tool finished. duration is in milliseconds.",
+      "payload": {
+        "properties": {
+          "duration": {
+            "type": "number"
+          },
+          "is_error": {
+            "type": "boolean"
+          },
+          "output": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "tool_id": {
+            "type": "string"
+          },
+          "tool_name": {
+            "type": "string"
+          },
+          "type": {
+            "const": "tool_result"
+          }
+        },
+        "required": [
+          "duration",
+          "is_error",
+          "output",
+          "session_id",
+          "tool_id",
+          "tool_name",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "tool_result"
+    },
+    {
+      "doc": "An immediate prompt was received (also the echo of prompts from other origins).",
+      "payload": {
+        "properties": {
+          "images": {
+            "items": {},
+            "type": "array"
+          },
+          "message_index": {
+            "type": "integer"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "type": {
+            "const": "received_prompt"
+          }
+        },
+        "required": [
+          "message_index",
+          "origin",
+          "session_id",
+          "text",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "received_prompt"
+    },
+    {
+      "doc": "A queued prompt is about to be processed.",
+      "payload": {
+        "properties": {
+          "images": {
+            "items": {},
+            "type": "array"
+          },
+          "message_index": {
+            "type": "integer"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "type": {
+            "const": "follow_up_start"
+          }
+        },
+        "required": [
+          "message_index",
+          "origin",
+          "session_id",
+          "text",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "follow_up_start"
+    },
+    {
+      "doc": "A transient network failure is being retried.",
+      "payload": {
+        "properties": {
+          "attempt": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          },
+          "max": {
+            "type": "integer"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "retry"
+          }
+        },
+        "required": [
+          "attempt",
+          "error",
+          "max",
+          "session_id",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "retry"
+    },
+    {
+      "doc": "Token usage: live context (input, context_usage, context_window) and session totals.",
+      "payload": {
+        "properties": {
+          "cache_read": {
+            "type": "integer"
+          },
+          "cache_write": {
+            "type": "integer"
+          },
+          "context_usage": {
+            "type": "number"
+          },
+          "context_window": {
+            "type": "integer"
+          },
+          "cost_usd": {
+            "type": "number"
+          },
+          "input": {
+            "type": "integer"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "total_input": {
+            "type": "integer"
+          },
+          "total_output": {
+            "type": "integer"
+          },
+          "type": {
+            "const": "tokens"
+          }
+        },
+        "required": [
+          "cache_read",
+          "cache_write",
+          "context_usage",
+          "context_window",
+          "cost_usd",
+          "input",
+          "session_id",
+          "total_input",
+          "total_output",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "tokens"
+    },
+    {
+      "doc": "Something broke in the turn.",
+      "payload": {
+        "properties": {
+          "details": {
+            "type": "object"
+          },
+          "message": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "error"
+          }
+        },
+        "required": [
+          "message",
+          "session_id",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "error"
+    },
+    {
+      "doc": "The iteration budget ran out (the model summarized its progress).",
+      "payload": {
+        "properties": {
+          "max_iterations": {
+            "type": "integer"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "max_iterations_reached"
+          }
+        },
+        "required": [
+          "max_iterations",
+          "session_id",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "max_iterations_reached"
+    },
+    {
+      "doc": "Compaction started.",
+      "payload": {
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "compact_start"
+          }
+        },
+        "required": [
+          "session_id",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "compact_start"
+    },
+    {
+      "doc": "Compaction finished.",
+      "payload": {
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "type": {
+            "const": "compact_end"
+          }
+        },
+        "required": [
+          "session_id",
+          "summary",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "compact_end"
+    },
+    {
+      "doc": "The turn was stopped by the user (not an error).",
+      "payload": {
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "stop"
+          }
+        },
+        "required": [
+          "session_id",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "stop"
+    }
+  ],
+  "methods": [
+    {
+      "method": "admin/mcp/delete",
+      "doc": "Removes a configured MCP server.",
+      "params": {
+        "$ref": "#/$defs/AdminMCPNameParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "admin/mcp/get",
+      "doc": "Returns one configured MCP server.",
+      "params": {
+        "$ref": "#/$defs/AdminMCPNameParams"
+      },
+      "result": {
+        "$ref": "#/$defs/MCPServer"
+      }
+    },
+    {
+      "method": "admin/mcp/list",
+      "doc": "Lists the configured MCP servers.",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminMCPListResult"
+      }
+    },
+    {
+      "method": "admin/mcp/put",
+      "doc": "Validates and stores (or replaces) an MCP server.",
+      "params": {
+        "$ref": "#/$defs/AdminMCPPutParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "admin/mcp/set_enabled",
+      "doc": "Enables or disables a configured MCP server, keeping the rest of its config.",
+      "params": {
+        "$ref": "#/$defs/AdminMCPSetEnabledParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "admin/memory/configured",
+      "doc": "Reports whether this agent has a memory store.",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminMemoryConfiguredResult"
+      }
+    },
+    {
+      "method": "admin/memory/delete",
+      "doc": "Removes one memory.",
+      "params": {
+        "$ref": "#/$defs/AdminMemoryKeyParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "admin/memory/get",
+      "doc": "Returns one memory. cwd is a project path, or \"<global>\" for a global memory.",
+      "params": {
+        "$ref": "#/$defs/AdminMemoryKeyParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Memory"
+      }
+    },
+    {
+      "method": "admin/memory/list",
+      "doc": "Lists memories, paginated. Empty when memory is not configured.",
+      "params": {
+        "$ref": "#/$defs/AdminMemoryListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SearchResult"
+      }
+    },
+    {
+      "method": "admin/memory/put",
+      "doc": "Creates or replaces one memory (an upsert by cwd+slug).",
+      "params": {
+        "$ref": "#/$defs/AdminMemoryPutParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminMemoryPutResult"
+      }
+    },
+    {
+      "method": "admin/memory/search",
+      "doc": "Full-text searches memories (an empty query lists them), paginated. Empty when memory is not configured.",
+      "params": {
+        "$ref": "#/$defs/AdminMemorySearchParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SearchResult"
+      }
+    },
+    {
+      "method": "admin/providers/connect",
+      "doc": "Saves a provider's credentials, validates them and activates it; answers how many models it offers.",
+      "params": {
+        "$ref": "#/$defs/AdminProvidersConnectParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminProvidersConnectResult"
+      }
+    },
+    {
+      "method": "admin/providers/credential_type",
+      "doc": "Reports the kind of credential a provider needs.",
+      "params": {
+        "$ref": "#/$defs/AdminProviderNameParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminProvidersCredentialTypeResult"
+      }
+    },
+    {
+      "method": "admin/providers/delete_custom",
+      "doc": "Removes a custom provider declaration from settings.",
+      "params": {
+        "$ref": "#/$defs/AdminProviderNameParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "admin/providers/disconnect",
+      "doc": "Clears a provider's credentials.",
+      "params": {
+        "$ref": "#/$defs/AdminProviderNameParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "admin/providers/list",
+      "doc": "Lists every registered provider (no credentials).",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminProvidersListResult"
+      }
+    },
+    {
+      "method": "admin/providers/list_custom",
+      "doc": "Lists the custom providers declared in settings.",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminProvidersListCustomResult"
+      }
+    },
+    {
+      "method": "admin/providers/model",
+      "doc": "Returns one model of a provider by its provider-local id.",
+      "params": {
+        "$ref": "#/$defs/AdminProvidersModelParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ModelListing"
+      }
+    },
+    {
+      "method": "admin/providers/models",
+      "doc": "Lists the models of every active provider, or of one (with the errors the unfiltered call hides).",
+      "params": {
+        "$ref": "#/$defs/AdminProvidersModelsParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminProvidersModelsResult"
+      }
+    },
+    {
+      "method": "admin/providers/oauth_exchange",
+      "doc": "Swaps the code the user pasted for credentials (does not connect: pass them to connect).",
+      "params": {
+        "$ref": "#/$defs/AdminProvidersOAuthExchangeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Credentials"
+      }
+    },
+    {
+      "method": "admin/providers/oauth_start",
+      "doc": "Begins a provider's OAuth login: answers the URL to open and the verifier to hand back.",
+      "params": {
+        "$ref": "#/$defs/AdminProvidersOAuthStartParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminProvidersOAuthStartResult"
+      }
+    },
+    {
+      "method": "admin/providers/put_custom",
+      "doc": "Declares (or replaces) a custom provider in settings; it takes effect on reload_custom.",
+      "params": {
+        "$ref": "#/$defs/AdminProvidersPutCustomParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "admin/providers/quota",
+      "doc": "Returns the provider's subscription usage (cached 60 s; refresh asks again, at most once per 5 s).",
+      "params": {
+        "$ref": "#/$defs/AdminProvidersQuotaParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminProvidersQuotaResult"
+      }
+    },
+    {
+      "method": "admin/providers/register_anthropic",
+      "doc": "Registers an Anthropic Messages-compatible provider for this process (url without /v1).",
+      "params": {
+        "$ref": "#/$defs/AdminProvidersRegisterAnthropicParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "admin/providers/register_openai",
+      "doc": "Registers an OpenAI Chat Completions-compatible provider for this process (authentication is headers only).",
+      "params": {
+        "$ref": "#/$defs/AdminProvidersRegisterOpenAIParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "admin/providers/reload_custom",
+      "doc": "Applies the settings' custom providers live. Names clashing with programmatic providers are skipped and reported, not an error.",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminProvidersReloadCustomResult"
+      }
+    },
+    {
+      "method": "admin/providers/unregister",
+      "doc": "Removes a provider registered with register_openai or register_anthropic.",
+      "params": {
+        "$ref": "#/$defs/AdminProviderNameParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "admin/schedules/list",
+      "doc": "Lists the cron-scheduled prompts, sorted by slug (read-only).",
+      "params": {
+        "$ref": "#/$defs/AdminSchedulesListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminSchedulesListResult"
+      }
+    },
+    {
+      "method": "admin/sessions/delete",
+      "doc": "Permanently deletes a stored session. Refused with session_active while it is open in this process.",
+      "params": {
+        "$ref": "#/$defs/SessionIDParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "admin/sessions/export",
+      "doc": "Exports a session as JSONL: written to path (a *.export.jsonl file, mode 0600) or, with no path, returned as a string.",
+      "params": {
+        "$ref": "#/$defs/AdminSessionsExportParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminSessionsExportResult"
+      }
+    },
+    {
+      "method": "admin/sessions/export_file_name",
+      "doc": "Returns the file name an export of the session is saved under by convention.",
+      "params": {
+        "$ref": "#/$defs/SessionIDParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminSessionsExportFileNameResult"
+      }
+    },
+    {
+      "method": "admin/sessions/get",
+      "doc": "Returns a stored session's meta.",
+      "params": {
+        "$ref": "#/$defs/SessionIDParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionMeta"
+      }
+    },
+    {
+      "method": "admin/sessions/list",
+      "doc": "Lists the stored sessions of a directory (every directory when cwd is empty).",
+      "params": {
+        "$ref": "#/$defs/AdminSessionsListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminSessionsListResult"
+      }
+    },
+    {
+      "method": "admin/sessions/messages",
+      "doc": "Reads a window of a stored session's log: from an absolute index, or after the k-th-to-last compaction.",
+      "params": {
+        "$ref": "#/$defs/AdminSessionsMessagesParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminSessionsMessagesResult"
+      }
+    },
+    {
+      "method": "admin/sessions/rename",
+      "doc": "Renames a stored session. Refused with session_active while it is open in this process.",
+      "params": {
+        "$ref": "#/$defs/AdminSessionsRenameParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "admin/settings/get",
+      "doc": "Returns the global defaults (active model and thinking level).",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/SettingsValues"
+      }
+    },
+    {
+      "method": "admin/settings/set_active_model",
+      "doc": "Stores the default \"provider/model\" and returns the settings. Does not touch open sessions.",
+      "params": {
+        "$ref": "#/$defs/AdminSettingsSetActiveModelParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SettingsValues"
+      }
+    },
+    {
+      "method": "admin/settings/set_thinking_level",
+      "doc": "Stores the default thinking level (off|low|medium|high|xhigh|max) and returns the settings. Does not touch open sessions.",
+      "params": {
+        "$ref": "#/$defs/AdminSettingsSetThinkingLevelParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SettingsValues"
+      }
+    },
+    {
+      "method": "agent/active_sessions",
+      "doc": "Lists the ids of the sessions open in this process.",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/IDsResult"
+      }
+    },
+    {
+      "method": "agent/mcp_status",
+      "doc": "Reports the connection state of each configured MCP server.",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/MCPStatusResult"
+      }
+    },
+    {
+      "method": "agent/profiles",
+      "doc": "Lists the registered profile names.",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/NamesResult"
+      }
+    },
+    {
+      "method": "agent/register_profile",
+      "doc": "Registers (or replaces) a profile; sessions bound to it pick it up at their next turn.",
+      "params": {
+        "$ref": "#/$defs/RegisterProfileParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "agent/register_tool",
+      "doc": "Registers a tool implemented by the client, for every session opened from now on.",
+      "params": {
+        "$ref": "#/$defs/RegisterToolParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "agent/shutdown",
+      "doc": "Replies, then closes every session and the agent and exits.",
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "agent/unregister_profile",
+      "doc": "Removes a profile; bound sessions keep the name and lose its directives and tools.",
+      "params": {
+        "$ref": "#/$defs/ProfileNameParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "initialize",
+      "doc": "Starts the connection: checks the protocol version and builds the agent from the configuration. Must be the first request, once.",
+      "params": {
+        "$ref": "#/$defs/InitializeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/InitializeResult"
+      }
+    },
+    {
+      "method": "session/ask",
+      "doc": "Sends a message and waits for the turn's final text. Returns early (empty text) when the turn is stopped.",
+      "params": {
+        "$ref": "#/$defs/SessionPromptParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionAskResult"
+      }
+    },
+    {
+      "method": "session/close",
+      "doc": "Closes an open session (its events stop).",
+      "params": {
+        "$ref": "#/$defs/SessionIDParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "session/compact",
+      "doc": "Summarizes the conversation into a checkpoint; replies when done. Conflict while a turn runs.",
+      "params": {
+        "$ref": "#/$defs/SessionIDParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "session/context",
+      "doc": "Estimated token usage of the session's context window, per component.",
+      "params": {
+        "$ref": "#/$defs/SessionIDParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ContextBreakdown"
+      }
+    },
+    {
+      "method": "session/exec_command",
+      "doc": "Runs a command that has no method of its own: skill:<name>.",
+      "params": {
+        "$ref": "#/$defs/SessionExecCommandParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionExecCommandResult"
+      }
+    },
+    {
+      "method": "session/fork",
+      "doc": "Copies a session at this instant into a new one and starts sending its events.",
+      "params": {
+        "$ref": "#/$defs/SessionForkParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionDetail"
+      }
+    },
+    {
+      "method": "session/import",
+      "doc": "Imports a session export (a file path or the JSONL content) as a NEW session.",
+      "params": {
+        "$ref": "#/$defs/SessionImportParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionDetail"
+      }
+    },
+    {
+      "method": "session/info",
+      "doc": "The session's live state: detail, busy, queue depth, MCP and schedule counts, system.",
+      "params": {
+        "$ref": "#/$defs/SessionIDParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionInfoResult"
+      }
+    },
+    {
+      "method": "session/messages",
+      "doc": "A window of the session's complete history (from an index, or after the k-th-to-last compaction).",
+      "params": {
+        "$ref": "#/$defs/SessionMessagesParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionMessagesResult"
+      }
+    },
+    {
+      "method": "session/new",
+      "doc": "Creates a session and starts sending its events.",
+      "params": {
+        "$ref": "#/$defs/SessionNewParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionDetail"
+      }
+    },
+    {
+      "method": "session/prompt",
+      "doc": "Sends a message to an open session; answers at once ('started', or 'queued' behind a running turn). The turn's events arrive as `event` notifications.",
+      "params": {
+        "$ref": "#/$defs/SessionPromptParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionPromptResult"
+      }
+    },
+    {
+      "method": "session/rename",
+      "doc": "Renames the session and answers its detail.",
+      "params": {
+        "$ref": "#/$defs/SessionRenameParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionDetail"
+      }
+    },
+    {
+      "method": "session/reset",
+      "doc": "Wipes the session's history and stats. Conflict while a turn runs.",
+      "params": {
+        "$ref": "#/$defs/SessionIDParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "session/resume",
+      "doc": "Reopens a stored session (or returns the open one) and starts sending its events.",
+      "params": {
+        "$ref": "#/$defs/SessionResumeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionDetail"
+      }
+    },
+    {
+      "method": "session/set_max_iterations",
+      "doc": "Sets the session's per-turn iteration budget (1-1000) and answers its detail.",
+      "params": {
+        "$ref": "#/$defs/SessionSetMaxIterationsParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionDetail"
+      }
+    },
+    {
+      "method": "session/stop",
+      "doc": "Cancels the turn in progress; queued prompts continue.",
+      "params": {
+        "$ref": "#/$defs/SessionIDParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "session/switch_model",
+      "doc": "Switches the session's model (provider/model) and answers its detail.",
+      "params": {
+        "$ref": "#/$defs/SessionSwitchModelParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionDetail"
+      }
+    },
+    {
+      "method": "session/switch_thinking",
+      "doc": "Switches the session's thinking level and answers its detail.",
+      "params": {
+        "$ref": "#/$defs/SessionSwitchThinkingParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionDetail"
+      }
+    },
+    {
+      "method": "session/sysprompt",
+      "doc": "The full system prompt the session sends to the provider.",
+      "params": {
+        "$ref": "#/$defs/SessionIDParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionSyspromptResult"
+      }
+    },
+    {
+      "method": "session/tools",
+      "doc": "The tool definitions the session sends to the provider.",
+      "params": {
+        "$ref": "#/$defs/SessionIDParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionToolsResult"
+      }
+    },
+    {
+      "method": "tool/call",
+      "doc": "Sent BY THE BINARY to the client when the model calls a declared tool. Answer with the tool's result.",
+      "params": {
+        "$ref": "#/$defs/ToolCallParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ToolCallResult"
+      }
+    }
+  ],
+  "notifications": [
+    {
+      "direction": "binary_to_client",
+      "doc": "A session event: {session_id, type, …} (see events).",
+      "method": "event",
+      "params": {
+        "description": "the payload of one of the events listed in events, plus session_id",
+        "type": "object"
+      }
+    },
+    {
+      "direction": "binary_to_client",
+      "doc": "A pending tool/call was abandoned (session stop, shutdown); a late answer is ignored.",
+      "method": "tool/cancel",
+      "params": {
+        "$ref": "#/$defs/ToolCancelParams"
+      }
+    }
+  ],
+  "protocol_version": 1
+}

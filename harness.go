@@ -68,6 +68,7 @@ import (
 	"github.com/gurcuff91/harness/agent/tools"
 	"github.com/gurcuff91/harness/client"
 	"github.com/gurcuff91/harness/logx"
+	"github.com/gurcuff91/harness/rpc"
 	"github.com/gurcuff91/harness/server"
 	"github.com/gurcuff91/harness/types"
 )
@@ -395,6 +396,27 @@ var ServerWithLogger = server.WithLogger
 // is cancelled or stdin closes. See [acp.Run]. Deliberately has no
 // AcpWithLogger: it never logs anything itself.
 var RunAcp = acp.Run
+
+// RunRpc runs the Harness JSON-RPC protocol over stdin/stdout, the way SDKs in
+// other languages drive an agent. Unlike every other runner it takes no agent:
+// the client builds it with the protocol's `initialize` request. Blocks until
+// ctx is cancelled or stdin closes. See [rpc.Run] and the protocol's schema.
+var RunRpc = rpc.Run
+
+// RpcOption configures a [RunRpc] call. See [rpc.Option].
+type RpcOption = rpc.Option
+
+// RpcWithStdin sets the stream protocol requests are read from (default:
+// os.Stdin). See [rpc.WithStdin].
+var RpcWithStdin = rpc.WithStdin
+
+// RpcWithStdout sets the stream protocol messages are written to (default:
+// os.Stdout). See [rpc.WithStdout].
+var RpcWithStdout = rpc.WithStdout
+
+// RpcWithLogger sets the Logger that receives diagnostics (default: silent).
+// See [rpc.WithLogger].
+var RpcWithLogger = rpc.WithLogger
 
 // AcpOption configures a [RunAcp] call. See [acp.Option].
 type AcpOption = acp.Option

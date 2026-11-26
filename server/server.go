@@ -725,33 +725,13 @@ func (s *Server) openSession(id string, profileNames *[]string, directives []str
 	return sess, nil
 }
 
-// sessionDetailDTO wraps store.SessionMeta with fields that live on the runtime
-// Session (or the Agent as a fallback), not in the persisted meta — currently
-// just MaxIterations, which the TUI footer uses for a "(turn/max_iterations)"
-// indicator. Also embedded in sessionInfoDTO for the /info endpoint.
-type sessionDetailDTO struct {
-	store.SessionMeta
-	MaxIterations int `json:"max_iterations"`
-	// ModelFallback is present when the session was reopened on a different
-	// model than it was saved with, because the saved model's provider was
-	// unavailable (disconnected, credentials removed, model retired). `model`
-	// is then the model it runs on now (and is saved with from now on); this
-	// says what it was and why it changed. Omitted in the normal case.
-	ModelFallback *agent.ModelFallback `json:"model_fallback,omitempty"`
-	// MissingProfiles are bound profiles that are not registered right now:
-	// skipped (the session works without them), their names kept. Omitted
-	// when none.
-	MissingProfiles []string `json:"missing_profiles,omitempty"`
-	// Channels are the external conversations the live session listens to.
-	// Omitted when none (and for a persisted session: channels are never
-	// stored).
-	Channels []agent.ChannelInfo `json:"channels,omitempty"`
-}
+// sessionDetailDTO is the HTTP detail of a session: agent.SessionDetail (the
+// one definition shared with the rpc frontend). Also embedded in
+// sessionInfoDTO for the /info endpoint.
+type sessionDetailDTO = agent.SessionDetail
 
 // liveDetail is the detail DTO of an active session.
-func liveDetail(sess *agent.Session) sessionDetailDTO {
-	return sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations(), ModelFallback: sess.ModelFallback(), Channels: sess.Channels(), MissingProfiles: sess.MissingProfiles()}
-}
+func liveDetail(sess *agent.Session) sessionDetailDTO { return sess.Detail() }
 
 // channelErrStatus maps a session-open failure caused by a channel to its HTTP
 // status (409 taken, 400 unavailable/invalid), else def.

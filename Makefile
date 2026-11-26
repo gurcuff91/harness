@@ -1,7 +1,7 @@
 # Makefile for Harness
 # A minimal AI agent harness built in pure Go.
 
-.PHONY: build install clean test vet lint run help release release-push docs-build docs-serve docs-clean docs-api
+.PHONY: build install clean test vet lint run help release release-push docs-build docs-serve docs-clean docs-rpc docs-api
 
 # Binary name and paths
 BINARY_NAME=harness
@@ -10,7 +10,7 @@ INSTALL_DIR=$(HOME)/go/bin
 GO=go
 
 # Build flags
-VERSION=v0.130.0
+VERSION=v0.131.0
 LDFLAGS=-ldflags "-s -w -X github.com/gurcuff91/harness/internal/version.Version=$(VERSION)"
 
 # Default target
@@ -29,6 +29,7 @@ help:
 	@echo "  make docs-build - Build the documentation site (docs/page → docs/page/dist)"
 	@echo "  make docs-serve - Build it and serve it on http://localhost:8000"
 	@echo "  make docs-clean - Remove the built site"
+	@echo "  make docs-rpc   - Regenerate the RPC protocol reference page from its schema"
 	@echo "  make docs-api   - Regenerate reference/http-api.md from the server's OpenAPI document"
 	@echo ""
 	@echo "Usage:"
@@ -206,3 +207,9 @@ docs-clean:
 
 docs-api:
 	$(GO) run ./docs/page/genapi
+
+# The RPC reference page is generated from rpc.Schema() (the schema the TS SDK's
+# types come from), so it cannot drift from the code.
+docs-rpc:
+	$(GO) run ./rpc/gen
+	$(GO) run ./docs/page/genrpc

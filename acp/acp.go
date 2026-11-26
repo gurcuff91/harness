@@ -101,7 +101,7 @@ func dispatchLoop(ctx context.Context, c *conn, h *handler) error {
 	reads := make(chan readResult)
 	go func() {
 		for {
-			req, err := c.readMessage()
+			req, err := c.ReadMessage()
 			reads <- readResult{req, err}
 			if err != nil {
 				return
@@ -131,7 +131,7 @@ func dispatchLoop(ctx context.Context, c *conn, h *handler) error {
 		case "initialize":
 			var p initializeParams
 			if err := json.Unmarshal(req.Params, &p); err != nil {
-				_ = c.sendError(req.ID, errCodeInvalidParams, err.Error(), nil)
+				_ = c.SendError(req.ID, errCodeInvalidParams, err.Error(), nil)
 				continue
 			}
 			result, rerr := h.handleInitialize(p)
@@ -146,7 +146,7 @@ func dispatchLoop(ctx context.Context, c *conn, h *handler) error {
 		case "session/new":
 			var p newSessionParams
 			if err := json.Unmarshal(req.Params, &p); err != nil {
-				_ = c.sendError(req.ID, errCodeInvalidParams, err.Error(), nil)
+				_ = c.SendError(req.ID, errCodeInvalidParams, err.Error(), nil)
 				continue
 			}
 			result, rerr := h.handleNewSession(c, p)
@@ -162,7 +162,7 @@ func dispatchLoop(ctx context.Context, c *conn, h *handler) error {
 		case "session/load":
 			var p loadSessionParams
 			if err := json.Unmarshal(req.Params, &p); err != nil {
-				_ = c.sendError(req.ID, errCodeInvalidParams, err.Error(), nil)
+				_ = c.SendError(req.ID, errCodeInvalidParams, err.Error(), nil)
 				continue
 			}
 			result, rerr := h.handleLoadSession(c, p)
@@ -174,7 +174,7 @@ func dispatchLoop(ctx context.Context, c *conn, h *handler) error {
 		case "session/resume":
 			var p resumeSessionParams
 			if err := json.Unmarshal(req.Params, &p); err != nil {
-				_ = c.sendError(req.ID, errCodeInvalidParams, err.Error(), nil)
+				_ = c.SendError(req.ID, errCodeInvalidParams, err.Error(), nil)
 				continue
 			}
 			result, rerr := h.handleResumeSession(c, p)
@@ -186,7 +186,7 @@ func dispatchLoop(ctx context.Context, c *conn, h *handler) error {
 		case "session/close":
 			var p closeSessionParams
 			if err := json.Unmarshal(req.Params, &p); err != nil {
-				_ = c.sendError(req.ID, errCodeInvalidParams, err.Error(), nil)
+				_ = c.SendError(req.ID, errCodeInvalidParams, err.Error(), nil)
 				continue
 			}
 			result, rerr := h.handleCloseSession(p)
@@ -195,7 +195,7 @@ func dispatchLoop(ctx context.Context, c *conn, h *handler) error {
 		case "session/delete":
 			var p deleteSessionParams
 			if err := json.Unmarshal(req.Params, &p); err != nil {
-				_ = c.sendError(req.ID, errCodeInvalidParams, err.Error(), nil)
+				_ = c.SendError(req.ID, errCodeInvalidParams, err.Error(), nil)
 				continue
 			}
 			result, rerr := h.handleDeleteSession(p)
@@ -204,7 +204,7 @@ func dispatchLoop(ctx context.Context, c *conn, h *handler) error {
 		case "session/list":
 			var p listSessionsParams
 			if err := json.Unmarshal(req.Params, &p); err != nil {
-				_ = c.sendError(req.ID, errCodeInvalidParams, err.Error(), nil)
+				_ = c.SendError(req.ID, errCodeInvalidParams, err.Error(), nil)
 				continue
 			}
 			result, rerr := h.handleListSessions(p)
@@ -213,7 +213,7 @@ func dispatchLoop(ctx context.Context, c *conn, h *handler) error {
 		case "session/prompt":
 			var p promptParams
 			if err := json.Unmarshal(req.Params, &p); err != nil {
-				_ = c.sendError(req.ID, errCodeInvalidParams, err.Error(), nil)
+				_ = c.SendError(req.ID, errCodeInvalidParams, err.Error(), nil)
 				continue
 			}
 			id := req.ID
@@ -231,7 +231,7 @@ func dispatchLoop(ctx context.Context, c *conn, h *handler) error {
 		case "session/set_config_option":
 			var p setConfigOptionParams
 			if err := json.Unmarshal(req.Params, &p); err != nil {
-				_ = c.sendError(req.ID, errCodeInvalidParams, err.Error(), nil)
+				_ = c.SendError(req.ID, errCodeInvalidParams, err.Error(), nil)
 				continue
 			}
 			result, rerr := h.handleSetConfigOption(p)
@@ -241,7 +241,7 @@ func dispatchLoop(ctx context.Context, c *conn, h *handler) error {
 			if isNotification {
 				continue // unknown notifications are silently ignored, per JSON-RPC convention
 			}
-			_ = c.sendError(req.ID, errCodeMethodNotFound, "method not found: "+req.Method, nil)
+			_ = c.SendError(req.ID, errCodeMethodNotFound, "method not found: "+req.Method, nil)
 		}
 	}
 }
@@ -253,8 +253,8 @@ func respond(c *conn, id json.RawMessage, result any, rerr *rpcError) {
 		return
 	}
 	if rerr != nil {
-		_ = c.sendError(id, rerr.Code, rerr.Message, rerr.Data)
+		_ = c.SendError(id, rerr.Code, rerr.Message, rerr.Data)
 		return
 	}
-	_ = c.sendResponse(id, result)
+	_ = c.SendResponse(id, result)
 }
