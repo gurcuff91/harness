@@ -129,80 +129,6 @@ type closeCounter struct {
 
 func (c *closeCounter) Close() error { c.closed++; return nil }
 
-// Part 2: max_tokens on GET /api/sessions/{id} and /info — the effective
-// ceiling, for active and persisted sessions, following the three resolution
-// paths and a model switch.
-func TestSessionMaxTokensInAPI(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	models := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"data":[{"id":"m"}]}`))
-	}))
-	defer models.Close()
-	// Catalogs: "big" says 512k (capped to 64k), "small" says 8k, "none" unknown.
-	reg := func(name string, max int) {
-		if err := admin.RegisterOpenAI(name, models.URL, admin.ProviderWithFetchModels(func() ([]types.ModelMeta, error) {
-			return []types.ModelMeta{{ID: "m", ContextWindow: 1_000_000, MaxTokens: max}}, nil
-		})); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { admin.UnregisterProvider(name) })
-	}
-	reg("mt-big", 512000)
-	reg("mt-small", 8000)
-	reg("mt-none", 0)
-
-	run := func(t *testing.T, opts agent.AgentOptions, model string, want int) (*client.Client, *client.Session) {
-		t.Helper()
-		opts.Store, opts.ResourceLoader = store.NewInMemoryStore(), resources.NilLoader{}
-		a := agent.New(opts)
-		t.Cleanup(func() { a.Close() })
-		srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { srv.Close() })
-		c := client.New(srv.Addr())
-		sess, err := c.CreateSession(model, "/p", "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if sess.MaxTokens != want {
-			t.Errorf("create: max_tokens = %d, want %d", sess.MaxTokens, want)
-		}
-		got, _ := c.GetSession(sess.ID)
-		info, _ := c.GetSessionInfo(sess.ID)
-		if got.MaxTokens != want || info.Session.MaxTokens != want {
-			t.Errorf("GET = %d, /info = %d; want %d", got.MaxTokens, info.Session.MaxTokens, want)
-		}
-		return c, sess
-	}
-
-	t.Run("catalog capped at the default", func(t *testing.T) { run(t, agent.AgentOptions{}, "mt-big/m", 64000) })
-	t.Run("catalog below the cap", func(t *testing.T) { run(t, agent.AgentOptions{}, "mt-small/m", 8000) })
-	t.Run("unknown → fallback", func(t *testing.T) { run(t, agent.AgentOptions{}, "mt-none/m", 32000) })
-	t.Run("explicit wins", func(t *testing.T) { run(t, agent.AgentOptions{MaxTokens: 32000}, "mt-big/m", 32000) })
-
-	t.Run("model switch re-resolves", func(t *testing.T) {
-		c, sess := run(t, agent.AgentOptions{}, "mt-big/m", 64000)
-		if _, err := c.ExecCommand(sess.ID, "model", map[string]any{"model": "mt-small/m"}); err != nil {
-			t.Fatal(err)
-		}
-		info, _ := c.GetSessionInfo(sess.ID)
-		if info.Session.MaxTokens != 8000 {
-			t.Errorf("after /model: max_tokens = %d, want 8000", info.Session.MaxTokens)
-		}
-	})
-
-	t.Run("persisted session", func(t *testing.T) {
-		c, sess := run(t, agent.AgentOptions{}, "mt-big/m", 64000)
-		c.CloseSession(sess.ID)
-		got, err := c.GetSession(sess.ID)
-		if err != nil || got.MaxTokens != 64000 {
-			t.Errorf("persisted: max_tokens = %d, %v; want 64000", got.MaxTokens, err)
-		}
-	})
-}
-
 // POST /api/settings/provider/reload through the client: the embedder's flow
 // — PutCustomProvider, then ReloadCustomProviders — makes the provider live
 // (it appears in /api/models) without a restart; deleting + reloading drops it.
@@ -309,5 +235,35 @@ func TestSessionDirectivesOverHTTP(t *testing.T) {
 	f2, _ := c.ForkSession(f.ID)
 	if strings.Contains(prompt(f2.ID), "## Fork text") {
 		t.Error("a fork must not inherit its parent's directives")
+	}
+}
+
+// max_tokens is internal: a session works it out each time it opens, so the
+// API reports it nowhere — not for an open session, not for a stored one, not
+// in /info.
+func TestMaxTokensIsNotInTheAPI(t *testing.T) {
+	srv, _, model := sharedServer(t, nil)
+	c := client.New(srv.Addr())
+	sess, err := c.CreateSession(model, "/p", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	get := func(path string) string {
+		resp, err := http.Get("http://" + srv.Addr() + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+	for _, p := range []string{"/api/sessions/" + sess.ID, "/api/sessions/" + sess.ID + "/info"} {
+		if body := get(p); strings.Contains(body, "max_tokens") {
+			t.Errorf("%s (open) reports max_tokens: %.200s", p, body)
+		}
+	}
+	c.CloseSession(sess.ID)
+	if body := get("/api/sessions/" + sess.ID); strings.Contains(body, "max_tokens") {
+		t.Errorf("stored session reports max_tokens: %.200s", body)
 	}
 }

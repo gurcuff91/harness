@@ -88,10 +88,6 @@ type Model struct {
 type Session struct {
 	store.SessionMeta
 	MaxIterations int `json:"max_iterations,omitempty"`
-	// MaxTokens is the session's output-token ceiling (the agent's
-	// AgentOptions.MaxTokens when set, else the model's catalog value capped
-	// at 64k) — also in SessionInfo.Session.
-	MaxTokens int `json:"max_tokens,omitempty"`
 	// ModelFallback is set on a resumed/forked session that was reopened on a
 	// different model than it was saved with, because the saved model's
 	// provider was unavailable. Model then names the model in use now. Nil in

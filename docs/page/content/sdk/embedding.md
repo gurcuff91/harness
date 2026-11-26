@@ -152,7 +152,7 @@ sess.Prompt(ctx, "What is in this image?",
 
 These getters never block, even while a turn is running, so they are safe from handlers and tools:
 
-`ID()`, `CWD()`, `Name()`, `CreatedAt()`, `Model()`, `Thinking()`, `MaxIterations()`, `MaxTokens()`, `Stats()`, `Meta()`, `ContextBreakdown()`, `Channels()`, `MissingProfiles()`, `ModelFallback()`, `SystemPrompt()`.
+`ID()`, `CWD()`, `Name()`, `CreatedAt()`, `Model()`, `Thinking()`, `MaxIterations()`, `Stats()`, `Meta()`, `ContextBreakdown()`, `Channels()`, `MissingProfiles()`, `ModelFallback()`, `SystemPrompt()`.
 
 Changing a session: `SwitchModel(ctx, "provider/model")`, `SwitchThinking(level)`, `SetMaxIterations(n)` (1 to 1000), `Rename(name)`, `Compact(ctx)` and `Reset()`. `Compact` and `Reset` return `agent.ErrBusy` while a turn is running.
 

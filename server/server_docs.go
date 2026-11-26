@@ -881,7 +881,6 @@ const openAPISpecTemplate = `{
             "type": "object",
             "properties": {
               "max_iterations": { "type": "integer" },
-              "max_tokens": { "type": "integer", "description": "Output-token ceiling: the agent's MaxTokens when set, else the model's catalog value capped at 64k (each request is further bounded by the room left in the window)" },
               "channels": { "type": "array", "items": { "type": "object", "properties": { "type": { "type": "string", "example": "slack" }, "id": { "type": "string", "example": "C0123ABC" }, "name": { "type": "string", "example": "#producto-y", "description": "Readable name: #channel, @person for a DM, the id when unknown." } } }, "description": "External conversations the live session listens to. Omitted when none (always for a persisted session: channels are never stored)." },
               "missing_profiles": { "type": "array", "items": { "type": "string" }, "description": "Profiles the session is bound to that are not registered right now: skipped (the session works without them), names kept. Omitted when none." },
               "model_fallback": {

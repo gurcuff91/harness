@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.130.0] - 2026-11-26
+
+### Removed (BREAKING) — `max_tokens` is internal
+A session's output-token ceiling is worked out each time it opens or switches model, and it bounds every request and the compaction trigger; it is not stored and nothing consumed it. It is no longer reported: `max_tokens` is gone from `GET /api/sessions/{id}` and `/info` (open or stored sessions), `client.Session.MaxTokens` is gone, and so are `Agent.MaxTokensFor` and `Session.MaxTokens()`. The model catalog's own `max_tokens` (`GET /api/models`) is a different field and stays. Behavior of the requests themselves is unchanged.
+
 ## [0.129.0] - 2026-11-26
 
 ### Added — the `admin` package

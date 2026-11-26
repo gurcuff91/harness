@@ -1053,21 +1053,6 @@ func (a *Agent) setSessionProfiles(sessionID string, profiles []string) error {
 	return st.UpdateMeta(meta)
 }
 
-// MaxTokensFor returns the output-token ceiling a session on fullModel
-// ("provider/model") would run with — the same rule sessions use
-// (sessionMaxTokens): AgentOptions.MaxTokens when set, else the model's
-// catalog value capped at the default, else the fallback. For persisted
-// (inactive) sessions, where there's no live Session to ask.
-func (a *Agent) MaxTokensFor(fullModel string) int {
-	var meta *types.ModelMeta
-	if name, model, ok := strings.Cut(fullModel, "/"); ok {
-		if p := providers.Find(name); p != nil {
-			meta = p.ModelMeta(model)
-		}
-	}
-	return sessionMaxTokens(a.maxTokens, meta)
-}
-
 // ── Session management ───────────────────────────────────────────────────
 
 // ForkSession creates a new session that is an exact copy of sessionID at this

@@ -133,9 +133,6 @@ type Session struct {
 	// lock-free by MaxIterations(). atomic.Int64 (not atomic.Value)
 	// since it's already a plain int — no boxing needed.
 	maxIterationsVal atomic.Int64
-	// maxTokensVal mirrors maxTokens (the output ceiling) for lock-free reads
-	// (MaxTokens()), same pattern as maxIterationsVal.
-	maxTokensVal atomic.Int64
 
 	// modelFallback is set when the session was reopened on a different model
 	// than the one it was saved with (see ModelFallback). Written once in
@@ -361,7 +358,6 @@ func newSession(storeInst *store.Session,
 	s.modelStr.Store(provider.Name() + "/" + modelID)
 	s.thinkingStr.Store(thinkingLvl)
 	s.maxIterationsVal.Store(int64(maxIterations))
-	s.maxTokensVal.Store(int64(maxTokens))
 	s.providerNameVal.Store(provider.Name()) // lock-free snapshot for ContextBreakdown()
 	s.snapshotStatsLocked()                  // no lock needed yet — s isn't reachable by any other goroutine until newSession returns
 
@@ -1175,7 +1171,6 @@ func (s *Session) SwitchModel(ctx context.Context, fullModel string) error {
 		agentMax = s.agent.maxTokens
 	}
 	s.maxTokens = sessionMaxTokens(agentMax, provider.ModelMeta(modelID))
-	s.maxTokensVal.Store(int64(s.maxTokens)) // lock-free snapshot for MaxTokens()
 	s.modelStr.Store(fullModel)              // update lock-free snapshot for Model()
 	s.providerNameVal.Store(provider.Name()) // update lock-free snapshot for ContextBreakdown()
 	meta := s.store.Meta()
@@ -1666,13 +1661,6 @@ func (s *Session) Name() string {
 // field access. This is the ONLY public accessor for the iteration
 // budget — there is no separate blocking alternative.
 func (s *Session) MaxIterations() int { return int(s.maxIterationsVal.Load()) }
-
-// MaxTokens returns the session's output-token ceiling — the most a single
-// reply may use (each request is further bounded by the room left in the
-// context window). The agent's explicit AgentOptions.MaxTokens when set, else
-// the model's catalog value capped at the default (64k), else the fallback;
-// re-resolved on a model switch. Lock-free, like MaxIterations().
-func (s *Session) MaxTokens() int { return int(s.maxTokensVal.Load()) }
 
 // Rename sets a friendly display name.
 func (s *Session) Rename(name string) error {

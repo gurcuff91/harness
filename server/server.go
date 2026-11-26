@@ -732,9 +732,6 @@ func (s *Server) openSession(id string, profileNames *[]string, directives []str
 type sessionDetailDTO struct {
 	store.SessionMeta
 	MaxIterations int `json:"max_iterations"`
-	// MaxTokens is the session's output-token ceiling (Session.MaxTokens;
-	// for a persisted session, what its model would resolve to).
-	MaxTokens int `json:"max_tokens"`
 	// ModelFallback is present when the session was reopened on a different
 	// model than it was saved with, because the saved model's provider was
 	// unavailable (disconnected, credentials removed, model retired). `model`
@@ -753,7 +750,7 @@ type sessionDetailDTO struct {
 
 // liveDetail is the detail DTO of an active session.
 func liveDetail(sess *agent.Session) sessionDetailDTO {
-	return sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations(), MaxTokens: sess.MaxTokens(), ModelFallback: sess.ModelFallback(), Channels: sess.Channels(), MissingProfiles: sess.MissingProfiles()}
+	return sessionDetailDTO{SessionMeta: sess.Meta(), MaxIterations: sess.MaxIterations(), ModelFallback: sess.ModelFallback(), Channels: sess.Channels(), MissingProfiles: sess.MissingProfiles()}
 }
 
 // channelErrStatus maps a session-open failure caused by a channel to its HTTP
@@ -798,7 +795,6 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sessionDetailDTO{
 		SessionMeta:   meta,
 		MaxIterations: s.agent.Options().MaxIterations,
-		MaxTokens:     s.agent.MaxTokensFor(meta.Model),
 	})
 }
 
