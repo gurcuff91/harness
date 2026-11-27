@@ -24,6 +24,26 @@ type MessageMeta struct {
 	// Event.Origin, persisted so a reloaded history can render it. Omitted
 	// for the default ("user") and for every non-prompt message.
 	Origin string `json:"origin,omitempty"`
+	// Display is what a frontend shows for a user prompt INSTEAD of its text:
+	// the full text goes to the model (and stays in the log), but a skill's whole
+	// body or a long sub-agent report would flood a screen. It is the same value
+	// the live prompt echo carries (Event.Output of received_prompt/follow_up_start,
+	// from PromptWithDisplayText), persisted so a RELOADED history (/resume, a
+	// fork, an import, session/messages) shows what the live echo showed instead
+	// of the full text. Never sent to a provider. Omitted when the prompt is shown
+	// as it is; an older message has none and is shown in full.
+	Display string `json:"display,omitempty"`
+}
+
+// Shown is the text a frontend should display for a user prompt whose full
+// text is text: the persisted Display when there is one, else text itself. It is
+// nil-safe (a message without Meta, or an older one, shows in full) and is THE
+// place frontends ask, so a live echo and a reloaded history cannot disagree.
+func (m *MessageMeta) Shown(text string) string {
+	if m != nil && m.Display != "" {
+		return m.Display
+	}
+	return text
 }
 
 // Message is a single turn in a conversation.

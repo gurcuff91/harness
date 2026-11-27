@@ -134,7 +134,8 @@ func (s *Session) runSubagent(ctx context.Context, cancel context.CancelFunc, na
 		if result == types.SubagentCancelled {
 			return
 		}
-		s.Prompt(context.Background(), subagentReply(name, text, err), PromptWithOrigin(subagentOrigin+":"+name))
+		reply := subagentReply(name, text, err)
+		s.Prompt(context.Background(), reply, PromptWithOrigin(subagentOrigin+":"+name), PromptWithDisplayText(subagentDisplay(name, text, err)))
 	}()
 
 	if hook := s.agent.subagentStartHookForTest; hook != nil {
@@ -290,4 +291,37 @@ func (a *Agent) newSubagent(systemPrompt string, maxIterations int, readonly boo
 		Tools:           a.MCPTools(),
 		sharedMemory:    a.memStore, // not closed by the sub-agent
 	}), nil
+}
+
+// subagentDisplay is what a frontend shows for a sub-agent's reply INSTEAD of the
+// reply itself (PromptWithDisplayText, persisted in the message's Meta.Display):
+// the report can be long and the parent summarizes it for the person, so the
+// screen gets one line, `subagent:<name> reply (N lines)` — or `reply error` when
+// it failed — and the full text stays in the log and goes to the model. No excerpt:
+// it would only be the start of the text, and show less than it looks like.
+func subagentDisplay(name, text string, err error) string {
+	body := text
+	kind := "reply"
+	if err != nil {
+		kind = "reply error"
+		body = err.Error()
+		if text != "" {
+			body += "\n\n" + text
+		}
+	}
+	return fmt.Sprintf("%s:%s %s (%s)", subagentOrigin, name, kind, lineCount(body))
+}
+
+// lineCount is "N lines" (or "1 line"): the number of lines of s, not counting
+// trailing newlines; an empty text is "0 lines".
+func lineCount(s string) string {
+	s = strings.TrimRight(s, "\r\n")
+	n := 0
+	if s != "" {
+		n = strings.Count(s, "\n") + 1
+	}
+	if n == 1 {
+		return "1 line"
+	}
+	return fmt.Sprintf("%d lines", n)
 }

@@ -513,7 +513,10 @@ func (t *TUI) replayMessages(messages []types.Message, hidden int) {
 					if msg.Meta != nil {
 						origin = msg.Meta.Origin
 					}
-					t.addSection("user", ansi.Primary(promptIcon(origin, part.Text)+" "+part.Text))
+					// What the live echo showed (a skill's or a sub-agent report's one-line
+					// display), not the whole prompt the model got.
+					shown := msg.Meta.Shown(part.Text)
+					t.addSection("user", ansi.Primary(promptIcon(origin, shown)+" "+shown))
 				} else {
 					t.mu.Lock()
 					t.beginSection("text")

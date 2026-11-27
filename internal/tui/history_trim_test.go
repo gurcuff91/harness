@@ -26,6 +26,12 @@ var histSeq int
 // renderHistory — the resume path.
 func resumedTUI(t *testing.T, layout string) *TUI {
 	t.Helper()
+	return resumedTUIWith(t, layout, nil)
+}
+
+// resumedTUIWith is resumedTUI with a hook to adjust each seeded message.
+func resumedTUIWith(t *testing.T, layout string, adjust func(i int, m *types.Message)) *TUI {
+	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	fs, err := store.NewFileStore(filepath.Join(t.TempDir(), "sessions"))
 	if err != nil {
@@ -64,7 +70,11 @@ func resumedTUI(t *testing.T, layout string) *TUI {
 		if ch == 'c' {
 			err = h.AddCompactionSummary(fmt.Sprintf("s%d", i))
 		} else {
-			err = h.AddMessage(types.NewUserTextMessage(fmt.Sprintf("m%d", i)))
+			m := types.NewUserTextMessage(fmt.Sprintf("m%d", i))
+			if adjust != nil {
+				adjust(i, &m)
+			}
+			err = h.AddMessage(m)
 		}
 		if err != nil {
 			t.Fatal(err)
@@ -121,5 +131,27 @@ func TestRenderHistoryShortSessionIsWhole(t *testing.T) {
 		if !strings.Contains(got, "m0") {
 			t.Errorf("%q: first message missing:\n%s", layout, got)
 		}
+	}
+}
+
+// A reloaded history shows what the live echo showed: a message stored with
+// Meta.Display is drawn as that text, never the full one; one without is full.
+func TestRenderHistoryShowsMetaDisplayNotTheFullText(t *testing.T) {
+	tu := resumedTUIWith(t, "mm", func(i int, m *types.Message) {
+		if i == 0 {
+			m.Parts[0].Text = "FULLBODY secret report line one\nline two"
+			m.Meta = &types.MessageMeta{Origin: "subagent:kano", Display: "subagent:kano reply (2 lines)"}
+		}
+	})
+	tu.renderHistory()
+	got := historyText(tu)
+	if !strings.Contains(got, "subagent:kano reply (2 lines)") {
+		t.Errorf("display text missing:\n%s", got)
+	}
+	if strings.Contains(got, "FULLBODY") {
+		t.Errorf("full text leaked into the history:\n%s", got)
+	}
+	if !strings.Contains(got, "m1") {
+		t.Errorf("message without display must show in full:\n%s", got)
 	}
 }

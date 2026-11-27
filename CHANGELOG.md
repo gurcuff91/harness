@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.138.0] - 2026-11-27
+
+### Fixed — a prompt's display text survives a reload
+`PromptWithDisplayText` only changed the live echo: the log kept the full text, so `/resume` showed an entire skill body where the live view had shown `Skill:name to Ana`. The display text is now persisted in the message's meta (`meta.display`), and frontends ask `MessageMeta.Shown(text)` — the TUI's history and ACP's replay both do — so a live echo and a reloaded history cannot disagree. The model and the log still hold the full text. Reaches `session/messages`, `GET /messages`, export/import and fork unchanged.
+
+### Changed
+- A sub-agent's reply is shown as one line, `⇌ subagent:kano-storm reply (12 lines)` (`reply error (N lines)` on failure), live and reloaded. **Behavior change:** the full report is no longer visible in the TUI or `/resume`; it stays in the log, `session/messages`, exports and the model's context.
+
 ## [0.137.0] - 2026-11-27
 
 ### Fixed — a sub-agent no longer escapes its parent's restrictions (security)

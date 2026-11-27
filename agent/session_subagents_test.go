@@ -538,3 +538,135 @@ func TestACancelledSubagentDeliversNothingEvenOnAnOpenSession(t *testing.T) {
 		t.Errorf("a cancelled sub-agent delivered: %v %v", l.all(), p.gotReplies())
 	}
 }
+
+// ── display: what a frontend shows for a reply ───────────────────────────
+
+func TestLineCountIsTheLinesOfTheTextWithoutTrailingNewlines(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"", "0 lines"},
+		{"one", "1 line"},
+		{"one\n", "1 line"},
+		{"a\nb", "2 lines"},
+		{"a\nb\n\n\n", "2 lines"},
+		{"a\n\nb\n", "3 lines"},
+		{"a\r\nb\r\n", "2 lines"},
+		{strings.Repeat("x\n", 40), "40 lines"},
+	} {
+		if got := lineCount(tc.in); got != tc.want {
+			t.Errorf("lineCount(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestSubagentDisplayIsOneLineWithTheNameAndTheLineCount(t *testing.T) {
+	if got := subagentDisplay("kano-storm", "a\nb\nc\n", nil); got != "subagent:kano-storm reply (3 lines)" {
+		t.Errorf("ok = %q", got)
+	}
+	if got := subagentDisplay("kano-storm", "partial", errors.New("it failed")); got != "subagent:kano-storm reply error (3 lines)" {
+		t.Errorf("error = %q (the reason, a blank line and the partial text)", got)
+	}
+	if got := subagentDisplay("kano-storm", "", errors.New("boom")); got != "subagent:kano-storm reply error (1 line)" {
+		t.Errorf("error without text = %q", got)
+	}
+	// No excerpt of the text: only the name, the kind and the size.
+	if got := subagentDisplay("n", "SECRET-EXCERPT\nmore", nil); strings.Contains(got, "SECRET-EXCERPT") {
+		t.Errorf("the display leaks an excerpt: %q", got)
+	}
+}
+
+// The reply reaches the parent with its full text (the model reads it), the live
+// echo carries the one-line display, and the PERSISTED message carries both: the
+// full text and Meta.Display, so a reloaded history shows what the echo showed.
+func TestAReplyIsDisplayedAsOneLineButTheModelAndTheLogKeepTheFullText(t *testing.T) {
+	_, sess, p, l := subSession(t)
+	var echoed []string
+	var mu sync.Mutex
+	sess.Subscribe(func(e types.Event) {
+		if (e.Type == types.EventReceivedPrompt || e.Type == types.EventFollowUpStart) && strings.HasPrefix(e.Origin, "subagent:") {
+			mu.Lock()
+			echoed = append(echoed, e.Output)
+			mu.Unlock()
+		}
+	})
+	_ = l
+	name, _ := sess.launchSubagent("answer a long report line one", 0, false)
+	waitLog(t, "the reply", func() bool { return len(p.gotReplies()) == 1 })
+
+	// 1. the MODEL got the full text
+	if got := p.gotReplies()[0]; !strings.Contains(got, "a long report line one") || !strings.HasPrefix(got, "<subagent") {
+		t.Errorf("the model did not get the full reply: %q", got)
+	}
+	// 2. the live echo is the display
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		n := len(echoed)
+		mu.Unlock()
+		if n == 1 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	want := fmt.Sprintf("subagent:%s reply (1 line)", name)
+	if len(echoed) != 1 || echoed[0] != want {
+		t.Fatalf("live echo = %q, want [%q]", echoed, want)
+	}
+	// 3. the LOG has the full text AND the display
+	var found bool
+	for _, m := range sess.AllMessages() {
+		if m.Role != types.RoleUser || m.Meta == nil || m.Meta.Origin != "subagent:"+name {
+			continue
+		}
+		found = true
+		if m.Meta.Display != want {
+			t.Errorf("persisted display = %q, want %q", m.Meta.Display, want)
+		}
+		txt := ""
+		for _, part := range m.Parts {
+			txt += part.Text
+		}
+		if !strings.Contains(txt, "a long report line one") {
+			t.Errorf("the persisted text lost the report: %q", txt)
+		}
+		if m.Meta.Shown(txt) != want {
+			t.Errorf("Shown = %q, want the display", m.Meta.Shown(txt))
+		}
+	}
+	if !found {
+		t.Fatal("the reply message is not in the log")
+	}
+}
+
+// A prompt with a display text but no special origin (a skill) keeps the display
+// in its meta too; a plain prompt has no meta at all.
+func TestADisplayTextIsPersistedEvenForAUserPrompt(t *testing.T) {
+	_, s, _, _ := subSession(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, err := s.PromptAndWait(ctx, "the whole skill body", PromptWithDisplayText("Skill:x")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PromptAndWait(ctx, "just a question"); err != nil {
+		t.Fatal(err)
+	}
+	var skill, plain *types.Message
+	for _, m := range s.AllMessages() {
+		m := m
+		if m.Role != types.RoleUser {
+			continue
+		}
+		if strings.Contains(m.Parts[0].Text, "skill body") {
+			skill = &m
+		} else {
+			plain = &m
+		}
+	}
+	if skill == nil || skill.Meta == nil || skill.Meta.Display != "Skill:x" || skill.Meta.Origin != "" {
+		t.Errorf("skill prompt meta = %+v, want only Display=Skill:x (the default origin is not stored)", skill)
+	}
+	if plain == nil || plain.Meta != nil {
+		t.Errorf("a plain prompt must have no meta, got %+v", plain)
+	}
+}

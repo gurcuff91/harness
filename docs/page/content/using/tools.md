@@ -29,7 +29,7 @@ An SDK embedder can remove built-ins by name through `AgentOptions.DisallowedToo
 
 ## Subagent
 
-`Subagent` starts a separate agent with a fresh context for one task, which keeps exploration noise out of your session. It always runs in the background: the tool returns at once with the sub-agent's generated name (such as `scorpion-hero`), and the model ends its turn or works on something else. When the sub-agent finishes, its answer arrives as a new prompt, `<subagent name="scorpion-hero" reply>…</subagent>` (with an `error` attribute when it failed or ran out of iterations). Several calls in one response run in parallel, and each answer starts one turn of its own.
+`Subagent` starts a separate agent with a fresh context for one task, which keeps exploration noise out of your session. It always runs in the background: the tool returns at once with the sub-agent's generated name (such as `scorpion-hero`), and the model ends its turn or works on something else. When the sub-agent finishes, its answer arrives as a new prompt, `<subagent name="scorpion-hero" reply>…</subagent>` (with an `error` attribute when it failed or ran out of iterations). Several calls in one response run in parallel, and each answer starts one turn of its own. The TUI shows a reply as one line, `⇌ subagent:scorpion-hero reply (12 lines)`, live and after `/resume`; the full text stays in the session log and in the model's context.
 
 | Argument | Meaning |
 | --- | --- |

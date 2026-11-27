@@ -858,8 +858,14 @@ func (s *Session) promptSync(ctx context.Context, fu followUp, first bool) (retT
 	} else {
 		userMsg = types.NewUserTextMessage(text)
 	}
-	if fu.origin != "" && fu.origin != OriginUser {
-		userMsg.Meta = &types.MessageMeta{Origin: fu.origin} // persisted, so a reloaded history knows it too
+	if (fu.origin != "" && fu.origin != OriginUser) || fu.displayText != "" {
+		// Persisted with the message, so a reloaded history knows the origin and shows
+		// the same display text the live echo showed (and not the whole prompt).
+		meta := &types.MessageMeta{Display: fu.displayText}
+		if fu.origin != OriginUser {
+			meta.Origin = fu.origin
+		}
+		userMsg.Meta = meta
 	}
 	msgIndex, err := s.store.AppendMessage(userMsg)
 	if err != nil {

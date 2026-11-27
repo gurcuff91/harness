@@ -37,7 +37,7 @@ func replayHistory(c *conn, sessionID string, messages []types.Message) {
 			case p.Text != "" && m.Role == types.RoleUser:
 				notify(c, sessionID, sessionUpdate{
 					SessionUpdate: "user_message_chunk",
-					Content:       ptr(textBlock(p.Text)),
+					Content:       ptr(textBlock(m.Meta.Shown(p.Text))),
 				})
 
 			case p.Text != "" && m.Role == types.RoleAssistant:

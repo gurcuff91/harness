@@ -129,3 +129,26 @@ func TestReplayHistoryEmpty(t *testing.T) {
 		t.Errorf("expected no output for empty history, got %q", buf.String())
 	}
 }
+
+func TestReplayHistoryUserMessageShowsMetaDisplay(t *testing.T) {
+	var buf bytes.Buffer
+	c := newConn(nil, &buf)
+	m := types.NewUserTextMessage("FULLBODY long report")
+	m.Meta = &types.MessageMeta{Display: "subagent:x reply (1 line)"}
+	replayHistory(c, "sess1", []types.Message{m, types.NewUserTextMessage("plain")})
+
+	notes := decodeNotifications(t, &buf)
+	if len(notes) != 2 {
+		t.Fatalf("want 2 notifications, got %d", len(notes))
+	}
+	raw := func(i int) string {
+		b, _ := json.Marshal(notes[i])
+		return string(b)
+	}
+	if !bytes.Contains([]byte(raw(0)), []byte("subagent:x reply (1 line)")) || bytes.Contains([]byte(raw(0)), []byte("FULLBODY")) {
+		t.Errorf("display not used: %s", raw(0))
+	}
+	if !bytes.Contains([]byte(raw(1)), []byte("plain")) {
+		t.Errorf("plain message lost: %s", raw(1))
+	}
+}
