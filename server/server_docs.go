@@ -882,6 +882,7 @@ const openAPISpecTemplate = `{
             "properties": {
               "max_iterations": { "type": "integer" },
               "channels": { "type": "array", "items": { "type": "object", "properties": { "type": { "type": "string", "example": "slack" }, "id": { "type": "string", "example": "C0123ABC" }, "name": { "type": "string", "example": "#producto-y", "description": "Readable name: #channel, @person for a DM, the id when unknown." } } }, "description": "External conversations the live session listens to. Omitted when none (always for a persisted session: channels are never stored)." },
+              "subagents": { "type": "array", "items": { "type": "string" }, "description": "Names of the sub-agents the live session has running, in launch order (e.g. scorpion-hero). Omitted when none and for a persisted session. Kept up to date by the subagent_start and subagent_stop events." },
               "missing_profiles": { "type": "array", "items": { "type": "string" }, "description": "Profiles the session is bound to that are not registered right now: skipped (the session works without them), names kept. Omitted when none." },
               "model_fallback": {
                 "type": "object",

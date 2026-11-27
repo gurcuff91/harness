@@ -419,6 +419,17 @@ Design: `docs/plans/2026-11-26-agent-profiles-design.md`. A profile is `{Directi
 - **Unknown name = failure, stored name no longer registered = skipped.** An explicit name that is not registered fails the open (`ErrUnknownProfile` → 400) and leaves nothing behind (fork/import delete the copy). A name already stored that is not registered now is skipped (its directive would describe tools that do not exist), KEPT in the meta, and reported: `Session.MissingProfiles()`, `missing_profiles`, a TUI warning. Registering it later applies it.
 - **One path:** `profilesFor(stored, cfg)` decides names + directives/tools for New, Resume, Fork/Import (`openStoredCopy`) and `reconfigureSession`. The profiles' directives/tools come BEFORE the caller's own. `RegisterProfile`/`UnregisterProfile` call `reconfigureBound` (open sessions apply it at their next turn boundary). Resuming an already-open session with profiles rebinds it (persist + reconfigure).
 
+### Sub-agents are always background and answer by prompt (v0.135.0)
+
+Design: `docs/plans/2026-11-27-subagents-background-design.md`. The `Subagent` tool returns at once with a generated name; the answer comes later as a prompt `<subagent name=… reply>` (`error` attribute on failure). Rules that are easy to break:
+
+- **A sub-agent lives as long as its PARENT SESSION**: its context is the session's own, cancelled only by `Session.Close()`. **Stop never cancels one**, not even from an earlier turn; a turn's context must never be its parent (it is cancelled when the turn ends).
+- **`subagent_stop` is ALWAYS emitted** (a `defer`: ok, error, out of iterations, panic, cancelled by close) and **BEFORE the reply is delivered**, with the name already gone from the live list, so the TUI has removed it when the model sees the reply. A cancelled one delivers nothing.
+- Names come from `internal/names` and are unique among the session's LIVE sub-agents; at most **10** live per session (the 11th is an error to the model).
+- The reply's origin is `subagent:<name>`; the TUI shows it with the existing outside icon `⇌` (no fourth icon).
+- **State, not only events:** `SessionDetail.Subagents` (`Session.Subagents()`, launch order) is the safety net for whoever connects late; the TUI initializes from it (`switchView`) and then applies the events under `viewMu`, ignoring the events of a replaced stream (`applySubagentEvent` checks the stream's ctx under the lock). The status line shows `subagents [a, b]` BEFORE the channels; `/info` (TUI and `infoview`, so ACP) has a `subagents` row only when there are any.
+- **A reply is a REPORT, not an instruction from the person — prompt-level only.** Before 0.135.0 a sub-agent's result came back as a TOOL RESULT (data); now it arrives as a PROMPT, the slot a person's message occupies, so text a sub-agent read (a file, a page) can be addressed to the parent. The tool description says so (`TestSubagentDescriptionSaysAReplyIsAReportNotAnInstruction` pins it). Measured: a file telling the report to order a `Write` in the person's name, 6 of 6 refused on claude-haiku-4-5 and claude-sonnet-5-5 (3 each) WITH and WITHOUT the sentence, so it is a safety net, not a proven boundary; weaker models (MiniMax) were not measured. Do not describe it as a security boundary and do not remove the sentence.
+
 ### Session export / import
 
 Design: `docs/plans/2026-11-23-session-export-import-design.md`. Rules that are easy to break:

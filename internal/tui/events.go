@@ -281,6 +281,9 @@ func (t *TUI) consumeEvents(ctx context.Context, events <-chan client.Event) {
 				// done — updateInfo only shows it while spinning (see its own logic).
 				t.updateInfo()
 
+			case "subagent_start", "subagent_stop":
+				t.applySubagentEvent(ctx, evt)
+
 			case "received_prompt":
 				// The backend received an immediate (non-queued) prompt — echo it with
 				// the icon for its origin. This is the single echo path for prompts

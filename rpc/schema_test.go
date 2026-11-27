@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/types"
 )
 
@@ -217,5 +219,26 @@ func TestSchemaGeneratorShapes(t *testing.T) {
 	n := g.defs["node"].(map[string]any)["properties"].(map[string]any)["children"].(map[string]any)
 	if n["items"].(map[string]any)["$ref"] != "#/$defs/node" {
 		t.Errorf("recursive type = %v", n)
+	}
+}
+
+// `subagents` rides in the session detail of session/new|resume|fork and in
+// session/info, and is omitted when there are none.
+func TestSessionDetailAndInfoResultCarrySubagents(t *testing.T) {
+	for name, v := range map[string]any{
+		"detail": agent.SessionDetail{Subagents: []string{"a", "b"}},
+		"info":   SessionInfoResult{Session: agent.SessionDetail{Subagents: []string{"a", "b"}}},
+	} {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), `"subagents":["a","b"]`) {
+			t.Errorf("%s lacks subagents: %s", name, b)
+		}
+	}
+	b, _ := json.Marshal(agent.SessionDetail{})
+	if strings.Contains(string(b), "subagents") {
+		t.Errorf("must be omitted when none: %s", b)
 	}
 }

@@ -33,17 +33,20 @@ import (
 // It has zero knowledge of providers, credentials, or which providers are active.
 // The caller is responsible for ensuring the provider is active before NewSession().
 type Agent struct {
-	opts            AgentOptions // original opts — used by Subagent tool to clone
-	profiles        *profiles.Registry
-	toolReg         *tools.Registry
-	disallowedTools []string
-	store           store.SessionStore
-	resourceLoader  resources.ResourceLoader // nil = discover nothing
-	thinkingLevel   string
-	systemPrompt    string
-	maxIterations   int
-	maxTokens       int          // 0 = resolved from ModelMeta in NewSession
-	mcpManager      *mcp.Manager // non-nil only when MCPServers is non-empty; owns MCP subprocesses
+	// subagentStartHookForTest runs at the start of every sub-agent goroutine
+	// (a test makes it panic or block). nil in production.
+	subagentStartHookForTest func()
+	opts                     AgentOptions // original opts — used by Subagent tool to clone
+	profiles                 *profiles.Registry
+	toolReg                  *tools.Registry
+	disallowedTools          []string
+	store                    store.SessionStore
+	resourceLoader           resources.ResourceLoader // nil = discover nothing
+	thinkingLevel            string
+	systemPrompt             string
+	maxIterations            int
+	maxTokens                int          // 0 = resolved from ModelMeta in NewSession
+	mcpManager               *mcp.Manager // non-nil only when MCPServers is non-empty; owns MCP subprocesses
 
 	// Memory (nil = no memory). ownsMemory is true when the store was injected
 	// via AgentOptions.Memory (this agent must Close it); false when it shares a
@@ -604,6 +607,7 @@ func (a *Agent) Close() error {
 		}
 		a.sessMu.Unlock()
 		for _, s := range live {
+			s.shutdownSubagents() // no sub-agent may outlive the agent's stores
 			s.closeChannels()
 		}
 		if a.mcpManager != nil {
@@ -1466,100 +1470,10 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 
 	// Subagent tool — only if allowed (excluded for sub-agents themselves)
 	if a.isToolAllowed(tools.ToolSubagent) {
-		// Capture current settings in a closure — Agent has zero knowledge of sub-agent mechanics
-		parentA := a
 		executor := func(ctx context.Context, prompt string, requestedMaxIterations int, readonly bool) (string, error) {
-			// requestedMaxIterations is the caller's optional override (the
-			// Subagent tool's own 'max_iterations' param) — 0 means "not
-			// requested, use the default". Already validated by the tool to
-			// be within [subagentMinIterations, subagentMaxIterationsCeiling]
-			// when non-zero, so no further bounds-checking is needed here.
-			//
-			// Deliberately NOT capped by parentA.maxIterations (the earlier
-			// behavior, via min(parentA.maxIterations, subagentMaxIterations)):
-			// a sub-agent is an independent, separately-budgeted execution —
-			// often deliberately delegated via 'background: true' precisely
-			// so it can run a large, multi-phase task the PARENT's own
-			// (possibly modest, interactive) iteration budget was never meant
-			// to bound. The only ceiling that still applies is the tool's own
-			// absolute safety limit (subagentMaxIterationsCeiling), already
-			// enforced by the tool before this closure ever runs.
-			maxIter := subagentMaxIterations
-			if requestedMaxIterations > 0 {
-				maxIter = requestedMaxIterations
-			}
-			disallowed := subagentDisallowedTools(readonly)
-			// Create ephemeral sub-agent inheriting parent settings. It reuses the
-			// parent's MCP tools (via Tools) WITHOUT spawning its own MCP processes
-			// (MCPServers stays empty). It is forbidden from launching further
-			// subagents (DisallowedTools) to prevent recursion.
-			subAgent := New(AgentOptions{
-				ThinkingLevel: parentA.thinkingLevel,
-				SystemPrompt:  subagentSystemPrompt,
-				MaxIterations: maxIter,
-				MaxTokens:     parentA.maxTokens,
-				Store:         store.NewInMemoryStore(),
-				// The sub-agent uses the parent's loader: it is stateless (cwd is Load's
-				// argument), so sharing it is safe and keeps whatever implementation the
-				// parent was configured with (a custom one loading skills from a database,
-				// say) instead of a different, filesystem-only context.
-				ResourceLoader: parentA.resourceLoader,
-				// Subagents can't launch further subagents (no recursion) and get
-				// READ-ONLY memory: they may recall context (MemoSearch) but
-				// not write or delete — only the parent agent curates what persists,
-				// avoiding noisy/conflicting writes from ephemeral subagents.
-				// Schedule management is parent-only too: like the MCP manager (which
-				// runs only in the parent), the scheduler engine and its tools belong
-				// to the root agent. Subagents get neither the engine (EnableScheduler
-				// stays false) nor the Schedule* tools (disallowed).
-				DisallowedTools: disallowed,
-				Tools:           parentA.MCPTools(),
-				sharedMemory:    parentA.memStore, // share the parent's store (read-only for subagents; not closed by the subagent)
-			})
-			// Read the CURRENT model at execution time, not the one captured
-			// when this closure was built — see buildSessionTools' sessRef
-			// doc comment for why that distinction is the whole point here.
-			// (*sessRef) is guaranteed non-nil by the time this executor can
-			// ever run: the tool it belongs to isn't reachable by the model
-			// until the owning session's Prompt() has been called at least
-			// once, which is well after every call site below assigns it.
-			currentModel := (*sessRef).Model()
-			sess, err := subAgent.NewSession(cwd, currentModel)
-			if err != nil {
-				return "", fmt.Errorf("sub-agent: %w", err)
-			}
-			// Fold this ephemeral sub-agent's token/cost spend into the
-			// PARENT session's own totals before it's discarded — see
-			// Session.addDelegatedCost's doc comment. syncStats() (not the
-			// lock-free Stats()) so any of THIS session's own delegated
-			// cost — a sub-sub-agent it launched — is drained first. Works
-			// identically for the background path too: that goroutine runs
-			// this whole executor closure independently (see
-			// runSubagentBackground), so this defer still fires there, on
-			// whatever session *sessRef points at when the background call
-			// eventually finishes — the parent session is still alive (it
-			// owns the sessRef), even if the TURN that launched the
-			// background call already ended.
-			defer func() {
-				if parent := *sessRef; parent != nil {
-					parent.addDelegatedCost(sess.syncStats())
-				}
-				sess.Close()
-			}()
-			var textBuf strings.Builder
-			done := make(chan error, 1)
-			sess.Subscribe(func(e types.Event) {
-				switch e.Type {
-				case types.EventStreamTextDelta:
-					textBuf.WriteString(e.Delta)
-				case types.EventTurnEnd:
-					done <- nil
-				case types.EventError:
-					done <- fmt.Errorf("%s", e.Message)
-				}
-			})
-			sess.Prompt(ctx, prompt)
-			return awaitSubagentResult(ctx, done, &textBuf)
+			// (*sessRef) is non-nil by the time a tool can run: the model
+			// cannot call it before the session's first Prompt.
+			return (*sessRef).launchSubagent(prompt, requestedMaxIterations, readonly)
 		}
 		reg.Register(tools.Subagent(executor))
 	}

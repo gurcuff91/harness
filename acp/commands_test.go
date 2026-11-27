@@ -65,6 +65,15 @@ func TestFormatInfoPlainRendersKeyFields(t *testing.T) {
 	}
 }
 
+func TestFormatInfoPlainShowsSubagents(t *testing.T) {
+	info := &client.SessionInfo{Session: client.Session{
+		SessionMeta: store.SessionMeta{ID: "abc-123-def"}, Subagents: []string{"scorpion-hero"},
+	}}
+	if text := formatInfoPlain(info, nil, nil, time.Now()); !strings.Contains(text, "subagents") || !strings.Contains(text, "scorpion-hero") {
+		t.Errorf("no subagents row:\n%s", text)
+	}
+}
+
 func TestFormatInfoPlainNil(t *testing.T) {
 	if text := formatInfoPlain(nil, nil, nil, time.Now()); !strings.Contains(text, "No session info") {
 		t.Errorf("formatInfoPlain(nil) = %q, want a warning message", text)

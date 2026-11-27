@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -124,8 +126,8 @@ func (t *TUI) updateInfo() {
 	// The channels get a line of their own above, only while there are any.
 	if t.channelsLine == nil {
 		// a TUI built without the full layout (tests): nothing to update
-	} else if full, short := channelsLabel(v.channelInfos); full != "" {
-		t.channelsLine.SetTexts(ansi.Dimmed("channels "+full), ansi.Dimmed("channels "+short))
+	} else if full, short := statusLineTexts(v.subagentNames, v.channelInfos); full != "" {
+		t.channelsLine.SetTexts(ansi.Dimmed(full), ansi.Dimmed(short))
 	} else {
 		t.channelsLine.SetText("")
 	}
@@ -410,6 +412,7 @@ type sessionView struct {
 	isSubscription                          bool
 	maxIterations, currTurn, queueCount     int
 	channelInfos                            []client.ChannelInfo
+	subagentNames                           []string
 }
 
 // view copies the session state under viewMu (see TUI.viewMu).
@@ -420,7 +423,8 @@ func (t *TUI) view() sessionView {
 		sessionID: t.sessionID, sessionName: t.sessionName, model: t.model, thinking: t.thinking,
 		isSubscription: t.isSubscription, maxIterations: t.maxIterations,
 		currTurn: t.currTurn, queueCount: t.queueCount,
-		channelInfos: append([]client.ChannelInfo(nil), t.channelInfos...),
+		channelInfos:  append([]client.ChannelInfo(nil), t.channelInfos...),
+		subagentNames: append([]string(nil), t.subagentNames...),
 	}
 }
 
@@ -433,10 +437,37 @@ func (t *TUI) withView(fn func()) {
 }
 
 // switchView sets the whole session state at once (a switch to another session).
-func (t *TUI) switchView(id, model, thinking string, maxIter int, chans []client.ChannelInfo) {
+// subagents are the sub-agents the session already has running (its detail).
+func (t *TUI) switchView(id, model, thinking string, maxIter int, chans []client.ChannelInfo, subagents []string) {
 	t.withView(func() {
 		t.sessionID, t.model, t.thinking, t.maxIterations, t.channelInfos = id, model, thinking, maxIter, chans
+		t.subagentNames = append([]string(nil), subagents...)
 	})
+}
+
+// applySubagentEvent applies a subagent_start (add, if absent) or
+// subagent_stop (remove) of the stream whose context is ctx. It does nothing
+// when that stream was replaced: the check is made under viewMu, and a switch
+// cancels the old stream BEFORE its switchView takes the same lock, so a late
+// event of the old session can never touch the new session's list.
+func (t *TUI) applySubagentEvent(ctx context.Context, evt client.Event) {
+	t.withView(func() {
+		if ctx.Err() != nil || evt.Name == "" {
+			return
+		}
+		i := slices.Index(t.subagentNames, evt.Name)
+		switch evt.Type {
+		case "subagent_start":
+			if i < 0 {
+				t.subagentNames = append(t.subagentNames, evt.Name)
+			}
+		case "subagent_stop":
+			if i >= 0 {
+				t.subagentNames = slices.Delete(t.subagentNames, i, i+1)
+			}
+		}
+	})
+	t.updateInfo()
 }
 
 // queued is how many prompts wait behind the running turn (under viewMu).

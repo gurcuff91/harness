@@ -169,7 +169,7 @@ A tool is declared with a name, a description and a JSON Schema, and **implement
 
 ## Events
 
-Each event is a notification `event` with `session_id` and the fields of one [event](../reference/rpc-protocol.md#events): `turn_start`, `text`, `thinking`, `tool_call`, `tool_result`, `tokens`, `turn_end` and so on. They are the same events, with the same fields, as the [HTTP server](server.md)'s stream, and they arrive in order. A client that reads too slowly loses streaming deltas but never a control event without a warning on stderr.
+Each event is a notification `event` with `session_id` and the fields of one [event](../reference/rpc-protocol.md#events): `turn_start`, `text`, `thinking`, `tool_call`, `tool_result`, `tokens`, `subagent_start`, `subagent_stop`, `turn_end` and so on. The `subagents` field of the session detail (`session/new`, `session/resume`, `session/info`) lists the sub-agents running now. They are the same events, with the same fields, as the [HTTP server](server.md)'s stream, and they arrive in order. A client that reads too slowly loses streaming deltas but never a control event without a warning on stderr.
 
 ## Errors
 

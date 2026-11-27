@@ -58,6 +58,7 @@ type TUI struct {
 	overrideModel    string
 	channels         []types.InputChannel // --slack-channel, for the startup session only
 	channelInfos     []client.ChannelInfo // what the current session listens to (status line)
+	subagentNames    []string             // the sub-agents the session has running (status line; under viewMu)
 	overrideThinking string
 	resumeID         string
 	schedulerOn      bool // --with-scheduler: the agent runs the engine

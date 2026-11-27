@@ -86,7 +86,7 @@ func (t *TUI) cmdFork() {
 	t.client.CloseSession(t.view().sessionID) //nolint:errcheck
 
 	// Switch TUI state to the fork.
-	t.switchView(fork.ID, fork.Model, fork.Thinking, fork.MaxIterations, fork.Channels) // a fork listens to nothing
+	t.switchView(fork.ID, fork.Model, fork.Thinking, fork.MaxIterations, fork.Channels, fork.Subagents) // a fork listens to nothing and runs no sub-agents
 	t.setSessionName(fork.Name)
 	t.refreshSubscriptionFlag()
 	t.loadStatsFromSession(fork)
@@ -263,6 +263,31 @@ func channelsLabel(chs []client.ChannelInfo) (full, short string) {
 		shortParts = append(shortParts, fmt.Sprintf("[%s: %d]", g.Type, len(g.Names)))
 	}
 	return strings.Join(fullParts, " "), strings.Join(shortParts, " ")
+}
+
+// subagentsLabel is the status-line mark of the sub-agents the session has
+// running: full ("[scorpion-hero, kano-storm]") and short ("[2]"); "" when none.
+func subagentsLabel(names []string) (full, short string) {
+	if len(names) == 0 {
+		return "", ""
+	}
+	return "[" + strings.Join(names, ", ") + "]", fmt.Sprintf("[%d]", len(names))
+}
+
+// statusLineTexts is the text of the line above the session line, in its full
+// and short forms: the sub-agents first, then the channels, two spaces apart.
+// "" when there is nothing to show (the line then does not exist).
+func statusLineTexts(names []string, chs []client.ChannelInfo) (full, short string) {
+	var fulls, shorts []string
+	if f, s := subagentsLabel(names); f != "" {
+		fulls = append(fulls, "subagents "+f)
+		shorts = append(shorts, "subagents "+s)
+	}
+	if f, s := channelsLabel(chs); f != "" {
+		fulls = append(fulls, "channels "+f)
+		shorts = append(shorts, "channels "+s)
+	}
+	return strings.Join(fulls, "  "), strings.Join(shorts, "  ")
 }
 
 func (t *TUI) submitPrompt(text string) {
@@ -679,6 +704,9 @@ func (t *TUI) showInfo() {
 	}
 	b.WriteString(mut("mcps", fmt.Sprintf("%d connected", info.MCPConnected)))
 	b.WriteString(mut("schedules", fmt.Sprintf("%d", info.ScheduleCount)))
+	if len(sess.Subagents) > 0 {
+		b.WriteString(mut("subagents", strings.Join(sess.Subagents, ", ")))
+	}
 	for _, g := range infoview.ChannelGroups(sess.Channels) {
 		b.WriteString(mut(g.Type, strings.Join(g.Names, ", ")))
 	}

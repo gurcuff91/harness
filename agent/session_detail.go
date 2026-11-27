@@ -25,6 +25,11 @@ type SessionDetail struct {
 	// Omitted when none (and for a persisted session: channels are never
 	// stored).
 	Channels []ChannelInfo `json:"channels,omitempty"`
+	// Subagents are the names of the sub-agents the live session has running
+	// right now, in launch order. Omitted when none (and for a persisted
+	// session). It is the state a frontend that connects late starts from; the
+	// subagent_start / subagent_stop events keep it up to date afterwards.
+	Subagents []string `json:"subagents,omitempty"`
 }
 
 // Detail is the session's detail. Like Meta() it is lock-free: safe to call
@@ -36,5 +41,6 @@ func (s *Session) Detail() SessionDetail {
 		ModelFallback:   s.ModelFallback(),
 		MissingProfiles: s.MissingProfiles(),
 		Channels:        s.Channels(),
+		Subagents:       s.Subagents(),
 	}
 }

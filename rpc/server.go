@@ -345,7 +345,13 @@ func (s *Server) untrack(id string) error {
 		return rpcErr("not_found", "session %q is not open in this connection", id)
 	}
 	o.sess.Stop()
-	o.watcher.Close()
+	// Close the SESSION first: it cancels its live sub-agents and emits their
+	// subagent_stop (result "cancelled") while the watcher still exists, so the
+	// client sees every sub-agent end. Closing the watcher first would drop those
+	// events and leave ghosts in the client's list. Closing the session also
+	// closes its watchers, which ends the pump.
+	err := o.sess.Close()
+	o.watcher.Close() // idempotent: a no-op after the session closed it
 	<-o.done
-	return o.sess.Close()
+	return err
 }

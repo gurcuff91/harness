@@ -80,6 +80,11 @@ type Event struct {
 	MaxIterations int    `json:"max_iterations,omitempty"`
 	Summary       string `json:"summary,omitempty"`
 
+	// Sub-agents — subagent_start / subagent_stop. Name is the generated name
+	// of the sub-agent; Result (stop only) is "ok", "error" or "cancelled".
+	Name   string `json:"name,omitempty"`
+	Result string `json:"result,omitempty"`
+
 	// Raw is the original "data:" JSON payload for this event, verbatim. It is
 	// NOT re-encoded (json:"-"), so it exactly preserves what the server sent —
 	// used by the CLI's json / json-stream output modes to pass events through

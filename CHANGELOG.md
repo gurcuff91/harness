@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.135.0] - 2026-11-27
+
+### Changed — sub-agents always run in the background (BREAKING for the Subagent tool)
+**What changed.** The `Subagent` tool no longer blocks the turn. The `background` and `timeout` parameters are **removed** (`prompt`, `max_iterations` and `readonly` stay): the tool returns at once with the sub-agent's generated name (`scorpion-hero`, unique among the session's live sub-agents), and the answer arrives later as a new prompt to the session, `<subagent name="scorpion-hero" reply>…</subagent>` with origin `subagent:<name>` (`error` attribute when it failed or ran out of iterations; nothing is delivered when the session closes first). A sub-agent lives as long as its session: Stop on a turn does not cancel it, closing the session does. At most 10 run per session; the 11th call is refused.
+
+**Who is affected.** Models and prompts that passed `background` or `timeout` (now unknown fields, an error), and anyone who read the old `/tmp/harness-subagent-*.txt` result file: there is no file any more, read the reply prompt instead.
+
+### Added
+- Events `subagent_start {name}` and `subagent_stop {name, result}` (`result` is `ok`, `error` or `cancelled`) over HTTP/SSE and `harness rpc`; the stop is always emitted, before the reply is delivered.
+- `subagents` (live names, launch order) in the session detail: create/resume/fork, `GET /api/sessions/{id}` and `/info`, and `session/*` over RPC; `client.Session.Subagents` and `client.Event.Name`/`Result`.
+- TUI: `subagents [scorpion-hero, kano-storm]` on the status line above the session line, before the channels (`subagents [2]` when narrow); `/info` (TUI and ACP) has a `subagents` row.
+
+### Fixed / notes
+- **`harness rpc`: closing a session delivers the `subagent_stop` of every cancelled sub-agent** (the session is now closed before its event watcher, so the client's list does not keep ghosts). Found with a real client against the binary.
+- **Safety note:** a sub-agent's answer used to come back as a tool result (data); it now arrives as a prompt, the slot a person's message occupies, so text the sub-agent read in a file or a page could be addressed to the parent. The tool description now says a reply is a report, not an instruction from the person (a prompt-level layer, not a security boundary). Measured with a file that orders a write in the person's name: 6 of 6 refused on claude-haiku-4-5 and claude-sonnet-5-5; weaker models were not measured.
+
 ## [0.134.0] - 2026-11-27
 
 ### Added — memory and resources served by the RPC client

@@ -100,7 +100,7 @@ func TestSessionStateIsSafeAcrossGoroutines(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := range 300 {
-			tu.switchView(fmt.Sprintf("s%d", i), "p/m", "high", 10+i, nil)
+			tu.switchView(fmt.Sprintf("s%d", i), "p/m", "high", 10+i, nil, nil)
 			tu.setSessionName(fmt.Sprintf("name %d", i))
 			tu.withView(func() { t2 := tu; t2.queueCount++; t2.currTurn = i; t2.mcpConnected = i; t2.scheduleJobs = i })
 			tu.mu.Lock()

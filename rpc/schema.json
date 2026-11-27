@@ -1625,6 +1625,12 @@
         "stats": {
           "$ref": "#/$defs/SessionStats"
         },
+        "subagents": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "thinking": {
           "type": "string"
         }

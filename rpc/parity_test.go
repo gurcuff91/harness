@@ -66,6 +66,7 @@ func TestEveryAgentAndSessionMethodIsDecided(t *testing.T) {
 		"MaxIterations":   "in the session detail",
 		"Meta":            "in the session detail",
 		"Channels":        "in the session detail",
+		"Subagents":       "in the session detail",
 	}
 
 	check := func(typeName string, typ reflect.Type, covered, excluded map[string]string) {

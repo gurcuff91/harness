@@ -96,3 +96,19 @@ func TestChannelGroups(t *testing.T) {
 		t.Errorf("groups = %+v", g)
 	}
 }
+
+func TestInfoPlainShowsSubagentsRowOnlyWhenAny(t *testing.T) {
+	in := Info{Version: "v", ID: "abcdefgh", Model: "p/m", Channels: []client.ChannelInfo{{Type: "slack", ID: "C", Name: "#x"}}}
+	if out := InfoPlain(in, now); strings.Contains(out, "subagents") {
+		t.Errorf("row without sub-agents:\n%s", out)
+	}
+	in.Subagents = []string{"scorpion-hero", "kano-storm"}
+	out := InfoPlain(in, now)
+	row := "subagents       scorpion-hero, kano-storm"
+	if !strings.Contains(out, row) {
+		t.Errorf("missing %q:\n%s", row, out)
+	}
+	if strings.Index(out, "subagents") > strings.Index(out, "slack") {
+		t.Errorf("subagents must come before the channels:\n%s", out)
+	}
+}

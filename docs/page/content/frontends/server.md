@@ -130,10 +130,13 @@ Every SSE `data:` line is a JSON object with a `type`:
 | `retry` | A transient network failure is being retried (`attempt`, `max`, `error`). |
 | `error` | A failure (`message`, optional `details`). |
 | `max_iterations_reached` | The iteration budget ran out (`max_iterations`). |
+| `subagent_start`, `subagent_stop` | A sub-agent was launched or ended (`name`; `result` on the stop is `ok`, `error` or `cancelled`). The stop always arrives, before the answer reaches the session as a prompt with origin `subagent:<name>`. |
 | `compact_start`, `compact_end` | Compaction started or finished (`summary`). |
 | `stop` | The turn was stopped by the user; not an error. |
 
 A turn ends with `turn_end` in every case, including errors and stops.
+
+The session detail (create, resume, fork, `GET /api/sessions/{id}` and `/info`) lists the sub-agents running right now in `subagents` (launch order, omitted when none). A client that connects late starts from it and then applies `subagent_start` and `subagent_stop`.
 
 ## Binding channels
 

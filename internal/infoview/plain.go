@@ -27,6 +27,8 @@ type Info struct {
 	MaxIterations int
 	Stats         types.SessionStats
 	Channels      []client.ChannelInfo
+	// Subagents are the names of the sub-agents running now (a row only when any).
+	Subagents     []string
 	Busy          bool
 	QueueDepth    int
 	MCPConnected  int
@@ -88,6 +90,9 @@ func InfoPlain(in Info, now time.Time) string {
 	}
 	b.WriteString(row("mcps", fmt.Sprintf("%d connected", in.MCPConnected)))
 	b.WriteString(row("schedules", fmt.Sprintf("%d", in.ScheduleCount)))
+	if len(in.Subagents) > 0 {
+		b.WriteString(row("subagents", strings.Join(in.Subagents, ", ")))
+	}
 	for _, g := range ChannelGroups(in.Channels) {
 		b.WriteString(row(g.Type, strings.Join(g.Names, ", ")))
 	}

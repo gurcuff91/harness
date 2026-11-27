@@ -116,7 +116,7 @@ func (t *TUI) autoConnect(ctx context.Context) error {
 			}
 			thinking = t.overrideThinking
 		}
-		t.switchView(sess.ID, model, thinking, sess.MaxIterations, sess.Channels)
+		t.switchView(sess.ID, model, thinking, sess.MaxIterations, sess.Channels, sess.Subagents)
 		t.setSessionName(sess.Name)
 		t.refreshSubscriptionFlag() // the model may differ from the one resolved above (fallback or --model)
 		t.loadStatsFromSession(sess)
@@ -171,7 +171,7 @@ func (t *TUI) autoConnect(ctx context.Context) error {
 		thinking = t.overrideThinking
 	}
 	t.withView(func() { t.isSubscription = subscription })
-	t.switchView(sess.ID, model, thinking, sess.MaxIterations, sess.Channels)
+	t.switchView(sess.ID, model, thinking, sess.MaxIterations, sess.Channels, sess.Subagents)
 	t.addRaw(t.welcomeBanner(warnings...))
 	t.setSessionName(sess.Name)
 	t.loadStatsFromSession(sess)
@@ -238,7 +238,7 @@ func (t *TUI) resumeInPlace(sessID string) {
 	// Reset state + scrollback for the incoming session.
 	t.resetForNewSession()
 
-	t.switchView(sess.ID, sess.Model, sess.Thinking, sess.MaxIterations, sess.Channels)
+	t.switchView(sess.ID, sess.Model, sess.Thinking, sess.MaxIterations, sess.Channels, sess.Subagents)
 	t.setSessionName(sess.Name)
 	t.refreshSubscriptionFlag()
 	t.loadStatsFromSession(sess)
@@ -297,7 +297,7 @@ func (t *TUI) newSessionInPlace() {
 	if sess.Thinking != "" {
 		thinking = sess.Thinking
 	}
-	t.switchView(sess.ID, t.view().model, thinking, sess.MaxIterations, sess.Channels)
+	t.switchView(sess.ID, t.view().model, thinking, sess.MaxIterations, sess.Channels, sess.Subagents)
 	t.setSessionName(sess.Name)
 	t.refreshSubscriptionFlag()
 	t.loadStatsFromSession(sess)

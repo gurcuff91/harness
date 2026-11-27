@@ -189,7 +189,7 @@ func formatInfoPlain(info *client.SessionInfo, quota *types.Quota, qerr error, n
 	sess := info.Session
 	return infoview.InfoPlain(infoview.Info{
 		Version: info.Version, ID: sess.ID, Name: sess.Name, Model: sess.Model, Thinking: sess.Thinking,
-		MaxIterations: sess.MaxIterations, Stats: sess.Stats, Channels: sess.Channels,
+		MaxIterations: sess.MaxIterations, Stats: sess.Stats, Channels: sess.Channels, Subagents: sess.Subagents,
 		Busy: info.Busy, QueueDepth: info.QueueDepth, MCPConnected: info.MCPConnected,
 		ScheduleCount: info.ScheduleCount, OS: info.OS, Arch: info.Arch,
 		Quota: quota, QuotaErr: qerr,

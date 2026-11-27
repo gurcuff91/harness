@@ -160,55 +160,29 @@ func TestAddDelegatedCostDrainedBySyncMeta(t *testing.T) {
 	}
 }
 
-// TestSubagentDelegatedCostReachesParentSession is an end-to-end integration
-// check of the real wiring in buildSessionTools' Subagent executor (agent.go)
-// — not just the addDelegatedCost primitive in isolation above. Requires a
-// live provider call (same limitation as TestModelReflectsSwitchModel
-// and TestSubagentMaxIterationsIsCapped — see their comments), so it skips
-// without one rather than faking a response; run it locally with a connected
-// provider to exercise the real path.
+// TestSubagentDelegatedCostReachesParentSession is the end-to-end check of the
+// real wiring: the model launches a sub-agent through the Subagent TOOL, the
+// launching turn ENDS, the sub-agent finishes afterwards, and its spend still
+// reaches the parent session's stats (the contract the old blocking executor
+// proved; now the sub-agent outlives the turn). Deterministic: scripted
+// providers, no network.
 func TestSubagentDelegatedCostReachesParentSession(t *testing.T) {
-	a := New(AgentOptions{Store: store.NewInMemoryStore()})
-	defer a.Close()
-
-	models := a.Models()
-	if len(models) < 1 {
-		t.Skip("need at least 1 active model in this environment to run a real Subagent call")
+	_, sess, p, _ := subSession(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := sess.PromptAndWait(ctx, "launch gate:cost"); err != nil {
+		t.Fatal(err)
 	}
-
-	sess, err := a.NewSession(t.TempDir(), models[0].Model)
-	if err != nil {
-		t.Fatalf("NewSession: %v", err)
+	if len(sess.Subagents()) != 1 {
+		t.Fatalf("the sub-agent should still be running after the launching turn ended: %v", sess.Subagents())
 	}
-	defer sess.Close()
-
 	before := sess.Stats()
-
-	// Trigger the model to use the Subagent tool via a direct, unambiguous
-	// instruction, and wait for the turn to fully finish.
-	done := make(chan struct{})
-	sess.Subscribe(func(e types.Event) {
-		if e.Type == types.EventTurnEnd {
-			close(done)
-		}
-	})
-	sess.Prompt(context.Background(), "Use the Subagent tool once, delegating exactly this task to it: respond with the single word PONG. Do not answer directly yourself.")
-
-	select {
-	case <-done:
-	case <-time.After(60 * time.Second):
-		t.Fatal("turn did not finish within 60s")
+	p.release("cost") // it finishes AFTER the launching turn
+	waitLog(t, "the reply turn", func() bool { return len(p.gotReplies()) == 1 && !sess.IsBusy() })
+	after := sess.syncStats()
+	if after.OutputTokens <= before.OutputTokens && after.CostUSD <= before.CostUSD && after.InputTokens <= before.InputTokens {
+		t.Errorf("the sub-agent's spend never reached the parent: before=%+v after=%+v", before, after)
 	}
-
-	after := sess.Stats()
-	if after.CostUSD <= before.CostUSD && after.InputTokens <= before.InputTokens {
-		t.Skip("model did not invoke Subagent this run (nondeterministic tool choice) — rerun to exercise the delegated-cost path")
-	}
-	if after.ContextUsage == 0 {
-		t.Error("ContextUsage is 0 after a real turn — sanity check failed, something else is wrong with this test setup")
-	}
-	t.Logf("parent session totals after a Subagent-using turn: input=%d output=%d cost=$%v (includes delegated sub-agent spend)",
-		after.InputTokens, after.OutputTokens, after.CostUSD)
 }
 
 // TestFetchSummarizerDelegatedCostReachesParentSession mirrors the Subagent

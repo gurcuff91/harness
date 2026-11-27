@@ -96,6 +96,9 @@ type Session struct {
 	// Channels are the external conversations a live session listens to.
 	// Empty when none.
 	Channels []ChannelInfo `json:"channels,omitempty"`
+	// Subagents are the names of the sub-agents a live session has running,
+	// in launch order. Empty when none.
+	Subagents []string `json:"subagents,omitempty"`
 	// MissingProfiles are bound profiles that are not registered right now:
 	// skipped, their names kept. Empty when none.
 	MissingProfiles []string `json:"missing_profiles,omitempty"`

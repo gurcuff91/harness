@@ -1079,6 +1079,7 @@ Copies a session at this instant into a new one and starts sending its events.
 | `profiles` | array of string (optional) |  |
 | `reset_count` | integer (optional) |  |
 | `stats` | `SessionStats` |  |
+| `subagents` | array of string (optional) |  |
 | `thinking` | string |  |
 
 #### `session/import`
@@ -1113,6 +1114,7 @@ Imports a session export (a file path or the JSONL content) as a NEW session.
 | `profiles` | array of string (optional) |  |
 | `reset_count` | integer (optional) |  |
 | `stats` | `SessionStats` |  |
+| `subagents` | array of string (optional) |  |
 | `thinking` | string |  |
 
 #### `session/info`
@@ -1193,6 +1195,7 @@ Creates a session and starts sending its events.
 | `profiles` | array of string (optional) |  |
 | `reset_count` | integer (optional) |  |
 | `stats` | `SessionStats` |  |
+| `subagents` | array of string (optional) |  |
 | `thinking` | string |  |
 
 #### `session/prompt`
@@ -1245,6 +1248,7 @@ Renames the session and answers its detail.
 | `profiles` | array of string (optional) |  |
 | `reset_count` | integer (optional) |  |
 | `stats` | `SessionStats` |  |
+| `subagents` | array of string (optional) |  |
 | `thinking` | string |  |
 
 #### `session/reset`
@@ -1291,6 +1295,7 @@ Reopens a stored session (or returns the open one) and starts sending its events
 | `profiles` | array of string (optional) |  |
 | `reset_count` | integer (optional) |  |
 | `stats` | `SessionStats` |  |
+| `subagents` | array of string (optional) |  |
 | `thinking` | string |  |
 
 #### `session/set_max_iterations`
@@ -1323,6 +1328,7 @@ Sets the session's per-turn iteration budget (1-1000) and answers its detail.
 | `profiles` | array of string (optional) |  |
 | `reset_count` | integer (optional) |  |
 | `stats` | `SessionStats` |  |
+| `subagents` | array of string (optional) |  |
 | `thinking` | string |  |
 
 #### `session/stop`
@@ -1367,6 +1373,7 @@ Switches the session's model (provider/model) and answers its detail.
 | `profiles` | array of string (optional) |  |
 | `reset_count` | integer (optional) |  |
 | `stats` | `SessionStats` |  |
+| `subagents` | array of string (optional) |  |
 | `thinking` | string |  |
 
 #### `session/switch_thinking`
@@ -1399,6 +1406,7 @@ Switches the session's thinking level and answers its detail.
 | `profiles` | array of string (optional) |  |
 | `reset_count` | integer (optional) |  |
 | `stats` | `SessionStats` |  |
+| `subagents` | array of string (optional) |  |
 | `thinking` | string |  |
 
 #### `session/sysprompt`

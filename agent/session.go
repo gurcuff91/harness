@@ -218,6 +218,17 @@ type Session struct {
 	// channels are the external conversations this handle listens to (nil =
 	// none); set once by attachChannels before the session is registered.
 	channels *sessionChannels
+
+	// lifeCtx lives exactly as long as the session handle: Close cancels it.
+	// Sub-agents run on a context derived from it (never from a turn's), so
+	// they outlive the turn that launched them but not the session. nil only
+	// for a bare &Session{} built by a test. closed is set (under followMu)
+	// before lifeCancel, so Prompt can refuse once Close began. subs is the
+	// live sub-agent registry (session_subagents.go).
+	lifeCtx    context.Context
+	lifeCancel context.CancelFunc
+	closed     bool
+	subs       subagentSet
 }
 
 type followUp struct {
@@ -349,6 +360,7 @@ func newSession(storeInst *store.Session,
 		hasMemory:     hasMemory,
 	}
 	s.name.Store(meta.Name)
+	s.lifeCtx, s.lifeCancel = context.WithCancel(context.Background())
 	s.followCond = sync.NewCond(&s.followMu)
 	s.systemPromptVal.Store(systemPrompt)
 	s.toolsVal.Store(toolReg)
@@ -422,6 +434,13 @@ func (s *Session) loadModelMeta(modelID string) {
 func (s *Session) Prompt(ctx context.Context, text string, opts ...PromptOption) types.PromptStatus {
 	c := buildPromptConfig(opts)
 	s.followMu.Lock()
+	if s.closed {
+		// A closed session takes no more work: a late sub-agent reply or a
+		// scheduler tick is dropped silently, never starting a turn on a
+		// store that is going away.
+		s.followMu.Unlock()
+		return types.PromptQueued
+	}
 	s.followUps = append(s.followUps, followUp{text: text, images: c.images, origin: c.origin, displayText: c.displayText})
 	if !s.busy {
 		s.busy = true
@@ -1875,7 +1894,15 @@ func (s *Session) Meta() store.SessionMeta {
 
 // Close flushes and closes the store, and removes the session from its agent's
 // active set (so the scheduler no longer routes prompts to it).
+//
+// Order: (1) the session is marked closed (Prompt now drops) and its life
+// context is cancelled, which unwinds every live sub-agent; (2) Close waits
+// (bounded) for those sub-agents to finish their cleanup, so each one's
+// subagent_stop reaches the handler, channels and watchers while they still
+// exist and Subagents() is empty; (3) channels stop, the session leaves its
+// agent, the watchers are closed, the store is closed.
 func (s *Session) Close() error {
+	s.shutdownSubagents()
 	s.closeChannels()
 	if s.agent != nil {
 		s.agent.unregisterSession(s.id)

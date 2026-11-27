@@ -43,7 +43,7 @@ $ harness --resume <session-id> "continue with the tests"
 
 ## The screen
 
-From top to bottom: the conversation history, a spinner while the model is working, the input editor between two rules, the command palette (only when open), a `channels` line (only when the session listens to Slack, Telegram or colleagues), the status line and the footer.
+From top to bottom: the conversation history, a spinner while the model is working, the input editor between two rules, the command palette (only when open), a line above the status line (only when there is something to show) with the running sub-agents, `subagents [scorpion-hero, kano-storm]` (the count, `subagents [2]`, when the names do not fit), followed by the `channels` the session listens to (Slack, Telegram or colleagues), the status line and the footer.
 
 The status line shows the working directory (with the git branch), the session name, the iteration counter while a turn runs (`(3/50)`) and the number of queued prompts (`[2 queued]`).
 
@@ -137,7 +137,7 @@ $ harness settings set model anthropic/claude-sonnet-4-20250514
 
 ## /info
 
-`/info` prints a snapshot: harness version, session name and id, model, thinking level, iteration limit, context use, tokens, cache and cost, the usage quota of the session's provider (when the provider reports one), the OS and terminal, connected MCP servers, the schedule count, the channels the session listens to, and whether it is busy with queued prompts.
+`/info` prints a snapshot: harness version, session name and id, model, thinking level, iteration limit, context use, tokens, cache and cost, the usage quota of the session's provider (when the provider reports one), the OS and terminal, connected MCP servers, the schedule count, the sub-agents running (only when there are any), the channels the session listens to, and whether it is busy with queued prompts.
 
 ## /context
 

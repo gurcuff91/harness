@@ -24,7 +24,8 @@ type budgetProvider struct {
 	maxIterations int
 
 	mu        sync.Mutex
-	subPasses int // requests the sub-agent made WITH tools (real ReAct passes)
+	subPasses int         // requests the sub-agent made WITH tools (real ReAct passes)
+	reply     chan string // the <subagent … reply> prompt the parent receives
 }
 
 func hasTool(req *types.Request, name string) bool {
@@ -60,6 +61,10 @@ func (p *budgetProvider) CompleteStream(_ context.Context, req *types.Request, c
 	}
 
 	if hasTool(req, "Subagent") { // the parent
+		if lt := lastText(req); strings.HasPrefix(lt, "<subagent") {
+			p.reply <- lt
+			return text("GOT THE REPLY")
+		}
 		for _, m := range req.Messages {
 			for _, part := range m.Parts {
 				if part.ToolResult != nil {
@@ -97,7 +102,7 @@ func TestSubagentMaxIterationsOverrideReachesEphemeralSubAgent(t *testing.T) {
 			withCleanProviderRegistry(t)
 			name := "budget-" + strings.NewReplacer("/", "-").Replace(t.Name())
 			var thinking string
-			p := &budgetProvider{fakeThinkingProbeProvider: fakeThinkingProbeProvider{name: name, lastThinking: &thinking}, maxIterations: budget}
+			p := &budgetProvider{fakeThinkingProbeProvider: fakeThinkingProbeProvider{name: name, lastThinking: &thinking}, maxIterations: budget, reply: make(chan string, 1)}
 			providers.AddForTest(p)
 			a := New(AgentOptions{Store: store.NewInMemoryStore()})
 			defer a.Close()
@@ -113,8 +118,17 @@ func TestSubagentMaxIterationsOverrideReachesEphemeralSubAgent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(out, "BUDGET EXHAUSTED") {
-				t.Fatalf("the sub-agent did not run out of budget: %q", out)
+			if !strings.Contains(out, "launched") {
+				t.Fatalf("the Subagent tool did not return at once with a launch note: %q", out)
+			}
+			var reply string
+			select {
+			case reply = <-p.reply:
+			case <-ctx.Done():
+				t.Fatal("the sub-agent's reply never arrived")
+			}
+			if !strings.Contains(reply, "BUDGET EXHAUSTED") || !strings.Contains(reply, " reply error>") {
+				t.Fatalf("the sub-agent did not run out of budget (reply %q)", reply)
 			}
 			p.mu.Lock()
 			passes := p.subPasses
