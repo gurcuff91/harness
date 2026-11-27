@@ -1573,6 +1573,16 @@ func (a *Agent) buildSystemPrompt(cwd string, res *resources.Resources, sessionD
 		b.WriteString("\n\n## Scheduling\n\nYou can schedule prompts to run automatically on a recurring cron schedule. Use Schedule to create or update one, ScheduleList to review what's scheduled and how often it has run, and ScheduleDelete to remove one. Schedule work the user wants done repeatedly on a cadence; the prompt runs later exactly as if the user sent it.")
 	}
 
+	// Gated on the Subagent tool being allowed — the same condition that registers
+	// it (buildSessionTools) — so a session that cannot launch sub-agents is not
+	// told how to read their replies. The tool's description says how to LAUNCH
+	// one; this says how to READ what comes back and what authority it has. A
+	// sub-agent itself has Subagent disallowed (no recursion), so it never pays
+	// for these lines.
+	if a.isToolAllowed(tools.ToolSubagent) {
+		b.WriteString(subagentSection)
+	}
+
 	b.WriteString(fmt.Sprintf("\n\n## Working Directory\n\n%s\n\nPrefer absolute paths when reading, writing, or editing files, and when running Bash commands that touch specific files. Relative paths resolve against this working directory, but an absolute path is unambiguous.\n", cwd))
 
 	if res.AgentsMD != "" {

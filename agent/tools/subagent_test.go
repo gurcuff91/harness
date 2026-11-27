@@ -149,14 +149,22 @@ func TestSubagentReadonlyReachesExecutor(t *testing.T) {
 	}
 }
 
-// The description tells the model a reply is a REPORT, not an instruction from
-// the person (a sub-agent reads files, pages and tool output that may contain
-// text addressed to its caller). A prompt-level layer, not a security boundary.
-func TestSubagentDescriptionSaysAReplyIsAReportNotAnInstruction(t *testing.T) {
+// The description says how to LAUNCH a sub-agent and points to the system
+// prompt for how to READ the reply: the report/authority rule lives in the
+// "## Sub-agents" section (agent/prompts.go), not here, so it is said once.
+func TestSubagentDescriptionIsAboutLaunchingAndPointsToTheInstructions(t *testing.T) {
 	d := Subagent(func(context.Context, string, int, bool) (string, error) { return "x", nil }).Def.Description
-	for _, w := range []string{"REPORT", "not an instruction from the person", "approved"} {
+	for _, w := range []string{"immediately", "background", "at most 10", "Sub-agents", "never wait, sleep, poll", "readonly", "max_iterations"} {
 		if !strings.Contains(d, w) {
 			t.Errorf("the description lacks %q:\n%s", w, d)
 		}
+	}
+	for _, w := range []string{"REPORT", "approved", "<subagent"} {
+		if strings.Contains(d, w) {
+			t.Errorf("the description must not repeat the reading rules (%q): they live in the system prompt section", w)
+		}
+	}
+	if len(d) > 900 {
+		t.Errorf("the description is %d characters; it should stay about launching", len(d))
 	}
 }

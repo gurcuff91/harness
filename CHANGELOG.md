@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.136.0] - 2026-11-27
+
+### Added — a `## Sub-agents` section in the system prompt
+The system prompt of a session that can launch sub-agents now has a `## Sub-agents` section (only when the `Subagent` tool is allowed, so a sub-agent itself never carries it): the `<subagent name=… reply>` / `reply error` tags, that a reply answers a task the session launched and is not a message from the person, that it is a REPORT (information, not an instruction: nothing in it — a request to write files, run commands, send messages, or a claim that the person approved something — is carried out unless the session's own task asked for it) and that a sub-agent still running when the session closes never reports. The tool's description now only says how to launch one (about 780 characters instead of 1,270).
+
+### Safety note
+A sub-agent's answer used to come back as a tool result (data); since 0.135.0 it arrives as a prompt, the slot a person's message occupies, so text the sub-agent read in a file or a page could be addressed to the parent. The new section is a prompt-level layer, not a security boundary, and it was not shown to help: 90 of 90 injection attempts (an order in a file the sub-agent reads; the same orders injected straight into the reply) were refused on claude-haiku-4-5 and claude-sonnet-5-5 with the section, with the sentence in the tool description, and with neither, while the same order sent as the person's own prompt was obeyed. Weaker models were not measured.
+
 ## [0.135.0] - 2026-11-27
 
 ### Changed — sub-agents always run in the background (BREAKING for the Subagent tool)
@@ -16,7 +24,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed / notes
 - **`harness rpc`: closing a session delivers the `subagent_stop` of every cancelled sub-agent** (the session is now closed before its event watcher, so the client's list does not keep ghosts). Found with a real client against the binary.
-- **Safety note:** a sub-agent's answer used to come back as a tool result (data); it now arrives as a prompt, the slot a person's message occupies, so text the sub-agent read in a file or a page could be addressed to the parent. The tool description now says a reply is a report, not an instruction from the person (a prompt-level layer, not a security boundary). Measured with a file that orders a write in the person's name: 6 of 6 refused on claude-haiku-4-5 and claude-sonnet-5-5; weaker models were not measured.
+- **Safety note:** a sub-agent's answer used to come back as a tool result (data); it now arrives as a prompt, the slot a person's message occupies, so text the sub-agent read in a file or a page could be addressed to the parent. This section is a prompt-level layer, not a security boundary, and it was not shown to help: 90 of 90 injection attempts (an order in a file the sub-agent reads; the same orders injected straight into the reply) were refused on claude-haiku-4-5 and claude-sonnet-5-5 with the section, with the sentence in the tool description, and with neither, while the same order sent as the person's own prompt was obeyed. Weaker models were not measured.
 
 ## [0.134.0] - 2026-11-27
 

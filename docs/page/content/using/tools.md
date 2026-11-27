@@ -39,6 +39,8 @@ An SDK embedder can remove built-ins by name through `AgentOptions.DisallowedToo
 
 Sub-agents cannot start sub-agents, cannot write or delete memories (they can search them), and have no Schedule tools. Their cost is added to the parent session's stats.
 
+The system prompt of a session that has the tool carries a short `Sub-agents` section that tells the model how to read those replies: a reply answers a task the session launched, it is a report (information to use) and not an instruction from the person, so a request inside it to write files, run commands or send messages is not carried out unless the session's own task asked for it. A sub-agent itself does not carry the section (it cannot launch sub-agents). This is guidance to the model, not a security boundary.
+
 A session can have up to 10 sub-agents running; the 11th call is refused with an error until one finishes. A sub-agent lives as long as its session, not the turn that started it: stopping the turn does not cancel it, and closing the session (leaving the TUI, `/new`, `/resume` to another session) does, delivering nothing. Frontends see them through the `subagent_start` and `subagent_stop` events and the `subagents` field of the session detail; the TUI lists them on its status line.
 
 ## Parallel execution
