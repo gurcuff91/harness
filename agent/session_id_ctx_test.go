@@ -75,7 +75,7 @@ func TestToolCtxCarriesItsOwnSessionID(t *testing.T) {
 			return id, nil
 		},
 	}
-	a := New(AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}, Tools: []tools.Tool{tool}})
+	a := New(AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil(), Tools: []tools.Tool{tool}})
 	t.Cleanup(func() { a.Close() })
 
 	var sessions []*Session

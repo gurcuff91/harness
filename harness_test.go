@@ -43,7 +43,7 @@ func TestAgentWithOptionsAppliesConfig(t *testing.T) {
 		AgentWithThinking("low"),
 		AgentWithMaxIterations(7),
 		AgentWithStore(store.NewInMemoryStore()),
-		AgentWithResourceLoader(resources.NilLoader{}),
+		AgentWithResourceLoader(resources.Nil()),
 	)
 	defer a.Close()
 

@@ -3,6 +3,7 @@ package cli
 import (
 	"github.com/gurcuff91/harness/agent"
 	"github.com/gurcuff91/harness/agent/memory"
+	"github.com/gurcuff91/harness/agent/resources"
 	"github.com/gurcuff91/harness/agent/store"
 	"github.com/gurcuff91/harness/mcp"
 )
@@ -80,6 +81,7 @@ func oneShotOptions() agent.AgentOptions {
 		MCPServers:      mcp.ServersFromSettings(),
 		Memory:          defaultMemory(),
 		Store:           store.NewInMemoryStore(),
+		ResourceLoader:  resources.File(), // the CLI is a coding assistant: it reads the project's AGENTS.md, SYSTEM.md and skills
 		EnableWebSearch: true,
 	}
 }
@@ -109,6 +111,7 @@ func interactiveOptions(x extras, directives []string) agent.AgentOptions {
 	opts := agent.AgentOptions{
 		MCPServers:      mcp.ServersFromSettings(),
 		Memory:          defaultMemory(),
+		ResourceLoader:  resources.File(), // the CLI is a coding assistant: it reads the project's AGENTS.md, SYSTEM.md and skills
 		EnableScheduler: x.scheduler,
 		EnableWebSearch: true,
 		MaxIterations:   interactiveMaxIterations,

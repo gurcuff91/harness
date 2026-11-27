@@ -29,9 +29,6 @@ func directivesTestAgent(t *testing.T, st store.SessionStore, opts AgentOptions)
 		t.Fatal(err)
 	}
 	opts.Store = st
-	if opts.ResourceLoader == nil {
-		opts.ResourceLoader = resources.NilLoader{}
-	}
 	a := New(opts)
 	t.Cleanup(func() { a.Close() })
 	return a, "directives-fake/m"
@@ -95,7 +92,7 @@ func TestProfileDirectiveSurvivesAReopenAfterRestart(t *testing.T) {
 	id := s.ID()
 	s.Close()
 
-	a2 := New(AgentOptions{Store: st, ResourceLoader: resources.NilLoader{}, Profiles: map[string]profiles.Profile{"tg": {Directives: []string{tgDirective}}}})
+	a2 := New(AgentOptions{Store: st, ResourceLoader: resources.Nil(), Profiles: map[string]profiles.Profile{"tg": {Directives: []string{tgDirective}}}})
 	defer a2.Close()
 	resumed, err := a2.ResumeSession(id)
 	if err != nil {
@@ -153,12 +150,11 @@ func TestToolsAreTheAgentsAndProfilesScopeTheRest(t *testing.T) {
 }
 
 // The base prompt: what the caller set > SYSTEM.md > the built-in default.
-type systemMDLoader struct{ resources.NilLoader }
+type systemMDLoader struct{}
 
-func (systemMDLoader) Load() (*resources.Resources, error) {
+func (systemMDLoader) Load(string) (*resources.Resources, error) {
 	return &resources.Resources{SystemMD: "FROM SYSTEM.MD"}, nil
 }
-func (l systemMDLoader) Copy() resources.ResourceLoader { return l }
 
 func TestSystemPromptPrecedence(t *testing.T) {
 	cases := []struct {
@@ -167,8 +163,8 @@ func TestSystemPromptPrecedence(t *testing.T) {
 	}{
 		{"explicit beats SYSTEM.md", "MINE", "MINE", "FROM SYSTEM.MD", systemMDLoader{}},
 		{"SYSTEM.md beats the default", "", "FROM SYSTEM.MD", "expert coding agent", systemMDLoader{}},
-		{"the default when there is nothing else", "", "You are an expert coding agent", "FROM SYSTEM.MD", resources.NilLoader{}},
-		{"explicit beats the default", "MINE", "MINE", "expert coding agent", resources.NilLoader{}},
+		{"the default when there is nothing else", "", "You are an expert coding agent", "FROM SYSTEM.MD", nil},
+		{"explicit beats the default", "MINE", "MINE", "expert coding agent", resources.Nil()},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -44,7 +44,7 @@ Everything the binary writes to stdout is a protocol message. Diagnostics go to 
 | `channels` | Input channels to register, by name: `slack`, `telegram`, `colleagues`. |
 | `store` | Where sessions live: `{"kind":"file","path":"…"}` (default, `~/.harness/agent/sessions`) or `{"kind":"memory"}`. |
 | `memory` | `{"kind":"sqlite","path":"…"}` or `{"kind":"none"}`. **Default: none**, so memory is on only if you ask. |
-| `resources` | `{"kind":"file"}` (default: `SYSTEM.md`, `AGENTS.md` and skills are discovered) or `{"kind":"none"}`. |
+| `resources` | `{"kind":"file"}` makes each session read its directory's `SYSTEM.md`, `AGENTS.md` and skills. **Default: nothing is read**, so a directory chosen by an end user cannot influence the agent unless you ask. |
 
 A `kind` a field does not accept is an error naming the field. Providing your own store, memory or resource loader from the client is not supported yet.
 

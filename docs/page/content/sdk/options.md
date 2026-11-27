@@ -36,7 +36,7 @@ The rule behind the split: **the agent configures, the session obeys.** Directiv
 | `AgentWithDisallowedTools(n...)` | `DisallowedTools` | Tool names to exclude, built-in, custom or MCP. Repeated calls accumulate. |
 | `AgentWithMCPs(servers)` | `MCPServers` | MCP servers by name. Presence is the switch; empty means no MCP. |
 | `AgentWithStore(s)` | `Store` | Session store (`store.SessionStore`). Default: file store, falling back to in-memory. |
-| `AgentWithResourceLoader(l)` | `ResourceLoader` | Skill and resource discovery. Default: filesystem per session; `resources.NilLoader{}` disables discovery. |
+| `AgentWithResourceLoader(l)` | `ResourceLoader` | Discovers `SYSTEM.md`, `AGENTS.md` and skills for each session's directory. **Default: nothing is discovered.** Pass `resources.File()` to read them from disk. See [Resource loaders](#resource-loaders). |
 | `AgentWithMemory(m)` | `Memory` | Persistent memory backend (`memory.Store`). Presence is the switch; the agent closes it. |
 | `AgentWithScheduler()` | `EnableScheduler` | Schedule tools plus the engine that fires them. Off by default. |
 | `AgentWithWebSearch()` | `EnableWebSearch` | Registers the `WebSearch` tool. Off by default. |
@@ -74,12 +74,40 @@ Both take the ports from package `configstore`. Without them Harness uses `~/.ha
 The base prompt is chosen in this order:
 
 1. `AgentOptions.SystemPrompt` (`AgentWithSystemPrompt`), when set
-2. the project's `.harness/agent/SYSTEM.md`, falling back to `~/.harness/agent/SYSTEM.md`
+2. the project's `.harness/agent/SYSTEM.md`, falling back to `~/.harness/agent/SYSTEM.md` (only when a [resource loader](#resource-loaders) reads the disk)
 3. the built-in default prompt
 
 A prompt you set is never overridden by a project's `SYSTEM.md`.
 
 The final prompt is assembled in this order: base prompt, skills, memory, tool sections, working directory, `AGENTS.md`, the agent's directives, the directives of the session's enabled profiles, the session's own directives, then the directives of its channels.
+
+## Resource loaders
+
+A resource loader finds the context of a session's working directory: a `SYSTEM.md` that replaces the base prompt, an `AGENTS.md` appended as project context, and the skills the model can load. **By default an agent discovers nothing**, so a directory chosen by an end user cannot change what the model is told. Ask for it:
+
+```go
+a := harness.NewAgent(
+	harness.AgentWithResourceLoader(resources.File()), // read them from the session's directory, as the harness CLI does
+)
+```
+
+`resources.File()` looks in the session's directory (and upward for `AGENTS.md`) and in `~/.harness`; `resources.Nil()` discovers nothing and is what a `nil` loader means.
+
+To load them from somewhere else (a database, an object store), implement the one-method interface. It has no state and is **not bound to a directory**: each session calls `Load` with its own `cwd`, and the same instance serves every session and sub-agent at once, so it must be safe for concurrent use.
+
+```go
+type ResourceLoader interface {
+	Load(cwd string) (*resources.Resources, error)
+}
+
+type Resources struct {
+	SystemMD string  // replaces the base system prompt
+	AgentsMD string  // project context
+	Skills   []Skill // Name, Description, Content, and Location when it lives on a disk
+}
+```
+
+A skill carries its `Content` with it: `Load` returns everything in one call, and the `Skill` tool reads from what the session was opened with.
 
 ## Directives, tools and disallowed tools
 

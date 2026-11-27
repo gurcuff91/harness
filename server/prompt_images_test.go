@@ -37,7 +37,7 @@ func visionServer(t *testing.T) (*Server, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { admin.UnregisterProvider(prov) })
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	t.Cleanup(func() { a.Close() })
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
 	if err != nil {

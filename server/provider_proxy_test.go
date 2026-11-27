@@ -83,7 +83,7 @@ func proxyEnv(t *testing.T, up *fakeUpstream, opts ServerOptions) (*Server, stri
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { admin.UnregisterProvider(name) })
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	t.Cleanup(func() { a.Close() })
 	opts.Logger = logx.NewNilLogger()
 	opts.KeepAgentOpen = true
@@ -321,7 +321,7 @@ func TestProxyHarnessErrors(t *testing.T) {
 func TestProxyInactiveProviderIs409(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "")
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	defer a.Close()
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
 	if err != nil {
@@ -438,7 +438,7 @@ func nativeServer(t *testing.T, up *fakeUpstream, creds map[string]config.Provid
 		providers.RedirectForTest(providers.NewAnthropic(), up.URL),
 	}
 	t.Cleanup(providers.SetForTest(list))
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	t.Cleanup(func() { a.Close() })
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
 	if err != nil {
@@ -687,7 +687,7 @@ func TestProxyInjectsReasoningSplitForDeclaredProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { admin.UnregisterProvider(name) })
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	t.Cleanup(func() { a.Close() })
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
 	if err != nil {
@@ -746,7 +746,7 @@ func TestProxyMiniMaxInjectsReasoningSplit(t *testing.T) {
 	mm := providers.NewMiniMax()
 	providers.RedirectForTest(mm, up.URL)
 	t.Cleanup(providers.SetForTest([]providers.Provider{mm}))
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	t.Cleanup(func() { a.Close() })
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
 	if err != nil {

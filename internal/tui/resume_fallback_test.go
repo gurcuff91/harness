@@ -72,7 +72,7 @@ func newFallbackFixtureWith(t *testing.T, opts agent.AgentOptions) *fallbackFixt
 	}
 
 	fs := store.NewInMemoryStore()
-	opts.Store, opts.ResourceLoader = fs, resources.NilLoader{}
+	opts.Store, opts.ResourceLoader = fs, resources.Nil()
 	a := agent.New(opts)
 	t.Cleanup(func() { a.Close() })
 	srv, err := server.Start(a, "", server.ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})

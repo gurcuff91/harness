@@ -448,7 +448,7 @@ func runTUI(t *testing.T, afterStart func(tu *TUI, rec *recTerminal)) (writes []
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	defer a.Close()
 
 	rec := newRecTerminal()

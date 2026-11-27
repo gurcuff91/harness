@@ -55,7 +55,7 @@ func (f *fakeMemory) Close() error {
 func memoToolNames(a *Agent, t *testing.T) map[string]bool {
 	t.Helper()
 	var sess *Session
-	reg, _ := a.buildSessionTools("sess-1", t.TempDir(), &sess, &resources.Resources{}, resources.NilLoader{})
+	reg, _ := a.buildSessionTools("sess-1", t.TempDir(), &sess, &resources.Resources{})
 	got := map[string]bool{}
 	for _, d := range reg.Definitions() {
 		switch d.Name {

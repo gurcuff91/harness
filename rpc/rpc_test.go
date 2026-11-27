@@ -103,17 +103,33 @@ func indexOf(s, sub string) int {
 
 func TestConfigDefaults(t *testing.T) {
 	c := start(t)
-	c.initialize(Config{}) // file store under the (temp) HOME, memory none, resources file
+	c.initialize(Config{}) // file store under the (temp) HOME, no memory, no resources
 	opts := c.srv.Agent().Options()
 	if opts.Memory != nil {
 		t.Fatal("memory must default to none")
 	}
 	if opts.ResourceLoader != nil {
-		t.Fatal("resources default to the file loader (nil = per-session FileResourceLoader)")
+		t.Fatal("resources default to NOTHING (nil), exactly as agent.New does")
 	}
 	home, _ := os.UserHomeDir()
 	if _, err := os.Stat(filepath.Join(home, ".harness", "agent", "sessions")); err != nil {
 		t.Fatalf("the default file store was not opened: %v", err)
+	}
+}
+
+// resources: {"kind":"file"} turns the discovery of the project's AGENTS.md,
+// SYSTEM.md and skills on; any other kind is an error naming the field.
+func TestConfigResourcesKinds(t *testing.T) {
+	c := start(t)
+	c.initialize(Config{Store: &KindConfig{Kind: "memory"}, Resources: &ResourcesConfig{Kind: "file"}})
+	if c.srv.Agent().Options().ResourceLoader == nil {
+		t.Fatal("resources kind file must install the file loader")
+	}
+
+	c2 := start(t)
+	_, e := c2.call("initialize", InitializeParams{ProtocolVersion: ProtocolVersion, Config: Config{Resources: &ResourcesConfig{Kind: "none"}}})
+	if e == nil || e.Code != jsonrpc.CodeInvalidParams {
+		t.Fatalf("resources kind none: %v, want invalid params (a field is omitted to turn something off)", e)
 	}
 }
 
@@ -151,7 +167,7 @@ func TestConfigInvalidKindsNameFieldAndAllowed(t *testing.T) {
 	}{
 		"store":     {Config{Store: &KindConfig{Kind: "s3"}}, []string{"config.store.kind", "file", "memory"}},
 		"memory":    {Config{Memory: &KindConfig{Kind: "redis"}}, []string{"config.memory.kind", "sqlite", "none"}},
-		"resources": {Config{Resources: &ResourcesConfig{Kind: "web"}}, []string{"config.resources.kind", "file", "none"}},
+		"resources": {Config{Resources: &ResourcesConfig{Kind: "web"}}, []string{"config.resources.kind", "file"}},
 		"path":      {Config{Store: &KindConfig{Kind: "memory", Path: "/x"}}, []string{"config.store.path"}},
 		"thinking":  {Config{ThinkingLevel: "ultra"}, []string{"thinking_level"}},
 		"channel":   {Config{Channels: []string{"irc"}}, []string{"irc"}},
@@ -261,7 +277,7 @@ func TestSessionResumeForkImport(t *testing.T) {
 	model := registerModel(t, &fakeModel{})
 	dir := t.TempDir()
 	c := start(t)
-	c.initialize(Config{Store: &KindConfig{Kind: "file", Path: dir}, Resources: &ResourcesConfig{Kind: "none"}})
+	c.initialize(Config{Store: &KindConfig{Kind: "file", Path: dir}})
 	var d agent.SessionDetail
 	c.must("session/new", SessionNewParams{CWD: t.TempDir(), Model: model, Name: "orig"}, &d)
 	sess, _ := c.srv.session(d.ID)

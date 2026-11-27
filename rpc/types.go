@@ -44,8 +44,9 @@ type KindConfig struct {
 	Path string `json:"path,omitempty"`
 }
 
-// ResourcesConfig picks the resource loader: "file" (skills and AGENTS.md
-// discovered on disk, the default) or "none".
+// ResourcesConfig turns on discovery of the project's context. Omit it and
+// NOTHING is read from a session's directory (the default of agent.New too);
+// "file" makes each session read its cwd's AGENTS.md, SYSTEM.md and skills.
 type ResourcesConfig struct {
 	Kind string `json:"kind"`
 }
@@ -74,7 +75,8 @@ type Config struct {
 	// Memory: kind "sqlite" (path = database file, default
 	// ~/.harness/agent/memory.db) or "none". Omitted = none.
 	Memory *KindConfig `json:"memory,omitempty"`
-	// Resources: kind "file" (default) or "none".
+	// Resources: omit it and nothing is discovered (agent.New's default); kind
+	// "file" makes each session read its cwd's AGENTS.md, SYSTEM.md and skills.
 	Resources *ResourcesConfig `json:"resources,omitempty"`
 }
 

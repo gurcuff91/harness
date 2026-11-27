@@ -1,15 +1,15 @@
 package resources
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
-// ── FileResourceLoader ───────────────────────────────────────────────────
+// ── File ────────────────────────────────────────────────────────────────
 
-// FileResourceLoader discovers context from the filesystem:
+// fileLoader discovers context from the filesystem:
 //   - SYSTEM.md:  <cwd>/.harness/agent/SYSTEM.md, falling back to
 //     ~/.harness/agent/SYSTEM.md if the project doesn't have one (whichever is
 //     found REPLACES the other entirely — see Load()'s comment)
@@ -21,49 +21,20 @@ import (
 //     4. <cwd>/.harness/agent/skills/    (local project — highest prio)
 //
 // Skills with the same name: higher priority directory wins.
-// All SKILL.md content is eagerly loaded at Load() time.
-type FileResourceLoader struct {
-	cwd      string
-	maxDepth int
-	index    map[string]skillEntry // populated by Load(), used by ReadSkill()
-}
+// It holds no state: the cwd is Load's argument, so one value serves every
+// session.
+type fileLoader struct{ maxDepth int }
 
-// NewFileResourceLoader creates a loader for the given working directory.
-func NewFileResourceLoader(cwd string) *FileResourceLoader {
+// File returns the ResourceLoader that discovers context on disk, in the working
+// directory each session passes to Load. One instance is shared by all of an
+// agent's sessions.
+func File() ResourceLoader { return fileLoader{maxDepth: 3} }
+
+// Load discovers all resources for cwd ("" = the process's working directory).
+func (f fileLoader) Load(cwd string) (*Resources, error) {
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
-	return &FileResourceLoader{
-		cwd:      cwd,
-		maxDepth: 3,
-		index:    map[string]skillEntry{},
-	}
-}
-
-// Copy returns a fresh FileResourceLoader for the same cwd/maxDepth, with its
-// own empty index — never sharing f's index map. Required because Load()
-// populates f.index in place (not goroutine-safe): a sub-agent calling
-// Load() concurrently with the parent session on a SHARED instance would
-// race on that map. See the ResourceLoader.Copy() doc comment for why
-// sub-agents need this instead of the caller hardcoding
-// NewFileResourceLoader directly.
-func (f *FileResourceLoader) Copy() ResourceLoader {
-	return &FileResourceLoader{
-		cwd:      f.cwd,
-		maxDepth: f.maxDepth,
-		index:    map[string]skillEntry{},
-	}
-}
-
-// skillEntry holds a skill's metadata and eagerly loaded content.
-type skillEntry struct {
-	info    SkillInfo
-	content string
-}
-
-// Load discovers all resources for the session.
-// After Load() returns, ReadSkill() serves from the in-memory index.
-func (f *FileResourceLoader) Load() (*Resources, error) {
 	home, _ := os.UserHomeDir()
 
 	res := &Resources{}
@@ -72,59 +43,46 @@ func (f *FileResourceLoader) Load() (*Resources, error) {
 	// override the user's default system-prompt addendum entirely by placing
 	// its own <cwd>/.harness/agent/SYSTEM.md; if it doesn't have one, the
 	// global ~/.harness/agent/SYSTEM.md is used instead; if neither exists,
-	// SystemMD is simply empty (no error, no fallback content) — same
-	// no-op-safe behavior as before this project-local override existed.
-	// This is a REPLACEMENT, not a merge: when the project-local file exists,
-	// the global one is ignored entirely, not concatenated with it — mirrors
-	// buildSystemPrompt's own SystemMD-vs-base-prompt precedence (agent.go),
-	// which also replaces rather than merges.
-	res.SystemMD = readFileIfExists(filepath.Join(f.cwd, ".harness", "agent", "SYSTEM.md"))
+	// SystemMD is simply empty (no error, no fallback content). This is a
+	// REPLACEMENT, not a merge: when the project-local file exists, the global
+	// one is ignored entirely, not concatenated with it.
+	res.SystemMD = readFileIfExists(filepath.Join(cwd, ".harness", "agent", "SYSTEM.md"))
 	if res.SystemMD == "" {
 		res.SystemMD = readFileIfExists(filepath.Join(home, ".harness", "agent", "SYSTEM.md"))
 	}
 
 	// 2. AGENTS.md — walk up from cwd
-	res.AgentsMD = f.findAgentsMD()
+	res.AgentsMD = f.findAgentsMD(cwd)
 
 	// 3. Skills — merge in precedence order (last wins)
 	skillDirs := []string{
 		filepath.Join(home, ".agents", "skills"),
 		filepath.Join(home, ".harness", "agent", "skills"),
-		filepath.Join(f.cwd, ".agents", "skills"),
-		filepath.Join(f.cwd, ".harness", "agent", "skills"),
+		filepath.Join(cwd, ".agents", "skills"),
+		filepath.Join(cwd, ".harness", "agent", "skills"),
 	}
-
-	f.index = map[string]skillEntry{}
+	merged := map[string]Skill{}
 	for _, dir := range skillDirs {
-		for name, entry := range loadSkillsFrom(dir) {
-			f.index[name] = entry // higher priority dirs overwrite lower
+		for name, sk := range loadSkillsFrom(dir) {
+			merged[name] = sk // higher priority dirs overwrite lower
 		}
 	}
-
-	for _, entry := range f.index {
-		res.Skills = append(res.Skills, entry.info)
+	names := make([]string, 0, len(merged))
+	for n := range merged {
+		names = append(names, n)
 	}
-
+	sort.Strings(names) // a stable order: the system prompt lists them
+	for _, n := range names {
+		res.Skills = append(res.Skills, merged[n])
+	}
 	return res, nil
-}
-
-// ReadSkill returns the eagerly loaded content of a skill by name.
-// Must be called after Load().
-func (f *FileResourceLoader) ReadSkill(name string) (content string, dir string, err error) {
-	entry, ok := f.index[name]
-	if !ok {
-		return "", "", fmt.Errorf("skill %q not found", name)
-	}
-	// entry.info.Location is the absolute path to the skill's SKILL.md; the
-	// directory that contains it is the skill's base for relative references.
-	return entry.content, filepath.Dir(entry.info.Location), nil
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────
 
 // findAgentsMD walks up from cwd looking for AGENTS.md, up to maxDepth levels.
-func (f *FileResourceLoader) findAgentsMD() string {
-	dir := f.cwd
+func (f fileLoader) findAgentsMD(cwd string) string {
+	dir := cwd
 	for i := 0; i <= f.maxDepth; i++ {
 		path := filepath.Join(dir, "AGENTS.md")
 		if content := readFileIfExists(path); content != "" {
@@ -142,13 +100,13 @@ func (f *FileResourceLoader) findAgentsMD() string {
 // loadSkillsFrom reads all skills from a directory.
 // Each skill must be a subdirectory containing SKILL.md.
 // Returns nil if the directory doesn't exist.
-func loadSkillsFrom(dir string) map[string]skillEntry {
+func loadSkillsFrom(dir string) map[string]Skill {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
 
-	result := map[string]skillEntry{}
+	result := map[string]Skill{}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -159,13 +117,11 @@ func loadSkillsFrom(dir string) map[string]skillEntry {
 			continue
 		}
 		name := e.Name()
-		result[name] = skillEntry{
-			info: SkillInfo{
-				Name:        name,
-				Description: extractDescription(content),
-				Location:    skillFile,
-			},
-			content: stripFrontmatter(content),
+		result[name] = Skill{
+			Name:        name,
+			Description: extractDescription(content),
+			Location:    skillFile,
+			Content:     stripFrontmatter(content),
 		}
 	}
 	return result

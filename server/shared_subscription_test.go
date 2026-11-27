@@ -104,7 +104,7 @@ func instanceA(t *testing.T, backend *claudeBackend) string {
 	oauth, _ := providers.NewClaudeOAuth()
 	providers.RedirectForTest(oauth, backend.URL)
 	t.Cleanup(providers.SetForTest([]providers.Provider{oauth}))
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	t.Cleanup(func() { a.Close() })
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
 	if err != nil {
@@ -127,7 +127,7 @@ func TestSharedSubscriptionAcrossInstances(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { admin.UnregisterProvider("shared-claude") })
-	bAgent := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	bAgent := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	t.Cleanup(func() { bAgent.Close() })
 
 	// 1. B lists A's models, WITH their capabilities (the proxy passed them verbatim).
@@ -218,7 +218,7 @@ func TestSharedSubscriptionChainOfThree(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { admin.UnregisterProvider("hop-b") })
-	bAgent := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	bAgent := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	t.Cleanup(func() { bAgent.Close() })
 	srvB, err := Start(bAgent, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
 	if err != nil {

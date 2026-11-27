@@ -106,12 +106,12 @@ func (s *Server) buildAgent(cfg Config) (*agent.Agent, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	resKind := "file"
+	resKind := "" // omitted: nothing is discovered
 	if cfg.Resources != nil && cfg.Resources.Kind != "" {
 		resKind = cfg.Resources.Kind
-	}
-	if resKind != "file" && resKind != "none" {
-		return nil, nil, invalidParams("config.resources.kind %q is not one of: file, none", cfg.Resources.Kind)
+		if resKind != "file" {
+			return nil, nil, invalidParams("config.resources.kind %q is not one of: file", cfg.Resources.Kind)
+		}
 	}
 	if cfg.ThinkingLevel != "" && !validThinking(cfg.ThinkingLevel) {
 		return nil, nil, invalidParams("config.thinking_level %q is not one of: off, low, medium, high, xhigh", cfg.ThinkingLevel)
@@ -179,8 +179,10 @@ func (s *Server) buildAgent(cfg Config) (*agent.Agent, []string, error) {
 		opts.Memory = m
 		closers = append(closers, func() { m.Close() })
 	}
-	if resKind == "none" {
-		opts.ResourceLoader = resources.NilLoader{}
+	// Omitted = discover nothing, exactly as agent.New does; only "file" reads the
+	// project's AGENTS.md, SYSTEM.md and skills from each session's cwd.
+	if resKind == "file" {
+		opts.ResourceLoader = resources.File()
 	}
 	return agent.New(opts), names, nil
 }

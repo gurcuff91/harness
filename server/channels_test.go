@@ -44,7 +44,7 @@ func channelServer(t *testing.T) *client.Client {
 	t.Cleanup(config.SwapStoresForTest(configstore.NewInMemoryStore(), configstore.NewInMemoryStore()))
 	providers.EnsureRegistry()
 	t.Cleanup(providers.SetForTest([]providers.Provider{newToggle("chsrv", "m")}))
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}, Channels: []agent.Channel{stubChannel{}}})
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil(), Channels: []agent.Channel{stubChannel{}}})
 	t.Cleanup(func() { a.Close() })
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
 	if err != nil {

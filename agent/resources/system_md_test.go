@@ -27,7 +27,7 @@ func TestSystemMD_ProjectOnlyIsUsed(t *testing.T) {
 
 	writeSystemMD(t, cwd, "project rules")
 
-	res, err := NewFileResourceLoader(cwd).Load()
+	res, err := File().Load(cwd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestSystemMD_FallsBackToGlobalWhenNoProjectOne(t *testing.T) {
 
 	writeSystemMD(t, home, "global rules")
 
-	res, err := NewFileResourceLoader(cwd).Load()
+	res, err := File().Load(cwd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestSystemMD_ProjectTakesPrecedenceOverGlobal(t *testing.T) {
 	writeSystemMD(t, home, "global rules")
 	writeSystemMD(t, cwd, "project rules")
 
-	res, err := NewFileResourceLoader(cwd).Load()
+	res, err := File().Load(cwd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestSystemMD_EmptyWhenNeitherExists(t *testing.T) {
 	t.Setenv("HOME", home)
 	cwd := t.TempDir()
 
-	res, err := NewFileResourceLoader(cwd).Load()
+	res, err := File().Load(cwd)
 	if err != nil {
 		t.Fatal(err)
 	}

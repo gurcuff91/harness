@@ -254,7 +254,7 @@ func (c *client) collectUntil(typ string) []map[string]any {
 
 // memStore is the config most tests use: sessions in memory, no resources.
 func memStoreConfig(tools ...ToolDecl) Config {
-	return Config{Store: &KindConfig{Kind: "memory"}, Resources: &ResourcesConfig{Kind: "none"}, Tools: tools}
+	return Config{Store: &KindConfig{Kind: "memory"}, Tools: tools}
 }
 
 // captureLogger records warnings.

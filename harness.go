@@ -187,9 +187,11 @@ func AgentWithStore(s store.SessionStore) AgentOption {
 	return func(o *agent.AgentOptions) { o.Store = s }
 }
 
-// AgentWithResourceLoader sets a custom skill/resource loader (default:
-// filesystem per session). Implement [agent/resources.ResourceLoader]; pass
-// resources.NilLoader{} to disable discovery.
+// AgentWithResourceLoader sets the loader that discovers SYSTEM.md, AGENTS.md
+// and skills for each session's working directory. The default is to discover
+// NOTHING; pass resources.File() to read them from disk (what the harness CLI
+// does), or implement [agent/resources.ResourceLoader] — one method,
+// Load(cwd), no state, shared by every session — to load them from anywhere.
 func AgentWithResourceLoader(l resources.ResourceLoader) AgentOption {
 	return func(o *agent.AgentOptions) { o.ResourceLoader = l }
 }

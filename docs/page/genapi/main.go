@@ -35,7 +35,7 @@ func main() {
 func run() error {
 	a := agent.New(agent.AgentOptions{
 		Store:          store.NewInMemoryStore(),
-		ResourceLoader: resources.NilLoader{},
+		ResourceLoader: resources.Nil(),
 	})
 	srv, err := server.Start(a, "127.0.0.1:0", server.ServerOptions{})
 	if err != nil {

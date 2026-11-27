@@ -62,7 +62,7 @@ func quotaServerURL(t *testing.T, ps ...providers.Provider) (*client.Client, str
 		name := p.Name()
 		t.Cleanup(func() { providers.ForgetQuota(name) })
 	}
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	t.Cleanup(func() { a.Close() })
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
 	if err != nil {

@@ -32,7 +32,7 @@ func TestSessionSystemPromptEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { admin.UnregisterProvider("srv-sysprompt-fake") })
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	defer a.Close()
 	ts := httptest.NewServer(NewServer(a, ServerOptions{Logger: logx.NewNilLogger()}).handler())
 	defer ts.Close()
@@ -86,7 +86,7 @@ func TestKeepAgentOpen(t *testing.T) {
 	}
 	t.Cleanup(func() { admin.UnregisterProvider("srv-keepopen-fake") })
 	mem := &closeCounter{SessionStore: store.NewInMemoryStore()}
-	a := agent.New(agent.AgentOptions{Store: mem, ResourceLoader: resources.NilLoader{}})
+	a := agent.New(agent.AgentOptions{Store: mem, ResourceLoader: resources.Nil()})
 	defer a.Close()
 
 	srv := NewServer(a, ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
@@ -139,7 +139,7 @@ func TestReloadCustomProvidersEndpoint(t *testing.T) {
 		w.Write([]byte(`{"data":[{"id":"m"}]}`))
 	}))
 	defer models.Close()
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	defer a.Close()
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
 	if err != nil {

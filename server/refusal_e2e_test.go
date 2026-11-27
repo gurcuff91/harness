@@ -72,7 +72,7 @@ func TestAnthropicRefusalEndToEnd(t *testing.T) {
 	}
 	t.Cleanup(func() { admin.UnregisterProvider("refuse-other") })
 
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	defer a.Close()
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
 	if err != nil {

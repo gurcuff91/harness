@@ -115,7 +115,7 @@ type Session struct {
 	watchers watchSet
 
 	// Skills
-	skills    []resources.SkillInfo
+	skills    []resources.Skill
 	readSkill func(string) (content string, dir string, err error)
 
 	mu            sync.Mutex
@@ -327,7 +327,7 @@ func newSession(storeInst *store.Session,
 	provider providers.Provider, modelID, thinkingLvl string,
 	toolReg *tools.Registry, tl toolLens, systemPrompt string, pl promptLens,
 	maxIterations, maxTokens int,
-	skills []resources.SkillInfo, readSkill func(string) (content string, dir string, err error),
+	skills []resources.Skill, readSkill func(string) (content string, dir string, err error),
 	hasMemory bool) *Session {
 
 	meta := storeInst.Meta()
@@ -594,7 +594,7 @@ func (s *Session) PromptAndWait(ctx context.Context, text string, opts ...Prompt
 }
 
 // Skills returns the discovered skills for this session.
-func (s *Session) Skills() []resources.SkillInfo { return s.skills }
+func (s *Session) Skills() []resources.Skill { return s.skills }
 
 // Tools returns the JSON tool definitions (name, description, input schema)
 // currently registered for this session — the exact set sent to the

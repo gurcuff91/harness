@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.132.0] - 2026-11-26
+
+### ⚠️ BREAKING — a `nil` ResourceLoader no longer reads the project's files
+**What changed.** `AgentOptions.ResourceLoader == nil` used to mean "read `AGENTS.md`, `SYSTEM.md` and skills from each session's directory" (the agent quietly built a filesystem loader per session). It now means **"discover nothing"**.
+
+**Who is affected.** Any Go program that builds an agent with `harness.NewAgent()` or `agent.New(AgentOptions{})` without setting a resource loader. **Nothing fails**: the agent keeps working, but its prompt is shorter (no project `AGENTS.md`, no `SYSTEM.md` override) and the `Skill` tool and the skills list are gone.
+
+**Migration (one line).**
+```go
+harness.NewAgent(harness.AgentWithResourceLoader(resources.File()))
+// or: agent.AgentOptions{ResourceLoader: resources.File()}
+```
+The `harness` CLI (TUI, `serve`, `acp`, `-p`) passes it itself, so nothing changes for CLI users.
+
+**Why.**
+- A `nil` that does something is a hidden default: the behavior depended on a value nobody wrote, and it could not be expressed as an explicit choice.
+- Reading files from a directory the *end user* picks is the wrong default for an embedded agent: `AGENTS.md`, `SYSTEM.md` and skills there become part of the model's instructions. An application should have to ask for that.
+- It makes `harness rpc` (SDKs for other languages) the same as Go instead of an exception.
+
+### ⚠️ BREAKING — the `ResourceLoader` interface
+The interface was bound to a directory (`NewFileResourceLoader(cwd)`, `Load()` without arguments) and kept state (a skill index), which is why it needed `Copy()` and why `ReadSkill` only worked on the instance whose `Load` had run. It is now:
+```go
+type ResourceLoader interface { Load(cwd string) (*Resources, error) }
+```
+- **Stateless and shared.** Every session and sub-agent calls `Load` with its own directory; one instance serves them all (it must be safe for concurrent use). `Copy()` and `ReadSkill()` are removed.
+- **Skills carry their content.** `Resources.Skills` is `[]resources.Skill{Name, Description, Location, Content}` (was `[]SkillInfo` without content): one call returns everything, and the `Skill` tool reads what the session was opened with.
+- **Constructors:** `resources.File()` (discover on disk, in each session's cwd) and `resources.Nil()` (nothing) replace `NewFileResourceLoader(cwd)` and `NilLoader{}`.
+- **Migrating a custom loader:** implement `Load(cwd)`, return the skills with their `Content`, drop `ReadSkill` and `Copy`.
+
+### Changed
+- `harness rpc`: `resources` is `{"kind":"file"}` or omitted; omitted discovers nothing (it was the other way round). `{"kind":"none"}` is no longer accepted — omit the field.
+- Skills are listed in the system prompt in a stable (alphabetical) order.
+
 ## [0.131.0] - 2026-11-26
 
 ### Added — `harness rpc`, a JSON-RPC protocol for SDKs in other languages

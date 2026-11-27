@@ -61,7 +61,7 @@ func TestAnSSEClientIsRegisteredBeforeItsHeadersAreSent(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { admin.UnregisterProvider("ssereg") })
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	defer a.Close()
 	srv := NewServer(a, ServerOptions{Logger: logx.NewNilLogger()})
 	sess, err := a.NewSession(t.TempDir(), "ssereg/m")
@@ -132,7 +132,7 @@ func proxySession(t *testing.T) (*agent.Agent, *agent.Session) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { admin.UnregisterProvider("proxysess") })
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	t.Cleanup(func() { a.Close() })
 	sess, err := a.NewSession(t.TempDir(), "proxysess/m")
 	if err != nil {

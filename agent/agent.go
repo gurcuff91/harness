@@ -38,7 +38,7 @@ type Agent struct {
 	toolReg         *tools.Registry
 	disallowedTools []string
 	store           store.SessionStore
-	resourceLoader  resources.ResourceLoader // nil = FileResourceLoader(cwd) per session
+	resourceLoader  resources.ResourceLoader // nil = discover nothing
 	thinkingLevel   string
 	systemPrompt    string
 	maxIterations   int
@@ -107,9 +107,11 @@ type AgentOptions struct {
 	MCPServers map[string]types.MCPServer
 
 	// ── Infrastructure (optional) ────────────────────────────────────────
-	Store          store.SessionStore       // default: in-memory
-	ResourceLoader resources.ResourceLoader // default: FileResourceLoader(cwd) per session
-	//                                         // pass NilLoader{} to disable discovery
+	Store store.SessionStore // default: in-memory
+	// ResourceLoader discovers SYSTEM.md, AGENTS.md and skills for each session's
+	// cwd. nil = discover NOTHING; pass resources.File() to discover on disk (what
+	// the harness CLI does). The loader is stateless and shared by every session.
+	ResourceLoader resources.ResourceLoader
 
 	// Memory is the project-scoped persistent memory backend. Its presence is
 	// the on/off switch: nil (the default) = no memory at all — no Memo* tools,
@@ -627,23 +629,6 @@ func (a *Agent) Close() error {
 	return a.closeErr
 }
 
-// newLoader returns the ResourceLoader for a session about to be built: a
-// fresh FileResourceLoader(cwd) if no custom loader was configured, or an
-// independent Copy() of a.resourceLoader otherwise — never a.resourceLoader
-// itself. Each session (and, via buildSessionTools' Subagent executor, each
-// sub-agent it spawns) gets its own instance because Load() may build
-// per-call state in place (e.g. FileResourceLoader's skill index), which
-// isn't safe to share across sessions calling Load() concurrently — a root
-// Agent serving multiple long-lived sessions (TUI/Telegram/ACP) with a
-// custom loader configured via harness.WithResourceLoader would otherwise
-// have every session racing on the same instance's internal state.
-func (a *Agent) newLoader(cwd string) resources.ResourceLoader {
-	if a.resourceLoader == nil {
-		return resources.NewFileResourceLoader(cwd)
-	}
-	return a.resourceLoader.Copy()
-}
-
 // SessionOption configures one session as it's created (NewSession) or
 // reopened (ResumeSession) — scoped to that session object only, never to
 // the Agent's other sessions, and never persisted.
@@ -746,8 +731,7 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 	maxTokens := sessionMaxTokens(a.maxTokens, provider.ModelMeta(modelID))
 
 	// Resources
-	loader := a.newLoader(cwd)
-	res, err := loader.Load()
+	res, err := a.loadResources(cwd)
 	if err != nil {
 		return nil, fmt.Errorf("load resources: %w", err)
 	}
@@ -767,7 +751,7 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 	if err != nil {
 		return nil, fmt.Errorf("new session: %w", err)
 	}
-	sessionTools, tl := a.buildSessionTools(sessionID, cwd, &sess, res, loader, append(append([]tools.Tool(nil), cfg.tools...), chTools...)...)
+	sessionTools, tl := a.buildSessionTools(sessionID, cwd, &sess, res, append(append([]tools.Tool(nil), cfg.tools...), chTools...)...)
 	systemPrompt, pl := a.buildSystemPrompt(cwd, res, append(append([]string(nil), cfg.directives...), chDirectives...)...)
 
 	meta := store.SessionMeta{
@@ -790,7 +774,7 @@ func (a *Agent) NewSession(cwd, model string, opts ...SessionOption) (*Session, 
 		provider, modelID, a.thinkingLevel,
 		sessionTools, tl, systemPrompt, pl,
 		a.maxIterations, maxTokens,
-		res.Skills, loader.ReadSkill,
+		res.Skills, skillReader(res.Skills),
 		a.memStore != nil)
 	sess.agent = a
 	sess.ownDirectives = append([]string(nil), cfgOwn...)
@@ -953,14 +937,8 @@ func (a *Agent) resumeStored(sessionID string, cfg sessionConfig) (*Session, err
 	maxTokens := sessionMaxTokens(a.maxTokens, provider.ModelMeta(modelID))
 
 	cwd := meta.CWD
-	loader := a.newLoader(cwd)
-	res, _ := loader.Load()
-	var skills []resources.SkillInfo
-	var readSkill func(string) (content string, dir string, err error)
-	if res != nil {
-		skills = res.Skills
-		readSkill = loader.ReadSkill
-	}
+	res, _ := a.loadResources(cwd) // a failing loader leaves the session without context, not unopenable
+	skills, readSkill := res.Skills, skillReader(res.Skills)
 
 	var sess *Session
 	chans, chDirectives, chTools, err := a.prepareChannels(meta.ID, cwd, a.withSessionChannels(cfg.channels), cfg.tools)
@@ -968,7 +946,7 @@ func (a *Agent) resumeStored(sessionID string, cfg sessionConfig) (*Session, err
 		_ = storeInst.Close()
 		return nil, fmt.Errorf("resume session: %w", err)
 	}
-	resumeTools, tl := a.buildSessionTools(meta.ID, cwd, &sess, res, loader, append(append([]tools.Tool(nil), cfg.tools...), chTools...)...)
+	resumeTools, tl := a.buildSessionTools(meta.ID, cwd, &sess, res, append(append([]tools.Tool(nil), cfg.tools...), chTools...)...)
 	resumePrompt, pl := a.buildSystemPrompt(cwd, res, append(append([]string(nil), cfg.directives...), chDirectives...)...)
 	sess = newSession(storeInst,
 		provider, modelID, thinkingLvl,
@@ -1009,11 +987,7 @@ func (a *Agent) reconfigureSession(sessionID string) error {
 	}
 	sess.missingProfiles.Store(missing)
 	cwd := sess.CWD()
-	loader := a.newLoader(cwd)
-	res, err := loader.Load()
-	if err != nil || res == nil {
-		res = &resources.Resources{}
-	}
+	res, _ := a.loadResources(cwd)
 	sessRef := sess
 	// The session's channels keep their tools and directive: they belong to
 	// how the session was opened.
@@ -1021,7 +995,7 @@ func (a *Agent) reconfigureSession(sessionID string) error {
 		cfg.tools = append(append([]tools.Tool(nil), cfg.tools...), sc.tools...)
 		cfg.directives = append(append([]string(nil), cfg.directives...), sc.directives...)
 	}
-	reg, tl := a.buildSessionTools(sessionID, cwd, &sessRef, res, loader, cfg.tools...)
+	reg, tl := a.buildSessionTools(sessionID, cwd, &sessRef, res, cfg.tools...)
 	prompt, pl := a.buildSystemPrompt(cwd, res, cfg.directives...)
 	sess.queueReconfig(&sessionReconfig{systemPrompt: prompt, pl: pl, tools: reg, tl: tl})
 	return nil
@@ -1146,14 +1120,8 @@ func (a *Agent) openStoredCopy(copyStore *store.Session, cfg sessionConfig, what
 	maxTokens := sessionMaxTokens(a.maxTokens, provider.ModelMeta(modelID))
 
 	cwd := meta.CWD
-	loader := a.newLoader(cwd)
-	res, _ := loader.Load()
-	var skills []resources.SkillInfo
-	var readSkill func(string) (string, string, error)
-	if res != nil {
-		skills = res.Skills
-		readSkill = loader.ReadSkill
-	}
+	res, _ := a.loadResources(cwd)
+	skills, readSkill := res.Skills, skillReader(res.Skills)
 
 	var sess *Session
 	// A fork listens to nothing of its parent's; it may be given channels of
@@ -1164,7 +1132,7 @@ func (a *Agent) openStoredCopy(copyStore *store.Session, cfg sessionConfig, what
 		_ = a.store.DeleteSession(meta.ID)
 		return nil, fmt.Errorf("%s: %w", what, err)
 	}
-	forkTools, tl := a.buildSessionTools(meta.ID, cwd, &sess, res, loader, append(append([]tools.Tool(nil), cfg.tools...), chTools...)...)
+	forkTools, tl := a.buildSessionTools(meta.ID, cwd, &sess, res, append(append([]tools.Tool(nil), cfg.tools...), chTools...)...)
 	forkPrompt, pl := a.buildSystemPrompt(cwd, res, append(append([]string(nil), cfg.directives...), chDirectives...)...)
 	sess = newSession(copyStore,
 		provider, modelID, thinkingLvl,
@@ -1258,7 +1226,7 @@ func awaitSubagentResult(ctx context.Context, done <-chan error, textBuf *string
 // and no sharedMemory at all — there is nothing to recall or persist for a
 // one-shot condensing call. Its only input is the content Fetch already
 // downloaded, handed to it as part of the prompt text, never re-fetched.
-func (a *Agent) buildFetchSummarizer(cwd string, loader resources.ResourceLoader, sessRef **Session) tools.FetchSummarizer {
+func (a *Agent) buildFetchSummarizer(cwd string, sessRef **Session) tools.FetchSummarizer {
 	parentA := a
 	return func(ctx context.Context, prompt, content string) (string, error) {
 		subAgent := New(AgentOptions{
@@ -1267,7 +1235,7 @@ func (a *Agent) buildFetchSummarizer(cwd string, loader resources.ResourceLoader
 			MaxIterations:  fetchSummarizeMaxIterations,
 			MaxTokens:      parentA.maxTokens,
 			Store:          store.NewInMemoryStore(),
-			ResourceLoader: loader.Copy(), // see Subagent's executor comment for why Copy(), not the parent's own instance
+			ResourceLoader: parentA.resourceLoader, // stateless: shared, never copied
 			// TOOLLESS on purpose: this sub-agent's only input is the content
 			// Fetch already downloaded, handed to it as prompt text — it has
 			// nothing to read, write, run, or fetch, and no memory to recall
@@ -1335,7 +1303,7 @@ func (a *Agent) buildFetchSummarizer(cwd string, loader resources.ResourceLoader
 // buildSessionTools assembles one session's tool registry. sessionTools
 // (SessionWithTools) are registered right after the Agent-wide registry, under
 // the same DisallowedTools filter.
-func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res *resources.Resources, loader resources.ResourceLoader, sessionTools ...tools.Tool) (*tools.Registry, toolLens) {
+func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res *resources.Resources, sessionTools ...tools.Tool) (*tools.Registry, toolLens) {
 	reg := tools.NewRegistry()
 	// Built one instance per session, bound to THIS session's cwd — they can't
 	// live in the shared agent-level registry (a.toolReg, seeded once in New()
@@ -1356,7 +1324,7 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 		reg.Register(tools.Edit(cwd))
 	}
 	if a.isToolAllowed(tools.ToolFetch) {
-		reg.Register(tools.Fetch(a.buildFetchSummarizer(cwd, loader, sessRef)))
+		reg.Register(tools.Fetch(a.buildFetchSummarizer(cwd, sessRef)))
 	}
 	for _, def := range a.toolReg.Definitions() {
 		if a.isToolAllowed(def.Name) {
@@ -1369,7 +1337,7 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 		}
 	}
 	if len(res.Skills) > 0 {
-		reg.Register(tools.Skill(loader.ReadSkill))
+		reg.Register(tools.Skill(skillReader(res.Skills)))
 	}
 	// Memory tools — project-scoped persistent memory, registered when a store is
 	// configured. cwd partitions memories per project (like sessions). The store
@@ -1531,21 +1499,11 @@ func (a *Agent) buildSessionTools(sessionID, cwd string, sessRef **Session, res 
 				MaxIterations: maxIter,
 				MaxTokens:     parentA.maxTokens,
 				Store:         store.NewInMemoryStore(),
-				// Each subagent gets its OWN loader instance, via Copy() — never
-				// the parent's own loader value directly. Two reasons: (1) a
-				// loader's Load() may build per-call state in place (e.g.
-				// FileResourceLoader's skill index), which isn't safe to run
-				// concurrently with the parent session's own Load() on a SHARED
-				// instance; (2) hardcoding resources.NewFileResourceLoader(cwd)
-				// here — as this used to do — silently ignored whatever
-				// ResourceLoader implementation the parent Agent was actually
-				// configured with (e.g. a custom one injected via
-				// harness.WithResourceLoader, loading skills from a database or
-				// object store): every sub-agent would see a completely
-				// different, filesystem-only context than the parent session
-				// did. Copy() (see ResourceLoader's doc comment) returns a fresh
-				// instance of the SAME implementation and configuration.
-				ResourceLoader: loader.Copy(),
+				// The sub-agent uses the parent's loader: it is stateless (cwd is Load's
+				// argument), so sharing it is safe and keeps whatever implementation the
+				// parent was configured with (a custom one loading skills from a database,
+				// say) instead of a different, filesystem-only context.
+				ResourceLoader: parentA.resourceLoader,
 				// Subagents can't launch further subagents (no recursion) and get
 				// READ-ONLY memory: they may recall context (MemoSearch) but
 				// not write or delete — only the parent agent curates what persists,

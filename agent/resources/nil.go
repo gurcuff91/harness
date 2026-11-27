@@ -1,22 +1,13 @@
 package resources
 
-import "fmt"
+// ── Nil ─────────────────────────────────────────────────────────────────
 
-// ── NilLoader ───────────────────────────────────────────────────────────
+// nilLoader discovers nothing.
+type nilLoader struct{}
 
-// NilLoader returns empty Resources and errors on ReadSkill.
-// Use for tests or minimal SDK usage where no context discovery is needed.
-type NilLoader struct{}
+// Nil returns a ResourceLoader that discovers nothing: no SYSTEM.md, no
+// AGENTS.md, no skills. It is what a nil AgentOptions.ResourceLoader means; pass
+// it when you want to say so explicitly.
+func Nil() ResourceLoader { return nilLoader{} }
 
-func (NilLoader) Load() (*Resources, error) {
-	return &Resources{}, nil
-}
-
-func (NilLoader) ReadSkill(name string) (content string, dir string, err error) {
-	return "", "", fmt.Errorf("skill %q not found (NilLoader has no skills)", name)
-}
-
-// Copy returns a NilLoader — trivial since it carries no state at all.
-func (NilLoader) Copy() ResourceLoader {
-	return NilLoader{}
-}
+func (nilLoader) Load(string) (*Resources, error) { return &Resources{}, nil }

@@ -36,7 +36,7 @@ func secureServer(t *testing.T, secret string) (*Server, string) {
 	t.Helper()
 	p := newToggle("sec", "m")
 	_, _, _ = fallbackServer(t, p) // isolates HOME, stores and the provider registry
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	t.Cleanup(func() { a.Close() })
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true, Secret: secret})
 	if err != nil {
@@ -203,7 +203,7 @@ func TestTheClientSendsTheSecretOnEveryRequest(t *testing.T) {
 func TestRunWithSecret(t *testing.T) {
 	p := newToggle("runsec", "m")
 	_, _, _ = fallbackServer(t, p)
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	// Run picks its own port: read it from the logger-free server by dialing

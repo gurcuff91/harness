@@ -46,7 +46,7 @@ func registryServer(t *testing.T) (c *client.Client, good, broken string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { admin.UnregisterProvider(good); admin.UnregisterProvider(broken) })
-	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.NilLoader{}})
+	a := agent.New(agent.AgentOptions{Store: store.NewInMemoryStore(), ResourceLoader: resources.Nil()})
 	t.Cleanup(func() { a.Close() })
 	srv, err := Start(a, "", ServerOptions{Logger: logx.NewNilLogger(), KeepAgentOpen: true})
 	if err != nil {

@@ -59,7 +59,7 @@ The model must belong to a connected provider (see [Connect a provider](../start
 
 ## Building the agent
 
-`harness.NewAgent(opts ...AgentOption)` never fails: a provider is resolved per session, not per agent. With no options you get the built-in tools (Bash, Read, Write, Edit, Fetch, Subagent, SessionInfo, plus Skill when skills are discovered), no MCP, no memory, no scheduler and no web search. Every option is listed in [Options](options.md).
+`harness.NewAgent(opts ...AgentOption)` never fails: a provider is resolved per session, not per agent. With no options you get the built-in tools (Bash, Read, Write, Edit, Fetch, Subagent, SessionInfo, plus Skill when a [resource loader](options.md#resource-loaders) finds skills), no MCP, no memory, no scheduler, no web search, and no discovery of `AGENTS.md`, `SYSTEM.md` or skills. Every option is listed in [Options](options.md).
 
 The same agent can also be built from the struct with `agent.New(agent.AgentOptions{...})`.
 
