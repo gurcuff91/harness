@@ -33,8 +33,10 @@ func TestWireEventOneCasePerEventType(t *testing.T) {
 		EventCompactEnd:           {Event{Summary: "s"}, "compact_end", []string{"summary"}},
 		EventStop:                 {Event{}, "stop", nil},
 		EventRetry:                {Event{Attempt: 1, MaxAttempts: 3, Message: "m"}, "retry", []string{"attempt", "max", "error"}},
+		EventSubagentStart:        {Event{Subagent: "scorpion-hero"}, "subagent_start", []string{"name"}},
+		EventSubagentStop:         {Event{Subagent: "scorpion-hero", SubagentResult: SubagentOK}, "subagent_stop", []string{"name", "result"}},
 	}
-	for et := EventTurnStart; et <= EventRetry; et++ {
+	for et := EventTurnStart; et <= EventSubagentStop; et++ {
 		tc, ok := cases[et]
 		if !ok {
 			t.Fatalf("event type %d has no case: add it here and to rpc's event table", et)
@@ -78,5 +80,19 @@ func TestWireEventDetails(t *testing.T) {
 	}
 	if _, ok := WireEvent(Event{Type: EventType(9999)}); ok {
 		t.Error("unknown type must not be exposed")
+	}
+}
+
+// The sub-agent events carry the name, and the stop carries how it ended.
+func TestSubagentEventsOnTheWire(t *testing.T) {
+	start, _ := WireEvent(Event{Type: EventSubagentStart, Subagent: "kano-storm"})
+	if start["name"] != "kano-storm" {
+		t.Errorf("start = %v", start)
+	}
+	for _, res := range []string{SubagentOK, SubagentError, SubagentCancelled} {
+		stop, _ := WireEvent(Event{Type: EventSubagentStop, Subagent: "kano-storm", SubagentResult: res})
+		if stop["name"] != "kano-storm" || stop["result"] != res {
+			t.Errorf("stop(%s) = %v", res, stop)
+		}
 	}
 }

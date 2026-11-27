@@ -67,6 +67,10 @@ func WireEvent(e Event) (map[string]any, bool) {
 		payload = promptEcho("follow_up_start", e)
 	case EventTurnEnd:
 		payload = map[string]any{"type": "turn_end"}
+	case EventSubagentStart:
+		payload = map[string]any{"type": "subagent_start", "name": e.Subagent}
+	case EventSubagentStop:
+		payload = map[string]any{"type": "subagent_stop", "name": e.Subagent, "result": e.SubagentResult}
 	case EventRetry:
 		// A transient network failure (dead/stalled connection, 502/503/504)
 		// is being retried on a new connection — non-fatal, for display.

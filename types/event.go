@@ -48,6 +48,17 @@ const (
 
 	// ── Resilience ─────────────────────────────────────────────────────────
 	EventRetry // a transient network failure is being retried (Attempt/MaxAttempts/Message)
+
+	// ── Sub-agents ─────────────────────────────────────────────────────────
+	EventSubagentStart // a sub-agent was launched by the Subagent tool (Subagent = its name)
+	EventSubagentStop  // a sub-agent ended (Subagent = its name, SubagentResult = how); always emitted
+)
+
+// Sub-agent results (Event.SubagentResult of an EventSubagentStop).
+const (
+	SubagentOK        = "ok"        // it finished and its answer is delivered to the parent
+	SubagentError     = "error"     // it failed or ran out of iterations; the parent is told
+	SubagentCancelled = "cancelled" // its parent session closed under it; nothing is delivered
 )
 
 // TokenUsage carries token counts and derived metrics for an EventTokens event.
@@ -102,8 +113,13 @@ type Event struct {
 	Output        string         // generic output (tool results, turn text)
 	Message       string         // error messages (EventError)
 	Details       map[string]any // structured error details, if any (EventError)
-	Summary       string         // compaction summary (EventCompactEnd)
-	Origin        string         // prompt source for EventReceivedPrompt/EventFollowUpStart ("user", "slack:C1", "colleague:x", …)
+	// Subagent is the generated name of the sub-agent an EventSubagentStart/Stop
+	// is about ("scorpion-hero"); SubagentResult is how it ended (SubagentOK,
+	// SubagentError or SubagentCancelled) and is set on the Stop only.
+	Subagent       string
+	SubagentResult string
+	Summary        string // compaction summary (EventCompactEnd)
+	Origin         string // prompt source for EventReceivedPrompt/EventFollowUpStart ("user", "slack:C1", "colleague:x", …)
 	// MessageIndex is the absolute index of the user message a
 	// EventReceivedPrompt/EventFollowUpStart echoes — already stored when the
 	// event fires, so clients can fetch it (or its images) immediately.

@@ -104,8 +104,8 @@ func TestEveryWireEventIsDocumented(t *testing.T) {
 		docs[d.Type] = d
 	}
 	seen := map[string]bool{}
-	for et := types.EventTurnStart; et <= types.EventRetry; et++ {
-		e := types.Event{Type: et, Output: "o", Details: map[string]any{"a": 1}, Images: []types.ImageRef{{}}}
+	for et := types.EventTurnStart; et <= types.EventSubagentStop; et++ {
+		e := types.Event{Type: et, Output: "o", Details: map[string]any{"a": 1}, Images: []types.ImageRef{{}}, Subagent: "scorpion-hero", SubagentResult: types.SubagentOK}
 		p, ok := types.WireEvent(e)
 		if !ok {
 			continue
