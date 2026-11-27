@@ -24,7 +24,6 @@ A sub-agent's answer used to come back as a tool result (data); since 0.135.0 it
 
 ### Fixed / notes
 - **`harness rpc`: closing a session delivers the `subagent_stop` of every cancelled sub-agent** (the session is now closed before its event watcher, so the client's list does not keep ghosts). Found with a real client against the binary.
-- **Safety note:** a sub-agent's answer used to come back as a tool result (data); it now arrives as a prompt, the slot a person's message occupies, so text the sub-agent read in a file or a page could be addressed to the parent. This section is a prompt-level layer, not a security boundary, and it was not shown to help: 90 of 90 injection attempts (an order in a file the sub-agent reads; the same orders injected straight into the reply) were refused on claude-haiku-4-5 and claude-sonnet-5-5 with the section, with the sentence in the tool description, and with neither, while the same order sent as the person's own prompt was obeyed. Weaker models were not measured.
 
 ## [0.134.0] - 2026-11-27
 
