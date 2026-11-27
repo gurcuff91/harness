@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.138.2] - 2026-11-27
+
+### Changed
+- A colleague's QUESTION is shown as one line too, `⇌ colleague:raiden-god ask (3 lines)`, like its reply (0.138.1). The full text stays in the log, `session/messages`, exports and the model's context. **Behavior change:** what another agent asks of your session is no longer readable in the TUI or `/resume`, only in the log.
+
 ## [0.138.1] - 2026-11-27
 
 ### Changed

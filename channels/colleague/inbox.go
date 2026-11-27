@@ -86,9 +86,10 @@ func (in *inbox) handle(conn net.Conn) {
 		return
 	case kindAsk:
 		text = wrap(m.From, false, m.Text)
+		display = messageDisplay(m.From, "ask", m.Text)
 	case kindReply:
 		text = wrap(m.From, true, m.Text)
-		display = replyDisplay(m.From, m.Text)
+		display = messageDisplay(m.From, "reply", m.Text)
 	default:
 		respond(conn, fmt.Errorf("unknown message kind %q", m.Kind))
 		return
@@ -241,10 +242,10 @@ func (in *inbox) close() {
 	<-in.done
 }
 
-// replyDisplay is the one line a screen shows for a colleague's reply,
-// `colleague:<from> reply (N lines)`: the full text stays in the log and goes to
-// the model (same rule as a sub-agent's reply). An ask is shown in full.
-func replyDisplay(from, text string) string {
+// messageDisplay is the one line a screen shows for a colleague's message,
+// `colleague:<from> ask|reply (N lines)`: the full text stays in the log and goes
+// to the model (same rule as a sub-agent's reply).
+func messageDisplay(from, kind, text string) string {
 	body := strings.TrimSpace(text)
 	n := 0
 	if body != "" {
@@ -254,5 +255,5 @@ func replyDisplay(from, text string) string {
 	if n == 1 {
 		lines = "1 line"
 	}
-	return fmt.Sprintf("%s:%s reply (%s)", Type, from, lines)
+	return fmt.Sprintf("%s:%s %s (%s)", Type, from, kind, lines)
 }

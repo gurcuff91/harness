@@ -179,7 +179,7 @@ func TestTwoColleaguesTalk(t *testing.T) {
 	})
 	// raiden got the question from scorpion, with scorpion as origin
 	rp := rl.prompts()
-	if len(rp) != 1 || rp[0].Origin != "colleague:"+sID || !strings.Contains(rp[0].Output, "what is your module path?") {
+	if len(rp) != 1 || rp[0].Origin != "colleague:"+sID || rp[0].Output != "colleague:"+sID+" ask (1 line)" || !strings.Contains(storedReplyText(raiden, rp[0].Origin), "what is your module path?") {
 		t.Fatalf("raiden's prompts = %+v", rp)
 	}
 	// the reply carries raiden's final answer
