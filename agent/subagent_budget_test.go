@@ -118,8 +118,8 @@ func TestSubagentMaxIterationsOverrideReachesEphemeralSubAgent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(out, "launched") {
-				t.Fatalf("the Subagent tool did not return at once with a launch note: %q", out)
+			if !strings.Contains(out, "Sub-agent ") || !strings.Contains(out, "is working on it") {
+				t.Fatalf("the Subagent tool did not return at once with its name and that it is working: %q", out)
 			}
 			var reply string
 			select {

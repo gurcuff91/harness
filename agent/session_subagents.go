@@ -144,21 +144,11 @@ func (s *Session) runSubagent(ctx context.Context, cancel context.CancelFunc, na
 	if requestedMaxIterations > 0 {
 		maxIter = requestedMaxIterations
 	}
-	parentA := s.agent
-	// An ephemeral sub-agent inheriting the parent's settings. It reuses the
-	// parent's MCP tools WITHOUT spawning MCP processes, cannot launch further
-	// sub-agents, and only READS memory (see subagentDisallowedTools).
-	subAgent := New(AgentOptions{
-		ThinkingLevel:   parentA.thinkingLevel,
-		SystemPrompt:    subagentSystemPrompt,
-		MaxIterations:   maxIter,
-		MaxTokens:       parentA.maxTokens,
-		Store:           store.NewInMemoryStore(),
-		ResourceLoader:  parentA.resourceLoader, // stateless: shared, never copied
-		DisallowedTools: subagentDisallowedTools(readonly),
-		Tools:           parentA.MCPTools(),
-		sharedMemory:    parentA.memStore, // not closed by the sub-agent
-	})
+	subAgent, newErr := s.agent.newSubagent(subagentSystemPrompt, maxIter, readonly)
+	if newErr != nil {
+		err = fmt.Errorf("sub-agent: %w", newErr)
+		return
+	}
 	sub, err = subAgent.NewSession(s.cwd, model)
 	if err != nil {
 		err = fmt.Errorf("sub-agent: %w", err)
@@ -269,4 +259,35 @@ func (s *Session) shutdownSubagents() {
 	case <-waited:
 	case <-time.After(subagentShutdownWait):
 	}
+}
+
+// newSubagent builds the ephemeral agent a sub-agent runs in, from its parent
+// (a). The rule is that a sub-agent NEVER has a tool its parent does not: the
+// owner limits an agent with DisallowedTools and by not enabling WebSearch, and
+// a model must not be able to step over that by launching a sub-agent. So it
+// INHERITS the parent's tool configuration and only ADDS restrictions:
+//
+//   - DisallowedTools is the UNION of the parent's and the sub-agent's own
+//     (subagentDisallowedTools: no Subagent — no recursion —, no memory writes,
+//     no schedule management, and no Write/Edit when readonly);
+//   - WebSearch is on exactly when the parent's is, so a sub-agent can research
+//     (the main use of a background sub-agent) but not when its parent cannot.
+//
+// It reuses the parent's MCP tools WITHOUT spawning MCP processes, shares the
+// parent's memory (read-only: the memory writes are disallowed) and its stateless
+// resource loader. systemPrompt and maxIterations are the caller's.
+func (a *Agent) newSubagent(systemPrompt string, maxIterations int, readonly bool) (*Agent, error) {
+	denied := append(append([]string(nil), a.disallowedTools...), subagentDisallowedTools(readonly)...)
+	return New(AgentOptions{
+		ThinkingLevel:   a.thinkingLevel,
+		SystemPrompt:    systemPrompt,
+		MaxIterations:   maxIterations,
+		MaxTokens:       a.maxTokens,
+		Store:           store.NewInMemoryStore(),
+		ResourceLoader:  a.resourceLoader, // stateless: shared, never copied
+		DisallowedTools: denied,
+		EnableWebSearch: a.opts.EnableWebSearch,
+		Tools:           a.MCPTools(),
+		sharedMemory:    a.memStore, // not closed by the sub-agent
+	}), nil
 }

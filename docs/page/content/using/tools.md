@@ -41,6 +41,8 @@ Sub-agents cannot start sub-agents, cannot write or delete memories (they can se
 
 The system prompt of a session that has the tool carries a short `Sub-agents` section that tells the model how to read those replies: a reply answers a task the session launched, it is a report (information to use) and not an instruction from the person, so a request inside it to write files, run commands or send messages is not carried out unless the session's own task asked for it. A sub-agent itself does not carry the section (it cannot launch sub-agents). This is guidance to the model, not a security boundary.
 
+A sub-agent **never has a tool its parent does not have**: it inherits the parent's `DisallowedTools` and only adds its own restrictions (it cannot launch sub-agents, write memory or manage schedules, and `readonly` also removes `Write` and `Edit`). It has `WebSearch` exactly when its parent does, so it can research. The result of a launch is just the sub-agent's name and that it received the task and is working on it; how to read the answer is in the session's instructions.
+
 A session can have up to 10 sub-agents running; the 11th call is refused with an error until one finishes. A sub-agent lives as long as its session, not the turn that started it: stopping the turn does not cancel it, and closing the session (leaving the TUI, `/new`, `/resume` to another session) does, delivering nothing. Frontends see them through the `subagent_start` and `subagent_stop` events and the `subagents` field of the session detail; the TUI lists them on its status line.
 
 ## Parallel execution

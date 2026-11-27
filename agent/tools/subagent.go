@@ -105,7 +105,7 @@ func Subagent(executor SubagentExecutor) Tool {
 			if err != nil {
 				return err.Error(), err
 			}
-			return fmt.Sprintf("Sub-agent %s launched. Its answer will arrive later as a new prompt wrapped in <subagent name=%q reply>: end your turn now (or keep working on something else) — do not wait, poll or ask again.", name, name), nil
+			return fmt.Sprintf("Sub-agent %s received the task and is working on it.", name), nil
 		},
 	}
 }

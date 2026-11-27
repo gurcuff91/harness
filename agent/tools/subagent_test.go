@@ -28,7 +28,7 @@ func TestSubagentMissingPromptErrors(t *testing.T) {
 	}
 }
 
-func TestSubagentReturnsAtOnceWithNameAndInstruction(t *testing.T) {
+func TestSubagentReturnsAtOnceWithTheNameAndThatItIsWorking(t *testing.T) {
 	var gotPrompt string
 	out, err := callSubagent(t, func(ctx context.Context, prompt string, maxIterations int, readonly bool) (string, error) {
 		gotPrompt = prompt
@@ -40,9 +40,16 @@ func TestSubagentReturnsAtOnceWithNameAndInstruction(t *testing.T) {
 	if gotPrompt != "look around" {
 		t.Errorf("prompt = %q", gotPrompt)
 	}
-	for _, want := range []string{"scorpion-hero", `<subagent name="scorpion-hero" reply>`, "end your turn", "do not wait, poll or ask again"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("result %q lacks %q", out, want)
+	// What the model does not already know: WHICH sub-agent, and that it has the task.
+	if out != "Sub-agent scorpion-hero received the task and is working on it." {
+		t.Errorf("result = %q", out)
+	}
+	// How to read the reply and not to poll are said ONCE, in the system prompt's
+	// "Sub-agents" section and the tool description; repeating them here costs
+	// tokens on every launch (up to 10 per session).
+	for _, repeated := range []string{"<subagent", "wrapped in", "poll", "end your turn", "do not wait"} {
+		if strings.Contains(out, repeated) {
+			t.Errorf("the result repeats %q, which the system prompt already says: %q", repeated, out)
 		}
 	}
 }

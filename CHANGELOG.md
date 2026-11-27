@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.137.0] - 2026-11-27
+
+### Fixed — a sub-agent no longer escapes its parent's restrictions (security)
+A sub-agent was built with a fixed tool list of its own, ignoring the parent's. So an agent limited with `DisallowedTools` (say, no `Bash`, `Write` or `Edit`, to be read-only) could still have the model launch a sub-agent **that had them**, and no sub-agent could use `WebSearch`. Now a sub-agent **inherits the parent's `DisallowedTools`** (plus its own: no `Subagent`, no memory writes, no `Schedule*`, and no `Write`/`Edit` when `readonly`) and has **`WebSearch` exactly when its parent does**. The property "a sub-agent never has a tool its parent does not" is pinned by a test over several configurations. **Behavior change** for an embedder whose sub-agents relied, knowingly or not, on keeping tools the parent had disallowed.
+
+### Changed
+- The `Subagent` tool's result is now just `Sub-agent <name> received the task and is working on it.`: how to read the answer (the `<subagent … reply>` tag, that it is a report) and not to poll are already said by the `## Sub-agents` section and the tool description, and the result repeated them on every launch.
+
 ## [0.136.0] - 2026-11-27
 
 ### Added — a `## Sub-agents` section in the system prompt

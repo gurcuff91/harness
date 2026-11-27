@@ -113,7 +113,7 @@ A skill carries its `Content` with it: `Load` returns everything in one call, an
 
 - **Directives** (`AgentWithDirectives`) are plain text blocks, added to every session of the agent.
 - **Tools** (`AgentWithTools`, or `Agent.RegisterTool` before opening sessions) are added to every session. Re-registering a name replaces the earlier tool.
-- **DisallowedTools** is a blocklist by name. It removes built-ins (`Bash`, `Read`, `Write`, `Edit`, `Fetch`, `Skill`, `Subagent`, `SessionInfo`, the `Memo*` and `Schedule*` tools, `WebSearch`), custom tools and MCP tools (by their `mcp__server__tool` name). Constants for the built-in names are in `agent/tools` (`tools.ToolBash`, and so on).
+- **DisallowedTools** is a blocklist by name. It removes built-ins (`Bash`, `Read`, `Write`, `Edit`, `Fetch`, `Skill`, `Subagent`, `SessionInfo`, the `Memo*` and `Schedule*` tools, `WebSearch`), custom tools and MCP tools (by their `mcp__server__tool` name). Constants for the built-in names are in `agent/tools` (`tools.ToolBash`, and so on). A sub-agent the model launches inherits this list (plus its own restrictions) and has `WebSearch` only when the agent does, so a model cannot step over a restriction by delegating.
 
 > **Note** Restrictions are not stored per session, on purpose: a restriction that is not persisted would be lost when the scheduler or a colleague reopens the session. Put it on the agent, or use a profile for the sessions that need extra capabilities.
 
