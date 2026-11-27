@@ -1049,6 +1049,112 @@
       ],
       "type": "object"
     },
+    "MemoryDeleteResult": {
+      "properties": {
+        "deleted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "deleted"
+      ],
+      "type": "object"
+    },
+    "MemoryGetResult": {
+      "properties": {
+        "found": {
+          "type": "boolean"
+        },
+        "memory": {
+          "$ref": "#/$defs/Memory"
+        }
+      },
+      "required": [
+        "found",
+        "memory"
+      ],
+      "type": "object"
+    },
+    "MemoryKeyParams": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "global": {
+          "type": "boolean"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cwd",
+        "global",
+        "slug"
+      ],
+      "type": "object"
+    },
+    "MemorySearchParams": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "include_content": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "query": {
+          "type": "string"
+        },
+        "skip": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cwd",
+        "include_content",
+        "limit",
+        "query",
+        "skip"
+      ],
+      "type": "object"
+    },
+    "MemoryWriteParams": {
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "global": {
+          "type": "boolean"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content",
+        "cwd",
+        "global",
+        "slug"
+      ],
+      "type": "object"
+    },
+    "MemoryWriteResult": {
+      "properties": {
+        "created": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "created"
+      ],
+      "type": "object"
+    },
     "Message": {
       "properties": {
         "created_at": {
@@ -1378,6 +1484,26 @@
       ],
       "type": "object"
     },
+    "Resources": {
+      "properties": {
+        "agents_md": {
+          "type": "string"
+        },
+        "skills": {
+          "items": {
+            "$ref": "#/$defs/Skill"
+          },
+          "type": "array"
+        },
+        "system_md": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "skills"
+      ],
+      "type": "object"
+    },
     "ResourcesConfig": {
       "properties": {
         "kind": {
@@ -1386,6 +1512,17 @@
       },
       "required": [
         "kind"
+      ],
+      "type": "object"
+    },
+    "ResourcesLoadParams": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cwd"
       ],
       "type": "object"
     },
@@ -1971,6 +2108,28 @@
       "required": [
         "active_model",
         "thinking_level"
+      ],
+      "type": "object"
+    },
+    "Skill": {
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content",
+        "description",
+        "name"
       ],
       "type": "object"
     },
@@ -3659,6 +3818,56 @@
       },
       "result": {
         "$ref": "#/$defs/StoreSwapResult"
+      }
+    },
+    {
+      "method": "memory/write",
+      "doc": "Sent BY THE BINARY when config.memory has kind \"client\": upserts one memory by cwd + slug (global:true stores it under the \"<global>\" cwd). Answer created:true the first time, false on a rewrite.",
+      "params": {
+        "$ref": "#/$defs/MemoryWriteParams"
+      },
+      "result": {
+        "$ref": "#/$defs/MemoryWriteResult"
+      }
+    },
+    {
+      "method": "memory/get",
+      "doc": "Sent BY THE BINARY: reads one memory by cwd + slug (global:true = the \"<global>\" scope). Answer found:false when it does not exist.",
+      "params": {
+        "$ref": "#/$defs/MemoryKeyParams"
+      },
+      "result": {
+        "$ref": "#/$defs/MemoryGetResult"
+      }
+    },
+    {
+      "method": "memory/search",
+      "doc": "Sent BY THE BINARY: lists (empty query: most recently updated first) or full-text searches memories, paginated. cwd \"\" = all projects, \"<global>\" = only global ones, else that project's plus the global ones. limit <= 0 means 10, skip < 0 means 0; include_content:false omits content; total counts every match.",
+      "params": {
+        "$ref": "#/$defs/MemorySearchParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SearchResult"
+      }
+    },
+    {
+      "method": "memory/delete",
+      "doc": "Sent BY THE BINARY: removes one memory by cwd + slug (global:true = the \"<global>\" scope). Answer deleted:true only when one existed.",
+      "params": {
+        "$ref": "#/$defs/MemoryKeyParams"
+      },
+      "result": {
+        "$ref": "#/$defs/MemoryDeleteResult"
+      }
+    },
+    {
+      "method": "resources/load",
+      "doc": "Sent BY THE BINARY when config.resources has kind \"client\": the context of a session's cwd (SYSTEM.md, AGENTS.md and every skill with its content). location is optional for a skill.",
+      "params": {
+        "$ref": "#/$defs/ResourcesLoadParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Resources"
       }
     }
   ],

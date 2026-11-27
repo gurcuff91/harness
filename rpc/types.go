@@ -46,7 +46,8 @@ type KindConfig struct {
 
 // ResourcesConfig turns on discovery of the project's context. Omit it and
 // NOTHING is read from a session's directory (the default of agent.New too);
-// "file" makes each session read its cwd's AGENTS.md, SYSTEM.md and skills.
+// "file" makes each session read its cwd's AGENTS.md, SYSTEM.md and skills;
+// "client" has the client serve them (resources/load). Neither takes a path.
 type ResourcesConfig struct {
 	Kind string `json:"kind"`
 }
@@ -73,7 +74,8 @@ type Config struct {
 	// ~/.harness/agent/sessions) or "ephemeral" (in memory).
 	Store *KindConfig `json:"store,omitempty"`
 	// Memory: kind "sqlite" (path = database file, default
-	// ~/.harness/agent/memory.db). Omitted = no memory.
+	// ~/.harness/agent/memory.db) or "client" (the client serves memory/*
+	// requests; no path). Omitted = no memory.
 	Memory *KindConfig `json:"memory,omitempty"`
 	// Settings: kind "file" (default; path = settings file, omitted = the
 	// process's ~/.harness/settings.json), "ephemeral" (in memory) or "client"
@@ -83,7 +85,8 @@ type Config struct {
 	// ~/.harness/credentials.json, 0600).
 	Credentials *KindConfig `json:"credentials,omitempty"`
 	// Resources: omit it and nothing is discovered (agent.New's default); kind
-	// "file" makes each session read its cwd's AGENTS.md, SYSTEM.md and skills.
+	// "file" makes each session read its cwd's AGENTS.md, SYSTEM.md and skills,
+	// "client" asks the client for them (resources/load).
 	Resources *ResourcesConfig `json:"resources,omitempty"`
 }
 

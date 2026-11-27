@@ -43,12 +43,12 @@ Everything the binary writes to stdout is a protocol message. Diagnostics go to 
 | `enable_scheduler`, `enable_web_search`, `terminal` | As the Go options. |
 | `channels` | Input channels to register, by name: `slack`, `telegram`, `colleagues`. |
 | `store` | Where sessions live: `{"kind":"file","path":"…"}` (default, `~/.harness/agent/sessions`) or `{"kind":"ephemeral"}` (in memory, never on disk). |
-| `memory` | `{"kind":"sqlite","path":"…"}`. **Default: no memory**, so it is on only if you ask; omit the field to leave it off. |
+| `memory` | `{"kind":"sqlite","path":"…"}` or `{"kind":"client"}` ([served by the client](#memory-and-resources-served-by-the-client); no `path`). **Default: no memory**, so it is on only if you ask; omit the field to leave it off. |
 | `settings` | Where the settings live: `{"kind":"file"}` (default, `~/.harness/settings.json`; a `path` picks another file), `{"kind":"ephemeral"}` or `{"kind":"client"}` ([served by the client](#stores-served-by-the-client)). |
 | `credentials` | The same kinds for the secrets (default `~/.harness/credentials.json`, mode 0600). Chosen separately from `settings`: secrets can live in a secret manager and settings in files. |
-| `resources` | `{"kind":"file"}` makes each session read its directory's `SYSTEM.md`, `AGENTS.md` and skills. **Default: nothing is read**, so a directory chosen by an end user cannot influence the agent unless you ask. |
+| `resources` | `{"kind":"file"}` makes each session read its directory's `SYSTEM.md`, `AGENTS.md` and skills; `{"kind":"client"}` has [the client serve them](#memory-and-resources-served-by-the-client). Neither takes a `path`. **Default: nothing is read**, so a directory chosen by an end user cannot influence the agent unless you ask. |
 
-A `kind` a field does not accept is an error naming the field and the kinds it accepts; `path` is only accepted by `file` (and `sqlite` for `memory`). The `store` kind `memory` was renamed `ephemeral`, and `memory: {"kind":"none"}` no longer exists: omit the field. Providing your own session store, memory or resource loader from the client is not supported yet.
+A `kind` a field does not accept is an error naming the field and the kinds it accepts; `path` is only accepted by `file` (and `sqlite` for `memory`). The `store` kind `memory` was renamed `ephemeral`, and `memory: {"kind":"none"}` no longer exists: omit the field. Providing your own session store from the client is not supported yet.
 
 ## Stores served by the client
 
@@ -94,6 +94,64 @@ An exchange, with the binary's requests first:
 {"jsonrpc":"2.0","id":"3","method":"credentials/get","params":{"namespace":"providers","key":"claude-oauth"}}
 {"jsonrpc":"2.0","id":"3","result":{"found":true,"value":{"type":"oauth"},"version":"v8"}}
 ```
+
+## Memory and resources served by the client
+
+With `"memory": {"kind":"client"}` the memories live in the client, and with `"resources": {"kind":"client"}` the client supplies each session's `SYSTEM.md`, `AGENTS.md` and skills. Unlike the settings and credentials stores these belong to one agent: there is no order to respect and no readiness check, and the client can start answering after `initialize`.
+
+Memory requests:
+
+| Method | Params | Result |
+|---|---|---|
+| `memory/write` | `cwd`, `slug`, `content`, `global` | `created` |
+| `memory/get` | `cwd`, `slug`, `global` | `found`, `memory` |
+| `memory/search` | `cwd`, `query`, `include_content`, `skip`, `limit` | `total`, `returned`, `skip`, `limit`, `results` |
+| `memory/delete` | `cwd`, `slug`, `global` | `deleted` |
+
+Resources request:
+
+| Method | Params | Result |
+|---|---|---|
+| `resources/load` | `cwd` | `system_md`, `agents_md`, `skills` |
+
+The rules the client must honor are the memory store's:
+
+- A memory is identified by `cwd` and `slug`. `memory/write` creates or replaces it and answers `created: true` only the first time.
+- With `global: true`, `write`, `get` and `delete` address the global scope instead of `cwd`. A global memory is visible from every project.
+- `memory/get` of a missing memory answers `found: false`, not an error. `memory/delete` answers `deleted: true` only if one existed.
+- `memory/search` takes `cwd` as a filter: `""` searches all projects, `"<global>"` only the global memories, and any other value that project's memories plus the global ones.
+- An empty `query` is list mode: the most recently updated first, with no `score`. A non-empty `query` is a search by whole words, case-insensitive, with `score` set.
+- `limit` of 0 or less means 10 and a negative `skip` means 0. `total` counts every match across pages, `returned` the ones in this page.
+- With `include_content: false` the `content` of each result is left out. Every result carries its `cwd`.
+- Results are ranked by the **order** of the list, never by the value of `score`: a memory that repeats the word comes before one that mentions it once, but the numbers themselves carry no meaning. `results` is an array, an empty one when nothing matches.
+
+```json
+{"jsonrpc":"2.0","id":"1","method":"memory/search","params":{"cwd":"/work/shop","query":"index","include_content":true,"skip":0,"limit":10}}
+{"jsonrpc":"2.0","id":"1","result":{"total":1,"returned":1,"skip":0,"limit":10,"results":[{"slug":"db-schema","cwd":"/work/shop","content":"orders has a unique index","score":1.2,"created_at":1764200000000,"updated_at":1764200000000}]}}
+{"jsonrpc":"2.0","id":"2","method":"memory/get","params":{"cwd":"/work/shop","slug":"nope","global":false}}
+{"jsonrpc":"2.0","id":"2","result":{"found":false}}
+{"jsonrpc":"2.0","id":"3","method":"memory/write","params":{"cwd":"/work/shop","slug":"style","content":"use tabs","global":true}}
+{"jsonrpc":"2.0","id":"3","result":{"created":true}}
+```
+
+`resources/load` is sent each time a session is opened, resumed, forked or reconfigured. Every skill travels with its `content`, so one reply carries everything:
+
+```json
+{"jsonrpc":"2.0","id":"4","method":"resources/load","params":{"cwd":"/work/shop"}}
+{"jsonrpc":"2.0","id":"4","result":{"system_md":"","agents_md":"Project rules…","skills":[{"name":"deploy","description":"Ship a release","location":"/work/shop/.agents/skills/deploy/SKILL.md","content":"Run the deploy script…"},{"name":"from-db","description":"Kept in a database","content":"…"}]}}
+```
+
+`location` is optional for a skill: a client that keeps skills in a database has no path, and the Skill tool then reports no directory.
+
+**Serve these requests concurrently.** Sessions can open at the same time, the model runs several tool calls in parallel, and sub-agents search the same memory and use the same resources. A client that answers one request at a time works, but slowly.
+
+Every request has a 30 second deadline: if the client does not answer, the call fails with `the client did not answer memory/search within 30s` (`resources/load` likewise). An error the client returns is passed on as `memory/search: client error <code>: <message>`, and both are logged on stderr. What a failure does:
+
+- **Memory read while a session prompt is built** (the list of memory names): the failure is tolerated. The list is left out of the prompt and the session opens. The `MemoSearch` and `MemoWrite` tools return the error to the model.
+- **`resources/load` on `session/new`**: the request fails with the message, because someone creating a session expects to see the problem.
+- **`resources/load` on `session/resume`, `session/fork` or a reconfiguration**: the session opens without that context.
+
+In Go, `memory/storetest.RunContract` is the bar: it runs the whole contract above against any `memory.Store`, and the adapter of this binary passes it with a correct client behind it.
 
 ## Custom tools
 

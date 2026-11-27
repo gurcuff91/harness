@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.134.0] - 2026-11-27
+
+### Added — memory and resources served by the RPC client
+`harness rpc`'s `initialize` takes **`memory: {"kind":"client"}`** and **`resources: {"kind":"client"}`** (besides `sqlite` and `file`). With `client` the agent's memory and the context of each session (`SYSTEM.md`, `AGENTS.md`, skills) live in the client: the binary calls `memory/write`, `memory/get`, `memory/search`, `memory/delete` and `resources/load {cwd}`. Sub-agents call the client too, so it must serve these requests concurrently. See [RPC](https://gurcuff91.github.io/harness/frontends/rpc.html#memory-and-resources-served-by-the-client).
+- **`agent/memory/storetest.RunContract`** is the contract any `memory.Store` must pass (scoping, list order, whole-word search, pagination, `include_content`, concurrent writes; relevance by *order*, never by `score` value, and no prefix matching), with a small correct in-memory `Reference`. `SQLiteStore`, the reference and the RPC adapter all pass it, and deliberately broken stores prove it detects each defect.
+- `resources.Resources` and `resources.Skill` have JSON tags (`system_md`, `agents_md`, `skills[{name, description, location, content}]`; `location` is optional and `skills` is `[]` when empty).
+
+### Fixed
+- A failure of something the RPC client serves (a timeout, an error answered by the client, a disconnect) is reported as `upstream` instead of `internal`, so an SDK can tell it from a fault of the binary. This includes the settings and credentials stores of 0.133.0.
+
 ## [0.133.0] - 2026-11-26
 
 ### Added — settings and credentials stores served by the RPC client

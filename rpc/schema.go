@@ -7,6 +7,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/gurcuff91/harness/agent/memory"
+	"github.com/gurcuff91/harness/agent/resources"
 )
 
 // Schema returns the JSON document describing the protocol: every method with
@@ -314,6 +317,16 @@ func init() {
 			clientCall{domain + "/swap", "Sent BY THE BINARY: a conditional write. Write value (null deletes) only if the entry's version equals expected_version (null: the entry must not exist), atomically; otherwise answer swapped:false and change nothing.", reflect.TypeFor[StoreSwapParams](), reflect.TypeFor[StoreSwapResult]()},
 		)
 	}
+}
+
+func init() {
+	clientCalls = append(clientCalls,
+		clientCall{"memory/write", "Sent BY THE BINARY when config.memory has kind \"client\": upserts one memory by cwd + slug (global:true stores it under the \"<global>\" cwd). Answer created:true the first time, false on a rewrite.", reflect.TypeFor[MemoryWriteParams](), reflect.TypeFor[MemoryWriteResult]()},
+		clientCall{"memory/get", "Sent BY THE BINARY: reads one memory by cwd + slug (global:true = the \"<global>\" scope). Answer found:false when it does not exist.", reflect.TypeFor[MemoryKeyParams](), reflect.TypeFor[MemoryGetResult]()},
+		clientCall{"memory/search", "Sent BY THE BINARY: lists (empty query: most recently updated first) or full-text searches memories, paginated. cwd \"\" = all projects, \"<global>\" = only global ones, else that project's plus the global ones. limit <= 0 means 10, skip < 0 means 0; include_content:false omits content; total counts every match.", reflect.TypeFor[MemorySearchParams](), reflect.TypeFor[memory.SearchResult]()},
+		clientCall{"memory/delete", "Sent BY THE BINARY: removes one memory by cwd + slug (global:true = the \"<global>\" scope). Answer deleted:true only when one existed.", reflect.TypeFor[MemoryKeyParams](), reflect.TypeFor[MemoryDeleteResult]()},
+		clientCall{"resources/load", "Sent BY THE BINARY when config.resources has kind \"client\": the context of a session's cwd (SYSTEM.md, AGENTS.md and every skill with its content). location is optional for a skill.", reflect.TypeFor[ResourcesLoadParams](), reflect.TypeFor[resources.Resources]()},
+	)
 }
 
 func notificationDocs(g *schemaGen) []map[string]any {

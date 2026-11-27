@@ -263,7 +263,8 @@ func TestClientStoreTimeoutFailsInitializeAndEndsProcess(t *testing.T) {
 	c.serveStores(ss, nil)
 	cfg := memStoreConfig()
 	cfg.Settings = &KindConfig{Kind: "client"}
-	je := c.fail("initialize", InitializeParams{ProtocolVersion: ProtocolVersion, Config: cfg}, jsonrpc.CodeInternalError, "")
+	// The store the CLIENT serves not answering is an upstream failure, not an internal fault.
+	je := c.fail("initialize", InitializeParams{ProtocolVersion: ProtocolVersion, Config: cfg}, CodeUpstream, "upstream")
 	for _, w := range []string{"the client did not answer settings/", "within 150ms", `a "client" store must be served from the first message`} {
 		if !strings.Contains(je.Message, w) {
 			t.Fatalf("message %q lacks %q", je.Message, w)

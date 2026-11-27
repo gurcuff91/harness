@@ -858,6 +858,108 @@ Starts the connection: checks the protocol version and builds the agent from the
 | `harness_version` | string |  |
 | `protocol_version` | integer |  |
 
+### memory
+
+#### `memory/write`
+
+Sent BY THE BINARY when config.memory has kind "client": upserts one memory by cwd + slug (global:true stores it under the "<global>" cwd). Answer created:true the first time, false on a rewrite.
+
+**Params (`MemoryWriteParams`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `content` | string |  |
+| `cwd` | string |  |
+| `global` | boolean |  |
+| `slug` | string |  |
+
+**Result (`MemoryWriteResult`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `created` | boolean |  |
+
+#### `memory/get`
+
+Sent BY THE BINARY: reads one memory by cwd + slug (global:true = the "<global>" scope). Answer found:false when it does not exist.
+
+**Params (`MemoryKeyParams`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `cwd` | string |  |
+| `global` | boolean |  |
+| `slug` | string |  |
+
+**Result (`MemoryGetResult`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `found` | boolean |  |
+| `memory` | `Memory` |  |
+
+#### `memory/search`
+
+Sent BY THE BINARY: lists (empty query: most recently updated first) or full-text searches memories, paginated. cwd "" = all projects, "<global>" = only global ones, else that project's plus the global ones. limit <= 0 means 10, skip < 0 means 0; include_content:false omits content; total counts every match.
+
+**Params (`MemorySearchParams`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `cwd` | string |  |
+| `include_content` | boolean |  |
+| `limit` | integer |  |
+| `query` | string |  |
+| `skip` | integer |  |
+
+**Result (`SearchResult`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `limit` | integer |  |
+| `results` | array of `Memory` |  |
+| `returned` | integer |  |
+| `skip` | integer |  |
+| `total` | integer |  |
+
+#### `memory/delete`
+
+Sent BY THE BINARY: removes one memory by cwd + slug (global:true = the "<global>" scope). Answer deleted:true only when one existed.
+
+**Params (`MemoryKeyParams`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `cwd` | string |  |
+| `global` | boolean |  |
+| `slug` | string |  |
+
+**Result (`MemoryDeleteResult`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `deleted` | boolean |  |
+
+### resources
+
+#### `resources/load`
+
+Sent BY THE BINARY when config.resources has kind "client": the context of a session's cwd (SYSTEM.md, AGENTS.md and every skill with its content). location is optional for a skill.
+
+**Params (`ResourcesLoadParams`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `cwd` | string |  |
+
+**Result (`Resources`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `agents_md` | string (optional) |  |
+| `skills` | array of `Skill` |  |
+| `system_md` | string (optional) |  |
+
 ### Session
 
 #### `session/ask`

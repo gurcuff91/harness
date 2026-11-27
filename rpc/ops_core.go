@@ -113,7 +113,7 @@ func (s *Server) buildAgent(cfg Config) (*agent.Agent, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	memKind, memPath, err := kindOf("memory", cfg.Memory, "", []string{"sqlite"}, []string{"sqlite"})
+	memKind, memPath, err := kindOf("memory", cfg.Memory, "", []string{"sqlite", "client"}, []string{"sqlite"})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -128,8 +128,8 @@ func (s *Server) buildAgent(cfg Config) (*agent.Agent, []string, error) {
 	resKind := "" // omitted: nothing is discovered
 	if cfg.Resources != nil && cfg.Resources.Kind != "" {
 		resKind = cfg.Resources.Kind
-		if resKind != "file" {
-			return nil, nil, invalidParams("config.resources.kind %q is not one of: file", cfg.Resources.Kind)
+		if resKind != "file" && resKind != "client" {
+			return nil, nil, invalidParams("config.resources.kind %q is not one of: file, client", cfg.Resources.Kind)
 		}
 	}
 	if cfg.ThinkingLevel != "" && !validThinking(cfg.ThinkingLevel) {
@@ -197,7 +197,11 @@ func (s *Server) buildAgent(cfg Config) (*agent.Agent, []string, error) {
 		opts.Store = fs
 		closers = append(closers, func() { fs.Close() })
 	}
-	if memKind == "sqlite" {
+	switch memKind {
+	case "client":
+		// Per agent, nothing global: the agent owns it and its Close is a no-op.
+		opts.Memory = clientMemory{conn: s.conn, timeout: clientStoreTimeout, logger: s.logger}
+	case "sqlite":
 		m, err := memory.OpenSQLite(memPath)
 		if err != nil {
 			return fail(errInvalid("config.memory: %v", err))
@@ -205,10 +209,14 @@ func (s *Server) buildAgent(cfg Config) (*agent.Agent, []string, error) {
 		opts.Memory = m
 		closers = append(closers, func() { m.Close() })
 	}
-	// Omitted = discover nothing, exactly as agent.New does; only "file" reads the
-	// project's AGENTS.md, SYSTEM.md and skills from each session's cwd.
-	if resKind == "file" {
+	// Omitted = discover nothing, exactly as agent.New does; "file" reads the
+	// project's AGENTS.md, SYSTEM.md and skills from each session's cwd, "client"
+	// asks the client (resources/load).
+	switch resKind {
+	case "file":
 		opts.ResourceLoader = resources.File()
+	case "client":
+		opts.ResourceLoader = clientResources{conn: s.conn, timeout: clientStoreTimeout, logger: s.logger}
 	}
 	return agent.New(opts), names, nil
 }

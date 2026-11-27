@@ -82,7 +82,7 @@ func (c *clientStore) call(method string, params, out any) error {
 		err = fmt.Errorf("%s: the client disconnected", full)
 	}
 	c.logger.Warn(component, full+" failed", "error", err.Error())
-	return err
+	return fmt.Errorf("%w: %w", ErrClientBackend, err)
 }
 
 func (c *clientStore) Get(namespace, key string) ([]byte, bool, error) {

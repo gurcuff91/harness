@@ -89,6 +89,9 @@ func rpcError(err error) *jsonrpc.Error {
 		return rpcErr("conflict", "%s", err.Error())
 	case errors.Is(err, agent.ErrNoModelAvailable):
 		return rpcErr("not_connected", "%s", err.Error())
+	case errors.Is(err, ErrClientBackend):
+		// A memory or resource loader the client serves failed: not the binary's fault.
+		return rpcErr("upstream", "%s", err.Error())
 	case errors.Is(err, os.ErrNotExist), containsNotFound(err):
 		return rpcErr("not_found", "%s", err.Error())
 	}
