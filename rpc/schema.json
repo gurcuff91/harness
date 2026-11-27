@@ -680,6 +680,9 @@
           },
           "type": "array"
         },
+        "credentials": {
+          "$ref": "#/$defs/KindConfig"
+        },
         "directives": {
           "items": {
             "type": "string"
@@ -721,6 +724,9 @@
         },
         "resources": {
           "$ref": "#/$defs/ResourcesConfig"
+        },
+        "settings": {
+          "$ref": "#/$defs/KindConfig"
         },
         "store": {
           "$ref": "#/$defs/KindConfig"
@@ -1987,6 +1993,123 @@
         "connected",
         "name",
         "tool_count"
+      ],
+      "type": "object"
+    },
+    "StoreEntry": {
+      "properties": {
+        "value": {},
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "version"
+      ],
+      "type": "object"
+    },
+    "StoreGetResult": {
+      "properties": {
+        "found": {
+          "type": "boolean"
+        },
+        "value": {},
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "found"
+      ],
+      "type": "object"
+    },
+    "StoreKeyParams": {
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "namespace"
+      ],
+      "type": "object"
+    },
+    "StoreListParams": {
+      "properties": {
+        "namespace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "namespace"
+      ],
+      "type": "object"
+    },
+    "StoreListResult": {
+      "properties": {
+        "entries": {
+          "additionalProperties": {
+            "$ref": "#/$defs/StoreEntry"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "type": "object"
+    },
+    "StoreSetParams": {
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "value": {}
+      },
+      "required": [
+        "key",
+        "namespace",
+        "value"
+      ],
+      "type": "object"
+    },
+    "StoreSwapParams": {
+      "properties": {
+        "expected_version": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "value": {}
+      },
+      "required": [
+        "expected_version",
+        "key",
+        "namespace",
+        "value"
+      ],
+      "type": "object"
+    },
+    "StoreSwapResult": {
+      "properties": {
+        "swapped": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "swapped"
       ],
       "type": "object"
     },
@@ -3436,6 +3559,106 @@
       },
       "result": {
         "$ref": "#/$defs/ToolCallResult"
+      }
+    },
+    {
+      "method": "settings/get",
+      "doc": "Sent BY THE BINARY when config.settings has kind \"client\": reads one entry of the settings (non-sensitive configuration). Answer found:false when it does not exist.",
+      "params": {
+        "$ref": "#/$defs/StoreKeyParams"
+      },
+      "result": {
+        "$ref": "#/$defs/StoreGetResult"
+      }
+    },
+    {
+      "method": "settings/set",
+      "doc": "Sent BY THE BINARY: upserts one entry of the settings (non-sensitive configuration).",
+      "params": {
+        "$ref": "#/$defs/StoreSetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "settings/delete",
+      "doc": "Sent BY THE BINARY: deletes one entry; a missing entry is not an error.",
+      "params": {
+        "$ref": "#/$defs/StoreKeyParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "settings/list",
+      "doc": "Sent BY THE BINARY: every entry of a namespace with its version (an empty object when none).",
+      "params": {
+        "$ref": "#/$defs/StoreListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/StoreListResult"
+      }
+    },
+    {
+      "method": "settings/swap",
+      "doc": "Sent BY THE BINARY: a conditional write. Write value (null deletes) only if the entry's version equals expected_version (null: the entry must not exist), atomically; otherwise answer swapped:false and change nothing.",
+      "params": {
+        "$ref": "#/$defs/StoreSwapParams"
+      },
+      "result": {
+        "$ref": "#/$defs/StoreSwapResult"
+      }
+    },
+    {
+      "method": "credentials/get",
+      "doc": "Sent BY THE BINARY when config.credentials has kind \"client\": reads one entry of the credentials (secrets: API keys, OAuth tokens). Answer found:false when it does not exist.",
+      "params": {
+        "$ref": "#/$defs/StoreKeyParams"
+      },
+      "result": {
+        "$ref": "#/$defs/StoreGetResult"
+      }
+    },
+    {
+      "method": "credentials/set",
+      "doc": "Sent BY THE BINARY: upserts one entry of the credentials (secrets: API keys, OAuth tokens).",
+      "params": {
+        "$ref": "#/$defs/StoreSetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "credentials/delete",
+      "doc": "Sent BY THE BINARY: deletes one entry; a missing entry is not an error.",
+      "params": {
+        "$ref": "#/$defs/StoreKeyParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    {
+      "method": "credentials/list",
+      "doc": "Sent BY THE BINARY: every entry of a namespace with its version (an empty object when none).",
+      "params": {
+        "$ref": "#/$defs/StoreListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/StoreListResult"
+      }
+    },
+    {
+      "method": "credentials/swap",
+      "doc": "Sent BY THE BINARY: a conditional write. Write value (null deletes) only if the entry's version equals expected_version (null: the entry must not exist), atomically; otherwise answer swapped:false and change nothing.",
+      "params": {
+        "$ref": "#/$defs/StoreSwapParams"
+      },
+      "result": {
+        "$ref": "#/$defs/StoreSwapResult"
       }
     }
   ],

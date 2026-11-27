@@ -120,7 +120,20 @@ func (c *CodexOAuth) loadCredentialsFromSources() error {
 	c.tokens.mu.Unlock()
 
 	if !validating {
-		if cred, ok := config.GetCredentialsManager().Credential("codex-oauth"); ok && cred.AccessToken != "" {
+		cred, ok, rerr := config.GetCredentialsManager().Credential("codex-oauth")
+		if rerr != nil {
+			// The store failed to answer: that is "could not read", never
+			// "not connected". The LAST KNOWN credentials (memory) stand; with
+			// none, report the read failure itself.
+			c.tokens.mu.Lock()
+			hasMem := c.tokens.creds != nil && c.tokens.creds.AccessToken != ""
+			c.tokens.mu.Unlock()
+			if hasMem {
+				return nil
+			}
+			return fmt.Errorf("codex-oauth: could not read credentials: %w", rerr)
+		}
+		if ok && cred.AccessToken != "" {
 			creds := codexCredFromDisk(cred)
 			c.tokens.mu.Lock()
 			c.tokens.creds = &creds
@@ -934,7 +947,10 @@ type codexTokenManager struct {
 
 func newCodexTokenManager() *codexTokenManager {
 	tm := &codexTokenManager{}
-	if cred, ok := config.GetCredentialsManager().Credential("codex-oauth"); ok && cred.AccessToken != "" {
+	// A failing store at construction leaves no credentials loaded; every
+	// ResolveCredentials re-reads (loadCredentialsFromSources) and reports the
+	// failure then, so nothing is lost for good.
+	if cred, ok, err := config.GetCredentialsManager().Credential("codex-oauth"); err == nil && ok && cred.AccessToken != "" {
 		creds := codexCredFromDisk(cred)
 		tm.creds = &creds
 	}
@@ -999,8 +1015,11 @@ func (tm *codexTokenManager) getValidToken() (string, error) {
 }
 
 func (tm *codexTokenManager) syncFromDisk() {
-	cred, ok := config.GetCredentialsManager().Credential("codex-oauth")
-	if !ok || cred.AccessToken == "" {
+	cred, ok, err := config.GetCredentialsManager().Credential("codex-oauth")
+	if err != nil || !ok || cred.AccessToken == "" {
+		// err: the store did not answer — keep the last known in-memory
+		// credentials (never treat it as disconnected); a refresh that then
+		// needs the store reports the failure through UpdateCredential.
 		return
 	}
 	synced := codexCredFromDisk(cred)

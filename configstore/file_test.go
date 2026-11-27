@@ -180,3 +180,17 @@ func itoa(i int) string {
 	}
 	return string(out)
 }
+
+// incr parses a small non-negative JSON integer and returns it plus one.
+func incr(b []byte) []byte {
+	n := 0
+	for _, c := range b {
+		n = n*10 + int(c-'0')
+	}
+	n++
+	var out []byte
+	for ; n > 0; n /= 10 {
+		out = append([]byte{byte('0' + n%10)}, out...)
+	}
+	return out
+}

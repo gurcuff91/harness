@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 )
 
 // reader is the read half shared by configstore.SettingsStore and
@@ -25,6 +26,23 @@ func getJSON(s reader, namespace, key string, out any) bool {
 		return false
 	}
 	return json.Unmarshal(raw, out) == nil
+}
+
+// getJSONErr is getJSON for readers that must not mistake a failing store for
+// an absent entry: not-found is (false, nil); a store failure or an
+// undecodable value is (false, err).
+func getJSONErr(s reader, namespace, key string, out any) (bool, error) {
+	raw, found, err := s.Get(namespace, key)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return false, fmt.Errorf("config: %s/%s is not decodable: %w", namespace, key, err)
+	}
+	return true, nil
 }
 
 // listJSON decodes every entry of namespace into a fresh map[string]T,

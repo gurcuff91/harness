@@ -70,11 +70,18 @@ type Config struct {
 	// "telegram", "colleagues". One whose credentials are missing is an error.
 	Channels []string `json:"channels,omitempty"`
 	// Store: kind "file" (path = base directory, default
-	// ~/.harness/agent/sessions) or "memory".
+	// ~/.harness/agent/sessions) or "ephemeral" (in memory).
 	Store *KindConfig `json:"store,omitempty"`
 	// Memory: kind "sqlite" (path = database file, default
-	// ~/.harness/agent/memory.db) or "none". Omitted = none.
+	// ~/.harness/agent/memory.db). Omitted = no memory.
 	Memory *KindConfig `json:"memory,omitempty"`
+	// Settings: kind "file" (default; path = settings file, omitted = the
+	// process's ~/.harness/settings.json), "ephemeral" (in memory) or "client"
+	// (the client serves settings/* requests).
+	Settings *KindConfig `json:"settings,omitempty"`
+	// Credentials: the same kinds for secrets (default
+	// ~/.harness/credentials.json, 0600).
+	Credentials *KindConfig `json:"credentials,omitempty"`
 	// Resources: omit it and nothing is discovered (agent.New's default); kind
 	// "file" makes each session read its cwd's AGENTS.md, SYSTEM.md and skills.
 	Resources *ResourcesConfig `json:"resources,omitempty"`

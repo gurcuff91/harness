@@ -125,7 +125,20 @@ func (c *ClaudeOAuth) loadCredentialsFromSources() error {
 	c.tokens.mu.Unlock()
 
 	if !validating {
-		if cred, ok := config.GetCredentialsManager().Credential("claude-oauth"); ok && cred.AccessToken != "" {
+		cred, ok, rerr := config.GetCredentialsManager().Credential("claude-oauth")
+		if rerr != nil {
+			// The store failed to answer: that is "could not read", never
+			// "not connected". The LAST KNOWN credentials (memory) stand; with
+			// none, report the read failure itself.
+			c.tokens.mu.Lock()
+			hasMem := c.tokens.creds != nil && c.tokens.creds.AccessToken != ""
+			c.tokens.mu.Unlock()
+			if hasMem {
+				return nil
+			}
+			return fmt.Errorf("claude-oauth: could not read credentials: %w", rerr)
+		}
+		if ok && cred.AccessToken != "" {
 			creds := types.OAuthCredentials(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType)
 			c.tokens.mu.Lock()
 			c.tokens.creds = &creds
@@ -599,7 +612,10 @@ type tokenManager struct {
 func newTokenManager() *tokenManager {
 	tm := &tokenManager{}
 	// Load from credentials.json at startup.
-	if cred, ok := config.GetCredentialsManager().Credential("claude-oauth"); ok && cred.AccessToken != "" {
+	// A failing store at construction leaves no credentials loaded; every
+	// ResolveCredentials re-reads (loadCredentialsFromSources) and reports the
+	// failure then, so nothing is lost for good.
+	if cred, ok, err := config.GetCredentialsManager().Credential("claude-oauth"); err == nil && ok && cred.AccessToken != "" {
 		creds := types.OAuthCredentials(cred.AccessToken, cred.RefreshToken, cred.ExpiresAt, cred.SubscriptionType)
 		tm.creds = &creds
 	}
@@ -713,8 +729,11 @@ func (tm *tokenManager) getValidToken() (string, error) {
 // persisted in credentials.json. Caller holds tm.mu. A no-op if there is no
 // disk entry (e.g. never connected) — in that case the in-memory value stands.
 func (tm *tokenManager) syncFromDisk() {
-	cred, ok := config.GetCredentialsManager().Credential("claude-oauth")
-	if !ok || cred.AccessToken == "" {
+	cred, ok, err := config.GetCredentialsManager().Credential("claude-oauth")
+	if err != nil || !ok || cred.AccessToken == "" {
+		// err: the store did not answer — keep the last known in-memory
+		// credentials (never treat it as disconnected); a refresh that then
+		// needs the store reports the failure through UpdateCredential.
 		return
 	}
 	synced := credFromDisk(cred)

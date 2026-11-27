@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.133.0] - 2026-11-26
+
+### Added — settings and credentials stores served by the RPC client
+For SDKs in other languages: `harness rpc`'s `initialize` takes `settings` and `credentials` as `{"kind": "file" | "ephemeral" | "client"}`. With **`client`** the data lives in the client (its database, a secret manager), not in `~/.harness/*.json`: the binary asks for each entry with the reverse requests `settings/{get,set,delete,list,swap}` and `credentials/{get,set,delete,list,swap}`. `swap` is a compare-and-swap on a `version` the client chooses, so the single-use OAuth refresh token cannot be redeemed twice. The client must answer from its very first message, because the binary reads settings while `initialize` is still pending; every request has a 30 s deadline and every error is logged and returned. Each field chooses separately (secrets in a secret manager, settings in files). See [RPC](https://gurcuff91.github.io/harness/frontends/rpc.html#stores-served-by-the-client).
+- **`configstore/storetest.RunContract`** is the contract every config store must pass, exported so a third-party implementation can use it; `FileStore`, `InMemoryStore` and the RPC adapter all pass it.
+
+### Changed
+- `harness rpc`: the `store` kind `memory` is now **`ephemeral`** (it clashed with the `memory` field), and `memory: {"kind":"none"}` is gone: omit the field for no memory (`sqlite` is the only kind).
+- Go (`internal/config`, not public): `CredentialsManager.Credential/APIKey/OAuth` now return an error besides "found", so a failing credentials store is never mistaken for "this provider has no credential"; the providers keep their last known state when a read fails. Local file and in-memory stores never fail this way, so nothing changes for them.
+
 ## [0.132.0] - 2026-11-26
 
 ### ⚠️ BREAKING — a `nil` ResourceLoader no longer reads the project's files

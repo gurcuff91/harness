@@ -38,8 +38,8 @@ func (a *Anthropic) Name() string        { return "anthropic" }
 func (a *Anthropic) DisplayName() string { return "Anthropic" }
 func (a *Anthropic) Description() string { return describeState(a) }
 func (a *Anthropic) ActivationSource() ActivationSource {
-	_, src := resolveAPIKey("anthropic", anthropicAPIKeyEnv)
-	return src
+	// A failing credentials store keeps the last known state (see activationOfAPIKey).
+	return activationOfAPIKey("anthropic", anthropicAPIKeyEnv, a.apiKey)
 }
 func (a *Anthropic) IsActive() bool {
 	_, err := a.ResolveCredentials()
@@ -52,7 +52,12 @@ func (a *Anthropic) ResolveCredentials() (types.Credentials, error) {
 	if a.apiKey != "" {
 		return types.APIKeyCredentials(a.apiKey), nil
 	}
-	if v, src := resolveAPIKey("anthropic", anthropicAPIKeyEnv); src != ActivationNone {
+	v, src, rerr := resolveAPIKeyErr("anthropic", anthropicAPIKeyEnv)
+	if rerr != nil {
+		// Could not read the store: say so, never "no credentials found".
+		return types.Credentials{}, rerr
+	}
+	if src != ActivationNone {
 		a.apiKey = v
 		return types.APIKeyCredentials(v), nil
 	}

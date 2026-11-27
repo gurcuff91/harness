@@ -1,0 +1,249 @@
+// Package storetest holds the behavior every configstore implementation must
+// have — the bar FileStore, InMemoryStore and any third implementation (such
+// as one served by a remote client) must pass. It runs against the method set
+// shared by SettingsStore and CredentialsStore.
+package storetest
+
+import (
+	"errors"
+	"sync"
+	"testing"
+
+	"github.com/gurcuff91/harness/configstore"
+)
+
+// Store is the method set shared by configstore.SettingsStore and
+// configstore.CredentialsStore.
+type Store interface {
+	Get(namespace, key string) ([]byte, bool, error)
+	Set(namespace, key string, value []byte) error
+	Delete(namespace, key string) error
+	List(namespace string) (map[string][]byte, error)
+	SwapValue(namespace, key string, fn func(current []byte, found bool) (next []byte, write bool, err error)) error
+	Close() error
+}
+
+// TB is the part of testing.TB the cases use, so a case can be driven by a
+// recording fake (to prove the suite catches a broken store).
+type TB interface {
+	Helper()
+	Error(args ...any)
+	Errorf(format string, args ...any)
+	Fatal(args ...any)
+	Fatalf(format string, args ...any)
+}
+
+// Case is one behavior of the contract.
+type Case struct {
+	Name string
+	Run  func(t TB, s Store)
+}
+
+// RunContract runs every case in Cases as a subtest, each on a fresh store
+// from newStore (closed when the case ends).
+func RunContract(t *testing.T, newStore func(t *testing.T) Store) {
+	t.Helper()
+	for _, c := range Cases {
+		t.Run(c.Name, func(t *testing.T) {
+			s := newStore(t)
+			defer s.Close()
+			c.Run(t, s)
+		})
+	}
+}
+
+// Cases is the whole contract.
+var Cases = []Case{
+	{"GetMissingIsNotFoundNotError", func(t TB, s Store) {
+		v, found, err := s.Get("ns", "nope")
+		if err != nil || found || v != nil {
+			t.Fatalf("Get(missing) = %q, %v, %v; want nil, false, nil", v, found, err)
+		}
+	}},
+	{"SetGetUpsert", func(t TB, s Store) {
+		if err := s.Set("ns", "k", []byte(`"one"`)); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Set("ns", "k", []byte(`"two"`)); err != nil {
+			t.Fatal(err)
+		}
+		v, found, err := s.Get("ns", "k")
+		if err != nil || !found || string(v) != `"two"` {
+			t.Fatalf("Get after upsert = %q, %v, %v; want \"two\"", v, found, err)
+		}
+	}},
+	{"NamespacesAreIsolated", func(t TB, s Store) {
+		_ = s.Set("a", "k", []byte(`1`))
+		_ = s.Set("b", "k", []byte(`2`))
+		if v, _, _ := s.Get("a", "k"); string(v) != `1` {
+			t.Errorf("a/k = %q, want 1", v)
+		}
+		if v, _, _ := s.Get("b", "k"); string(v) != `2` {
+			t.Errorf("b/k = %q, want 2", v)
+		}
+	}},
+	{"DeleteIsIdempotent", func(t TB, s Store) {
+		_ = s.Set("ns", "k", []byte(`true`))
+		if err := s.Delete("ns", "k"); err != nil {
+			t.Fatal(err)
+		}
+		if _, found, _ := s.Get("ns", "k"); found {
+			t.Error("value still present after Delete")
+		}
+		if err := s.Delete("ns", "k"); err != nil {
+			t.Errorf("deleting a missing entry must not error, got %v", err)
+		}
+	}},
+	{"List", func(t TB, s Store) {
+		empty, err := s.List("ns")
+		if err != nil || empty == nil || len(empty) != 0 {
+			t.Fatalf("List(empty) = %v, %v; want empty non-nil map", empty, err)
+		}
+		_ = s.Set("ns", "a", []byte(`1`))
+		_ = s.Set("ns", "b", []byte(`2`))
+		_ = s.Set("other", "c", []byte(`3`))
+		got, err := s.List("ns")
+		if err != nil || len(got) != 2 || string(got["a"]) != `1` || string(got["b"]) != `2` {
+			t.Fatalf("List(ns) = %v, %v; want exactly a=1, b=2", got, err)
+		}
+	}},
+	{"ReturnedBytesAreCopies", func(t TB, s Store) {
+		in := []byte(`"orig"`)
+		_ = s.Set("ns", "k", in)
+		in[1] = 'X' // mutating the caller's slice must not reach the store
+		v, _, _ := s.Get("ns", "k")
+		if len(v) < 2 {
+			t.Fatalf("Get returned %q", v)
+		}
+		v[1] = 'Y' // mutating a returned slice must not reach the store either
+		again, _, _ := s.Get("ns", "k")
+		if string(again) != `"orig"` {
+			t.Errorf("stored value = %s, want \"orig\" — store aliases caller memory", again)
+		}
+	}},
+	{"RejectsInvalidJSON", func(t TB, s Store) {
+		if err := s.Set("ns", "k", []byte(`not json`)); !errors.Is(err, configstore.ErrInvalidValue) {
+			t.Errorf("Set(invalid) = %v, want ErrInvalidValue", err)
+		}
+		err := s.SwapValue("ns", "k", func([]byte, bool) ([]byte, bool, error) {
+			return []byte(`{broken`), true, nil
+		})
+		if !errors.Is(err, configstore.ErrInvalidValue) {
+			t.Errorf("SwapValue(invalid) = %v, want ErrInvalidValue", err)
+		}
+		if _, found, _ := s.Get("ns", "k"); found {
+			t.Error("an invalid value must not be stored")
+		}
+	}},
+	{"SwapValueSeesCurrentAndWrites", func(t TB, s Store) {
+		var sawFound bool
+		err := s.SwapValue("ns", "k", func(cur []byte, found bool) ([]byte, bool, error) {
+			sawFound = found
+			return []byte(`1`), true, nil
+		})
+		if err != nil || sawFound {
+			t.Fatalf("first SwapValue: err=%v found=%v; want nil, false", err, sawFound)
+		}
+		var saw string
+		_ = s.SwapValue("ns", "k", func(cur []byte, found bool) ([]byte, bool, error) {
+			saw = string(cur)
+			return []byte(`2`), true, nil
+		})
+		if saw != `1` {
+			t.Errorf("fn saw %q, want the current value 1", saw)
+		}
+		if v, _, _ := s.Get("ns", "k"); string(v) != `2` {
+			t.Errorf("value after swap = %s, want 2", v)
+		}
+	}},
+	{"SwapValueWriteFalseAndErrorDoNotWrite", func(t TB, s Store) {
+		_ = s.Set("ns", "k", []byte(`"keep"`))
+
+		if err := s.SwapValue("ns", "k", func([]byte, bool) ([]byte, bool, error) {
+			return []byte(`"no"`), false, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		sentinel := errors.New("boom")
+		if err := s.SwapValue("ns", "k", func([]byte, bool) ([]byte, bool, error) {
+			return []byte(`"no"`), true, sentinel
+		}); !errors.Is(err, sentinel) {
+			t.Fatalf("SwapValue error = %v, want the callback's own error", err)
+		}
+		if v, _, _ := s.Get("ns", "k"); string(v) != `"keep"` {
+			t.Errorf("value = %s, want \"keep\" — write=false/error must not write", v)
+		}
+	}},
+	{"SwapValueIsAtomic", func(t TB, s Store) {
+		_ = s.Set("ns", "counter", []byte(`0`))
+		const n = 40
+		var wg sync.WaitGroup
+		for range n {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				err := s.SwapValue("ns", "counter", func(cur []byte, _ bool) ([]byte, bool, error) {
+					return incr(cur), true, nil
+				})
+				if err != nil {
+					t.Errorf("SwapValue: %v", err)
+				}
+			}()
+		}
+		wg.Wait()
+		if v, _, _ := s.Get("ns", "counter"); string(v) != "40" {
+			t.Errorf("counter = %s, want 40 — concurrent SwapValue lost updates", v)
+		}
+	}},
+	// A nil next with write=true is the atomic delete form: it removes the
+	// entry (dropping an emptied namespace from List), and is a no-op when
+	// missing.
+	{"SwapValueNilNextDeletes", func(t TB, s Store) {
+		_ = s.Set("ns", "gone", []byte(`1`))
+		_ = s.Set("ns", "kept", []byte(`2`))
+
+		var sawFound bool
+		if err := s.SwapValue("ns", "gone", func(cur []byte, found bool) ([]byte, bool, error) {
+			sawFound = found && string(cur) == `1`
+			return nil, true, nil
+		}); err != nil {
+			t.Fatalf("delete form: %v", err)
+		}
+		if !sawFound {
+			t.Error("fn must see the current value before deleting")
+		}
+		if _, found, _ := s.Get("ns", "gone"); found {
+			t.Error("entry must be gone after the delete form")
+		}
+		if v, found, _ := s.Get("ns", "kept"); !found || string(v) != `2` {
+			t.Errorf("sibling entry = %s found=%v, want untouched", v, found)
+		}
+
+		// Missing key: no-op, no error.
+		if err := s.SwapValue("ns", "never", func([]byte, bool) ([]byte, bool, error) {
+			return nil, true, nil
+		}); err != nil {
+			t.Fatalf("delete form on a missing key: %v", err)
+		}
+
+		// Last entry: the namespace disappears.
+		_ = s.SwapValue("ns", "kept", func([]byte, bool) ([]byte, bool, error) { return nil, true, nil })
+		if m, err := s.List("ns"); err != nil || len(m) != 0 {
+			t.Errorf("List after deleting everything = %v, %v; want empty", m, err)
+		}
+	}},
+}
+
+// incr parses a small non-negative JSON integer and returns it plus one.
+func incr(b []byte) []byte {
+	n := 0
+	for _, c := range b {
+		n = n*10 + int(c-'0')
+	}
+	n++
+	var out []byte
+	for ; n > 0; n /= 10 {
+		out = append([]byte{byte('0' + n%10)}, out...)
+	}
+	return out
+}

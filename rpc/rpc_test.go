@@ -121,7 +121,7 @@ func TestConfigDefaults(t *testing.T) {
 // SYSTEM.md and skills on; any other kind is an error naming the field.
 func TestConfigResourcesKinds(t *testing.T) {
 	c := start(t)
-	c.initialize(Config{Store: &KindConfig{Kind: "memory"}, Resources: &ResourcesConfig{Kind: "file"}})
+	c.initialize(Config{Store: &KindConfig{Kind: "ephemeral"}, Resources: &ResourcesConfig{Kind: "file"}})
 	if c.srv.Agent().Options().ResourceLoader == nil {
 		t.Fatal("resources kind file must install the file loader")
 	}
@@ -137,7 +137,7 @@ func TestConfigSqliteMemoryAndMemoryStore(t *testing.T) {
 	dir := t.TempDir()
 	db := filepath.Join(dir, "mem.db")
 	c := start(t)
-	c.initialize(Config{Store: &KindConfig{Kind: "memory"}, Memory: &KindConfig{Kind: "sqlite", Path: db}})
+	c.initialize(Config{Store: &KindConfig{Kind: "ephemeral"}, Memory: &KindConfig{Kind: "sqlite", Path: db}})
 	if c.srv.Agent().Options().Memory == nil {
 		t.Fatal("sqlite memory was not opened")
 	}
@@ -165,10 +165,10 @@ func TestConfigInvalidKindsNameFieldAndAllowed(t *testing.T) {
 		cfg  Config
 		want []string
 	}{
-		"store":     {Config{Store: &KindConfig{Kind: "s3"}}, []string{"config.store.kind", "file", "memory"}},
-		"memory":    {Config{Memory: &KindConfig{Kind: "redis"}}, []string{"config.memory.kind", "sqlite", "none"}},
+		"store":     {Config{Store: &KindConfig{Kind: "s3"}}, []string{"config.store.kind", "file", "ephemeral"}},
+		"memory":    {Config{Memory: &KindConfig{Kind: "redis"}}, []string{"config.memory.kind", "sqlite"}},
 		"resources": {Config{Resources: &ResourcesConfig{Kind: "web"}}, []string{"config.resources.kind", "file"}},
-		"path":      {Config{Store: &KindConfig{Kind: "memory", Path: "/x"}}, []string{"config.store.path"}},
+		"path":      {Config{Store: &KindConfig{Kind: "ephemeral", Path: "/x"}}, []string{"config.store.path"}},
 		"thinking":  {Config{ThinkingLevel: "ultra"}, []string{"thinking_level"}},
 		"channel":   {Config{Channels: []string{"irc"}}, []string{"irc"}},
 	} {
@@ -196,7 +196,7 @@ func TestConfigChannelWithoutCredentialsIsInvalid(t *testing.T) {
 		}
 	}
 	// colleagues needs no credentials
-	res := c.initialize(Config{Store: &KindConfig{Kind: "memory"}, Channels: []string{"colleagues"}})
+	res := c.initialize(Config{Store: &KindConfig{Kind: "ephemeral"}, Channels: []string{"colleagues"}})
 	if len(res.Capabilities.Channels) != 1 || res.Capabilities.Channels[0] != "colleagues" {
 		t.Fatalf("channels = %v", res.Capabilities.Channels)
 	}

@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	colleaguech "github.com/gurcuff91/harness/channels/colleague"
 	slackch "github.com/gurcuff91/harness/channels/slack"
 	telegramch "github.com/gurcuff91/harness/channels/telegram"
+	"github.com/gurcuff91/harness/configstore"
 	"github.com/gurcuff91/harness/internal/version"
 	"github.com/gurcuff91/harness/mcp"
 )
@@ -47,6 +49,15 @@ func opInitialize(_ context.Context, s *Server, p InitializeParams) (InitializeR
 
 	a, chans, err := s.buildAgent(p.Config)
 	if err != nil {
+		// The settings and credentials stores are process-global and cannot be
+		// swapped once registered: a failure after that point cannot be retried
+		// with another configuration, so the process ends right after replying.
+		// A failure before any registration stays retryable.
+		if s.committedToStores() {
+			je := rpcError(err)
+			je.After = s.stop
+			return InitializeResult{}, je
+		}
 		s.mu.Lock()
 		s.state = stateNew // a failed initialize can be retried
 		s.initBuilding = false
@@ -98,11 +109,19 @@ func kindOf(field string, k *KindConfig, def string, allowed, pathKinds []string
 // open.
 func (s *Server) buildAgent(cfg Config) (*agent.Agent, []string, error) {
 	// Validate everything before opening anything.
-	storeKind, storePath, err := kindOf("store", cfg.Store, "file", []string{"file", "memory"}, []string{"file"})
+	storeKind, storePath, err := kindOf("store", cfg.Store, "file", []string{"file", "ephemeral"}, []string{"file"})
 	if err != nil {
 		return nil, nil, err
 	}
-	memKind, memPath, err := kindOf("memory", cfg.Memory, "none", []string{"sqlite", "none"}, []string{"sqlite"})
+	memKind, memPath, err := kindOf("memory", cfg.Memory, "", []string{"sqlite"}, []string{"sqlite"})
+	if err != nil {
+		return nil, nil, err
+	}
+	settingsKind, settingsPath, err := kindOf("settings", cfg.Settings, "file", configKinds, []string{"file"})
+	if err != nil {
+		return nil, nil, err
+	}
+	credsKind, credsPath, err := kindOf("credentials", cfg.Credentials, "file", configKinds, []string{"file"})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -138,6 +157,13 @@ func (s *Server) buildAgent(cfg Config) (*agent.Agent, []string, error) {
 		profs[name] = pr
 	}
 
+	// Everything is valid: the process-global stores are registered now, BEFORE
+	// the agent is built (building it reads settings, and a client store is
+	// asked for them while `initialize` is still pending).
+	if err := s.registerConfigStores(settingsKind, settingsPath, credsKind, credsPath); err != nil {
+		return nil, nil, err
+	}
+
 	opts := agent.AgentOptions{
 		ThinkingLevel:   cfg.ThinkingLevel,
 		SystemPrompt:    cfg.SystemPrompt,
@@ -161,7 +187,7 @@ func (s *Server) buildAgent(cfg Config) (*agent.Agent, []string, error) {
 		return nil, nil, err
 	}
 	switch storeKind {
-	case "memory":
+	case "ephemeral":
 		opts.Store = store.NewInMemoryStore()
 	default:
 		fs, err := store.NewFileStore(storePath)
@@ -330,3 +356,92 @@ func opMCPStatus(_ context.Context, s *Server, _ Empty) (MCPStatusResult, error)
 }
 
 func opShutdown(_ context.Context, _ *Server, _ Empty) (Empty, error) { return Empty{}, nil }
+
+// configKinds are the kinds of the settings and credentials fields.
+var configKinds = []string{"file", "ephemeral", "client"}
+
+// registerSettingsStore and registerCredentialsStore are what registers the
+// process-global stores (tests replace them: the real ones refuse once the
+// process has read its settings).
+var (
+	registerSettingsStore    = agent.SetSettingsStore
+	registerCredentialsStore = agent.SetCredentialsStore
+)
+
+// registerConfigStores registers the settings and credentials stores the
+// configuration chose. "file" without a path leaves the process default
+// (~/.harness files) alone. Both stores are built before either is
+// registered, so a bad path registers nothing. Once one is registered the
+// connection is committed to it (see opInitialize).
+func (s *Server) registerConfigStores(settingsKind, settingsPath, credsKind, credsPath string) error {
+	ss, err := s.configStore("settings", settingsKind, settingsPath)
+	if err != nil {
+		return err
+	}
+	cs, err := s.configStore("credentials", credsKind, credsPath)
+	if err != nil {
+		return err
+	}
+	if ss != nil {
+		if err := registerSettingsStore(ss); err != nil {
+			return storeRegistrationError("settings", err)
+		}
+		s.markStoresRegistered()
+	}
+	if cs != nil {
+		if err := registerCredentialsStore(cs); err != nil {
+			return storeRegistrationError("credentials", err)
+		}
+		s.markStoresRegistered()
+	}
+	// A client store is asked once now: the managers read settings leniently, so
+	// without this a client that never answers would start an agent on empty
+	// settings instead of failing initialize.
+	for _, st := range []configstore.SettingsStore{ss, cs} {
+		if p, ok := st.(*clientStore); ok {
+			if err := p.probe(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// configStore builds the store of one domain; nil means "leave the process
+// default". The two ports have the same method set, so one value serves both.
+func (s *Server) configStore(domain, kind, path string) (configstore.SettingsStore, error) {
+	switch kind {
+	case "client":
+		return newClientStore(s.conn, domain, s.logger), nil
+	case "ephemeral":
+		return configstore.NewInMemoryStore(), nil
+	}
+	if path == "" {
+		return nil, nil
+	}
+	fs, err := configstore.NewFileStore(path, 0600)
+	if err != nil {
+		return nil, errInvalid("config.%s: %v", domain, err)
+	}
+	return fs, nil
+}
+
+func storeRegistrationError(domain string, err error) error {
+	if errors.Is(err, configstore.ErrAlreadyInitialized) {
+		return rpcErr("conflict", "a %s store was already in use in this process; it must be registered before anything reads %s", domain, domain)
+	}
+	return errInvalid("config.%s: %v", domain, err)
+}
+
+func (s *Server) markStoresRegistered() {
+	s.mu.Lock()
+	s.storesRegistered = true
+	s.mu.Unlock()
+}
+
+// committedToStores reports whether a process-global store was registered.
+func (s *Server) committedToStores() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.storesRegistered
+}

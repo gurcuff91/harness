@@ -42,11 +42,58 @@ Everything the binary writes to stdout is a protocol message. Diagnostics go to 
 | `profiles` | Named bundles of `directives` and `tools`, enabled per session. See [Profiles](../sdk/profiles.md). |
 | `enable_scheduler`, `enable_web_search`, `terminal` | As the Go options. |
 | `channels` | Input channels to register, by name: `slack`, `telegram`, `colleagues`. |
-| `store` | Where sessions live: `{"kind":"file","path":"…"}` (default, `~/.harness/agent/sessions`) or `{"kind":"memory"}`. |
-| `memory` | `{"kind":"sqlite","path":"…"}` or `{"kind":"none"}`. **Default: none**, so memory is on only if you ask. |
+| `store` | Where sessions live: `{"kind":"file","path":"…"}` (default, `~/.harness/agent/sessions`) or `{"kind":"ephemeral"}` (in memory, never on disk). |
+| `memory` | `{"kind":"sqlite","path":"…"}`. **Default: no memory**, so it is on only if you ask; omit the field to leave it off. |
+| `settings` | Where the settings live: `{"kind":"file"}` (default, `~/.harness/settings.json`; a `path` picks another file), `{"kind":"ephemeral"}` or `{"kind":"client"}` ([served by the client](#stores-served-by-the-client)). |
+| `credentials` | The same kinds for the secrets (default `~/.harness/credentials.json`, mode 0600). Chosen separately from `settings`: secrets can live in a secret manager and settings in files. |
 | `resources` | `{"kind":"file"}` makes each session read its directory's `SYSTEM.md`, `AGENTS.md` and skills. **Default: nothing is read**, so a directory chosen by an end user cannot influence the agent unless you ask. |
 
-A `kind` a field does not accept is an error naming the field. Providing your own store, memory or resource loader from the client is not supported yet.
+A `kind` a field does not accept is an error naming the field and the kinds it accepts; `path` is only accepted by `file` (and `sqlite` for `memory`). The `store` kind `memory` was renamed `ephemeral`, and `memory: {"kind":"none"}` no longer exists: omit the field. Providing your own session store, memory or resource loader from the client is not supported yet.
+
+## Stores served by the client
+
+With `"settings": {"kind":"client"}` (or `credentials`) the data lives in the client, not in a file of the binary. Each time Harness needs to read or write an entry it sends the client a request; the client keeps the data wherever it likes (a database, a secret manager, memory). The binary keeps no copy.
+
+> **Note** Before it builds the agent, the binary does one `get` of the entry `core` / `probe`, which never exists: it is how it finds out that the client really serves the store. Answer it like any other missing entry (`found: false`). Without a reply the `initialize` request fails instead of the agent starting on empty settings.
+
+There are ten requests the client must answer, five per domain: `settings/get`, `settings/set`, `settings/delete`, `settings/list`, `settings/swap`, and the same five under `credentials/`.
+
+| Method | Params | Result |
+|---|---|---|
+| `…/get` | `namespace`, `key` | `found`, `value`, `version` |
+| `…/set` | `namespace`, `key`, `value` | `{}` (creates or replaces) |
+| `…/delete` | `namespace`, `key` | `{}` (a missing entry is not an error) |
+| `…/list` | `namespace` | `entries`: an object of `key` to `{value, version}` (empty when there are none) |
+| `…/swap` | `namespace`, `key`, `expected_version`, `value` | `swapped` |
+
+`value` is a JSON document, passed verbatim: the client never needs to interpret it. `version` is an opaque string **the client chooses** (a counter, an etag, a hash, a row version). The binary only hands it back in `swap`.
+
+`swap` is a conditional write and must be atomic in the client:
+
+- `expected_version: null` means the entry must not exist (a create).
+- `value: null` deletes the entry.
+- If the entry's current version is not `expected_version`, answer `{"swapped": false}` and change nothing. The binary then reads again and retries, up to 10 times; after that the operation fails with a `conflict` error.
+
+Why it exists: an OAuth refresh token can be redeemed only once. When two requests try to renew the same token at the same moment, only one `swap` can win; the other re-reads the renewed token instead of redeeming the old one again. A `client` store is only as atomic as the client makes `swap`: Harness adds no lock across processes and no cache.
+
+**Answer from the first message.** The binary reads settings while it builds the agent, so it calls `settings/get` (and `credentials/get`) **during `initialize`**, before it has replied. The client must already be serving them. Requests are answered concurrently, so a client that waits for the `initialize` reply before it answers deadlocks itself.
+
+Every request has a 30 second deadline. If the client does not answer in time, the call fails with:
+
+> the client did not answer settings/get within 30s: a "client" store must be served from the first message
+
+During `initialize` this fails the whole request. A failure at that point also ends the process: the stores are global to the process and cannot be replaced, so start it again. Errors the client returns are passed on with their message and logged on stderr; a failed read is never taken for "not found". Registering a store fails with a `conflict` error if the process already used its settings or credentials before `initialize`.
+
+An exchange, with the binary's requests first:
+
+```json
+{"jsonrpc":"2.0","id":"1","method":"settings/get","params":{"namespace":"core","key":"active_model"}}
+{"jsonrpc":"2.0","id":"1","result":{"found":false}}
+{"jsonrpc":"2.0","id":"2","method":"credentials/swap","params":{"namespace":"providers","key":"claude-oauth","expected_version":"v7","value":{"type":"oauth"}}}
+{"jsonrpc":"2.0","id":"2","result":{"swapped":false}}
+{"jsonrpc":"2.0","id":"3","method":"credentials/get","params":{"namespace":"providers","key":"claude-oauth"}}
+{"jsonrpc":"2.0","id":"3","result":{"found":true,"value":{"type":"oauth"},"version":"v8"}}
+```
 
 ## Custom tools
 

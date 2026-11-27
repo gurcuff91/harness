@@ -85,7 +85,7 @@ func rpcError(err error) *jsonrpc.Error {
 		errors.Is(err, agent.ErrChannelInvalid),
 		errors.Is(err, agent.ErrChannelUnavailable):
 		return rpcErr("invalid", "%s", err.Error())
-	case errors.Is(err, agent.ErrChannelTaken), errors.Is(err, agent.ErrBusy):
+	case errors.Is(err, agent.ErrChannelTaken), errors.Is(err, agent.ErrBusy), errors.Is(err, ErrStoreConflict):
 		return rpcErr("conflict", "%s", err.Error())
 	case errors.Is(err, agent.ErrNoModelAvailable):
 		return rpcErr("not_connected", "%s", err.Error())

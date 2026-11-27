@@ -57,7 +57,12 @@ func (o *OpenAI) ResolveCredentials() (types.Credentials, error) {
 	if o.apiKey != "" {
 		return types.APIKeyCredentials(o.apiKey), nil
 	}
-	if v, src := resolveAPIKey("openai", openAIAPIKeyEnv); src != ActivationNone {
+	v, src, rerr := resolveAPIKeyErr("openai", openAIAPIKeyEnv)
+	if rerr != nil {
+		// Could not read the store: say so, never "no credentials found".
+		return types.Credentials{}, rerr
+	}
+	if src != ActivationNone {
 		o.apiKey = v
 		return types.APIKeyCredentials(v), nil
 	}
@@ -95,8 +100,8 @@ func (o *OpenAI) Name() string        { return "openai" }
 func (o *OpenAI) DisplayName() string { return "OpenAI" }
 func (o *OpenAI) Description() string { return describeState(o) }
 func (o *OpenAI) ActivationSource() ActivationSource {
-	_, src := resolveAPIKey("openai", openAIAPIKeyEnv)
-	return src
+	// A failing credentials store keeps the last known state (see activationOfAPIKey).
+	return activationOfAPIKey("openai", openAIAPIKeyEnv, o.apiKey)
 }
 func (o *OpenAI) IsActive() bool {
 	_, err := o.ResolveCredentials()

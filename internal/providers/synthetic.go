@@ -69,8 +69,8 @@ func (o *Synthetic) Name() string        { return "synthetic" }
 func (o *Synthetic) DisplayName() string { return "Synthetic" }
 func (o *Synthetic) Description() string { return describeState(o) }
 func (o *Synthetic) ActivationSource() ActivationSource {
-	_, src := resolveAPIKey("synthetic", syntheticAPIKeyEnv)
-	return src
+	// A failing credentials store keeps the last known state (see activationOfAPIKey).
+	return activationOfAPIKey("synthetic", syntheticAPIKeyEnv, o.apiKey)
 }
 func (o *Synthetic) IsActive() bool {
 	_, err := o.ResolveCredentials()
@@ -101,7 +101,12 @@ func (o *Synthetic) ResolveCredentials() (types.Credentials, error) {
 	if o.apiKey != "" {
 		return types.APIKeyCredentials(o.apiKey), nil
 	}
-	if v, src := resolveAPIKey("synthetic", syntheticAPIKeyEnv); src != ActivationNone {
+	v, src, rerr := resolveAPIKeyErr("synthetic", syntheticAPIKeyEnv)
+	if rerr != nil {
+		// Could not read the store: say so, never "no credentials found".
+		return types.Credentials{}, rerr
+	}
+	if src != ActivationNone {
 		o.apiKey = v
 		return types.APIKeyCredentials(v), nil
 	}

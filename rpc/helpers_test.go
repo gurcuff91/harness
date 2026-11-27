@@ -84,6 +84,9 @@ type client struct {
 	onTool   func(ctx context.Context, p ToolCallParams) (ToolCallResult, error)
 	srv      *Server
 	srvReady chan struct{}
+	// ext, when set, answers the methods handle does not know (the client
+	// stores' settings/* and credentials/*); handled=false falls through.
+	ext func(ctx context.Context, method string, params json.RawMessage) (res any, err error, handled bool)
 }
 
 type startOpt func(*runConfig)
@@ -152,6 +155,14 @@ func (c *client) handle(ctx context.Context, method string, params json.RawMessa
 			return nil, &jsonrpc.Error{Code: jsonrpc.CodeMethodNotFound, Message: "no tool handler"}
 		}
 		return h(ctx, p)
+	}
+	c.mu.Lock()
+	ext := c.ext
+	c.mu.Unlock()
+	if ext != nil {
+		if res, err, ok := ext(ctx, method, params); ok {
+			return res, err
+		}
 	}
 	return nil, &jsonrpc.Error{Code: jsonrpc.CodeMethodNotFound, Message: method}
 }
@@ -254,7 +265,7 @@ func (c *client) collectUntil(typ string) []map[string]any {
 
 // memStore is the config most tests use: sessions in memory, no resources.
 func memStoreConfig(tools ...ToolDecl) Config {
-	return Config{Store: &KindConfig{Kind: "memory"}, Tools: tools}
+	return Config{Store: &KindConfig{Kind: "ephemeral"}, Tools: tools}
 }
 
 // captureLogger records warnings.

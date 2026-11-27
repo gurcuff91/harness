@@ -28,7 +28,7 @@ func TestUpdateCredential_MissingIsReportedNotWritten(t *testing.T) {
 	if sawOK {
 		t.Error("ok should be false for a provider with no stored credential")
 	}
-	if _, ok := m.Credential("claude-oauth"); ok {
+	if _, ok, _ := m.Credential("claude-oauth"); ok {
 		t.Error("nothing should have been persisted")
 	}
 }
@@ -46,7 +46,7 @@ func TestUpdateCredential_WriteFlagControlsPersistence(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := m.Credential("claude-oauth"); ok {
+	if _, ok, _ := m.Credential("claude-oauth"); ok {
 		t.Fatal("write=false must not persist")
 	}
 
@@ -56,7 +56,7 @@ func TestUpdateCredential_WriteFlagControlsPersistence(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got, ok := m.Credential("claude-oauth")
+	got, ok, _ := m.Credential("claude-oauth")
 	if !ok || got.AccessToken != "at" {
 		t.Fatalf("write=true should have persisted, got %+v ok=%v", got, ok)
 	}
@@ -73,7 +73,7 @@ func TestUpdateCredential_FnErrorPropagatesAndSkipsWrite(t *testing.T) {
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("expected the sentinel error, got %v", err)
 	}
-	if _, ok := m.Credential("claude-oauth"); ok {
+	if _, ok, _ := m.Credential("claude-oauth"); ok {
 		t.Error("an fn error must prevent the write")
 	}
 }
@@ -89,7 +89,7 @@ func TestUpdateCredential_ValidatesBeforeWriting(t *testing.T) {
 	if !errors.Is(err, ErrInvalidCredential) {
 		t.Fatalf("expected ErrInvalidCredential, got %v", err)
 	}
-	if _, ok := m.Credential("claude-oauth"); ok {
+	if _, ok, _ := m.Credential("claude-oauth"); ok {
 		t.Error("invalid credential must not be persisted")
 	}
 }

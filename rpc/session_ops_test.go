@@ -329,7 +329,7 @@ func TestSessionExecCommand(t *testing.T) {
 	g := &sessGated{}
 	model := sessRegister(t, g)
 	c := start(t)
-	c.initialize(Config{Store: &KindConfig{Kind: "memory"}, Resources: &ResourcesConfig{Kind: "file"}}) // skills are only discovered when asked for
+	c.initialize(Config{Store: &KindConfig{Kind: "ephemeral"}, Resources: &ResourcesConfig{Kind: "file"}}) // skills are only discovered when asked for
 	cwd := t.TempDir()
 	skill := filepath.Join(cwd, ".harness", "agent", "skills", "greet")
 	if err := os.MkdirAll(skill, 0o755); err != nil {

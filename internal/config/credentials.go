@@ -119,29 +119,39 @@ func validateCredential(c ProviderCredential) error {
 }
 
 // Credential returns the stored credential for a provider by name (any type).
-func (m *CredentialsManager) Credential(provider string) (ProviderCredential, bool) {
+// Unlike the other readers of this package, it tells a failure from absence:
+// not found is (zero, false, nil); a store failure (a remote store that did
+// not answer) or an undecodable value is (zero, false, err). A caller must
+// never read an error as "this provider is not connected".
+func (m *CredentialsManager) Credential(provider string) (cred ProviderCredential, found bool, err error) {
 	var c ProviderCredential
-	return c, getJSON(m.store, nsProviders, provider, &c)
+	ok, err := getJSONErr(m.store, nsProviders, provider, &c)
+	if err != nil || !ok {
+		return ProviderCredential{}, false, err
+	}
+	return c, true, nil
 }
 
-// APIKey returns the stored API key for a provider, or ("", false) if there is
-// no credential or it is not an api_key credential.
-func (m *CredentialsManager) APIKey(provider string) (string, bool) {
-	c, ok := m.Credential(provider)
-	if !ok || c.Type != "api_key" || c.APIKey == "" {
-		return "", false
+// APIKey returns the stored API key for a provider, or ("", false, nil) if
+// there is no credential or it is not an api_key credential; err is as in
+// Credential.
+func (m *CredentialsManager) APIKey(provider string) (string, bool, error) {
+	c, ok, err := m.Credential(provider)
+	if err != nil || !ok || c.Type != "api_key" || c.APIKey == "" {
+		return "", false, err
 	}
-	return c.APIKey, true
+	return c.APIKey, true, nil
 }
 
-// OAuth returns the stored OAuth credential for a provider, or (zero, false) if
-// there is no credential or it is not an oauth credential.
-func (m *CredentialsManager) OAuth(provider string) (ProviderCredential, bool) {
-	c, ok := m.Credential(provider)
-	if !ok || c.Type != "oauth" || c.AccessToken == "" {
-		return ProviderCredential{}, false
+// OAuth returns the stored OAuth credential for a provider, or (zero, false,
+// nil) if there is no credential or it is not an oauth credential; err is as
+// in Credential.
+func (m *CredentialsManager) OAuth(provider string) (ProviderCredential, bool, error) {
+	c, ok, err := m.Credential(provider)
+	if err != nil || !ok || c.Type != "oauth" || c.AccessToken == "" {
+		return ProviderCredential{}, false, err
 	}
-	return c, true
+	return c, true, nil
 }
 
 // SetCredential validates and stores (or replaces) a provider's credential.

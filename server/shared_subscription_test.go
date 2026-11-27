@@ -177,7 +177,7 @@ func TestSharedSubscriptionAcrossInstances(t *testing.T) {
 		}
 	}
 	// B never held a credential: nothing of B's carried the token.
-	if _, ok := config.GetCredentialsManager().Credential("shared-claude"); ok {
+	if _, ok, _ := config.GetCredentialsManager().Credential("shared-claude"); ok {
 		t.Error("B must have no credential for the shared provider")
 	}
 }

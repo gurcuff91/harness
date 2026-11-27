@@ -81,10 +81,13 @@ type Server struct {
 	// initBuilding: an `initialize` is building the agent right now (so a
 	// second one is refused as already initialized).
 	initBuilding bool
-	agent        *agent.Agent
-	admin        *admin.Admin
-	sessions     map[string]*openSession
-	closed       bool
+	// storesRegistered: `initialize` registered a process-global settings or
+	// credentials store, so a failure after it ends the process.
+	storesRegistered bool
+	agent            *agent.Agent
+	admin            *admin.Admin
+	sessions         map[string]*openSession
+	closed           bool
 }
 
 // openSession is a session this connection opened and the pump that forwards

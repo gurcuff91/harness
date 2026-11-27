@@ -438,7 +438,7 @@ func TestConnectingWithAGoodKeyListsTheModelsAndStoresTheKey(t *testing.T) {
 	if got := len(p.Models()); got != 3 {
 		t.Errorf("%d models, want the 3 hf: text models of the fixture", got)
 	}
-	if v, ok := config.GetCredentialsManager().APIKey("synthetic"); !ok || v != "syn_good" {
+	if v, ok, _ := config.GetCredentialsManager().APIKey("synthetic"); !ok || v != "syn_good" {
 		t.Errorf("stored key = %q (%v)", v, ok)
 	}
 	if f.chatAuth != "Bearer syn_good" {
@@ -462,7 +462,7 @@ func TestConnectingWithABadKeyRollsBack(t *testing.T) {
 	if p.apiKey != "" {
 		t.Error("the rejected key was kept on the provider")
 	}
-	if _, ok := config.GetCredentialsManager().APIKey("synthetic"); ok {
+	if _, ok, _ := config.GetCredentialsManager().APIKey("synthetic"); ok {
 		t.Error("the rejected key was stored")
 	}
 	if len(p.Models()) != 0 {
@@ -511,7 +511,7 @@ func TestDisconnectForgetsTheKeyAndTheModels(t *testing.T) {
 	if p.apiKey != "" || len(p.Models()) != 0 {
 		t.Errorf("still holding key %q and %d models", p.apiKey, len(p.Models()))
 	}
-	if _, ok := config.GetCredentialsManager().APIKey("synthetic"); ok {
+	if _, ok, _ := config.GetCredentialsManager().APIKey("synthetic"); ok {
 		t.Error("the stored key survived")
 	}
 }
@@ -937,7 +937,7 @@ func TestAnOAuthCredentialWithAKeyIsStillRefused(t *testing.T) {
 	if f.chatCalls != 0 || p.apiKey != "" {
 		t.Errorf("%d requests were made and the key %q was kept for a credential of the wrong kind", f.chatCalls, p.apiKey)
 	}
-	if _, ok := config.GetCredentialsManager().APIKey("synthetic"); ok {
+	if _, ok, _ := config.GetCredentialsManager().APIKey("synthetic"); ok {
 		t.Error("a credential of the wrong kind was stored")
 	}
 }

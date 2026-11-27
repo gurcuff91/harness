@@ -156,14 +156,43 @@ func describeState(p Provider) string {
 // the stored credential. Returns the resolved key ("" if none) and the
 // ActivationSource that produced it — so a provider's ResolveCredentials and
 // ActivationSource share one source of truth.
+//
+// A store that FAILS to answer is not "no key": resolveAPIKeyErr reports the
+// failure, which resolveAPIKey (kept for callers with nowhere to show it)
+// collapses to ActivationNone.
 func resolveAPIKey(provider, envVar string) (string, ActivationSource) {
+	key, src, _ := resolveAPIKeyErr(provider, envVar)
+	return key, src
+}
+
+// resolveAPIKeyErr is resolveAPIKey that also returns the credentials store's
+// failure (an env var still wins, with no error). On failure the key is ""
+// and the source ActivationNone, and err says why: "could not read", not
+// "not connected".
+func resolveAPIKeyErr(provider, envVar string) (key string, src ActivationSource, err error) {
 	if v := os.Getenv(envVar); v != "" {
-		return v, ActivationEnvVar
+		return v, ActivationEnvVar, nil
 	}
-	if v, ok := config.GetCredentialsManager().APIKey(provider); ok {
-		return v, ActivationCredentials
+	v, ok, err := config.GetCredentialsManager().APIKey(provider)
+	if err != nil {
+		return "", ActivationNone, fmt.Errorf("reading the %s credential: %w", provider, err)
 	}
-	return "", ActivationNone
+	if ok {
+		return v, ActivationCredentials, nil
+	}
+	return "", ActivationNone, nil
+}
+
+// activationOfAPIKey is the ActivationSource of an api_key provider. When the
+// credentials store fails to answer, the LAST KNOWN state stands: a provider
+// that already resolved a key (cached) stays connected instead of silently
+// flipping to disconnected because of a transport failure.
+func activationOfAPIKey(provider, envVar, cached string) ActivationSource {
+	_, src, err := resolveAPIKeyErr(provider, envVar)
+	if err != nil && cached != "" {
+		return ActivationCredentials
+	}
+	return src
 }
 
 // storeAPIKey persists an API key for a provider as a typed credential.

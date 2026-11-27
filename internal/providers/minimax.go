@@ -47,8 +47,8 @@ func (o *MiniMax) DisplayName() string { return "MiniMax" }
 func (o *MiniMax) Description() string { return describeState(o) }
 
 func (o *MiniMax) ActivationSource() ActivationSource {
-	_, src := resolveAPIKey("minimax", miniMaxAPIKeyEnv)
-	return src
+	// A failing credentials store keeps the last known state (see activationOfAPIKey).
+	return activationOfAPIKey("minimax", miniMaxAPIKeyEnv, o.apiKey)
 }
 
 func (o *MiniMax) IsActive() bool {
@@ -84,7 +84,12 @@ func (o *MiniMax) ResolveCredentials() (types.Credentials, error) {
 	if o.apiKey != "" {
 		return types.APIKeyCredentials(o.apiKey), nil
 	}
-	if v, src := resolveAPIKey("minimax", miniMaxAPIKeyEnv); src != ActivationNone {
+	v, src, rerr := resolveAPIKeyErr("minimax", miniMaxAPIKeyEnv)
+	if rerr != nil {
+		// Could not read the store: say so, never "no credentials found".
+		return types.Credentials{}, rerr
+	}
+	if src != ActivationNone {
 		o.apiKey = v
 		return types.APIKeyCredentials(v), nil
 	}

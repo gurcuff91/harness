@@ -53,7 +53,7 @@ func TestCredentialValidation(t *testing.T) {
 		} else if !errors.Is(err, ErrInvalidCredential) {
 			t.Errorf("%s: expected ErrInvalidCredential, got %v", name, err)
 		}
-		if _, ok := m.Credential(name); ok {
+		if _, ok, _ := m.Credential(name); ok {
 			t.Errorf("%s: invalid credential was persisted", name)
 		}
 	}
@@ -78,16 +78,16 @@ func TestCredentialRoundTrip(t *testing.T) {
 	})
 
 	m2 := credsAt(t, path)
-	if c, ok := m2.Credential("minimax"); !ok || c.APIKey != "kb_x" {
+	if c, ok, _ := m2.Credential("minimax"); !ok || c.APIKey != "kb_x" {
 		t.Errorf("minimax not persisted: %+v", c)
 	}
-	if c, ok := m2.Credential("claude-oauth"); !ok || c.AccessToken != "at" || c.SubscriptionType != "team" {
+	if c, ok, _ := m2.Credential("claude-oauth"); !ok || c.AccessToken != "at" || c.SubscriptionType != "team" {
 		t.Errorf("oauth not persisted: %+v", c)
 	}
 	if err := m2.DeleteCredential("minimax"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, ok := m2.Credential("minimax"); ok {
+	if _, ok, _ := m2.Credential("minimax"); ok {
 		t.Errorf("minimax still present after delete")
 	}
 }
@@ -107,7 +107,7 @@ func TestCredentialCrossProcessReload(t *testing.T) {
 	reader := credsAt(t, path)
 
 	// Reader sees nothing yet — matches the writer's empty initial state.
-	if _, ok := reader.Credential("claude-oauth"); ok {
+	if _, ok, _ := reader.Credential("claude-oauth"); ok {
 		t.Fatalf("reader should see no credential before the writer's first write")
 	}
 
@@ -121,7 +121,7 @@ func TestCredentialCrossProcessReload(t *testing.T) {
 	// relied on wall-clock elapsed time between the two writes instead.
 	bumpMtime(t, path, 2*time.Second)
 
-	got, ok := reader.Credential("claude-oauth")
+	got, ok, _ := reader.Credential("claude-oauth")
 	if !ok || got.AccessToken != "at-1" {
 		t.Fatalf("reader did not pick up the writer's credential via reloadIfStale: %+v ok=%v", got, ok)
 	}
@@ -135,7 +135,7 @@ func TestCredentialCrossProcessReload(t *testing.T) {
 	}
 	bumpMtime(t, path, 4*time.Second)
 
-	got, ok = reader.Credential("claude-oauth")
+	got, ok, _ = reader.Credential("claude-oauth")
 	if !ok || got.AccessToken != "at-2" {
 		t.Fatalf("reader did not pick up the SECOND write: %+v ok=%v", got, ok)
 	}
@@ -164,17 +164,17 @@ func TestCredentialTypedGetters(t *testing.T) {
 		"claude-oauth":{"type":"oauth","access_token":"a","refresh_token":"r","expires_at":1}
 	}}`)
 	// APIKey returns the key only for api_key credentials.
-	if k, ok := m.APIKey("minimax"); !ok || k != "k" {
+	if k, ok, _ := m.APIKey("minimax"); !ok || k != "k" {
 		t.Errorf("APIKey(minimax) = %q,%v", k, ok)
 	}
-	if _, ok := m.APIKey("claude-oauth"); ok {
+	if _, ok, _ := m.APIKey("claude-oauth"); ok {
 		t.Errorf("APIKey should not return an oauth credential")
 	}
 	// OAuth returns only oauth credentials.
-	if c, ok := m.OAuth("claude-oauth"); !ok || c.AccessToken != "a" {
+	if c, ok, _ := m.OAuth("claude-oauth"); !ok || c.AccessToken != "a" {
 		t.Errorf("OAuth(claude-oauth) = %+v,%v", c, ok)
 	}
-	if _, ok := m.OAuth("minimax"); ok {
+	if _, ok, _ := m.OAuth("minimax"); ok {
 		t.Errorf("OAuth should not return an api_key credential")
 	}
 }

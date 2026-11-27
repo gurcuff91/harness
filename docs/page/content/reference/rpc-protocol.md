@@ -753,6 +753,89 @@ Removes a profile; bound sessions keep the name and lose its directives and tool
 
 **Result:** none.
 
+### credentials
+
+#### `credentials/get`
+
+Sent BY THE BINARY when config.credentials has kind "client": reads one entry of the credentials (secrets: API keys, OAuth tokens). Answer found:false when it does not exist.
+
+**Params (`StoreKeyParams`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `key` | string |  |
+| `namespace` | string |  |
+
+**Result (`StoreGetResult`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `found` | boolean |  |
+| `value` | any (optional) |  |
+| `version` | string (optional) |  |
+
+#### `credentials/set`
+
+Sent BY THE BINARY: upserts one entry of the credentials (secrets: API keys, OAuth tokens).
+
+**Params (`StoreSetParams`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `key` | string |  |
+| `namespace` | string |  |
+| `value` | any |  |
+
+**Result:** none.
+
+#### `credentials/delete`
+
+Sent BY THE BINARY: deletes one entry; a missing entry is not an error.
+
+**Params (`StoreKeyParams`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `key` | string |  |
+| `namespace` | string |  |
+
+**Result:** none.
+
+#### `credentials/list`
+
+Sent BY THE BINARY: every entry of a namespace with its version (an empty object when none).
+
+**Params (`StoreListParams`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `namespace` | string |  |
+
+**Result (`StoreListResult`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `entries` | map of `StoreEntry` |  |
+
+#### `credentials/swap`
+
+Sent BY THE BINARY: a conditional write. Write value (null deletes) only if the entry's version equals expected_version (null: the entry must not exist), atomically; otherwise answer swapped:false and change nothing.
+
+**Params (`StoreSwapParams`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `expected_version` | string |  |
+| `key` | string |  |
+| `namespace` | string |  |
+| `value` | any |  |
+
+**Result (`StoreSwapResult`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `swapped` | boolean |  |
+
 ### Initialize
 
 #### `initialize`
@@ -1247,6 +1330,89 @@ The tool definitions the session sends to the provider.
 | Field | Type | Description |
 |---|---|---|
 | `tools` | array of `ToolDef` |  |
+
+### settings
+
+#### `settings/get`
+
+Sent BY THE BINARY when config.settings has kind "client": reads one entry of the settings (non-sensitive configuration). Answer found:false when it does not exist.
+
+**Params (`StoreKeyParams`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `key` | string |  |
+| `namespace` | string |  |
+
+**Result (`StoreGetResult`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `found` | boolean |  |
+| `value` | any (optional) |  |
+| `version` | string (optional) |  |
+
+#### `settings/set`
+
+Sent BY THE BINARY: upserts one entry of the settings (non-sensitive configuration).
+
+**Params (`StoreSetParams`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `key` | string |  |
+| `namespace` | string |  |
+| `value` | any |  |
+
+**Result:** none.
+
+#### `settings/delete`
+
+Sent BY THE BINARY: deletes one entry; a missing entry is not an error.
+
+**Params (`StoreKeyParams`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `key` | string |  |
+| `namespace` | string |  |
+
+**Result:** none.
+
+#### `settings/list`
+
+Sent BY THE BINARY: every entry of a namespace with its version (an empty object when none).
+
+**Params (`StoreListParams`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `namespace` | string |  |
+
+**Result (`StoreListResult`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `entries` | map of `StoreEntry` |  |
+
+#### `settings/swap`
+
+Sent BY THE BINARY: a conditional write. Write value (null deletes) only if the entry's version equals expected_version (null: the entry must not exist), atomically; otherwise answer swapped:false and change nothing.
+
+**Params (`StoreSwapParams`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `expected_version` | string |  |
+| `key` | string |  |
+| `namespace` | string |  |
+| `value` | any |  |
+
+**Result (`StoreSwapResult`):**
+
+| Field | Type | Description |
+|---|---|---|
+| `swapped` | boolean |  |
 
 ### Tools (calls to the client)
 

@@ -300,6 +300,22 @@ var clientCalls = []clientCall{
 	{"tool/call", "Sent BY THE BINARY to the client when the model calls a declared tool. Answer with the tool's result.", reflect.TypeFor[ToolCallParams](), reflect.TypeFor[ToolCallResult]()},
 }
 
+func init() {
+	for _, domain := range []string{"settings", "credentials"} {
+		what := "settings (non-sensitive configuration)"
+		if domain == "credentials" {
+			what = "credentials (secrets: API keys, OAuth tokens)"
+		}
+		clientCalls = append(clientCalls,
+			clientCall{domain + "/get", "Sent BY THE BINARY when config." + domain + " has kind \"client\": reads one entry of the " + what + ". Answer found:false when it does not exist.", reflect.TypeFor[StoreKeyParams](), reflect.TypeFor[StoreGetResult]()},
+			clientCall{domain + "/set", "Sent BY THE BINARY: upserts one entry of the " + what + ".", reflect.TypeFor[StoreSetParams](), reflect.TypeFor[Empty]()},
+			clientCall{domain + "/delete", "Sent BY THE BINARY: deletes one entry; a missing entry is not an error.", reflect.TypeFor[StoreKeyParams](), reflect.TypeFor[Empty]()},
+			clientCall{domain + "/list", "Sent BY THE BINARY: every entry of a namespace with its version (an empty object when none).", reflect.TypeFor[StoreListParams](), reflect.TypeFor[StoreListResult]()},
+			clientCall{domain + "/swap", "Sent BY THE BINARY: a conditional write. Write value (null deletes) only if the entry's version equals expected_version (null: the entry must not exist), atomically; otherwise answer swapped:false and change nothing.", reflect.TypeFor[StoreSwapParams](), reflect.TypeFor[StoreSwapResult]()},
+		)
+	}
+}
+
 func notificationDocs(g *schemaGen) []map[string]any {
 	return []map[string]any{
 		{"method": "event", "direction": "binary_to_client", "doc": "A session event: {session_id, type, …} (see events).", "params": map[string]any{"type": "object", "description": "the payload of one of the events listed in events, plus session_id"}},

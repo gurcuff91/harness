@@ -58,7 +58,7 @@ func TestCodexRefreshKeepsAccountIDOnDisk(t *testing.T) {
 	if err != nil || tok != "new-opaque" {
 		t.Fatalf("getValidToken = %q, %v", tok, err)
 	}
-	cred, _ := config.GetCredentialsManager().Credential("codex-oauth")
+	cred, _, _ := config.GetCredentialsManager().Credential("codex-oauth")
 	if cred.AccountID != "acct-1" || cred.AccessToken != "new-opaque" {
 		t.Fatalf("stored after refresh: account=%q token=%q, want acct-1/new-opaque", cred.AccountID, cred.AccessToken)
 	}

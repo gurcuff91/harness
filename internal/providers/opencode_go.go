@@ -52,8 +52,8 @@ func (o *OpenCodeGo) Name() string        { return "opencode-go" }
 func (o *OpenCodeGo) DisplayName() string { return "OpenCode Go" }
 func (o *OpenCodeGo) Description() string { return describeState(o) }
 func (o *OpenCodeGo) ActivationSource() ActivationSource {
-	_, src := resolveAPIKey("opencode-go", openCodeGoAPIKeyEnv)
-	return src
+	// A failing credentials store keeps the last known state (see activationOfAPIKey).
+	return activationOfAPIKey("opencode-go", openCodeGoAPIKeyEnv, o.apiKey)
 }
 func (o *OpenCodeGo) IsActive() bool {
 	_, err := o.ResolveCredentials()
@@ -81,7 +81,12 @@ func (o *OpenCodeGo) ResolveCredentials() (types.Credentials, error) {
 	if o.apiKey != "" {
 		return types.APIKeyCredentials(o.apiKey), nil
 	}
-	if v, src := resolveAPIKey("opencode-go", openCodeGoAPIKeyEnv); src != ActivationNone {
+	v, src, rerr := resolveAPIKeyErr("opencode-go", openCodeGoAPIKeyEnv)
+	if rerr != nil {
+		// Could not read the store: say so, never "no credentials found".
+		return types.Credentials{}, rerr
+	}
+	if src != ActivationNone {
 		o.apiKey = v
 		return types.APIKeyCredentials(v), nil
 	}
