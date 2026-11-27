@@ -655,3 +655,40 @@ func TestListenCtxCarriesAReadOnlySessionView(t *testing.T) {
 		t.Errorf("SessionView has %d methods; adding one is a deliberate decision (it must stay read-only)", n)
 	}
 }
+
+// Inbound.Display is what the echo shows and what the log keeps in meta, while
+// the model and the log's text stay full.
+func TestInboundDisplayIsEchoedAndPersisted(t *testing.T) {
+	ch := newFakeChannel("fake")
+	a, model, _ := channelAgent(t, ch)
+	sess, err := a.NewSession(t.TempDir(), model, SessionWithChannels(types.InputChannel{Type: "fake", Ref: "one"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	ch.mu.Lock()
+	d := ch.listening["ONE"]
+	ch.mu.Unlock()
+	d(Inbound{Text: "FULL BODY\nline two", Display: "fake:x reply (2 lines)"})
+	waitFor(t, "the turn to end", func() bool { return hasEvent(ch.eventsOf("ONE"), types.EventTurnEnd) })
+
+	evs := ch.eventsOf("ONE")
+	if evs[0].Output != "fake:x reply (2 lines)" {
+		t.Errorf("echo = %q", evs[0].Output)
+	}
+	if got := textOf(evs); got != "answer to FULL BODY\nline two" {
+		t.Errorf("the model did not get the full text: %q", got)
+	}
+	var found bool
+	for _, m := range sess.AllMessages() {
+		if m.Role == types.RoleUser && m.Meta != nil && m.Meta.Display == "fake:x reply (2 lines)" {
+			found = true
+			if !strings.Contains(m.Parts[0].Text, "FULL BODY") {
+				t.Errorf("stored text is not full: %q", m.Parts[0].Text)
+			}
+		}
+	}
+	if !found {
+		t.Error("display not persisted")
+	}
+}

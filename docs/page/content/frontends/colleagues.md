@@ -38,7 +38,7 @@ Asking is asynchronous. `ColleagueAsk` returns as soon as the message is deliver
 
 1. Agent A calls `ColleagueAsk` for colleague B. B receives a prompt wrapped as `<colleague from="A-id">…</colleague>`.
 2. B answers normally. When its turn ends, B's final text (or its error) is sent back to A automatically. B does not need to call `ColleagueAsk` to answer.
-3. A receives it as `<colleague from="B-id" reply>…</colleague>`. The turn that handles a reply sends nothing back, so two agents cannot loop.
+3. A receives it as `<colleague from="B-id" reply>…</colleague>`. The turn that handles a reply sends nothing back, so two agents cannot loop. Screens show a reply as one line, `⇌ colleague:B-id reply (12 lines)`, live and after `/resume`; the full text stays in the session log and in the model's context.
 
 The model is told never to wait, sleep or poll for the answer. If the colleague's session closes before replying, the reply is lost; ask again.
 

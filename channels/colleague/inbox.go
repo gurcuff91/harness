@@ -74,7 +74,7 @@ func (in *inbox) handle(conn net.Conn) {
 		respond(conn, err)
 		return
 	}
-	var text string
+	var text, display string
 	switch m.Kind {
 	case kindPing:
 		a := ack{OK: true}
@@ -88,12 +88,13 @@ func (in *inbox) handle(conn net.Conn) {
 		text = wrap(m.From, false, m.Text)
 	case kindReply:
 		text = wrap(m.From, true, m.Text)
+		display = replyDisplay(m.From, m.Text)
 	default:
 		respond(conn, fmt.Errorf("unknown message kind %q", m.Kind))
 		return
 	}
 	in.c.logger.Info("colleague", "received", "to", in.id, "from", m.From, "kind", m.Kind)
-	in.deliver(agent.Inbound{Text: text, Images: m.Images, Origin: kindOrigin(m.Kind, m.From)})
+	in.deliver(agent.Inbound{Text: text, Images: m.Images, Origin: kindOrigin(m.Kind, m.From), Display: display})
 	respond(conn, nil)
 }
 
@@ -238,4 +239,20 @@ func (in *inbox) close() {
 	default:
 	}
 	<-in.done
+}
+
+// replyDisplay is the one line a screen shows for a colleague's reply,
+// `colleague:<from> reply (N lines)`: the full text stays in the log and goes to
+// the model (same rule as a sub-agent's reply). An ask is shown in full.
+func replyDisplay(from, text string) string {
+	body := strings.TrimSpace(text)
+	n := 0
+	if body != "" {
+		n = strings.Count(body, "\n") + 1
+	}
+	lines := fmt.Sprintf("%d lines", n)
+	if n == 1 {
+		lines = "1 line"
+	}
+	return fmt.Sprintf("%s:%s reply (%s)", Type, from, lines)
 }

@@ -144,6 +144,12 @@ func TestDelivery(t *testing.T) {
 	if got[1].Text != "<colleague from=\"kitana-blade\" reply>\ndone\n</colleague>" || got[1].Origin != "colleague:kitana-blade#reply" {
 		t.Errorf("reply = %+v", got[1])
 	}
+	if got[0].Display != "" {
+		t.Errorf("an ask must be shown in full, display = %q", got[0].Display)
+	}
+	if got[1].Display != "colleague:kitana-blade reply (1 line)" {
+		t.Errorf("reply display = %q", got[1].Display)
+	}
 	for _, m := range []message{{Kind: "ask", From: "../evil", Text: "x"}, {Kind: "boom", From: "a", Text: "x"}} {
 		if err := send(ctx, path, m); err == nil {
 			t.Errorf("%+v accepted", m)
@@ -230,5 +236,18 @@ func TestDefaultRunDir(t *testing.T) {
 	}
 	if p := filepath.Join(got, "c-"+strings.Repeat("x", longestID)+".sock"); len(p) > maxSocketPath {
 		t.Errorf("fallback still too long: %q (%d)", p, len(p))
+	}
+}
+
+func TestReplyDisplayCountsLines(t *testing.T) {
+	for _, c := range []struct{ text, want string }{
+		{"", "colleague:x reply (0 lines)"},
+		{"a", "colleague:x reply (1 line)"},
+		{"a\nb\nc\n\n", "colleague:x reply (3 lines)"},
+		{"  a\n\nb ", "colleague:x reply (3 lines)"},
+	} {
+		if got := replyDisplay("x", c.text); got != c.want {
+			t.Errorf("%q: %q, want %q", c.text, got, c.want)
+		}
 	}
 }

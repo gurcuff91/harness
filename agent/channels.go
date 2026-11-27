@@ -92,6 +92,10 @@ type Inbound struct {
 	// are themselves addressable (colleagues) puts the SENDER there. The turn
 	// is still routed to the conversation that delivered it.
 	Origin string
+	// Display, when set, is what frontends show for this prompt instead of its
+	// full text (PromptWithDisplayText: persisted in the message's meta, so a
+	// reloaded history shows it too). The model and the log keep Text.
+	Display string
 }
 
 // Channel errors, for callers that map them (the HTTP server: 409 / 400).
@@ -297,6 +301,9 @@ func (sc *sessionChannels) start(sess *Session) error {
 			opts := []PromptOption{PromptWithOrigin(o)}
 			if len(in.Images) > 0 {
 				opts = append(opts, PromptWithImages(in.Images...))
+			}
+			if in.Display != "" {
+				opts = append(opts, PromptWithDisplayText(in.Display))
 			}
 			sess.Prompt(context.Background(), in.Text, opts...)
 		})

@@ -183,12 +183,16 @@ func TestTwoColleaguesTalk(t *testing.T) {
 		t.Fatalf("raiden's prompts = %+v", rp)
 	}
 	// the reply carries raiden's final answer
-	var reply string
+	var echo string
 	for _, p := range sl.prompts() {
 		if p.Origin == "colleague:"+rID+"#reply" {
-			reply = p.Output
+			echo = p.Output
 		}
 	}
+	if echo != "colleague:"+rID+" reply (1 line)" {
+		t.Errorf("the reply is echoed as %q, want the one-line display", echo)
+	}
+	reply := storedReplyText(scorpion, "colleague:"+rID+"#reply")
 	if !strings.Contains(reply, `<colleague from="`+rID+`" reply>`) || !strings.Contains(reply, "ANSWER: what is your module path?") {
 		t.Errorf("reply = %q", reply)
 	}
@@ -590,7 +594,7 @@ func TestAScheduleAColleagueAskedForAnswersThatColleague(t *testing.T) {
 	a.FireScheduleForTest(stored)
 	eventually(t, "raiden receives the scheduled answer", func() bool {
 		for _, p := range rl.prompts()[repliesBefore:] {
-			if p.Origin == "colleague:"+sID+"#reply" && strings.Contains(p.Output, "STATUS IS GREEN") {
+			if p.Origin == "colleague:"+sID+"#reply" && strings.Contains(storedReplyText(raiden, p.Origin), "STATUS IS GREEN") {
 				return true
 			}
 		}
@@ -623,4 +627,16 @@ func schedStore(t *testing.T) *schedule.Store {
 		t.Fatalf("schedule store: %v", err)
 	}
 	return st
+}
+
+// storedReplyText is the full text of the last stored user message with origin:
+// the echo only shows the one-line display, the log keeps everything.
+func storedReplyText(s *agent.Session, origin string) string {
+	var text string
+	for _, m := range s.AllMessages() {
+		if m.Role == types.RoleUser && m.Meta != nil && m.Meta.Origin == origin && len(m.Parts) > 0 {
+			text = m.Parts[0].Text
+		}
+	}
+	return text
 }

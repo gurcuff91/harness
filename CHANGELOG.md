@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.138.1] - 2026-11-27
+
+### Changed
+- A colleague's reply is shown as one line too, `⇌ colleague:kano-storm reply (12 lines)`, live and reloaded, like a sub-agent's. A colleague's QUESTION is still shown in full. The full text stays in the log, `session/messages`, exports and the model's context. New `agent.Inbound.Display` lets any input channel do the same (persisted as `meta.display`).
+
 ## [0.138.0] - 2026-11-27
 
 ### Fixed — a prompt's display text survives a reload
